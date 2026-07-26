@@ -8,23 +8,25 @@
 pub(crate) mod cas_capture;
 mod checkpoint;
 mod conflicts;
-mod convert;
 mod hooks;
 mod native_handoff;
 mod outcome;
 mod packages;
 mod refresh;
+mod requirements;
 mod status;
 mod system;
 mod unadopt;
 
 // Re-export all public commands
 pub use conflicts::cmd_conflicts;
-pub use convert::cmd_adopt_convert;
 pub use hooks::cmd_sync_hook_install;
 pub use native_handoff::{
     NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, cmd_native_handoff,
 };
+pub use outcome::BulkAdoptionOutcome;
+#[cfg(test)]
+pub use outcome::{BulkAdoptionFailure, BulkAdoptionFailureStage};
 pub use packages::cmd_adopt;
 pub use refresh::cmd_adopt_refresh;
 pub use status::cmd_adopt_status;

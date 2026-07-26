@@ -15,6 +15,13 @@ use conary_core::generation::artifact::{
     write_generation_artifact,
 };
 use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+use conary_core::generation::root_manifest::{
+    GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+    MutableStateManifest,
+};
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -292,11 +299,12 @@ fn seed_publication_state(db_path: &Path, runtime_root: &Path, generation_number
         db_path.to_str().unwrap(),
         runtime_root.to_str().unwrap(),
         "fixture generation publication",
+        &Default::default(),
     )
     .unwrap();
     debt.set_phase(
         &conn,
-        GenerationPublicationPhase::CurrentPublished,
+        GenerationPublicationPhase::ActiveMarked,
         GenerationPublicationStatus::Running,
         Some(generation_number),
         Some(generation_number),
@@ -318,6 +326,7 @@ fn write_generation_artifact_fixture(
     std::fs::write(boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
     let cas_object = write_cas_object(objects_dir, b"cas object");
+    write_generation_root_authority(generation_dir, &cas_object);
     let boot_assets = BootAssetsManifest {
         version: 1,
         generation: generation_number,
@@ -337,7 +346,6 @@ fn write_generation_artifact_fixture(
         architecture: "x86_64",
         erofs_path: &generation_dir.join("root.erofs"),
         cas_base_rel: "../../objects",
-        cas_objects: vec![cas_object],
         cas_verification: CasObjectVerification::Deep,
         boot_assets,
     })
@@ -359,6 +367,66 @@ fn write_generation_artifact_fixture(
     }
     .write_to(generation_dir)
     .unwrap();
+}
+
+fn write_generation_root_authority(generation_dir: &Path, object: &CasObjectRef) {
+    let content = || {
+        Some(PayloadContentAuthority {
+            sha256: object.sha256.clone(),
+            size: object.size,
+        })
+    };
+    GenerationRootManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        root: resolved_directory(0o755),
+        entries: vec![
+            GenerationRootEntry {
+                path: "/usr".to_string(),
+                node: resolved_directory(0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr/share".to_string(),
+                node: resolved_directory(0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr/share/conary-backup-fixture".to_string(),
+                node: resolved_regular(0o644),
+                content: content(),
+            },
+        ],
+    }
+    .write_to(generation_dir)
+    .unwrap();
+    MutableStateManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        entries: vec![
+            GenerationRootEntry {
+                path: "/etc".to_string(),
+                node: resolved_directory(0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/etc/conary-backup-fixture.conf".to_string(),
+                node: resolved_regular(0o644),
+                content: content(),
+            },
+        ],
+    }
+    .write_to(generation_dir)
+    .unwrap();
+}
+
+fn resolved_directory(permissions: u32) -> ResolvedPayloadNode {
+    let mut node = PayloadNode::regular(permissions);
+    node.kind = PayloadNodeKind::Directory;
+    node.mode = libc::S_IFDIR | permissions;
+    ResolvedPayloadNode::from_numeric_source(node).unwrap()
+}
+
+fn resolved_regular(permissions: u32) -> ResolvedPayloadNode {
+    ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(permissions)).unwrap()
 }
 
 fn write_cas_object(objects_dir: &Path, bytes: &[u8]) -> CasObjectRef {

@@ -2,14 +2,15 @@
 
 //! User and group management for CCS hooks
 //!
-//! Handles creation and deletion of system users and groups,
-//! with support for both live root and target root operations.
+//! Handles creation and deletion of system users and groups in a materialized
+//! selected root.
 
 use super::HookExecutor;
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::path::{Component, Path};
 use std::process::Command;
 use std::sync::OnceLock;
 use tracing::{debug, info};
@@ -34,28 +35,26 @@ pub(crate) fn validate_username(name: &str) -> Result<()> {
 }
 
 pub(crate) fn validate_shell(shell: &str) -> Result<()> {
-    match shell {
-        "/usr/sbin/nologin" | "/sbin/nologin" | "/bin/false" => Ok(()),
-        _ => Err(anyhow::anyhow!("unsupported login shell: {}", shell)),
+    if shell.is_empty() {
+        return Err(anyhow::anyhow!("login shell path cannot be empty"));
     }
+    let path = Path::new(shell);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(anyhow::anyhow!(
+            "login shell must be an absolute traversal-free path: {shell}"
+        ));
+    }
+    Ok(())
 }
 
 impl HookExecutor {
-    /// Check if we're operating on the live root
-    pub(super) fn is_live_root(&self) -> bool {
-        self.root == std::path::Path::new("/")
-    }
-
-    /// Check if a user exists
-    ///
-    /// When root == "/", uses nix to query the live system.
-    /// When root != "/", parses the target's /etc/passwd directly.
+    /// Check if a user exists in the selected root's `/etc/passwd`.
     pub(super) fn user_exists(&self, name: &str) -> bool {
-        if self.is_live_root() {
-            nix::unistd::User::from_name(name).ok().flatten().is_some()
-        } else {
-            self.user_exists_in_target(name)
-        }
+        self.user_exists_in_target(name)
     }
 
     /// Check if a user exists in the target root's /etc/passwd
@@ -81,16 +80,9 @@ impl HookExecutor {
         false
     }
 
-    /// Check if a group exists
-    ///
-    /// When root == "/", uses nix to query the live system.
-    /// When root != "/", parses the target's /etc/group directly.
+    /// Check if a group exists in the selected root's `/etc/group`.
     pub(super) fn group_exists(&self, name: &str) -> bool {
-        if self.is_live_root() {
-            nix::unistd::Group::from_name(name).ok().flatten().is_some()
-        } else {
-            self.group_exists_in_target(name)
-        }
+        self.group_exists_in_target(name)
     }
 
     /// Check if a group exists in the target root's /etc/group
@@ -118,8 +110,8 @@ impl HookExecutor {
 
     /// Create a user. Returns true if created, false if already exists.
     ///
-    /// When root != "/", uses `useradd --root <target>` to create the user
-    /// in the target filesystem's /etc/passwd without affecting the host.
+    /// Uses `useradd --root <selected>` so the active host account database is
+    /// never consulted or mutated.
     pub(super) fn create_user(
         &self,
         name: &str,
@@ -141,25 +133,18 @@ impl HookExecutor {
             return Ok(false);
         }
 
-        // Ensure target /etc directory exists when not operating on live root
-        if !self.is_live_root() {
-            let etc_path = self.root.join("etc");
-            fs::create_dir_all(&etc_path)
-                .with_context(|| format!("Failed to create {}", etc_path.display()))?;
-        }
+        let etc_path = self.root.join("etc");
+        fs::create_dir_all(&etc_path)
+            .with_context(|| format!("Failed to create {}", etc_path.display()))?;
 
         let mut cmd = Command::new("useradd");
-
-        // Critical: use --root for target installations
-        if !self.is_live_root() {
-            let root_str = self.root.to_str().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "install root path contains non-UTF-8 characters: {}",
-                    self.root.display()
-                )
-            })?;
-            cmd.args(["--root", root_str]);
-        }
+        let root_str = self.root.to_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "install root path contains non-UTF-8 characters: {}",
+                self.root.display()
+            )
+        })?;
+        cmd.args(["--root", root_str]);
 
         if system {
             cmd.arg("--system");
@@ -167,13 +152,8 @@ impl HookExecutor {
 
         if let Some(h) = home {
             cmd.args(["--home-dir", h]);
-            // For target root, don't try to create home dir (it would fail or
-            // create in wrong place). The install phase will handle directories.
-            if self.is_live_root() {
-                cmd.arg("--create-home");
-            } else {
-                cmd.arg("--no-create-home");
-            }
+            // Payload/directory hooks own home materialization.
+            cmd.arg("--no-create-home");
         } else if system {
             cmd.args(["--home-dir", "/nonexistent"]);
             cmd.arg("--no-create-home");
@@ -206,17 +186,20 @@ impl HookExecutor {
 
     /// Delete a user
     ///
-    /// When root != "/", uses `userdel --root <target>`.
+    /// Uses `userdel --root <selected>`.
     pub(super) fn delete_user(&self, name: &str) -> Result<()> {
         if !self.user_exists(name) {
             return Ok(());
         }
 
+        let root = self.root.to_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "install root path contains non-UTF-8 characters: {}",
+                self.root.display()
+            )
+        })?;
         let mut cmd = Command::new("userdel");
-
-        if !self.is_live_root() {
-            cmd.args(["--root", self.root.to_str().unwrap_or("/")]);
-        }
+        cmd.args(["--root", root]);
 
         cmd.arg(name);
 
@@ -235,8 +218,8 @@ impl HookExecutor {
 
     /// Create a group. Returns true if created, false if already exists.
     ///
-    /// When root != "/", uses `groupadd --root <target>` to create the group
-    /// in the target filesystem's /etc/group without affecting the host.
+    /// Uses `groupadd --root <selected>` so the active host account database is
+    /// never consulted or mutated.
     pub(super) fn create_group(&self, name: &str, system: bool) -> Result<bool> {
         validate_username(name)?;
 
@@ -245,19 +228,18 @@ impl HookExecutor {
             return Ok(false);
         }
 
-        // Ensure target /etc directory exists when not operating on live root
-        if !self.is_live_root() {
-            let etc_path = self.root.join("etc");
-            fs::create_dir_all(&etc_path)
-                .with_context(|| format!("Failed to create {}", etc_path.display()))?;
-        }
+        let etc_path = self.root.join("etc");
+        fs::create_dir_all(&etc_path)
+            .with_context(|| format!("Failed to create {}", etc_path.display()))?;
 
         let mut cmd = Command::new("groupadd");
-
-        // Critical: use --root for target installations
-        if !self.is_live_root() {
-            cmd.args(["--root", self.root.to_str().unwrap_or("/")]);
-        }
+        let root = self.root.to_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "install root path contains non-UTF-8 characters: {}",
+                self.root.display()
+            )
+        })?;
+        cmd.args(["--root", root]);
 
         if system {
             cmd.arg("--system");
@@ -280,17 +262,20 @@ impl HookExecutor {
 
     /// Delete a group
     ///
-    /// When root != "/", uses `groupdel --root <target>`.
+    /// Uses `groupdel --root <selected>`.
     pub(super) fn delete_group(&self, name: &str) -> Result<()> {
         if !self.group_exists(name) {
             return Ok(());
         }
 
+        let root = self.root.to_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "install root path contains non-UTF-8 characters: {}",
+                self.root.display()
+            )
+        })?;
         let mut cmd = Command::new("groupdel");
-
-        if !self.is_live_root() {
-            cmd.args(["--root", self.root.to_str().unwrap_or("/")]);
-        }
+        cmd.args(["--root", root]);
 
         cmd.arg(name);
 
@@ -331,17 +316,20 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_shell_accepts_nologin_allowlist() {
+    fn test_validate_shell_accepts_package_declared_absolute_paths() {
         assert!(validate_shell("/usr/sbin/nologin").is_ok());
         assert!(validate_shell("/sbin/nologin").is_ok());
         assert!(validate_shell("/bin/false").is_ok());
+        assert!(validate_shell("/bin/sh").is_ok());
+        assert!(validate_shell("/usr/bin/zsh").is_ok());
     }
 
     #[test]
-    fn test_validate_shell_rejects_interactive_shells() {
-        assert!(validate_shell("/bin/sh").is_err());
-        assert!(validate_shell("/bin/bash").is_err());
-        assert!(validate_shell("/usr/bin/zsh").is_err());
+    fn test_validate_shell_rejects_non_absolute_or_traversing_paths() {
+        assert!(validate_shell("").is_err());
+        assert!(validate_shell("bin/sh").is_err());
+        assert!(validate_shell("/usr/bin/../bin/sh").is_err());
+        assert!(validate_shell("./bin/sh").is_err());
     }
 
     #[test]
@@ -358,7 +346,7 @@ mod tests {
         )
         .unwrap();
 
-        let executor = HookExecutor::new(temp_dir.path());
+        let executor = HookExecutor::new(temp_dir.path(), Default::default());
         assert!(executor.user_exists_in_target("root"));
         assert!(executor.user_exists_in_target("nobody"));
         assert!(!executor.user_exists_in_target("nonexistent"));
@@ -374,18 +362,9 @@ mod tests {
         let group_path = etc_dir.join("group");
         fs::write(&group_path, "root:x:0:\nwheel:x:10:user1,user2\n").unwrap();
 
-        let executor = HookExecutor::new(temp_dir.path());
+        let executor = HookExecutor::new(temp_dir.path(), Default::default());
         assert!(executor.group_exists_in_target("root"));
         assert!(executor.group_exists_in_target("wheel"));
         assert!(!executor.group_exists_in_target("nonexistent"));
-    }
-
-    #[test]
-    fn test_is_live_root() {
-        let executor_live = HookExecutor::new(std::path::Path::new("/"));
-        assert!(executor_live.is_live_root());
-
-        let executor_target = HookExecutor::new(std::path::Path::new("/tmp/rootfs"));
-        assert!(!executor_target.is_live_root());
     }
 }

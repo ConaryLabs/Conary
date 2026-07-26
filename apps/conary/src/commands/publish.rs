@@ -2,6 +2,10 @@
 
 //! Publish command - build a recipe project and publish it to a static repo.
 
+mod artifact;
+
+use artifact::publish_artifact_form;
+pub(crate) use artifact::publish_static_artifact_form_service;
 use std::env;
 use std::fs::File;
 use std::io::Write;
@@ -17,7 +21,8 @@ use conary_core::diagnostics::{
 use conary_core::recipe::Recipe;
 use conary_core::recipe::hermetic::{CiMode, DivergenceStatus, HermeticBuildInput};
 use conary_core::recipe::{
-    Kitchen, KitchenConfig, SourceDownloadPolicy, parse_recipe_file, validate_recipe,
+    CcsPackageSigningAuthority, Kitchen, KitchenConfig, SourceDownloadPolicy, parse_recipe_file,
+    validate_recipe,
 };
 use conary_core::repository::static_repo::RepoLocation;
 use conary_core::repository::static_repo::publish::{
@@ -43,8 +48,6 @@ pub struct PublishOptions {
     pub key_dir: Option<String>,
     pub state_file: Option<String>,
     pub refresh: bool,
-    pub force_reinit: bool,
-    pub accept_destination_state: bool,
     pub rotate_publish_key: bool,
     pub rotate_root_key: bool,
     pub yes: bool,
@@ -57,8 +60,6 @@ pub(crate) struct StaticArtifactPublishServiceInput {
     pub key_dir: Option<PathBuf>,
     pub state_file: Option<PathBuf>,
     pub refresh: bool,
-    pub force_reinit: bool,
-    pub accept_destination_state: bool,
     pub rotate_publish_key: bool,
     pub rotate_root_key: bool,
     pub operation_id: String,
@@ -187,6 +188,8 @@ async fn run_project_form_publish(
             writeln!(writer, "{}", crate::ui::warn_line(warning))?;
         }
     }
+    let prepared = prepare_project_form_static_context(&destination, &key_dir)
+        .with_context(|| format!("prepare static publish context for {}", repo_name))?;
 
     let builder = load_default_hermetic_builder()?;
     ensure_no_build_dependencies_for_m2a(&recipe)?;
@@ -201,6 +204,9 @@ async fn run_project_form_publish(
     )
     .with_builder_environment(builder_identity);
     let mut config = publish_kitchen_config(&recipe_path, output_dir.path(), builder_sysroot);
+    config.ccs_signing_authority = Some(CcsPackageSigningAuthority::from_key_pair(
+        &prepared.active_publish_key,
+    ));
     configure_host_record_for_publish(&mut config, &recipe);
     let kitchen = Kitchen::new(config);
 
@@ -223,9 +229,6 @@ async fn run_project_form_publish(
     if !options.json {
         print_divergence_summary(writer, result.provenance.as_ref())?;
     }
-    let prepared =
-        prepare_project_form_static_context(&destination, &key_dir, options.force_reinit)
-            .with_context(|| format!("prepare static publish context for {}", repo_name))?;
     let attested_package_path = attach_project_form_attestation(ProjectFormAttestationInput {
         package_path: &result.package_path,
         provenance: result
@@ -244,8 +247,6 @@ async fn run_project_form_publish(
         state_file,
         package_paths: vec![attested_package_path.clone()],
         refresh: options.refresh,
-        force_reinit: options.force_reinit,
-        accept_destination_state: options.accept_destination_state,
         rotate_publish_key: options.rotate_publish_key,
         rotate_root_key: options.rotate_root_key,
         artifact_gate_context: None,
@@ -283,166 +284,6 @@ async fn run_project_form_publish(
     Ok(output)
 }
 
-async fn publish_artifact_form(
-    options: PublishOptions,
-    target: &str,
-    writer: &mut impl Write,
-) -> Result<()> {
-    let operation_id = publish_operation_id();
-    match classify_publish_target(target)? {
-        PublishTargetRoute::StaticLocal => {
-            publish_static_artifact_form(options, target, writer, operation_id).await
-        }
-        PublishTargetRoute::RemiRelease if options.json => {
-            let message = "Remi publish JSON output is not supported in M3a";
-            let output = publish_failure_output(
-                &operation_id,
-                PackagingDiagnosticCode::PublishJsonUnsupported,
-                message,
-            );
-            super::diagnostics::write_packaging_output(&output, true, writer)?;
-            super::diagnostics::write_packaging_record_if_possible(&output);
-            bail!("{message}")
-        }
-        PublishTargetRoute::RemiRelease => publish_remi_artifact_form(options, target).await,
-    }
-}
-
-async fn publish_static_artifact_form(
-    options: PublishOptions,
-    target: &str,
-    writer: &mut impl Write,
-    operation_id: String,
-) -> Result<()> {
-    let json = options.json;
-    let input = StaticArtifactPublishServiceInput {
-        artifact_path: PathBuf::from(&options.what),
-        target: target.to_string(),
-        key_dir: options.key_dir.as_deref().map(PathBuf::from),
-        state_file: options.state_file.as_deref().map(PathBuf::from),
-        refresh: options.refresh,
-        force_reinit: options.force_reinit,
-        accept_destination_state: options.accept_destination_state,
-        rotate_publish_key: options.rotate_publish_key,
-        rotate_root_key: options.rotate_root_key,
-        operation_id,
-    };
-    let output = publish_static_artifact_form_service(input).await?;
-
-    if output.status == PackagingCommandStatus::Failed {
-        super::diagnostics::write_packaging_output(&output, json, writer)?;
-        super::diagnostics::write_packaging_record_if_possible(&output);
-        bail!("{}", publish_failure_message_from_output(&output));
-    }
-
-    if json {
-        super::diagnostics::write_packaging_output(&output, true, writer)?;
-    } else {
-        let repo_name = derive_repo_name(target)?;
-        writeln!(
-            writer,
-            "Published attested artifact to static repo: {repo_name}"
-        )?;
-        if let Some(publish_key_id) = publish_key_id_from_output(&output) {
-            writeln!(writer, "Publish key ID: {publish_key_id}")?;
-        }
-    }
-    super::diagnostics::write_packaging_record_if_possible(&output);
-
-    Ok(())
-}
-
-pub(crate) async fn publish_static_artifact_form_service(
-    input: StaticArtifactPublishServiceInput,
-) -> Result<PackagingCommandOutput> {
-    let artifact_path = input.artifact_path;
-    let destination = RepoLocation::parse(&input.target)
-        .with_context(|| format!("parse publish target {}", input.target))?;
-    ensure_static_local_publish_destination(&destination)?;
-    let repo_name = derive_repo_name(&input.target)?;
-    let key_dir = match input.key_dir {
-        Some(key_dir) => key_dir,
-        None => resolve_key_dir(None, &repo_name)?,
-    };
-    let prepared = prepare_artifact_form_static_context(&destination, &key_dir, input.force_reinit)
-        .with_context(|| format!("prepare static artifact publish context for {repo_name}"))?;
-    let report = verify_static_artifact_publish_eligibility(
-        &artifact_path,
-        &prepared.accepted_signers,
-        &prepared.publish_policy_digest,
-    )?;
-    if !report.is_passed() {
-        return Ok(publish_gate_failure_output(&input.operation_id, &report));
-    }
-    let state_file = input
-        .state_file
-        .unwrap_or_else(|| key_dir.join("last-published.toml"));
-    let outcome = publish_static_repo(StaticPublishOptions {
-        repo_name: repo_name.clone(),
-        repo_description: None,
-        destination,
-        key_dir,
-        state_file,
-        package_paths: vec![artifact_path.clone()],
-        refresh: input.refresh,
-        force_reinit: input.force_reinit,
-        accept_destination_state: input.accept_destination_state,
-        rotate_publish_key: input.rotate_publish_key,
-        rotate_root_key: input.rotate_root_key,
-        artifact_gate_context: Some(prepared.artifact_gate_context()),
-    })
-    .with_context(|| format!("publish attested artifact to static repo {repo_name}"))?;
-
-    let mut output =
-        publish_success_output(&input.operation_id, "Published static artifact to repo");
-    output.artifacts.push(PackagingArtifact {
-        path: artifact_path.display().to_string(),
-        kind: Some("ccs".to_string()),
-    });
-    output.events.push(PackagingEvent {
-        schema_version: conary_core::diagnostics::PACKAGING_JSON_SCHEMA_VERSION,
-        operation_id: input.operation_id,
-        sequence: 1,
-        phase: PackagingPhase::Publish,
-        kind: PackagingEventKind::OperationFinished,
-        message: Some(format!("Publish key ID: {}", outcome.publish_key_id)),
-        diagnostic: None,
-        artifact: None,
-        progress: None,
-    });
-    Ok(output)
-}
-
-fn publish_failure_message_from_output(output: &PackagingCommandOutput) -> String {
-    output
-        .diagnostics
-        .first()
-        .map(|diagnostic| diagnostic.message.clone())
-        .unwrap_or_else(|| "static artifact publish failed".to_string())
-}
-
-fn publish_key_id_from_output(output: &PackagingCommandOutput) -> Option<&str> {
-    output
-        .events
-        .iter()
-        .filter_map(|event| event.message.as_deref())
-        .find_map(|message| message.strip_prefix("Publish key ID: "))
-}
-
-async fn publish_remi_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
-    let artifact_path = PathBuf::from(&options.what);
-    let bearer_token = resolve_remi_publish_bearer_token()?;
-    publish_to_remi(RemiPublishOptions {
-        artifact_path: &artifact_path,
-        target_url: target,
-        bearer_token: &bearer_token,
-    })
-    .await?;
-
-    println!("Published attested artifact to Remi release endpoint: {target}");
-    Ok(())
-}
-
 fn publish_kitchen_config(
     recipe_path: &Path,
     output_dir: &Path,
@@ -455,8 +296,6 @@ fn publish_kitchen_config(
         use_isolation: true,
         pristine_mode: true,
         sysroot: Some(sysroot),
-        auto_makedepends: false,
-        cleanup_makedepends: false,
         source_download_policy: SourceDownloadPolicy::AllowDownloads,
         ..Default::default()
     }
@@ -639,8 +478,6 @@ mod tests {
             key_dir: Some(fixture.key_dir.clone()),
             state_file: Some(fixture.state_file.clone()),
             refresh: false,
-            force_reinit: false,
-            accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
             operation_id: "publish-test".to_string(),
@@ -691,8 +528,6 @@ install = "mkdir -p %(destdir)s/usr/share/publish-json"
                 key_dir: Some(key_dir.display().to_string()),
                 state_file: Some(state_file.display().to_string()),
                 refresh: false,
-                force_reinit: false,
-                accept_destination_state: false,
                 rotate_publish_key: false,
                 rotate_root_key: false,
                 yes: true,
@@ -731,8 +566,6 @@ install = "mkdir -p %(destdir)s/usr/share/publish-json"
                 key_dir: None,
                 state_file: None,
                 refresh: false,
-                force_reinit: false,
-                accept_destination_state: false,
                 rotate_publish_key: false,
                 rotate_root_key: false,
                 yes: true,
@@ -829,8 +662,6 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
             key_dir: Some(key_dir.display().to_string()),
             state_file: Some(state_file.display().to_string()),
             refresh: false,
-            force_reinit: false,
-            accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
             yes: true,
@@ -858,8 +689,6 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
             key_dir: Some(key_dir.display().to_string()),
             state_file: None,
             refresh: false,
-            force_reinit: false,
-            accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
             yes: false,
@@ -993,8 +822,6 @@ sysroot_hash = "{TEST_HASH}"
                 key_dir: Some(self.key_dir.display().to_string()),
                 state_file: Some(self.state_file.display().to_string()),
                 refresh: false,
-                force_reinit: false,
-                accept_destination_state: false,
                 rotate_publish_key: false,
                 rotate_root_key: false,
                 yes: true,
@@ -1025,8 +852,16 @@ sysroot_hash = "{TEST_HASH}"
 [package]
 name = "widget"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "fixture package"
 license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
 
 [provenance]
 origin_class = "native-built"
@@ -1035,6 +870,7 @@ hardening_level = "hermetic"
             )
             .unwrap();
             let result = conary_core::ccs::CcsBuilder::new(manifest, &source_dir)
+                .unwrap()
                 .build()
                 .unwrap();
             let key = conary_core::ccs::SigningKeyPair::generate().with_key_id("publish");
@@ -1043,8 +879,13 @@ hardening_level = "hermetic"
                 &key_dir.join("publish.public"),
             )
             .unwrap();
-            conary_core::ccs::builder::write_signed_ccs_package(&result, &package_path, &key)
-                .unwrap();
+            conary_core::ccs::builder::write_signed_current_ccs_package(
+                &result,
+                &package_path,
+                &key,
+                false,
+            )
+            .unwrap();
 
             Self {
                 repo_dir: temp.path().join("repo"),
@@ -1063,8 +904,6 @@ hardening_level = "hermetic"
                 key_dir: Some(self.key_dir.display().to_string()),
                 state_file: Some(self.state_file.display().to_string()),
                 refresh: false,
-                force_reinit: false,
-                accept_destination_state: false,
                 rotate_publish_key: false,
                 rotate_root_key: false,
                 yes: true,

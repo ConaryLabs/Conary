@@ -5,13 +5,11 @@ use std::path::{Path, PathBuf};
 use super::cas::artifact_root_for_generations_root;
 use super::initramfs::generate_runtime_initramfs;
 use super::kernel::{
-    collect_boot_kernel_releases, collect_module_kernel_releases,
-    detect_kernel_version_from_troves, module_kernel_path, push_unique_release,
+    collect_boot_kernel_releases, collect_module_kernel_releases, module_kernel_path,
     regular_file_exists, system_root_for_boot_root,
 };
 use super::runtime_inputs;
 use super::sysroot::materialize_runtime_generation_sysroot;
-use crate::db::models::Trove;
 use crate::generation::artifact::{BootAssetSources, BootAssetsManifest, stage_boot_assets};
 
 #[derive(Debug)]
@@ -54,12 +52,8 @@ pub(super) fn stage_runtime_boot_assets_from_sources(
 }
 
 #[cfg(test)]
-fn resolve_runtime_boot_asset_sources(
-    troves: &[Trove],
-    boot_root: &Path,
-) -> crate::Result<RuntimeBootAssetSources> {
+fn resolve_runtime_boot_asset_sources(boot_root: &Path) -> crate::Result<RuntimeBootAssetSources> {
     resolve_runtime_boot_asset_sources_with_tools(
-        troves,
         boot_root,
         Path::new("dracut"),
         Path::new("depmod"),
@@ -68,13 +62,11 @@ fn resolve_runtime_boot_asset_sources(
 }
 
 pub(super) fn resolve_generation_boot_asset_sources(
-    troves: &[Trove],
     runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
     boot_root: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
     resolve_generation_boot_asset_sources_with_tools(
-        troves,
         runtime_inputs,
         generations_root,
         boot_root,
@@ -85,7 +77,6 @@ pub(super) fn resolve_generation_boot_asset_sources(
 }
 
 fn resolve_generation_boot_asset_sources_with_tools(
-    troves: &[Trove],
     runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
     boot_root: &Path,
@@ -94,9 +85,7 @@ fn resolve_generation_boot_asset_sources_with_tools(
     cpio: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
     if boot_root != Path::new("/boot") {
-        return resolve_runtime_boot_asset_sources_with_tools(
-            troves, boot_root, dracut, depmod, cpio,
-        );
+        return resolve_runtime_boot_asset_sources_with_tools(boot_root, dracut, depmod, cpio);
     }
 
     let artifact_root = artifact_root_for_generations_root(generations_root)?;
@@ -105,7 +94,6 @@ fn resolve_generation_boot_asset_sources_with_tools(
         materialize_runtime_generation_sysroot(runtime_inputs, &objects_dir, &artifact_root)?;
     let generation_boot_root = sysroot_workspace.path().join("boot");
     let mut sources = resolve_runtime_boot_asset_sources_with_tools_and_policy(
-        troves,
         &generation_boot_root,
         dracut,
         depmod,
@@ -117,14 +105,12 @@ fn resolve_generation_boot_asset_sources_with_tools(
 }
 
 fn resolve_runtime_boot_asset_sources_with_tools(
-    troves: &[Trove],
     boot_root: &Path,
     dracut: &Path,
     depmod: &Path,
     cpio: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
     resolve_runtime_boot_asset_sources_with_tools_and_policy(
-        troves,
         boot_root,
         dracut,
         depmod,
@@ -134,31 +120,25 @@ fn resolve_runtime_boot_asset_sources_with_tools(
 }
 
 fn resolve_runtime_boot_asset_sources_with_tools_and_policy(
-    troves: &[Trove],
     boot_root: &Path,
     dracut: &Path,
     depmod: &Path,
     cpio: &Path,
     initramfs_policy: InitramfsPolicy,
 ) -> crate::Result<RuntimeBootAssetSources> {
-    let requested_version = detect_kernel_version_from_troves(troves).ok_or_else(|| {
-        crate::error::Error::NotFound(
-            "could not determine kernel version for generation boot assets".to_string(),
-        )
-    })?;
-    if requested_version.contains('/') || requested_version.contains('\\') {
-        return Err(crate::error::Error::InvalidPath(format!(
-            "kernel version must not contain path separators: {requested_version}"
+    let system_root = system_root_for_boot_root(boot_root);
+    let mut candidate_releases = Vec::new();
+    collect_boot_kernel_releases(boot_root, &mut candidate_releases)?;
+    collect_module_kernel_releases(&system_root, &mut candidate_releases)?;
+    if candidate_releases.is_empty() {
+        return Err(crate::error::Error::NotFound(format!(
+            "generation boot root {} has no exact versioned kernel identity in /boot or /lib/modules",
+            boot_root.display()
         )));
     }
 
-    let system_root = system_root_for_boot_root(boot_root);
-    let mut candidate_releases = Vec::new();
-    push_unique_release(&mut candidate_releases, requested_version.clone());
-    collect_boot_kernel_releases(boot_root, &requested_version, &mut candidate_releases);
-    collect_module_kernel_releases(&system_root, &requested_version, &mut candidate_releases);
-
-    let mut last_error = None;
+    let mut complete = Vec::new();
+    let mut failures = Vec::new();
     for release in candidate_releases {
         match runtime_boot_asset_sources_for_release(
             boot_root,
@@ -169,16 +149,30 @@ fn resolve_runtime_boot_asset_sources_with_tools_and_policy(
             cpio,
             initramfs_policy,
         ) {
-            Ok(sources) => return Ok(sources),
-            Err(error) => last_error = Some(error),
+            Ok(sources) => complete.push(sources),
+            Err(error) => failures.push((release, error)),
         }
     }
-
-    Err(last_error.unwrap_or_else(|| {
-        crate::error::Error::NotFound(format!(
-            "could not find runtime boot assets for kernel {requested_version}"
-        ))
-    }))
+    match complete.len() {
+        1 => Ok(complete.pop().expect("one complete boot asset set")),
+        0 => Err(crate::error::Error::NotFound(format!(
+            "generation boot root {} has no complete exact kernel/initramfs/EFI asset set: {}",
+            boot_root.display(),
+            failures
+                .into_iter()
+                .map(|(release, error)| format!("{release}: {error}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))),
+        _ => Err(crate::error::Error::InvalidPath(format!(
+            "generation boot root {} has multiple complete kernel asset sets {:?}; select one exact kernel before building the generation",
+            boot_root.display(),
+            complete
+                .iter()
+                .map(|sources| sources.kernel_version.as_str())
+                .collect::<Vec<_>>()
+        ))),
+    }
 }
 
 fn runtime_boot_asset_sources_for_release(
@@ -191,29 +185,21 @@ fn runtime_boot_asset_sources_for_release(
     initramfs_policy: InitramfsPolicy,
 ) -> crate::Result<RuntimeBootAssetSources> {
     let versioned_kernel = boot_root.join(format!("vmlinuz-{release}"));
-    let unversioned_kernel = boot_root.join("vmlinuz");
     let kernel = if regular_file_exists(&versioned_kernel) {
         versioned_kernel
     } else {
         module_kernel_path(system_root, release)
-            .or_else(|| regular_file_exists(&unversioned_kernel).then_some(unversioned_kernel))
             .ok_or_else(|| {
                 crate::error::Error::NotFound(format!(
-                    "missing required boot asset kernel for {release}; expected {}, {}, or a module kernel at lib/modules/{release}/vmlinuz",
+                    "missing exact versioned boot asset kernel for {release}; expected {} or a module kernel at lib/modules/{release}/vmlinuz",
                     boot_root.join(format!("vmlinuz-{release}")).display(),
-                    boot_root.join("vmlinuz").display()
                 ))
             })?
     };
 
     let versioned_initramfs = boot_root.join(format!("initramfs-{release}.img"));
-    let unversioned_initramfs = boot_root.join("initramfs.img");
     let force_conary_initramfs = initramfs_policy == InitramfsPolicy::GenerateConary;
-    let initramfs = if force_conary_initramfs {
-        versioned_initramfs
-    } else {
-        select_existing_or_versioned_initramfs(versioned_initramfs, unversioned_initramfs)
-    };
+    let initramfs = versioned_initramfs;
     if force_conary_initramfs || !regular_file_exists(&initramfs) {
         generate_runtime_initramfs(dracut, depmod, cpio, system_root, release, &initramfs)?;
     }
@@ -241,32 +227,91 @@ fn runtime_boot_asset_sources_for_release(
     })
 }
 
-fn select_existing_or_versioned_initramfs(
-    versioned_initramfs: PathBuf,
-    unversioned_initramfs: PathBuf,
-) -> PathBuf {
-    if regular_file_exists(&versioned_initramfs) {
-        versioned_initramfs
-    } else if regular_file_exists(&unversioned_initramfs) {
-        unversioned_initramfs
-    } else {
-        versioned_initramfs
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::initramfs::{
         CONARY_DRACUT_MODULE_SETUP, RUNTIME_DRACUT_ADD_MODULES, RUNTIME_DRACUT_OMIT_MODULES,
     };
-    use super::super::{FileEntryRef, runtime_inputs};
+    use super::super::runtime_inputs;
     use super::*;
-    use crate::db::models::{Trove, TroveType};
     use crate::filesystem::CasStore;
+    use crate::generation::root_manifest::{
+        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+        MutableStateManifest,
+    };
+    use crate::payload::{
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     #[cfg(unix)]
     use super::super::test_support::write_executable;
+
+    fn exact_runtime_inputs(
+        files: Vec<(String, String, u64)>,
+    ) -> runtime_inputs::RuntimeGenerationInputs {
+        let mut directory_paths = BTreeSet::new();
+        for (path, _, _) in &files {
+            let mut parent = Path::new(path).parent();
+            while let Some(path) = parent {
+                if path == Path::new("/") {
+                    break;
+                }
+                directory_paths.insert(path.to_string_lossy().into_owned());
+                parent = path.parent();
+            }
+        }
+        let mut entries = directory_paths
+            .into_iter()
+            .map(|path| GenerationRootEntry {
+                path,
+                node: directory_node(),
+                content: None,
+            })
+            .collect::<Vec<_>>();
+        entries.extend(
+            files
+                .into_iter()
+                .map(|(path, sha256, size)| GenerationRootEntry {
+                    path,
+                    node: owned_regular_node(0o644),
+                    content: Some(PayloadContentAuthority { sha256, size }),
+                }),
+        );
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        runtime_inputs::RuntimeGenerationInputs {
+            generation: GenerationRootManifest {
+                version: GENERATION_ROOT_MANIFEST_VERSION,
+                root: directory_node(),
+                entries,
+            },
+            state: MutableStateManifest::empty(),
+            adopted_track_count: 0,
+        }
+    }
+
+    fn directory_node() -> ResolvedPayloadNode {
+        let mut node = owned_regular_source(0o755);
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        ResolvedPayloadNode::from_numeric_source(node).unwrap()
+    }
+
+    fn owned_regular_node(permissions: u32) -> ResolvedPayloadNode {
+        ResolvedPayloadNode::from_numeric_source(owned_regular_source(permissions)).unwrap()
+    }
+
+    fn owned_regular_source(permissions: u32) -> PayloadNode {
+        let mut node = PayloadNode::regular(permissions);
+        node.user = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::geteuid() }),
+        };
+        node.group = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::getegid() }),
+        };
+        node
+    }
 
     #[test]
     fn runtime_boot_asset_resolution_uses_arch_qualified_module_release() {
@@ -284,13 +329,7 @@ mod tests {
         .unwrap();
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            "6.17.1-300.fc44".to_string(),
-            TroveType::Package,
-        )];
-
-        let sources = resolve_runtime_boot_asset_sources(&troves, &boot_root).unwrap();
+        let sources = resolve_runtime_boot_asset_sources(&boot_root).unwrap();
 
         assert_eq!(sources.kernel_version, release);
         assert_eq!(sources.kernel, module_dir.join("vmlinuz"));
@@ -300,7 +339,7 @@ mod tests {
         );
     }
     #[test]
-    fn runtime_boot_asset_resolution_accepts_unversioned_boot_fixture_assets() {
+    fn runtime_boot_asset_resolution_rejects_unversioned_assets_without_release_authority() {
         let tmp = tempfile::TempDir::new().unwrap();
         let boot_root = tmp.path().join("boot");
         let release = "6.19.8";
@@ -309,22 +348,62 @@ mod tests {
         std::fs::write(boot_root.join("initramfs.img"), b"initramfs").unwrap();
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            release.to_string(),
-            TroveType::Package,
-        )];
+        let error = resolve_runtime_boot_asset_sources(&boot_root)
+            .unwrap_err()
+            .to_string();
 
-        let sources = resolve_runtime_boot_asset_sources(&troves, &boot_root).unwrap();
+        assert!(error.contains("no exact versioned kernel identity"));
+        assert!(!error.contains(release));
+    }
 
-        assert_eq!(sources.kernel_version, release);
-        assert_eq!(sources.kernel, boot_root.join("vmlinuz"));
-        assert_eq!(sources.initramfs, boot_root.join("initramfs.img"));
+    #[test]
+    fn runtime_boot_asset_resolution_never_pairs_unversioned_kernel_with_versioned_initramfs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.19.8";
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("vmlinuz"), b"wrong-kernel").unwrap();
+        std::fs::write(
+            boot_root.join(format!("initramfs-{release}.img")),
+            b"initramfs",
+        )
+        .unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+
+        let error = resolve_runtime_boot_asset_sources(&boot_root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("missing exact versioned boot asset kernel"));
+        assert!(error.contains(release));
+    }
+
+    #[test]
+    fn runtime_boot_asset_resolution_rejects_multiple_complete_kernels() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+        std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
+        for release in ["6.19.8", "6.20.1"] {
+            std::fs::write(boot_root.join(format!("vmlinuz-{release}")), b"kernel").unwrap();
+            std::fs::write(
+                boot_root.join(format!("initramfs-{release}.img")),
+                b"initramfs",
+            )
+            .unwrap();
+        }
+
+        let error = resolve_runtime_boot_asset_sources(&boot_root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("multiple complete kernel asset sets"));
+        assert!(error.contains("6.19.8"));
+        assert!(error.contains("6.20.1"));
     }
 
     #[test]
     fn generation_boot_asset_resolution_materializes_default_boot_from_cas_inputs() {
-        use crate::db::models::TroveType;
         let tmp = tempfile::TempDir::new().unwrap();
         let generations_root = tmp.path().join("generations");
         let objects_dir = tmp.path().join("objects");
@@ -339,62 +418,35 @@ mod tests {
         let initramfs_hash = cas.store(b"cas-initramfs").unwrap();
         let efi_hash = cas.store(b"cas-efi").unwrap();
         let modules_dep_hash = cas.store(b"modules-dep").unwrap();
-        let runtime_inputs = runtime_inputs::RuntimeGenerationInputs {
-            file_refs: vec![
-                FileEntryRef {
-                    path: format!("/boot/vmlinuz-{release}"),
-                    sha256_hash: kernel_hash,
-                    size: b"cas-kernel".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-                FileEntryRef {
-                    path: format!("/boot/initramfs-{release}.img"),
-                    sha256_hash: initramfs_hash,
-                    size: b"cas-initramfs".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-                FileEntryRef {
-                    path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
-                    sha256_hash: efi_hash,
-                    size: b"cas-efi".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-                FileEntryRef {
-                    path: format!("/usr/lib/modules/{release}/modules.dep"),
-                    sha256_hash: modules_dep_hash,
-                    size: b"modules-dep".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-            ],
-            symlink_refs: Vec::new(),
-            adopted_track_count: 0,
-        };
+        let runtime_inputs = exact_runtime_inputs(vec![
+            (
+                format!("/boot/vmlinuz-{release}"),
+                kernel_hash,
+                b"cas-kernel".len() as u64,
+            ),
+            (
+                format!("/boot/initramfs-{release}.img"),
+                initramfs_hash,
+                b"cas-initramfs".len() as u64,
+            ),
+            (
+                "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
+                efi_hash,
+                b"cas-efi".len() as u64,
+            ),
+            (
+                format!("/usr/lib/modules/{release}/modules.dep"),
+                modules_dep_hash,
+                b"modules-dep".len() as u64,
+            ),
+        ]);
         write_executable(
             &fake_dracut,
             "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
         );
         write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
         write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            release.to_string(),
-            TroveType::Package,
-        )];
-
         let sources = resolve_generation_boot_asset_sources_with_tools(
-            &troves,
             &runtime_inputs,
             &generations_root,
             Path::new("/boot"),
@@ -422,7 +474,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn generation_boot_asset_resolution_regenerates_conary_initramfs_from_materialized_sysroot() {
-        use crate::db::models::TroveType;
         let tmp = tempfile::TempDir::new().unwrap();
         let generations_root = tmp.path().join("generations");
         let objects_dir = tmp.path().join("objects");
@@ -438,48 +489,28 @@ mod tests {
         let adopted_initramfs_hash = cas.store(b"adopted-host-initramfs").unwrap();
         let efi_hash = cas.store(b"cas-efi").unwrap();
         let modules_dep_hash = cas.store(b"modules-dep").unwrap();
-        let runtime_inputs = runtime_inputs::RuntimeGenerationInputs {
-            file_refs: vec![
-                FileEntryRef {
-                    path: format!("/boot/vmlinuz-{release}"),
-                    sha256_hash: kernel_hash,
-                    size: b"cas-kernel".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-                FileEntryRef {
-                    path: format!("/boot/initramfs-{release}.img"),
-                    sha256_hash: adopted_initramfs_hash,
-                    size: b"adopted-host-initramfs".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-                FileEntryRef {
-                    path: "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
-                    sha256_hash: efi_hash,
-                    size: b"cas-efi".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-                FileEntryRef {
-                    path: format!("/usr/lib/modules/{release}/modules.dep"),
-                    sha256_hash: modules_dep_hash,
-                    size: b"modules-dep".len() as u64,
-                    permissions: 0o100644,
-                    owner: None,
-                    group_name: None,
-                    xattrs: std::collections::BTreeMap::new(),
-                },
-            ],
-            symlink_refs: Vec::new(),
-            adopted_track_count: 0,
-        };
+        let runtime_inputs = exact_runtime_inputs(vec![
+            (
+                format!("/boot/vmlinuz-{release}"),
+                kernel_hash,
+                b"cas-kernel".len() as u64,
+            ),
+            (
+                format!("/boot/initramfs-{release}.img"),
+                adopted_initramfs_hash,
+                b"adopted-host-initramfs".len() as u64,
+            ),
+            (
+                "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
+                efi_hash,
+                b"cas-efi".len() as u64,
+            ),
+            (
+                format!("/usr/lib/modules/{release}/modules.dep"),
+                modules_dep_hash,
+                b"modules-dep".len() as u64,
+            ),
+        ]);
         write_executable(
             &fake_dracut,
             &format!(
@@ -489,14 +520,7 @@ mod tests {
         );
         write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
         write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            release.to_string(),
-            TroveType::Package,
-        )];
-
         let sources = resolve_generation_boot_asset_sources_with_tools(
-            &troves,
             &runtime_inputs,
             &generations_root,
             Path::new("/boot"),
@@ -544,14 +568,7 @@ mod tests {
         write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
         write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
 
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            "6.17.1-300.fc44".to_string(),
-            TroveType::Package,
-        )];
-
         let sources = resolve_runtime_boot_asset_sources_with_tools(
-            &troves,
             &boot_root,
             &fake_dracut,
             &fake_depmod,
@@ -599,14 +616,7 @@ mod tests {
         );
         write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
 
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            "6.17.1-300.fc44".to_string(),
-            TroveType::Package,
-        )];
-
         resolve_runtime_boot_asset_sources_with_tools(
-            &troves,
             &boot_root,
             &fake_dracut,
             &fake_depmod,
@@ -635,14 +645,7 @@ mod tests {
         write_executable(&fake_dracut, "#!/bin/sh\nexit 99\n");
         write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
 
-        let troves = vec![Trove::new(
-            "kernel-core".to_string(),
-            "6.17.1-300.fc44".to_string(),
-            TroveType::Package,
-        )];
-
         let error = resolve_runtime_boot_asset_sources_with_tools(
-            &troves,
             &boot_root,
             &fake_dracut,
             &fake_depmod,

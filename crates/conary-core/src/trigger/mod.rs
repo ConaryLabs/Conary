@@ -11,20 +11,19 @@
 //! - DAG-ordered execution (respects trigger dependencies)
 //! - Deduplication (each trigger runs once per changeset, not per file)
 //! - Timeout protection
-//! - Handler existence checking (skip if handler not found)
-//! - Target root support: triggers can run inside a target filesystem
+//! - Handler existence checking against the selected root
+//! - Selected-root execution with no host-root path
 //!
 //! ## Target Root Support
 //!
-//! When installing to a target root (root != "/"), triggers are executed
-//! inside a chroot rooted at the target path. This allows triggers to run
-//! correctly during bootstrap or container image creation.
+//! Triggers execute only inside a materialized selected root. The host root is
+//! never a trigger target.
 
 mod execution;
 
 use crate::db::models::{ChangesetTrigger, Trigger, TriggerEngine};
 use crate::error::Result;
-use execution::{handler_exists, shell_split};
+use execution::shell_split;
 use rusqlite::Connection;
 use std::path::Path;
 use std::time::Duration;
@@ -76,13 +75,21 @@ impl<'a> TriggerExecutor<'a> {
         engine.record_triggers(changeset_id, file_paths)
     }
 
-    /// Check if we're operating on the live root
-    fn is_live_root(&self) -> bool {
-        self.root == Path::new("/")
-    }
-
     /// Execute all pending triggers for a changeset
     pub fn execute_pending(&self, changeset_id: i64) -> Result<TriggerResults> {
+        if self.root == Path::new("/") {
+            return Err(crate::error::Error::TriggerError(
+                "Trigger execution requires a materialized selected root; the host root '/' is not an execution target"
+                    .to_string(),
+            ));
+        }
+        if !self.root.is_absolute() {
+            return Err(crate::error::Error::TriggerError(format!(
+                "Trigger execution root must be absolute: {}",
+                self.root.display()
+            )));
+        }
+
         let engine = TriggerEngine::new(self.conn);
         let triggers = engine.get_execution_order(changeset_id)?;
 
@@ -109,9 +116,7 @@ impl<'a> TriggerExecutor<'a> {
                 continue;
             }
 
-            // Check if handler exists (in target root if not live).
-            // Surface parse errors (e.g. unterminated quotes) as warnings
-            // instead of silently treating them as "not found".
+            // Surface parse errors instead of treating them as "not found".
             let handler_parts = match shell_split(&trigger.handler) {
                 Ok(parts) => parts,
                 Err(e) => {
@@ -132,41 +137,25 @@ impl<'a> TriggerExecutor<'a> {
                 .first()
                 .map(String::as_str)
                 .unwrap_or_default();
-            let handler_check = if self.is_live_root() {
-                handler_exists(handler_cmd)
-            } else {
-                handler_exists_in_root(handler_cmd, self.root)
-            };
+            let handler_check = handler_exists_in_root(handler_cmd, self.root);
 
             if !handler_check {
-                info!(
-                    "  [SKIP] Trigger '{}': handler '{}' not found{}",
-                    trigger.name,
+                let message = format!(
+                    "handler '{}' is missing from selected root {}",
                     handler_cmd,
-                    if self.is_live_root() {
-                        ""
-                    } else {
-                        " in target root"
-                    }
+                    self.root.display()
                 );
-                ChangesetTrigger::mark_completed(
-                    self.conn,
-                    changeset_id,
-                    trigger_id,
-                    Some(&format!("Skipped: handler '{}' not found", handler_cmd)),
-                )?;
-                results.skipped += 1;
+                warn!("Trigger '{}' cannot run: {message}", trigger.name);
+                ChangesetTrigger::mark_failed(self.conn, changeset_id, trigger_id, &message)?;
+                results.failed += 1;
+                results.errors.push(format!("{}: {message}", trigger.name));
                 continue;
             }
 
             info!("  Running trigger: {} ({})", trigger.name, trigger.handler);
             ChangesetTrigger::mark_running(self.conn, changeset_id, trigger_id)?;
 
-            let result = if self.is_live_root() {
-                self.execute_handler(&trigger)
-            } else {
-                self.execute_handler_in_target(&trigger)
-            };
+            let result = self.execute_handler_in_target(&trigger);
 
             match result {
                 Ok(output) => {

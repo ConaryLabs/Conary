@@ -4,6 +4,13 @@
 
 use crate::db::models::Trove;
 use crate::error::Result;
+use crate::packages::payload::PackagePayload;
+use crate::payload::{PayloadContentAuthority, PayloadNode};
+use crate::repository::dependency_model::{
+    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RepositoryCapabilityKind, RepositoryRequirementGroup,
+};
+use crate::repository::versioning::{VersionScheme, validate_repo_version};
 
 pub use crate::packages::native_abi::*;
 
@@ -11,55 +18,65 @@ pub use crate::packages::native_abi::*;
 #[derive(Debug, Clone)]
 pub struct PackageFile {
     pub path: String,
-    pub size: i64,
-    pub mode: i32,
-    pub sha256: Option<String>,
-    /// Symlink target (None for regular files, Some for symlinks)
-    pub symlink_target: Option<String>,
+    pub node: PayloadNode,
+    pub content: Option<PayloadContentAuthority>,
 }
 
 /// A file extracted from a package with its content
 #[derive(Debug, Clone)]
 pub struct ExtractedFile {
     pub path: String,
+    pub node: PayloadNode,
     pub content: Vec<u8>,
-    pub size: i64,
-    pub mode: i32,
-    pub sha256: Option<String>,
-    /// Symlink target (None for regular files, Some for symlinks).
-    /// For symlinks, `content` is empty and this field holds the target.
-    pub symlink_target: Option<String>,
+    pub content_authority: Option<PayloadContentAuthority>,
 }
 
-/// Dependency information
-#[derive(Debug, Clone)]
-pub struct Dependency {
+/// Exact capability provided by one parsed package.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidedCapability {
+    pub kind: RepositoryCapabilityKind,
     pub name: String,
+    /// Provider range boundary, never a comparison expression.
     pub version: Option<String>,
-    pub dep_type: DependencyType,
-    pub description: Option<String>,
+    /// Typed relation associated with `version`.
+    pub version_relation: Option<ProvideVersionRelation>,
+    pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DependencyType {
-    Runtime,
-    Build,
-    Optional,
-}
-
-impl DependencyType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Runtime => "runtime",
-            Self::Build => "build",
-            Self::Optional => "optional",
+impl ProvidedCapability {
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(crate::error::Error::ParseError(
+                "provided capability name is empty".to_string(),
+            ));
         }
+        if self.version.is_some() != self.version_relation.is_some() {
+            return Err(crate::error::Error::ParseError(format!(
+                "provided capability '{}' must carry both a version relation and boundary, or neither",
+                self.name
+            )));
+        }
+        if let Some(version) = self.version.as_deref() {
+            validate_repo_version(self.version_scheme, version).map_err(|error| {
+                crate::error::Error::ParseError(format!(
+                    "provided capability '{}' has invalid {} provider version: {error}",
+                    self.name,
+                    self.version_scheme.as_str()
+                ))
+            })?;
+        }
+        Ok(())
     }
 }
 
-/// When a scriptlet runs during the package lifecycle
+/// Non-authoritative lifecycle label attached to flattened diagnostic evidence.
+///
+/// Exact native lifecycle authority uses [`NativeLifecyclePath`] and
+/// [`NativeScriptletEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptletPhase {
+pub enum DiagnosticScriptletPhase {
     /// Before package installation
     PreInstall,
     /// After package installation
@@ -80,7 +97,7 @@ pub enum ScriptletPhase {
     Trigger,
 }
 
-impl std::fmt::Display for ScriptletPhase {
+impl std::fmt::Display for DiagnosticScriptletPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PreInstall => write!(f, "pre-install"),
@@ -96,21 +113,21 @@ impl std::fmt::Display for ScriptletPhase {
     }
 }
 
-/// A scriptlet (install/remove hook) from a package
+/// Non-authoritative flattened script text retained only for conversion diagnostics.
+///
+/// Install, remove, publication, and lifecycle planning must use
+/// [`NativeScriptletEntry`] instead.
 #[derive(Debug, Clone)]
-pub struct Scriptlet {
-    /// When this scriptlet runs
-    pub phase: ScriptletPhase,
-    /// The interpreter to use (e.g., "/bin/sh", "/bin/bash", "/usr/bin/lua")
+pub struct DiagnosticScriptletEvidence {
+    pub phase: DiagnosticScriptletPhase,
     pub interpreter: String,
-    /// The script content
     pub content: String,
-    /// Optional flags/arguments for the interpreter
     pub flags: Option<String>,
 }
 
 /// Configuration file information from a package
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigFileInfo {
     /// Path to the config file
     pub path: String,
@@ -118,6 +135,9 @@ pub struct ConfigFileInfo {
     pub noreplace: bool,
     /// If true, this is a ghost config (not in payload, just tracked)
     pub ghost: bool,
+    /// Debian control declaration: remove the old conffile on the next
+    /// upgrade, preserving a locally modified copy as `.dpkg-old`.
+    pub remove_on_upgrade: bool,
 }
 
 /// Common interface for all package formats (RPM, DEB, Arch, etc.)
@@ -133,8 +153,22 @@ pub trait PackageFormat {
     /// Get the package version
     fn version(&self) -> &str;
 
+    /// Monotonic signed CCS build release, absent for a source-native
+    /// artifact that has not been wrapped in a CCS envelope.
+    fn package_release(&self) -> Option<&str> {
+        None
+    }
+
+    /// Native version algebra for package requirements and provides.
+    fn version_scheme(&self) -> VersionScheme;
+
     /// Get the package architecture (e.g., "x86_64", "aarch64")
     fn architecture(&self) -> Option<&str>;
+
+    /// Exact Debian `Multi-Arch` behavior, when the source format defines it.
+    fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
+        None
+    }
 
     /// Get the package summary/description
     fn description(&self) -> Option<&str>;
@@ -142,29 +176,41 @@ pub trait PackageFormat {
     /// Get the list of files in the package
     fn files(&self) -> &[PackageFile];
 
-    /// Get the list of dependencies
-    fn dependencies(&self) -> &[Dependency];
+    /// Get exact positive package requirements.
+    ///
+    /// This is the sole install and resolution authority; Boolean structure
+    /// must remain intact through conversion and persistence.
+    fn requirements(&self) -> &[RepositoryRequirementGroup];
 
     /// Get the list of native capabilities this package provides.
     ///
     /// Defaults to an empty slice for formats that do not expose native
     /// provide metadata.
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         &[]
     }
 
-    /// Extract all file contents from the package
+    /// Get source-native conflict, break, replacement, and obsolete relations.
     ///
-    /// Returns a vector of ExtractedFile containing file metadata and content.
-    /// This is used during package installation to get the actual file data.
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>>;
-
-    /// Get the scriptlets (install/remove hooks) from the package
-    ///
-    /// Returns a slice of Scriptlet containing phase, interpreter, and content.
-    /// Default implementation returns empty slice for formats that don't support scriptlets.
-    fn scriptlets(&self) -> &[Scriptlet] {
+    /// These are persisted in the same typed requirement-group authority as
+    /// positive requirements.
+    fn relations(&self) -> &[RepositoryRequirementGroup] {
         &[]
+    }
+
+    /// Open the complete package payload as independently reopenable streams.
+    ///
+    /// This is the sole payload authority for install, conversion, trusted
+    /// intake, and future package backends.
+    fn package_payload(&self) -> Result<PackagePayload>;
+
+    /// Explicitly materialize the complete payload in memory.
+    ///
+    /// This convenience is only for tests and tooling whose input is already
+    /// bounded. Install, conversion, and trusted intake must use
+    /// [`Self::package_payload`].
+    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
+        self.package_payload()?.to_extracted_in_memory()
     }
 
     /// Get byte-preserving native package-manager scriptlet ABI entries.

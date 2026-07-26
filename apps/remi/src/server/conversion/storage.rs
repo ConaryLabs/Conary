@@ -1,21 +1,84 @@
 // apps/remi/src/server/conversion/storage.rs
-//! CAS and optional R2 write-through storage for converted blobs.
+//! Bounded-memory CAS and optional R2 storage for emitted CCS artifacts.
 
 use super::ConversionService;
 use anyhow::{Context, Result};
+use conary_core::ccs::chunking::Chunker;
 use conary_core::ccs::convert::ConversionResult;
+use conary_core::db::models::ChunkAccess;
+use conary_core::filesystem::{CasStore, object_path};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::debug;
 
 pub(super) struct StoredChunks {
     pub(super) chunk_hashes: Vec<String>,
+    pub(super) chunking_duration: Duration,
     pub(super) cas_duration: Duration,
     pub(super) r2_duration: Option<Duration>,
 }
 
+struct LocalStoredChunks {
+    ordered_chunks: Vec<(String, i64)>,
+    chunking_duration: Duration,
+    cas_duration: Duration,
+}
+
+fn chunk_and_store_ccs_artifact(
+    package_path: &Path,
+    objects_dir: &Path,
+) -> Result<LocalStoredChunks> {
+    let file = File::open(package_path)
+        .with_context(|| format!("open emitted CCS artifact {}", package_path.display()))?;
+    let expected_size = file
+        .metadata()
+        .with_context(|| format!("stat emitted CCS artifact {}", package_path.display()))?
+        .len();
+    if expected_size == 0 {
+        anyhow::bail!("emitted CCS artifact is empty");
+    }
+
+    let cas = CasStore::new(objects_dir).context("initialize converted-artifact CAS")?;
+    let mut ordered_chunks = Vec::new();
+    let mut cas_duration = Duration::default();
+    let chunking_started = Instant::now();
+    let processed = Chunker::new().visit_reader_chunks(file, |chunk| {
+        let expected_hash = chunk.hash_hex();
+        let cas_started = Instant::now();
+        let stored_hash = cas
+            .store(&chunk.data)
+            .context("store emitted CCS artifact chunk")?;
+        cas_duration += cas_started.elapsed();
+        if stored_hash != expected_hash {
+            anyhow::bail!(
+                "CAS hash disagrees with streamed chunk authority: {stored_hash} != {expected_hash}"
+            );
+        }
+        ordered_chunks.push((expected_hash, i64::from(chunk.length)));
+        Ok(())
+    })?;
+    let chunking_duration = chunking_started.elapsed().saturating_sub(cas_duration);
+
+    if processed != expected_size {
+        anyhow::bail!(
+            "streamed CCS artifact size disagrees with file metadata: {processed} != {expected_size}"
+        );
+    }
+    if ordered_chunks.is_empty() {
+        anyhow::bail!("emitted CCS artifact produced no chunks");
+    }
+
+    Ok(LocalStoredChunks {
+        ordered_chunks,
+        chunking_duration,
+        cas_duration,
+    })
+}
+
 impl ConversionService {
-    /// Store blobs from conversion result in CAS
+    /// Store the emitted CCS artifact as ordered content-defined chunks.
     #[cfg(test)]
     async fn store_chunks(&self, result: &ConversionResult) -> Result<Vec<String>> {
         Ok(self.store_chunks_with_timing(result).await?.chunk_hashes)
@@ -25,62 +88,93 @@ impl ConversionService {
         &self,
         result: &ConversionResult,
     ) -> Result<StoredChunks> {
-        let mut chunk_hashes = Vec::new();
-        let mut cas_duration = Duration::default();
-        let mut r2_duration = self.r2_store.as_ref().map(|_| Duration::default());
+        let package_path = result
+            .package_path
+            .clone()
+            .context("conversion did not emit a CCS artifact")?;
         let objects_dir = self.chunk_dir.join("objects");
+        let local_objects_dir = objects_dir.clone();
+        let local = tokio::task::spawn_blocking(move || {
+            chunk_and_store_ccs_artifact(&package_path, &local_objects_dir)
+        })
+        .await
+        .context("join emitted CCS artifact chunking task")??;
 
-        // Get blobs from the build result (chunks or whole files)
-        for (hash, data) in &result.build_result.blobs {
-            let cas_started = Instant::now();
-            let (prefix, rest) = hash.split_at(2.min(hash.len()));
-            let chunk_path = objects_dir.join(prefix).join(rest);
-
-            // Skip if chunk already exists (content-addressed = immutable)
-            if chunk_path.exists() {
-                cas_duration += cas_started.elapsed();
-                debug!("Chunk {} already exists", hash);
-                chunk_hashes.push(hash.clone());
-                continue;
+        let mut exact_sizes = BTreeMap::new();
+        for (hash, size) in &local.ordered_chunks {
+            if let Some(previous) = exact_sizes.insert(hash.clone(), *size)
+                && previous != *size
+            {
+                anyhow::bail!(
+                    "identical chunk hash has conflicting exact sizes: {previous} != {size}"
+                );
             }
+        }
 
-            // Create parent directory
-            if let Some(parent) = chunk_path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .context("Failed to create chunk directory")?;
-            }
-
-            // Write chunk atomically
-            let temp_path = chunk_path.with_extension("tmp");
-            tokio::fs::write(&temp_path, data)
-                .await
-                .context("Failed to write chunk")?;
-            tokio::fs::rename(&temp_path, &chunk_path)
-                .await
-                .context("Failed to rename chunk")?;
-            cas_duration += cas_started.elapsed();
-
-            // R2 write-through: upload to Cloudflare R2 in parallel
-            if let Some(ref r2) = self.r2_store {
+        let r2_duration = if let Some(ref r2) = self.r2_store {
+            let mut duration = Duration::default();
+            let unique_hashes: BTreeSet<_> = local
+                .ordered_chunks
+                .iter()
+                .map(|(hash, _)| hash.clone())
+                .collect();
+            for hash in unique_hashes {
                 let r2_started = Instant::now();
-                if let Err(e) = r2.put_chunk(hash, data).await {
+                let chunk_path = object_path(&objects_dir, &hash)?;
+                let data = tokio::fs::read(&chunk_path)
+                    .await
+                    .with_context(|| format!("read local CAS chunk {hash} for R2 write-through"))?;
+                let actual_hash = conary_core::hash::sha256(&data);
+                if actual_hash != hash {
+                    anyhow::bail!(
+                        "local CAS chunk failed R2 integrity check: {actual_hash} != {hash}"
+                    );
+                }
+                if let Err(e) = r2.put_chunk(&hash, &data).await {
                     tracing::warn!("R2 write-through failed for chunk {}: {}", hash, e);
                 } else {
                     debug!("R2 write-through: uploaded chunk {}", hash);
                 }
-                if let Some(total) = &mut r2_duration {
-                    *total += r2_started.elapsed();
-                }
+                duration += r2_started.elapsed();
             }
+            Some(duration)
+        } else {
+            None
+        };
 
-            debug!("Stored chunk: {} ({} bytes)", hash, data.len());
-            chunk_hashes.push(hash.clone());
+        if !exact_sizes.is_empty() {
+            let db_path = self.db_path.clone();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let mut conn = crate::server::open_runtime_db(&db_path)?;
+                let tx = conn.transaction()?;
+                for (hash, size) in exact_sizes {
+                    if let Some(existing) = ChunkAccess::find_by_hash(&tx, &hash)?
+                        && existing.size_bytes != size
+                    {
+                        anyhow::bail!(
+                            "chunk {hash} size disagrees with persisted CAS authority: \
+                             {} != {size}",
+                            existing.size_bytes
+                        );
+                    }
+                    ChunkAccess::new(hash, size).upsert(&tx)?;
+                }
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+            .context("join exact chunk-size persistence task")??;
         }
 
+        let chunk_hashes = local
+            .ordered_chunks
+            .into_iter()
+            .map(|(hash, _)| hash)
+            .collect();
         Ok(StoredChunks {
             chunk_hashes,
-            cas_duration,
+            chunking_duration: local.chunking_duration,
+            cas_duration: local.cas_duration,
             r2_duration,
         })
     }
@@ -97,6 +191,29 @@ mod tests {
     use super::super::test_support::make_conversion_result;
     use super::*;
     use std::path::{Path, PathBuf};
+
+    fn initialized_db(temp_dir: &tempfile::TempDir) -> PathBuf {
+        let db_path = temp_dir.path().join("remi.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        db_path
+    }
+
+    fn artifact_data(seed: u64, len: usize) -> Vec<u8> {
+        let mut state = seed;
+        (0..len)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                (state >> 32) as u8
+            })
+            .collect()
+    }
+
+    fn conversion_result_for(path: PathBuf) -> ConversionResult {
+        make_conversion_result(Some(path))
+    }
 
     #[test]
     fn test_calculate_checksum_valid_file() {
@@ -133,36 +250,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_store_chunks_writes_files() {
+    async fn test_store_chunks_reassembles_emitted_ccs_artifact() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let chunk_dir = temp_dir.path().join("chunks");
         std::fs::create_dir_all(&chunk_dir).unwrap();
+        let artifact_path = temp_dir.path().join("test.ccs");
+        let artifact = artifact_data(91, 1_250_000);
+        std::fs::write(&artifact_path, &artifact).unwrap();
 
         let service = ConversionService::new(
             chunk_dir.clone(),
             temp_dir.path().to_path_buf(),
-            PathBuf::from("/tmp/nonexistent.db"),
+            initialized_db(&temp_dir),
             None,
         );
 
-        let mut blobs = std::collections::HashMap::new();
-        blobs.insert("abcdef1234567890".to_string(), b"chunk data one".to_vec());
-        blobs.insert("1234567890abcdef".to_string(), b"chunk data two".to_vec());
-
-        let result = make_conversion_result(blobs);
+        let result = conversion_result_for(artifact_path);
         let hashes = service.store_chunks(&result).await.unwrap();
-        assert_eq!(hashes.len(), 2);
+        assert!(hashes.len() > 1);
 
-        // Verify files were written to correct paths
+        let conn = rusqlite::Connection::open(temp_dir.path().join("remi.db")).unwrap();
+        let mut reassembled = Vec::new();
+        let mut exact_total = 0_i64;
         for hash in &hashes {
-            let (prefix, rest) = hash.split_at(2);
-            let chunk_path = chunk_dir.join("objects").join(prefix).join(rest);
-            assert!(
-                chunk_path.exists(),
-                "Chunk file should exist at {:?}",
-                chunk_path
-            );
+            assert_eq!(hash.len(), 64);
+            let chunk_path = object_path(&chunk_dir.join("objects"), hash).unwrap();
+            let chunk = std::fs::read(chunk_path).unwrap();
+            assert_eq!(conary_core::hash::sha256(&chunk), *hash);
+            reassembled.extend_from_slice(&chunk);
+            exact_total += ChunkAccess::find_by_hash(&conn, hash)
+                .unwrap()
+                .unwrap()
+                .size_bytes;
         }
+        assert_eq!(reassembled, artifact);
+        assert_eq!(exact_total, artifact.len() as i64);
     }
 
     #[tokio::test]
@@ -170,42 +292,40 @@ mod tests {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let chunk_dir = temp_dir.path().join("chunks");
         std::fs::create_dir_all(&chunk_dir).unwrap();
+        let artifact_path = temp_dir.path().join("repeat.ccs");
+        std::fs::write(&artifact_path, artifact_data(32, 500_000)).unwrap();
 
         let service = ConversionService::new(
             chunk_dir.clone(),
             temp_dir.path().to_path_buf(),
-            PathBuf::from("/tmp/nonexistent.db"),
+            initialized_db(&temp_dir),
             None,
         );
 
-        let mut blobs = std::collections::HashMap::new();
-        blobs.insert("aabbccdd11223344".to_string(), b"some data".to_vec());
-
-        let result = make_conversion_result(blobs.clone());
-
-        // Store twice - should not error
+        let result = conversion_result_for(artifact_path.clone());
         let hashes1 = service.store_chunks(&result).await.unwrap();
-
-        let result2 = make_conversion_result(blobs);
+        let result2 = conversion_result_for(artifact_path);
         let hashes2 = service.store_chunks(&result2).await.unwrap();
         assert_eq!(hashes1, hashes2);
     }
 
     #[tokio::test]
-    async fn test_store_chunks_empty() {
+    async fn test_store_chunks_rejects_empty_artifact() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let chunk_dir = temp_dir.path().join("chunks");
         std::fs::create_dir_all(&chunk_dir).unwrap();
+        let artifact_path = temp_dir.path().join("empty.ccs");
+        std::fs::write(&artifact_path, b"").unwrap();
 
         let service = ConversionService::new(
             chunk_dir,
             temp_dir.path().to_path_buf(),
-            PathBuf::from("/tmp/nonexistent.db"),
+            initialized_db(&temp_dir),
             None,
         );
 
-        let result = make_conversion_result(std::collections::HashMap::new());
-        let hashes = service.store_chunks(&result).await.unwrap();
-        assert!(hashes.is_empty());
+        let result = conversion_result_for(artifact_path);
+        let error = service.store_chunks(&result).await.unwrap_err();
+        assert!(error.to_string().contains("empty"));
     }
 }

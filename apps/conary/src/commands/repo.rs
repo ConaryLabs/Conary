@@ -4,9 +4,11 @@
 use super::open_db;
 use anyhow::Result;
 use conary_core::db::models::SecurityAdvisorySupport;
-use conary_core::db::paths::keyring_dir;
+use conary_core::repository::{
+    ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, OpenPgpTrustRoot,
+    RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
+};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::Path;
 use std::time::Duration;
 use tracing::info;
 
@@ -14,19 +16,30 @@ use tracing::info;
 pub struct RepoAddOptions {
     pub name: String,
     pub url: String,
+    pub package_format: Option<RepositoryFormat>,
+    pub distribution: Option<String>,
+    pub component: Option<String>,
+    pub architecture: Option<String>,
+    pub database: Option<String>,
     pub db_path: String,
     pub content_url: Option<String>,
     pub priority: i32,
     pub disabled: bool,
-    pub gpg_key: Option<String>,
-    pub no_gpg_check: bool,
-    pub gpg_strict: bool,
+    pub debian_release_keys: Vec<OpenPgpTrustRoot>,
+    pub rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
+    pub rpm_metalink: Option<String>,
+    pub rpm_package_keys: Vec<OpenPgpTrustRoot>,
+    pub arch_keyring: Option<String>,
+    pub arch_keyring_format: Option<ArchKeyringFormat>,
+    pub arch_master_keys: Vec<String>,
+    pub arch_packager_key_threshold: Option<usize>,
+    pub arch_database_signature: Option<ArchSignatureRequirement>,
     pub fingerprints: Vec<String>,
     pub yes: bool,
     pub replace: bool,
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
-    pub remi_distro: Option<String>,
+    pub source_profile: Option<String>,
     pub security_advisory_support: SecurityAdvisorySupport,
 }
 
@@ -37,22 +50,23 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     // Validate Remi strategy configuration before any static-repository probe.
     if let Some(ref strategy) = opts.default_strategy
         && strategy == "remi"
+        && opts.remi_endpoint.is_none()
     {
-        if opts.remi_endpoint.is_none() {
-            anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
-        }
-        if opts.remi_distro.is_none() {
-            anyhow::bail!("--remi-distro is required when --default-strategy=remi");
-        }
-        if let Some(distro) = opts.remi_distro.as_deref()
-            && conary_core::repository::supported_profiles::profile_by_public_id(distro).is_none()
-        {
-            anyhow::bail!(
-                "unsupported Remi distro '{}'; use an exact public distro ID",
-                distro
-            );
-        }
+        anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
     }
+
+    let supplied_profile = opts
+        .source_profile
+        .as_deref()
+        .map(|source_profile| {
+            conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unsupported source profile '{source_profile}'; use an exact public profile ID"
+                    )
+                })
+        })
+        .transpose()?;
 
     if super::repo_static::try_cmd_repo_add_static(&opts).await? {
         return Ok(());
@@ -65,40 +79,88 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     if opts.replace {
         anyhow::bail!("--replace is only supported for static repositories");
     }
+    let package_format = opts.package_format.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--package-format is required for non-static repositories; choose rpm, deb, arch, or json"
+        )
+    })?;
+    let profile = supplied_profile.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--source-profile is required for non-static repositories; use an exact public profile ID"
+        )
+    })?;
+    let format_matches = matches!(
+        (package_format, profile.package_format()),
+        (
+            RepositoryFormat::Fedora,
+            conary_core::repository::supported_profiles::ProfilePackageFormat::Rpm
+        ) | (
+            RepositoryFormat::Debian,
+            conary_core::repository::supported_profiles::ProfilePackageFormat::Deb
+        ) | (
+            RepositoryFormat::Arch,
+            conary_core::repository::supported_profiles::ProfilePackageFormat::Arch
+        ) | (RepositoryFormat::Json, _)
+    );
+    if !format_matches {
+        anyhow::bail!(
+            "source profile '{}' uses '{}' packages, not '{}' metadata",
+            profile.id(),
+            profile.package_format().as_str(),
+            package_format.as_str()
+        );
+    }
+    let parser_config = exact_parser_config(
+        package_format,
+        opts.distribution,
+        opts.component,
+        opts.architecture,
+        opts.database,
+    )?;
+    let trust_policy = exact_trust_policy(ExactTrustPolicyInput {
+        package_format,
+        debian_release_keys: opts.debian_release_keys,
+        rpm_metadata_keys: opts.rpm_metadata_keys,
+        rpm_metalink: opts.rpm_metalink,
+        rpm_package_keys: opts.rpm_package_keys,
+        arch_keyring: opts.arch_keyring,
+        arch_keyring_format: opts.arch_keyring_format,
+        arch_master_keys: opts.arch_master_keys,
+        arch_packager_key_threshold: opts.arch_packager_key_threshold,
+        arch_database_signature: opts.arch_database_signature,
+    })?;
 
-    // Save values needed after opts is partially moved
     let db_path = opts.db_path;
-    let gpg_key = opts.gpg_key;
 
     let conn = open_db(&db_path)?;
 
     // Create the repository with all settings
     let mut repo = conary_core::db::models::Repository::new(opts.name, opts.url);
+    repo.set_parser_config(parser_config)?;
+    if let Some(policy) = trust_policy {
+        repo.set_trust_policy(policy)?;
+    }
     repo.content_url = opts.content_url;
     repo.enabled = !opts.disabled;
     repo.priority = opts.priority;
-    repo.gpg_check = !opts.no_gpg_check;
-    if opts.gpg_strict {
-        repo.gpg_strict = true;
-    }
-    repo.gpg_key_url = gpg_key.clone();
     repo.default_strategy = opts.default_strategy;
     repo.default_strategy_endpoint = opts.remi_endpoint;
-    repo.default_strategy_distro = opts.remi_distro;
+    repo.source_profile = Some(profile.id().to_string());
     repo.security_advisory_support = opts.security_advisory_support;
 
-    if let Err(e) = repo.insert(&conn) {
-        let msg = e.to_string();
-        if msg.contains("UNIQUE constraint failed") {
-            anyhow::bail!(
-                "Repository '{}' already exists.\nUse 'conary repo list' to see configured repositories.",
-                repo.name
-            );
+    if let Err(error) = repo.insert(&conn) {
+        if matches!(&error, conary_core::Error::ConflictError(_)) {
+            return Err(anyhow::Error::new(conary_core::Error::ConflictError(
+                format!(
+                    "Repository '{}' already exists.\nUse 'conary repo list' to see configured repositories.",
+                    repo.name
+                ),
+            )));
         }
         return Err(anyhow::anyhow!(
             "Failed to add repository '{}': {}",
             repo.name,
-            e
+            error
         ));
     }
 
@@ -109,44 +171,268 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     }
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
-    println!("  GPG Check: {}", repo.gpg_check);
+    println!(
+        "  Source Profile: {}",
+        repo.source_profile
+            .as_deref()
+            .expect("repository insertion validated its source profile")
+    );
+    if let Some(policy) = repo.trust_policy.as_ref() {
+        println!("  Repository Trust: {}", describe_trust_policy(policy));
+    } else {
+        println!("  Repository Trust: typed JSON/Remi authority");
+    }
     println!(
         "  Security Advisories: {}",
         repo.security_advisory_support.as_str()
     );
-    println!(
-        "  GPG Strict: {}{}",
-        repo.gpg_strict,
-        if repo.gpg_strict {
-            " (missing signatures will fail)"
-        } else {
-            " (non-strict mode weakens signature enforcement)"
-        }
-    );
-
     // Show default strategy if configured
     if let Some(ref strategy) = repo.default_strategy {
         println!("  Default Strategy: {}", strategy);
-        if strategy == "remi" {
-            if let Some(ref endpoint) = repo.default_strategy_endpoint {
-                println!("  Remi Endpoint: {}", endpoint);
-            }
-            if let Some(ref distro) = repo.default_strategy_distro {
-                println!("  Remi Distro: {}", distro);
-            }
-        }
-    }
-
-    // If GPG key was provided, import it
-    if let Some(key_source) = gpg_key {
-        println!("  Importing GPG key...");
-        match import_gpg_key(&repo.name, &key_source, &db_path).await {
-            Ok(fingerprint) => println!("  GPG Key: {}", fingerprint),
-            Err(e) => println!("  Warning: Failed to import GPG key: {}", e),
+        if strategy == "remi"
+            && let Some(ref endpoint) = repo.default_strategy_endpoint
+        {
+            println!("  Remi Endpoint: {}", endpoint);
         }
     }
 
     Ok(())
+}
+
+struct ExactTrustPolicyInput {
+    package_format: RepositoryFormat,
+    debian_release_keys: Vec<OpenPgpTrustRoot>,
+    rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
+    rpm_metalink: Option<String>,
+    rpm_package_keys: Vec<OpenPgpTrustRoot>,
+    arch_keyring: Option<String>,
+    arch_keyring_format: Option<ArchKeyringFormat>,
+    arch_master_keys: Vec<String>,
+    arch_packager_key_threshold: Option<usize>,
+    arch_database_signature: Option<ArchSignatureRequirement>,
+}
+
+fn exact_trust_policy(input: ExactTrustPolicyInput) -> Result<Option<RepositoryTrustPolicy>> {
+    let ExactTrustPolicyInput {
+        package_format,
+        debian_release_keys,
+        rpm_metadata_keys,
+        rpm_metalink,
+        rpm_package_keys,
+        arch_keyring,
+        arch_keyring_format,
+        arch_master_keys,
+        arch_packager_key_threshold,
+        arch_database_signature,
+    } = input;
+    let reject = |flag: &str, present: bool| -> Result<()> {
+        if present {
+            anyhow::bail!("{flag} is not valid for {}", package_format.as_str());
+        }
+        Ok(())
+    };
+
+    let policy = match package_format {
+        RepositoryFormat::Debian => {
+            reject("--rpm-metadata-key", !rpm_metadata_keys.is_empty())?;
+            reject("--rpm-metalink", rpm_metalink.is_some())?;
+            reject("--rpm-package-key", !rpm_package_keys.is_empty())?;
+            reject("--arch-keyring", arch_keyring.is_some())?;
+            reject("--arch-keyring-format", arch_keyring_format.is_some())?;
+            reject("--arch-master-key", !arch_master_keys.is_empty())?;
+            reject(
+                "--arch-packager-key-threshold",
+                arch_packager_key_threshold.is_some(),
+            )?;
+            reject(
+                "--arch-database-signature",
+                arch_database_signature.is_some(),
+            )?;
+            Some(RepositoryTrustPolicy::Debian {
+                release_keys: debian_release_keys,
+            })
+        }
+        RepositoryFormat::Fedora => {
+            reject("--debian-release-key", !debian_release_keys.is_empty())?;
+            reject("--arch-keyring", arch_keyring.is_some())?;
+            reject("--arch-keyring-format", arch_keyring_format.is_some())?;
+            reject("--arch-master-key", !arch_master_keys.is_empty())?;
+            reject(
+                "--arch-packager-key-threshold",
+                arch_packager_key_threshold.is_some(),
+            )?;
+            reject(
+                "--arch-database-signature",
+                arch_database_signature.is_some(),
+            )?;
+            let metadata = match rpm_metalink {
+                Some(url) => {
+                    if !rpm_metadata_keys.is_empty() {
+                        anyhow::bail!(
+                            "--rpm-metalink and --rpm-metadata-key are mutually exclusive"
+                        );
+                    }
+                    conary_core::repository::RpmMetadataAuthority::Metalink { url }
+                }
+                None => conary_core::repository::RpmMetadataAuthority::OpenPgp {
+                    keys: rpm_metadata_keys,
+                },
+            };
+            Some(RepositoryTrustPolicy::Rpm {
+                metadata,
+                package_keys: rpm_package_keys,
+            })
+        }
+        RepositoryFormat::Arch => {
+            reject("--debian-release-key", !debian_release_keys.is_empty())?;
+            reject("--rpm-metadata-key", !rpm_metadata_keys.is_empty())?;
+            reject("--rpm-metalink", rpm_metalink.is_some())?;
+            reject("--rpm-package-key", !rpm_package_keys.is_empty())?;
+            let keyring_url = arch_keyring.ok_or_else(|| {
+                anyhow::anyhow!("--arch-keyring is required for --package-format=arch")
+            })?;
+            let keyring_format = arch_keyring_format.ok_or_else(|| {
+                anyhow::anyhow!("--arch-keyring-format is required for --package-format=arch")
+            })?;
+            let packager_key_threshold = arch_packager_key_threshold.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--arch-packager-key-threshold is required for --package-format=arch"
+                )
+            })?;
+            Some(RepositoryTrustPolicy::Arch {
+                keyring: ArchKeyringTrust {
+                    url: keyring_url,
+                    format: keyring_format,
+                    master_fingerprints: arch_master_keys,
+                    packager_key_threshold,
+                },
+                sig_level: ArchSigLevel {
+                    database: arch_database_signature.unwrap_or(ArchSignatureRequirement::Optional),
+                    package: ArchSignatureRequirement::Required,
+                    trust: conary_core::repository::ArchTrustLevel::TrustedOnly,
+                },
+            })
+        }
+        RepositoryFormat::Json => {
+            reject("--debian-release-key", !debian_release_keys.is_empty())?;
+            reject("--rpm-metadata-key", !rpm_metadata_keys.is_empty())?;
+            reject("--rpm-metalink", rpm_metalink.is_some())?;
+            reject("--rpm-package-key", !rpm_package_keys.is_empty())?;
+            reject("--arch-keyring", arch_keyring.is_some())?;
+            reject("--arch-keyring-format", arch_keyring_format.is_some())?;
+            reject("--arch-master-key", !arch_master_keys.is_empty())?;
+            reject(
+                "--arch-packager-key-threshold",
+                arch_packager_key_threshold.is_some(),
+            )?;
+            reject(
+                "--arch-database-signature",
+                arch_database_signature.is_some(),
+            )?;
+            None
+        }
+        RepositoryFormat::Unspecified => {
+            anyhow::bail!("repository package format must be explicit")
+        }
+    };
+    if let Some(policy) = policy.as_ref() {
+        policy.validate()?;
+    }
+    Ok(policy)
+}
+
+fn describe_trust_policy(policy: &RepositoryTrustPolicy) -> String {
+    match policy {
+        RepositoryTrustPolicy::Debian { release_keys } => {
+            format!(
+                "Debian Release chain ({} pinned key(s))",
+                release_keys.len()
+            )
+        }
+        RepositoryTrustPolicy::Rpm {
+            metadata,
+            package_keys,
+        } => format!(
+            "RPM metadata/package chain ({}, {} package key(s))",
+            match metadata {
+                conary_core::repository::RpmMetadataAuthority::OpenPgp { keys } =>
+                    format!("{} metadata key(s)", keys.len()),
+                conary_core::repository::RpmMetadataAuthority::Metalink { .. } =>
+                    "exact metalink identity".to_string(),
+            },
+            package_keys.len()
+        ),
+        RepositoryTrustPolicy::Arch { keyring, sig_level } => format!(
+            "Arch database/package chain ({} pinned master key(s), {} certification threshold, \
+             database {:?}, package {:?})",
+            keyring.master_fingerprints.len(),
+            keyring.packager_key_threshold,
+            sig_level.database,
+            sig_level.package
+        ),
+    }
+}
+
+fn exact_parser_config(
+    package_format: RepositoryFormat,
+    distribution: Option<String>,
+    component: Option<String>,
+    architecture: Option<String>,
+    database: Option<String>,
+) -> Result<RepositoryParserConfig> {
+    let reject = |flag: &str, present: bool| -> Result<()> {
+        if present {
+            anyhow::bail!("{flag} is not valid for {}", package_format.as_str());
+        }
+        Ok(())
+    };
+    let required = |flag: &str, value: Option<String>| {
+        value.ok_or_else(|| {
+            anyhow::anyhow!(
+                "{flag} is required for --package-format={}",
+                package_format.as_str()
+            )
+        })
+    };
+
+    let config = match package_format {
+        RepositoryFormat::Fedora => {
+            reject("--distribution", distribution.is_some())?;
+            reject("--component", component.is_some())?;
+            reject("--database", database.is_some())?;
+            RepositoryParserConfig::Rpm {
+                architecture: required("--architecture", architecture)?,
+            }
+        }
+        RepositoryFormat::Debian => {
+            reject("--database", database.is_some())?;
+            RepositoryParserConfig::Deb {
+                distribution: required("--distribution", distribution)?,
+                component: required("--component", component)?,
+                architecture: required("--architecture", architecture)?,
+            }
+        }
+        RepositoryFormat::Arch => {
+            reject("--distribution", distribution.is_some())?;
+            reject("--component", component.is_some())?;
+            reject("--architecture", architecture.is_some())?;
+            RepositoryParserConfig::Arch {
+                database: required("--database", database)?,
+            }
+        }
+        RepositoryFormat::Json => {
+            reject("--distribution", distribution.is_some())?;
+            reject("--component", component.is_some())?;
+            reject("--architecture", architecture.is_some())?;
+            reject("--database", database.is_some())?;
+            RepositoryParserConfig::Json
+        }
+        RepositoryFormat::Unspecified => {
+            anyhow::bail!("repository package format must be explicit")
+        }
+    };
+    config.validate()?;
+    Ok(config)
 }
 
 /// List repositories
@@ -245,35 +531,16 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
         return Ok(());
     }
 
-    let keyring_dir = keyring_dir(db_path);
-
     let spinner_style = ProgressStyle::default_spinner()
         .template("  {spinner:.cyan} {msg}")
         .expect("Invalid spinner template");
 
-    let mut results: Vec<(String, conary_core::Result<usize>, Option<String>)> = Vec::new();
+    let mut results: Vec<(String, conary_core::Result<usize>)> = Vec::new();
     for repo in &repos_needing_sync {
         let spinner = ProgressBar::new_spinner();
         spinner.set_style(spinner_style.clone());
         spinner.enable_steady_tick(Duration::from_millis(100));
         spinner.set_message(format!("Syncing {}...", repo.name));
-
-        // Try to fetch GPG key if configured and gpg_check is enabled
-        let gpg_result = if repo.gpg_check {
-            spinner.set_message(format!("Fetching GPG key for {}...", repo.name));
-            match conary_core::repository::maybe_fetch_gpg_key(repo, &keyring_dir).await {
-                Ok(Some(fingerprint)) => Some(fingerprint),
-                Ok(None) => None,
-                Err(e) => {
-                    spinner.suspend(|| {
-                        println!("  Warning: GPG key fetch failed for {}: {}", repo.name, e);
-                    });
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
         spinner.set_message(format!("Syncing metadata for {}...", repo.name));
         let sync_result = {
@@ -291,18 +558,15 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
             }
         }
 
-        results.push((repo.name.clone(), sync_result, gpg_result));
+        results.push((repo.name.clone(), sync_result));
     }
 
     let mut failures = Vec::new();
 
-    for (name, result, gpg_key) in results {
+    for (name, result) in results {
         match result {
             Ok(count) => {
-                let gpg_note = gpg_key
-                    .map(|fp| format!(" (GPG key imported: {})", &fp[..16]))
-                    .unwrap_or_default();
-                let row = format!("Synchronized {count} packages from {name}{gpg_note}");
+                let row = format!("Synchronized {count} packages from {name}");
                 crate::ui::row(crate::ui::Status::Ok, &[&row]);
             }
             Err(e) => {
@@ -313,29 +577,45 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
         }
     }
 
-    // Best-effort canonical map sync from Remi
+    // Canonical authority comes only from explicitly configured Remi
+    // strategy endpoints. Ordered endpoint failover is transport behavior;
+    // failure of every declared authority fails the sync.
     {
-        let repos: Vec<String> = conn
-            .prepare("SELECT url FROM repositories WHERE enabled = 1 ORDER BY priority DESC")?
+        let endpoints: Vec<String> = conn
+            .prepare(
+                "SELECT default_strategy_endpoint
+                 FROM repositories
+                 WHERE enabled = 1
+                   AND default_strategy = 'remi'
+                   AND default_strategy_endpoint IS NOT NULL
+                 GROUP BY default_strategy_endpoint
+                 ORDER BY MAX(priority) DESC",
+            )?
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        for url in &repos {
-            let endpoint = url.trim_end_matches('/');
+        let mut canonical_synced = endpoints.is_empty();
+        let mut canonical_errors = Vec::new();
+        for configured_endpoint in &endpoints {
+            let endpoint = configured_endpoint.trim_end_matches('/');
             match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
                 Ok(Some(n)) => {
                     tracing::info!("Canonical map updated: {n} entries from {endpoint}");
+                    canonical_synced = true;
                     break;
                 }
                 Ok(None) => {
                     tracing::debug!("Canonical map is current (304)");
+                    canonical_synced = true;
                     break;
                 }
                 Err(e) => {
-                    tracing::debug!("Canonical map fetch from {endpoint} skipped: {e}");
-                    continue;
+                    canonical_errors.push(format!("{endpoint}: {e}"));
                 }
             }
+        }
+        if !canonical_synced {
+            failures.push(("canonical map".to_string(), canonical_errors.join("; ")));
         }
     }
 
@@ -372,143 +652,46 @@ pub async fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
     Ok(())
 }
 
-// =============================================================================
-// GPG Key Management Commands
-// =============================================================================
-
-/// Internal helper to import a GPG key from file or URL
-async fn import_gpg_key(repository: &str, key_source: &str, db_path: &str) -> Result<String> {
-    use conary_core::repository::GpgVerifier;
-
-    let keyring_dir = keyring_dir(db_path);
-    let verifier = GpgVerifier::new(keyring_dir)?;
-
-    // Check if it's a URL
-    if key_source.starts_with("http://") || key_source.starts_with("https://") {
-        info!("Fetching GPG key from URL: {}", key_source);
-        let response = reqwest::get(key_source)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to fetch GPG key: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Failed to fetch GPG key: HTTP {}",
-                response.status()
-            ));
-        }
-
-        let key_data = response
-            .bytes()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read GPG key data: {}", e))?;
-
-        Ok(verifier.import_key(&key_data, repository)?)
-    } else {
-        // It's a local file path
-        info!("Importing GPG key from file: {}", key_source);
-        let key_path = Path::new(key_source);
-        if !key_path.exists() {
-            anyhow::bail!("GPG key file not found: {}", key_source);
-        }
-        Ok(verifier.import_key_from_file(key_path, repository)?)
-    }
-}
-
-/// Import a GPG key for a repository
-pub async fn cmd_key_import(repository: &str, key_source: &str, db_path: &str) -> Result<()> {
-    info!("Importing GPG key for repository: {}", repository);
-
-    // Verify repository exists
-    let conn = open_db(db_path)?;
-    let repo = conary_core::db::models::Repository::find_by_name(&conn, repository)?
-        .ok_or_else(|| anyhow::anyhow!("Repository '{}' not found", repository))?;
-
-    let fingerprint = import_gpg_key(repository, key_source, db_path).await?;
-
-    println!("Imported GPG key for repository '{}'", repo.name);
-    println!("  Fingerprint: {}", fingerprint);
-
-    // Update repository's gpg_key_url if it was a URL
-    if key_source.starts_with("http://") || key_source.starts_with("https://") {
-        let mut repo = repo;
-        repo.gpg_key_url = Some(key_source.to_string());
-        repo.update(&conn)?;
-        println!("  Updated repository gpg_key_url");
-    }
-
-    Ok(())
-}
-
-/// List all imported GPG keys
-pub async fn cmd_key_list(db_path: &str) -> Result<()> {
-    use conary_core::repository::GpgVerifier;
-
-    info!("Listing GPG keys");
-    let keyring_dir = keyring_dir(db_path);
-    let verifier = GpgVerifier::new(keyring_dir)?;
-
-    let keys = verifier.list_keys()?;
-
-    if keys.is_empty() {
-        println!("No GPG keys imported");
-    } else {
-        println!("GPG Keys:");
-        for (repo_name, fingerprint) in keys {
-            println!("  {} -> {}", repo_name, fingerprint);
-        }
-    }
-    Ok(())
-}
-
-/// Remove a GPG key for a repository
-pub async fn cmd_key_remove(repository: &str, db_path: &str) -> Result<()> {
-    use conary_core::repository::GpgVerifier;
-
-    info!("Removing GPG key for repository: {}", repository);
-    let keyring_dir = keyring_dir(db_path);
-    let verifier = GpgVerifier::new(keyring_dir)?;
-
-    if !verifier.has_key(repository) {
-        return Err(anyhow::anyhow!(
-            "No GPG key found for repository '{}'",
-            repository
-        ));
-    }
-
-    verifier.remove_key(repository)?;
-    println!("Removed GPG key for repository '{}'", repository);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use conary_core::db::models::{Repository, SecurityAdvisorySupport};
 
     #[tokio::test]
-    async fn repo_add_rejects_internal_remi_route_slug() {
+    async fn repo_add_rejects_internal_source_route_slug() {
         let err = cmd_repo_add(RepoAddOptions {
             name: "remi-fedora".to_string(),
             url: "https://remi.example.invalid".to_string(),
+            package_format: Some(RepositoryFormat::Json),
+            distribution: None,
+            component: None,
+            architecture: None,
+            database: None,
             db_path: "/unused/conary.db".to_string(),
             content_url: None,
             priority: 50,
             disabled: false,
-            gpg_key: None,
-            no_gpg_check: false,
-            gpg_strict: false,
+            debian_release_keys: Vec::new(),
+            rpm_metadata_keys: Vec::new(),
+            rpm_metalink: None,
+            rpm_package_keys: Vec::new(),
+            arch_keyring: None,
+            arch_keyring_format: None,
+            arch_master_keys: Vec::new(),
+            arch_packager_key_threshold: None,
+            arch_database_signature: None,
             fingerprints: Vec::new(),
             yes: false,
             replace: false,
             default_strategy: Some("remi".to_string()),
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
-            remi_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Unknown,
         })
         .await
         .unwrap_err();
 
-        assert!(err.to_string().contains("exact public distro ID"));
+        assert!(err.to_string().contains("unsupported source profile"));
     }
 
     #[tokio::test]
@@ -523,19 +706,30 @@ mod tests {
         cmd_repo_add(RepoAddOptions {
             name: "security-supported".to_string(),
             url: repo_dir.display().to_string(),
+            package_format: Some(RepositoryFormat::Json),
+            distribution: None,
+            component: None,
+            architecture: None,
+            database: None,
             db_path: db_path_string.clone(),
             content_url: None,
             priority: 50,
             disabled: false,
-            gpg_key: None,
-            no_gpg_check: true,
-            gpg_strict: false,
+            debian_release_keys: Vec::new(),
+            rpm_metadata_keys: Vec::new(),
+            rpm_metalink: None,
+            rpm_package_keys: Vec::new(),
+            arch_keyring: None,
+            arch_keyring_format: None,
+            arch_master_keys: Vec::new(),
+            arch_packager_key_threshold: None,
+            arch_database_signature: None,
             fingerprints: Vec::new(),
             yes: false,
             replace: false,
             default_strategy: None,
             remi_endpoint: None,
-            remi_distro: None,
+            source_profile: Some("fedora-44".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Supported,
         })
         .await

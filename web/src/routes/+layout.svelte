@@ -90,7 +90,7 @@
 			</nav>
 		</div>
 		<div class="container footer-bottom">
-			<span>Remi conversion remains policy-gated during the limited preview.</span>
+			<span>Remi preserves RPM, Debian, and Arch source semantics in one CCS transaction model.</span>
 			<a href={`${mainSite}/install/`}>Open the tester runbook</a>
 		</div>
 	</footer>

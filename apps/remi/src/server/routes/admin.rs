@@ -41,24 +41,8 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             post(tuf::refresh_timestamp),
         )
         .route(
-            "/v1/admin/packages/{distro}",
-            post(admin_handlers::upload_package),
-        )
-        .route(
             "/v1/admin/releases/{distro}",
             post(admin_handlers::upload_release_package),
-        )
-        .route(
-            "/v1/admin/packages/{distro}/{package}/scriptlet-review",
-            get(admin_handlers::get_scriptlet_review_artifact),
-        )
-        .route(
-            "/v1/admin/packages/{distro}/{package}/test-manifest",
-            get(admin_handlers::get_non_public_test_manifest),
-        )
-        .route(
-            "/v1/admin/packages/{distro}/{package}/test-download",
-            get(admin_handlers::download_non_public_test_package),
         )
         .route_layer(middleware::from_fn(require_localhost))
         .with_state(state)
@@ -84,56 +68,12 @@ pub fn create_external_admin_router(
             put(admin_handlers::upload_test_artifact),
         )
         .route(
-            "/v1/admin/packages/{distro}",
-            post(admin_handlers::upload_package),
-        )
-        .route(
             "/v1/admin/releases/{distro}",
             post(admin_handlers::upload_release_package),
         )
         .route(
-            "/v1/admin/packages/{distro}/{package}/scriptlet-review",
-            get(admin_handlers::get_scriptlet_review_artifact),
-        )
-        .route(
-            "/v1/admin/packages/{distro}/{package}/test-manifest",
-            get(admin_handlers::get_non_public_test_manifest),
-        )
-        .route(
-            "/v1/admin/packages/{distro}/{package}/test-download",
-            get(admin_handlers::download_non_public_test_package),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/backfill",
-            post(admin_handlers::scriptlet_evidence_backfill),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/reconcile-unknown-commands",
-            post(admin_handlers::reconcile_scriptlet_evidence_unknown_commands),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/reconcile-apparmor",
-            post(admin_handlers::reconcile_scriptlet_evidence_apparmor),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/clusters",
-            get(admin_handlers::list_scriptlet_evidence_clusters),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}",
-            get(admin_handlers::get_scriptlet_evidence_cluster),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state",
-            put(admin_handlers::update_scriptlet_evidence_cluster_state),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/notes",
-            post(admin_handlers::add_scriptlet_evidence_cluster_note),
-        )
-        .route(
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/packet",
-            get(admin_handlers::get_scriptlet_evidence_packet),
+            "/v1/admin/models/{name}",
+            put(models::put_model_authenticated),
         )
         .route(
             "/v1/admin/tuf/{distro}/refresh-timestamp",
@@ -376,6 +316,51 @@ async fn refresh_upstream(
                 })),
             )
                 .into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn retired_admin_workflow_routes_are_absent() {
+        for (method, path) in [
+            ("POST", "/v1/admin/packages/fedora"),
+            ("POST", "/v1/admin/scriptlet-evidence/backfill"),
+            ("GET", "/v1/admin/scriptlet-evidence/clusters"),
+            ("GET", "/v1/admin/scriptlet-evidence/clusters/example"),
+            ("PUT", "/v1/admin/scriptlet-evidence/clusters/example/state"),
+            (
+                "POST",
+                "/v1/admin/scriptlet-evidence/clusters/example/notes",
+            ),
+            (
+                "GET",
+                "/v1/admin/scriptlet-evidence/clusters/example/packet",
+            ),
+            ("GET", "/v1/admin/packages/fedora/example/scriptlet-review"),
+        ] {
+            let (app, _) = admin_handlers::test_helpers::test_app().await;
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("authorization", "Bearer test-admin-token-12345")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "retired route remains callable: {method} {path}"
+            );
         }
     }
 }

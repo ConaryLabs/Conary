@@ -9,9 +9,11 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
     use conary_core::derivation::compose::erofs_image_hash;
     use conary_core::derivation::seed::{SeedMetadata, SeedSource};
     use conary_core::filesystem::CasStore;
-    use conary_core::generation::builder::{FileEntryRef, SymlinkEntryRef, build_erofs_image};
-    use std::os::unix::fs::MetadataExt;
-    use walkdir::WalkDir;
+    use conary_core::generation::root_manifest::{
+        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+        build_erofs_image_from_root_manifest, scan_payload_tree,
+    };
+    use conary_core::payload::PayloadNodeKind;
 
     let from_path = PathBuf::from(from);
     let output_path = PathBuf::from(output);
@@ -40,60 +42,50 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
     let cas_dir = output_path.join("cas");
     let cas = CasStore::new(&cas_dir).context("Failed to create CAS store")?;
 
-    // Walk source tree, store files in CAS, collect entries
-    let mut file_entries = Vec::new();
-    let mut symlink_entries = Vec::new();
-    let mut file_count: u64 = 0;
-
-    for entry in WalkDir::new(&from_path).follow_links(false) {
-        let entry = entry.context("Failed to walk directory")?;
-        let rel_path = entry
-            .path()
-            .strip_prefix(&from_path)
-            .context("Failed to compute relative path")?;
-
-        // Skip the root directory itself
-        if rel_path.as_os_str().is_empty() {
-            continue;
+    let (root, source_entries) =
+        scan_payload_tree(&from_path, &cas, &format!("bootstrap-seed:{target}"))
+            .context("Failed to capture exact cross-tools payload")?;
+    let mut entries = Vec::with_capacity(source_entries.len() + 1);
+    entries.push(GenerationRootEntry {
+        path: "/tools".to_string(),
+        node: root.clone(),
+        content: None,
+    });
+    for mut entry in source_entries {
+        entry.path = format!("/tools{}", entry.path);
+        if let PayloadNodeKind::Hardlink { target, .. } = &mut entry.node.source.kind {
+            *target = format!("/tools{target}");
         }
-
-        let abs_path = format!("/tools/{}", rel_path.display());
-        let metadata = entry.path().symlink_metadata()?;
-
-        if metadata.is_symlink() {
-            let link_target = std::fs::read_link(entry.path())?;
-            symlink_entries.push(SymlinkEntryRef {
-                path: abs_path,
-                target: link_target.to_string_lossy().to_string(),
-            });
-        } else if metadata.is_file() {
-            let content = std::fs::read(entry.path())?;
-            let hash = cas.store(&content).context("CAS store failed")?;
-            file_entries.push(FileEntryRef {
-                path: abs_path,
-                sha256_hash: hash,
-                size: metadata.len(),
-                permissions: metadata.mode() & 0o7777,
-                owner: None,
-                group_name: None,
-                xattrs: std::collections::BTreeMap::new(),
-            });
-            file_count += 1;
-        }
-        // Directories are implicit in EROFS
+        entries.push(entry);
     }
+    let manifest = GenerationRootManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        root,
+        entries,
+    };
+    manifest
+        .validate()
+        .context("Cross-tools payload is not a valid exact generation root")?;
+    let file_count = manifest.regular_contents().count() as u64;
+    let symlink_count = manifest
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Symlink { .. }))
+        .count();
 
     println!(
         "  Stored {} files, {} symlinks in CAS",
-        file_count,
-        symlink_entries.len()
+        file_count, symlink_count
     );
 
     // Build EROFS image
     let gen_dir = output_path.join("gen");
     std::fs::create_dir_all(&gen_dir)?;
-    let build_result = build_erofs_image(&file_entries, &symlink_entries, &gen_dir)
+    let build_result = build_erofs_image_from_root_manifest(&manifest, &gen_dir)
         .context("Failed to build EROFS image")?;
+    manifest
+        .write_to(&output_path)
+        .context("Failed to persist exact seed root manifest")?;
 
     // Move EROFS image to seed.erofs
     let seed_erofs = output_path.join("seed.erofs");

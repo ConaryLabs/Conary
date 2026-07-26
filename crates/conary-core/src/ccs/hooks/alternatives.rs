@@ -6,9 +6,8 @@
 //! of programs that provide the same functionality.
 
 use super::HookExecutor;
-use anyhow::{Context, Result};
-use std::process::Command;
-use tracing::{debug, info};
+use anyhow::Result;
+use tracing::info;
 
 /// Validate alternative name - only allow `[a-zA-Z0-9_-]` characters.
 fn validate_alternative_name(name: &str) -> Result<()> {
@@ -45,63 +44,55 @@ fn validate_alternative_path(path: &str) -> Result<()> {
 }
 
 impl HookExecutor {
-    /// Update alternatives
-    ///
-    /// When root == "/", uses update-alternatives command.
-    /// When root != "/", skips (alternatives will need to be set up on first
-    /// boot or via a trigger). This is a limitation - alternatives are complex
-    /// to set up without the actual command.
-    pub(super) fn update_alternatives(&self, name: &str, path: &str, priority: i32) -> Result<()> {
-        // Validate inputs before any other logic to catch malicious metadata early
+    pub(super) fn preflight_alternative(&self, link: &str, name: &str, path: &str) -> Result<()> {
+        validate_alternative_path(link)?;
         validate_alternative_name(name)?;
         validate_alternative_path(path)?;
+        crate::scriptlet::ScriptletExecutor::new(
+            &self.root,
+            "ccs-alternatives",
+            "signed-v2",
+            crate::scriptlet::PackageFormat::Conary,
+        )
+        .preflight_native_command(&["/usr/bin/update-alternatives".to_string()])?;
+        Ok(())
+    }
 
-        if !self.is_live_root() {
-            // For target root: we can't easily replicate update-alternatives
-            // behavior. Log and skip for now.
-            debug!(
-                "Skipping update-alternatives for '{}' in target root (will be set up on first boot)",
-                name
-            );
-            // TODO: We could create the alternatives directory structure manually
-            // but it's complex and distro-specific
-            return Ok(());
-        }
+    /// Update alternatives
+    ///
+    /// Apply the target-owned alternatives grammar to the selected root.
+    pub(super) fn update_alternatives(
+        &self,
+        link: &str,
+        name: &str,
+        path: &str,
+        priority: i32,
+    ) -> Result<()> {
+        self.preflight_alternative(link, name, path)?;
 
-        // Check if update-alternatives is available
-        let has_alternatives = Command::new("update-alternatives")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if !has_alternatives {
-            debug!("update-alternatives not available, skipping");
-            return Ok(());
-        }
-
-        let status = Command::new("update-alternatives")
-            .args([
-                "--install",
-                &format!("/usr/bin/{}", name),
-                name,
-                path,
-                &priority.to_string(),
-            ])
-            .status()
-            .context("Failed to run update-alternatives")?;
-
-        if status.success() {
-            info!(
-                "Updated alternative '{}' -> '{}' (priority {})",
-                name, path, priority
-            );
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("update-alternatives --install failed"))
-        }
+        let argv = vec![
+            "/usr/bin/update-alternatives".to_string(),
+            "--install".to_string(),
+            link.to_string(),
+            name.to_string(),
+            path.to_string(),
+            priority.to_string(),
+        ];
+        crate::scriptlet::ScriptletExecutor::new(
+            &self.root,
+            "ccs-alternatives",
+            "signed-v2",
+            crate::scriptlet::PackageFormat::Conary,
+        )
+        .execute_native_command("alternatives", &argv, &[])?;
+        info!(
+            "Updated alternative '{}' -> '{}' (priority {}) in selected root {}",
+            name,
+            path,
+            priority,
+            self.root.display()
+        );
+        Ok(())
     }
 }
 

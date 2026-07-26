@@ -1,0 +1,28 @@
+[package]
+name = "phase4-runtime-fixture"
+version = "1.0.1-1"
+version_scheme = "arch"
+release = "1"
+kind = "package"
+description = "Signed Arch-versioned repository update fixture"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["phase4-runtime-fixture"]
+binaries = ["/usr/bin/phase4-runtime-fixture"]
+
+[components]
+default = ["runtime"]
+
+[[config.files]]
+path = "/etc/phase4-runtime-fixture/app.conf"
+noreplace = true
+ghost = false
+remove_on_upgrade = false
+
+[hooks]

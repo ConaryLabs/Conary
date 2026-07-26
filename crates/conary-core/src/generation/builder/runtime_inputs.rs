@@ -1,45 +1,23 @@
 // conary-core/src/generation/builder/runtime_inputs.rs
 
+//! Exact projection of installed payload authority into generation artifacts.
+
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use crate::ccs::manifest::FileCapability;
-use crate::db::models::{FileEntry, InstallSource, InstalledFileCapability, Trove};
-use crate::filesystem::CasStore;
-use crate::generation::metadata::is_excluded;
+use crate::db::models::{DirectoryClaim, FileEntry, InstallSource, InstalledFileCapability, Trove};
+use crate::generation::root_manifest::{
+    GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+    MutableStateManifest, RootPathDomain, capture_root_node, classify_root_path,
+};
+use crate::payload::PayloadNodeKind;
 
 use super::file_capabilities::{SECURITY_CAPABILITY_XATTR, encode_security_capability_xattr};
-use super::{FileEntryRef, SymlinkEntryRef, hex_to_digest};
-
-const S_IFMT: i32 = 0o170000;
-const S_IFREG: i32 = 0o100000;
-const S_IFDIR: i32 = 0o040000;
-const S_IFLNK: i32 = 0o120000;
-const X86_64_LFS_LOADER: &str = "/usr/lib/ld-linux-x86-64.so.2";
-const X86_64_LIB64_LOADER: &str = "/usr/lib64/ld-linux-x86-64.so.2";
-const X86_64_LIB64_LOADER_TARGET: &str = "../lib/ld-linux-x86-64.so.2";
 
 type RuntimeXattrs = BTreeMap<String, Vec<u8>>;
 type CapabilityTargetKey = (i64, String);
 type RuntimeCapabilityXattrs = HashMap<CapabilityTargetKey, RuntimeXattrs>;
-
-#[derive(Debug, Clone)]
-enum ValidatedRuntimeEntry {
-    Regular(FileEntryRef),
-    Symlink(SymlinkEntryRef),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RuntimeEntryKind {
-    Regular,
-    Symlink { target: String },
-    Directory,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RuntimeEntryProblem {
-    MissingSymlinkTarget,
-    UnsupportedFileType(i32),
-}
 
 pub(super) fn is_generation_input_source(source: InstallSource) -> bool {
     matches!(
@@ -53,15 +31,33 @@ pub(super) fn is_generation_input_source(source: InstallSource) -> bool {
 
 #[derive(Debug)]
 pub(super) struct RuntimeGenerationInputs {
-    pub file_refs: Vec<FileEntryRef>,
-    pub symlink_refs: Vec<SymlinkEntryRef>,
+    pub generation: GenerationRootManifest,
+    pub state: MutableStateManifest,
     pub adopted_track_count: usize,
+}
+
+impl RuntimeGenerationInputs {
+    pub fn security_capability_xattr_count(&self) -> usize {
+        self.generation
+            .entries
+            .iter()
+            .chain(&self.state.entries)
+            .filter(|entry| {
+                entry
+                    .node
+                    .source
+                    .xattrs
+                    .contains_key(SECURITY_CAPABILITY_XATTR)
+            })
+            .count()
+    }
 }
 
 pub(super) fn collect_runtime_generation_inputs(
     conn: &rusqlite::Connection,
     troves: &[Trove],
     files: Vec<FileEntry>,
+    selected_root: &Path,
 ) -> crate::Result<RuntimeGenerationInputs> {
     let trove_map: HashMap<i64, (&str, &InstallSource)> = troves
         .iter()
@@ -75,47 +71,76 @@ pub(super) fn collect_runtime_generation_inputs(
         .iter()
         .filter(|trove| trove.install_source == InstallSource::AdoptedTrack)
         .count();
-    let capability_xattrs = collect_runtime_capability_xattrs(conn, &trove_map, &files)?;
-    let mut file_refs = Vec::new();
-    let mut symlink_refs = Vec::new();
-    let mut capability_xattrs = capability_xattrs;
+    let mut capability_xattrs = collect_runtime_capability_xattrs(conn, &trove_map, &files)?;
+    let mut immutable_entries = Vec::new();
+    let mut state_entries = Vec::new();
 
     for file in files {
-        let Some((package_name, source)) = trove_map.get(&file.trove_id) else {
+        let Some((anchor_package_name, anchor_source)) = trove_map.get(&file.trove_id) else {
             return Err(crate::Error::InternalError(format!(
                 "orphaned file entry in generation input: path {} references missing trove_id {}",
                 file.path, file.trove_id
             )));
         };
-
-        if **source == InstallSource::AdoptedTrack {
-            continue;
-        }
-        if !is_generation_input_source((*source).clone()) {
-            continue;
-        }
-        if is_excluded(&file.path) {
-            continue;
-        }
-
-        match validate_runtime_file_entry(package_name, &file)? {
-            Some(ValidatedRuntimeEntry::Regular(mut file_ref)) => {
-                if let Some(xattrs) = capability_xattrs.remove(&(file.trove_id, file.path.clone()))
-                {
-                    file_ref.xattrs = xattrs;
-                }
-                file_refs.push(file_ref);
+        let mut generation_owner = is_generation_input_source((*anchor_source).clone())
+            .then_some((*anchor_package_name, file.trove_id));
+        for claim in DirectoryClaim::find_retaining_path(conn, &file.path)? {
+            let Some((claim_package_name, claim_source)) = trove_map.get(&claim.trove_id) else {
+                return Err(crate::Error::InternalError(format!(
+                    "orphaned directory claim in generation input: path {} references missing trove_id {}",
+                    file.path, claim.trove_id
+                )));
+            };
+            if generation_owner.is_none() && is_generation_input_source((*claim_source).clone()) {
+                generation_owner = Some((*claim_package_name, claim.trove_id));
             }
-            Some(ValidatedRuntimeEntry::Symlink(symlink_ref)) => symlink_refs.push(symlink_ref),
-            None => {}
+        }
+        let Some((package_name, _generation_trove_id)) = generation_owner else {
+            continue;
+        };
+
+        let domain = classify_root_path(&file.path)?;
+        if domain == RootPathDomain::EphemeralMountOrUser {
+            continue;
+        }
+
+        let mut entry = GenerationRootEntry {
+            path: file.path,
+            node: file.node,
+            content: file.content,
+        };
+        if let Some(capability) = capability_xattrs.remove(&(file.trove_id, entry.path.clone())) {
+            merge_capability_xattrs(package_name, &mut entry, capability)?;
+        }
+        entry
+            .validate()
+            .map_err(|error| runtime_input_error(package_name, &entry.path, error.to_string()))?;
+        match domain {
+            RootPathDomain::Immutable => immutable_entries.push(entry),
+            RootPathDomain::ConfigState | RootPathDomain::MutableState => {
+                state_entries.push(entry);
+            }
+            RootPathDomain::EphemeralMountOrUser => unreachable!("handled above"),
         }
     }
+    immutable_entries.sort_by(|left, right| left.path.cmp(&right.path));
+    state_entries.sort_by(|left, right| left.path.cmp(&right.path));
 
-    add_abi_compat_symlinks(&file_refs, &mut symlink_refs);
+    let generation = GenerationRootManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        root: capture_root_node(selected_root)?,
+        entries: immutable_entries,
+    };
+    let state = MutableStateManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        entries: state_entries,
+    };
+    generation.validate()?;
+    state.validate()?;
 
     Ok(RuntimeGenerationInputs {
-        file_refs,
-        symlink_refs,
+        generation,
+        state,
         adopted_track_count,
     })
 }
@@ -139,7 +164,6 @@ fn collect_runtime_capability_xattrs(
         .map(|file| ((file.trove_id, file.path.as_str()), file))
         .collect::<HashMap<_, _>>();
     let mut xattrs = HashMap::new();
-
     for row in capability_rows {
         let Some((package_name, source)) = trove_map.get(&row.trove_id) else {
             return Err(capability_input_error(
@@ -151,15 +175,6 @@ fn collect_runtime_capability_xattrs(
                 ),
             ));
         };
-
-        if is_excluded(&row.path) {
-            return Err(capability_input_error(
-                package_name,
-                &row.path,
-                "path is excluded from generation",
-            ));
-        }
-
         if !is_generation_input_source((*source).clone()) {
             return Err(capability_input_error(
                 package_name,
@@ -170,7 +185,13 @@ fn collect_runtime_capability_xattrs(
                 ),
             ));
         }
-
+        if classify_root_path(&row.path)? == RootPathDomain::EphemeralMountOrUser {
+            return Err(capability_input_error(
+                package_name,
+                &row.path,
+                "path belongs to the finite ephemeral/user domain",
+            ));
+        }
         let Some(file) = files_by_trove_path.get(&(row.trove_id, row.path.as_str())) else {
             return Err(capability_input_error(
                 package_name,
@@ -178,7 +199,6 @@ fn collect_runtime_capability_xattrs(
                 "has no matching installed file entry",
             ));
         };
-
         ensure_capability_target_is_regular(package_name, file)?;
         let capability = FileCapability {
             path: row.path.clone(),
@@ -189,141 +209,58 @@ fn collect_runtime_capability_xattrs(
         };
         let encoded = encode_security_capability_xattr(&capability)?;
         xattrs.insert(
-            (row.trove_id, row.path.clone()),
+            (row.trove_id, row.path),
             BTreeMap::from([(SECURITY_CAPABILITY_XATTR.to_string(), encoded)]),
         );
     }
-
     Ok(xattrs)
 }
 
 fn ensure_capability_target_is_regular(package_name: &str, file: &FileEntry) -> crate::Result<()> {
-    match classify_file_entry(file) {
-        Ok(RuntimeEntryKind::Regular) => Ok(()),
-        Ok(RuntimeEntryKind::Symlink { .. }) => Err(capability_input_error(
+    if matches!(file.node.source.kind, PayloadNodeKind::Regular { .. }) {
+        Ok(())
+    } else {
+        Err(capability_input_error(
             package_name,
             &file.path,
-            "file capability target is a symlink, not a regular file",
-        )),
-        Ok(RuntimeEntryKind::Directory) => Err(capability_input_error(
-            package_name,
-            &file.path,
-            "file capability target is a directory, not a regular file",
-        )),
-        Err(RuntimeEntryProblem::MissingSymlinkTarget) => Err(capability_input_error(
-            package_name,
-            &file.path,
-            "file capability target is a symlink without symlink_target, not a regular file",
-        )),
-        Err(RuntimeEntryProblem::UnsupportedFileType(mode)) => Err(capability_input_error(
-            package_name,
-            &file.path,
-            format!("file capability target is non-regular mode {mode:o}"),
-        )),
+            format!(
+                "file capability target is {}, not a regular file",
+                payload_kind_name(&file.node.source.kind)
+            ),
+        ))
     }
 }
 
-fn add_abi_compat_symlinks(file_refs: &[FileEntryRef], symlink_refs: &mut Vec<SymlinkEntryRef>) {
-    let has_lfs_loader = file_refs.iter().any(|file| file.path == X86_64_LFS_LOADER);
-    if !has_lfs_loader {
-        return;
-    }
-
-    let has_lib64_loader_file = file_refs
-        .iter()
-        .any(|file| file.path == X86_64_LIB64_LOADER);
-    let has_lib64_loader_symlink = symlink_refs
-        .iter()
-        .any(|symlink| symlink.path == X86_64_LIB64_LOADER);
-    if has_lib64_loader_file || has_lib64_loader_symlink {
-        return;
-    }
-
-    symlink_refs.push(SymlinkEntryRef {
-        path: X86_64_LIB64_LOADER.to_string(),
-        target: X86_64_LIB64_LOADER_TARGET.to_string(),
-    });
-}
-
-fn classify_file_entry(file: &FileEntry) -> Result<RuntimeEntryKind, RuntimeEntryProblem> {
-    if let Some(target) = file
-        .symlink_target
-        .as_deref()
-        .filter(|target| !target.is_empty())
-    {
-        return Ok(RuntimeEntryKind::Symlink {
-            target: target.to_string(),
-        });
-    }
-
-    match file.permissions & S_IFMT {
-        S_IFLNK => Err(RuntimeEntryProblem::MissingSymlinkTarget),
-        S_IFDIR => Ok(RuntimeEntryKind::Directory),
-        S_IFREG | 0 => Ok(RuntimeEntryKind::Regular),
-        other => Err(RuntimeEntryProblem::UnsupportedFileType(other)),
-    }
-}
-
-fn validate_runtime_file_entry(
+fn merge_capability_xattrs(
     package_name: &str,
-    file: &FileEntry,
-) -> crate::Result<Option<ValidatedRuntimeEntry>> {
-    let kind = classify_file_entry(file).map_err(|problem| {
-        let detail = match problem {
-            RuntimeEntryProblem::MissingSymlinkTarget => {
-                "symlink entry is missing symlink_target".to_string()
-            }
-            RuntimeEntryProblem::UnsupportedFileType(mode) => {
-                format!("unsupported special file mode {mode:o} for generation root")
-            }
-        };
-        runtime_input_error(package_name, &file.path, detail)
-    })?;
+    entry: &mut GenerationRootEntry,
+    capability: RuntimeXattrs,
+) -> crate::Result<()> {
+    for (name, value) in capability {
+        if let Some(existing) = entry.node.source.xattrs.get(&name)
+            && existing != &value
+        {
+            return Err(capability_input_error(
+                package_name,
+                &entry.path,
+                format!("persisted {name} conflicts with payload-node xattr authority"),
+            ));
+        }
+        entry.node.source.xattrs.insert(name, value);
+    }
+    Ok(())
+}
 
+fn payload_kind_name(kind: &PayloadNodeKind) -> &'static str {
     match kind {
-        RuntimeEntryKind::Regular => {
-            hex_to_digest(&file.sha256_hash).map_err(|error| {
-                runtime_input_error(
-                    package_name,
-                    &file.path,
-                    format!("invalid SHA-256 digest for regular file: {error}"),
-                )
-            })?;
-
-            #[allow(clippy::cast_sign_loss)]
-            let permissions = file.permissions as u32;
-            #[allow(clippy::cast_sign_loss)]
-            let size = file.size as u64;
-
-            Ok(Some(ValidatedRuntimeEntry::Regular(FileEntryRef {
-                path: file.path.clone(),
-                sha256_hash: file.sha256_hash.clone(),
-                size,
-                permissions,
-                owner: file.owner.clone(),
-                group_name: file.group_name.clone(),
-                xattrs: BTreeMap::new(),
-            })))
-        }
-        RuntimeEntryKind::Symlink { target } => {
-            let expected = CasStore::compute_symlink_hash(&target);
-            if file.sha256_hash != expected {
-                return Err(runtime_input_error(
-                    package_name,
-                    &file.path,
-                    format!(
-                        "symlink hash mismatch: expected {expected}, got {}",
-                        file.sha256_hash
-                    ),
-                ));
-            }
-
-            Ok(Some(ValidatedRuntimeEntry::Symlink(SymlinkEntryRef {
-                path: file.path.clone(),
-                target,
-            })))
-        }
-        RuntimeEntryKind::Directory => Ok(None),
+        PayloadNodeKind::Regular { .. } => "regular",
+        PayloadNodeKind::Directory => "directory",
+        PayloadNodeKind::Symlink { .. } => "symlink",
+        PayloadNodeKind::Hardlink { .. } => "hardlink",
+        PayloadNodeKind::BlockDevice { .. } => "block-device",
+        PayloadNodeKind::CharacterDevice { .. } => "character-device",
+        PayloadNodeKind::Fifo => "fifo",
+        PayloadNodeKind::Socket => "socket",
     }
 }
 
@@ -333,7 +270,7 @@ fn runtime_input_error(
     detail: impl std::fmt::Display,
 ) -> crate::Error {
     crate::Error::InvalidPath(format!(
-        "exportable runtime generation is not self-contained: package {package_name} has unresolved CAS-backed path {path}: {detail}. Run conary system adopt --system --full for bulk adoption, conary system adopt <pkg> --full for a single package, or conary system takeover --up-to generation for full generation takeover."
+        "exact runtime generation input is invalid: package {package_name} path {path}: {detail}"
     ))
 }
 
@@ -343,18 +280,22 @@ fn capability_input_error(
     detail: impl std::fmt::Display,
 ) -> crate::Error {
     crate::Error::InvalidPath(format!(
-        "exportable runtime generation cannot preserve file capability: package {package_name} path {path}: {detail}"
+        "runtime generation cannot preserve file capability: package {package_name} path {path}: {detail}"
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::manifest::FileCapability;
-    use crate::db::models::{FileEntry, Trove, TroveType};
+    use crate::db::models::{DirectoryClaimAnchorPolicy, FileEntry, Trove, TroveType};
     use crate::db::testing::create_test_db;
-    use crate::filesystem::CasStore;
-    use crate::generation::builder::file_capabilities::SECURITY_CAPABILITY_XATTR;
+    use crate::payload::{
+        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
+
+    fn resolved(node: PayloadNode) -> ResolvedPayloadNode {
+        ResolvedPayloadNode::from_numeric_source(node).unwrap()
+    }
 
     fn trove(id: i64, name: &str, source: InstallSource) -> Trove {
         let mut trove = Trove::new_with_source(
@@ -362,475 +303,247 @@ mod tests {
             "1.0-1".to_string(),
             TroveType::Package,
             source,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.id = Some(id);
         trove
     }
 
-    fn file_entry(path: &str, hash: &str, mode: i32, trove_id: i64) -> FileEntry {
-        let mut entry = FileEntry::new(path.to_string(), hash.to_string(), 0, mode, trove_id);
-        entry.owner = Some("root".to_string());
-        entry.group_name = Some("root".to_string());
-        entry
+    fn directory(path: &str, trove_id: i64) -> FileEntry {
+        let mut node = PayloadNode::regular(0o755);
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        FileEntry::new(path.to_string(), resolved(node), None, trove_id)
     }
 
-    fn symlink_entry(path: &str, target: &str, hash: &str, mode: i32, trove_id: i64) -> FileEntry {
-        let mut entry = file_entry(path, hash, mode, trove_id);
-        entry.symlink_target = Some(target.to_string());
-        entry
-    }
-
-    fn assert_error_contains<T: std::fmt::Debug>(result: crate::Result<T>, snippets: &[&str]) {
-        let error = result.unwrap_err().to_string();
-        for snippet in snippets {
-            assert!(
-                error.contains(snippet),
-                "expected error to contain {snippet:?}; got {error}"
-            );
-        }
-    }
-
-    fn persist_capability(
-        conn: &rusqlite::Connection,
-        trove_id: i64,
-        path: &str,
-    ) -> FileCapability {
-        let capability = FileCapability {
-            path: path.to_string(),
-            capabilities: vec!["cap_net_bind_service".to_string()],
-            permitted: true,
-            effective: true,
-            inheritable: false,
-        };
-        crate::db::models::InstalledFileCapability::replace_for_trove(
-            conn,
+    fn regular(path: &str, bytes: &[u8], trove_id: i64) -> FileEntry {
+        FileEntry::new(
+            path.to_string(),
+            resolved(PayloadNode::regular(0o755)),
+            Some(PayloadContentAuthority {
+                sha256: crate::hash::sha256(bytes),
+                size: bytes.len() as u64,
+            }),
             trove_id,
-            std::slice::from_ref(&capability),
         )
-        .expect("persist file capability");
-        capability
+    }
+
+    fn symlink(path: &str, target: &str, trove_id: i64) -> FileEntry {
+        let mut node = PayloadNode::regular(0o777);
+        node.kind = PayloadNodeKind::Symlink {
+            target: target.to_string(),
+        };
+        node.mode = libc::S_IFLNK | 0o777;
+        FileEntry::new(path.to_string(), resolved(node), None, trove_id)
+    }
+
+    fn selected_root() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
-    fn generation_input_source_classification_is_not_is_conary_owned() {
-        assert!(!is_generation_input_source(InstallSource::AdoptedTrack));
-        assert!(is_generation_input_source(InstallSource::AdoptedFull));
-        assert!(is_generation_input_source(InstallSource::Taken));
-        assert!(is_generation_input_source(InstallSource::Repository));
-        assert!(is_generation_input_source(InstallSource::File));
-    }
-
-    #[test]
-    fn non_empty_symlink_target_wins_over_mode_bits() {
-        let target = "../lib/systemd/systemd";
-        let hash = CasStore::compute_symlink_hash(target);
-        let entry = symlink_entry("/usr/sbin/init", target, &hash, 0o100755, 1);
-
-        assert_eq!(
-            classify_file_entry(&entry).unwrap(),
-            RuntimeEntryKind::Symlink {
-                target: target.to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn symlink_mode_without_target_fails_with_package_path_and_remediation() {
-        let entry = file_entry("/usr/lib/libfoo.so", &"a".repeat(64), 0o120777, 1);
-
-        assert_eq!(
-            classify_file_entry(&entry),
-            Err(RuntimeEntryProblem::MissingSymlinkTarget)
-        );
-        assert_error_contains(
-            validate_runtime_file_entry("glibc", &entry),
-            &[
-                "exportable runtime generation is not self-contained",
-                "package glibc",
-                "/usr/lib/libfoo.so",
-                "symlink entry is missing symlink_target",
-                "conary system adopt --system --full",
-                "conary system takeover --up-to generation",
-            ],
-        );
-    }
-
-    #[test]
-    fn directory_entries_bypass_digest_validation_and_are_not_erofs_inputs() {
-        let entry = file_entry("/usr/share/doc", "directory-placeholder", 0o040755, 1);
-
-        assert_eq!(
-            classify_file_entry(&entry).unwrap(),
-            RuntimeEntryKind::Directory
-        );
-        assert!(
-            validate_runtime_file_entry("filesystem", &entry)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn bare_permission_only_mode_defaults_to_regular_file() {
-        let entry = file_entry("/usr/bin/true", &"b".repeat(64), 0o755, 1);
-
-        assert_eq!(
-            classify_file_entry(&entry).unwrap(),
-            RuntimeEntryKind::Regular
-        );
-        match validate_runtime_file_entry("coreutils", &entry)
-            .unwrap()
-            .unwrap()
-        {
-            ValidatedRuntimeEntry::Regular(file) => {
-                assert_eq!(file.path, "/usr/bin/true");
-                assert_eq!(file.permissions, 0o755);
-            }
-            other => panic!("expected regular entry, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn included_special_files_fail_clearly() {
-        for (path, mode) in [
-            ("/usr/lib/systemd/fifo", 0o010644),
-            ("/etc/kmsg", 0o020600),
-            ("/boot/socket", 0o140777),
-        ] {
-            let entry = file_entry(path, &"c".repeat(64), mode, 1);
-
-            assert_error_contains(
-                validate_runtime_file_entry("systemd", &entry),
-                &[
-                    "package systemd",
-                    path,
-                    "unsupported special file mode",
-                    "conary system adopt <pkg> --full",
-                ],
-            );
-        }
-    }
-
-    #[test]
-    fn regular_file_invalid_digest_fails_through_shared_parser() {
-        let entry = file_entry("/usr/bin/false", "not-a-sha256", 0o100755, 1);
-
-        assert_error_contains(
-            validate_runtime_file_entry("coreutils", &entry),
-            &[
-                "package coreutils",
-                "/usr/bin/false",
-                "invalid SHA-256 digest for regular file",
-                "Expected 64-char hex digest",
-            ],
-        );
-    }
-
-    #[test]
-    fn symlink_hash_must_match_target_hash() {
-        let target = "libfoo.so.1";
-        let hash = CasStore::compute_symlink_hash(target);
-        let valid = symlink_entry("/usr/lib/libfoo.so", target, &hash, 0o120777, 1);
-
-        match validate_runtime_file_entry("glibc", &valid)
-            .unwrap()
-            .unwrap()
-        {
-            ValidatedRuntimeEntry::Symlink(symlink) => {
-                assert_eq!(symlink.path, "/usr/lib/libfoo.so");
-                assert_eq!(symlink.target, target);
-            }
-            other => panic!("expected symlink entry, got {other:?}"),
-        }
-
-        let invalid = symlink_entry("/usr/lib/libfoo.so", target, &"d".repeat(64), 0o120777, 1);
-        assert_error_contains(
-            validate_runtime_file_entry("glibc", &invalid),
-            &[
-                "package glibc",
-                "/usr/lib/libfoo.so",
-                "symlink hash mismatch",
-                &hash,
-            ],
-        );
-    }
-
-    #[test]
-    fn collect_runtime_generation_inputs_skips_excluded_paths_before_validation() {
+    fn exact_nodes_split_into_immutable_and_state_domains() {
         let (_tmp, conn) = create_test_db();
-        let troves = vec![trove(1, "runtime", InstallSource::AdoptedFull)];
-        let files = vec![
-            file_entry("/var/bad-fifo", "not-a-sha256", 0o010644, 1),
-            file_entry("/dev/bad-symlink", &"e".repeat(64), 0o120777, 1),
-            symlink_entry("/tmp/bad-link", "target", &"f".repeat(64), 0o120777, 1),
-        ];
-
-        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
-
-        assert!(inputs.file_refs.is_empty());
-        assert!(inputs.symlink_refs.is_empty());
-        assert_eq!(inputs.adopted_track_count, 0);
-    }
-
-    #[test]
-    fn collect_runtime_generation_inputs_skips_adopted_track_entries_but_counts_them() {
-        let (_tmp, conn) = create_test_db();
-        let troves = vec![
-            trove(1, "tracked", InstallSource::AdoptedTrack),
-            trove(2, "runtime", InstallSource::AdoptedFull),
-        ];
-        let files = vec![
-            file_entry("/usr/bin/tracked", "placeholder", 0o100755, 1),
-            file_entry("/usr/bin/runtime", &"1".repeat(64), 0o100755, 2),
-        ];
-
-        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
-
-        assert_eq!(inputs.adopted_track_count, 1);
-        assert_eq!(inputs.file_refs.len(), 1);
-        assert_eq!(inputs.file_refs[0].path, "/usr/bin/runtime");
-        assert!(inputs.symlink_refs.is_empty());
-    }
-
-    #[test]
-    fn collect_runtime_generation_inputs_rejects_non_excluded_special_file() {
-        let (_tmp, conn) = create_test_db();
-        let troves = vec![trove(1, "systemd", InstallSource::Repository)];
-        let files = vec![file_entry(
-            "/etc/systemd/fifo",
-            &"2".repeat(64),
-            0o010644,
-            1,
-        )];
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &troves, files),
-            &[
-                "package systemd",
-                "/etc/systemd/fifo",
-                "unsupported special file mode",
-            ],
-        );
-    }
-
-    #[test]
-    fn collect_runtime_generation_inputs_rejects_orphaned_file_entries() {
-        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
         let troves = vec![trove(1, "runtime", InstallSource::Repository)];
-        let files = vec![file_entry("/usr/bin/orphan", &"3".repeat(64), 0o100755, 99)];
+        let files = vec![
+            directory("/etc", 1),
+            regular("/etc/runtime.conf", b"state", 1),
+            directory("/opt", 1),
+            regular("/opt/runtime", b"immutable", 1),
+            directory("/tmp", 1),
+            regular("/tmp/ignored", b"ephemeral", 1),
+        ];
 
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &troves, files),
-            &["orphaned file entry", "trove_id 99", "/usr/bin/orphan"],
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/opt", "/opt/runtime"]
+        );
+        assert_eq!(
+            inputs
+                .state
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/etc", "/etc/runtime.conf"]
         );
     }
 
     #[test]
-    fn collect_runtime_generation_inputs_adds_lib64_loader_bridge_for_lfs_roots() {
+    fn special_nodes_remain_typed_generation_inputs() {
         let (_tmp, conn) = create_test_db();
-        let troves = vec![trove(1, "glibc", InstallSource::AdoptedFull)];
-        let files = vec![file_entry(X86_64_LFS_LOADER, &"4".repeat(64), 0o100755, 1)];
+        let root = selected_root();
+        let troves = vec![trove(1, "runtime", InstallSource::Repository)];
+        let mut fifo = PayloadNode::regular(0o640);
+        fifo.kind = PayloadNodeKind::Fifo;
+        fifo.mode = libc::S_IFIFO | 0o640;
+        let files = vec![
+            directory("/usr", 1),
+            FileEntry::new("/usr/events".to_string(), resolved(fifo), None, 1),
+        ];
 
-        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+        assert!(matches!(
+            inputs.generation.entries[1].node.source.kind,
+            PayloadNodeKind::Fifo
+        ));
+    }
 
-        assert_eq!(inputs.file_refs.len(), 1);
+    #[test]
+    fn runtime_projection_never_synthesizes_usr_merge_or_abi_links() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "glibc", InstallSource::Repository)];
+        let files = vec![
+            directory("/usr", 1),
+            directory("/usr/lib", 1),
+            regular("/usr/lib/ld-linux-x86-64.so.2", b"loader", 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
         assert!(
             inputs
-                .symlink_refs
+                .generation
+                .entries
                 .iter()
-                .any(|symlink| symlink.path == X86_64_LIB64_LOADER
-                    && symlink.target == X86_64_LIB64_LOADER_TARGET),
-            "expected runtime generation inputs to bridge /lib64's dynamic loader lookup"
+                .all(|entry| entry.path != "/lib64")
         );
     }
 
     #[test]
-    fn collect_runtime_generation_inputs_does_not_duplicate_existing_lib64_loader() {
+    fn exact_symlinks_are_preserved_without_mode_or_hash_inference() {
         let (_tmp, conn) = create_test_db();
-        let troves = vec![trove(1, "glibc", InstallSource::AdoptedFull)];
-        let existing_target = "../lib/ld-linux-x86-64.so.2";
+        let root = selected_root();
+        let troves = vec![trove(1, "init", InstallSource::Repository)];
         let files = vec![
-            file_entry(X86_64_LFS_LOADER, &"5".repeat(64), 0o100755, 1),
-            symlink_entry(
-                X86_64_LIB64_LOADER,
-                existing_target,
-                &CasStore::compute_symlink_hash(existing_target),
-                0o120777,
-                1,
-            ),
+            directory("/sbin", 1),
+            symlink("/sbin/init", "../usr/lib/systemd/systemd", 1),
         ];
 
-        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
-        let loader_symlinks = inputs
-            .symlink_refs
-            .iter()
-            .filter(|symlink| symlink.path == X86_64_LIB64_LOADER)
-            .count();
-
-        assert_eq!(loader_symlinks, 1);
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+        assert!(matches!(
+            &inputs.generation.entries[1].node.source.kind,
+            PayloadNodeKind::Symlink { target }
+                if target == "../usr/lib/systemd/systemd"
+        ));
     }
 
     #[test]
-    fn persisted_regular_file_capability_attaches_security_capability_xattr() {
+    fn adopted_track_is_counted_but_not_generation_authority() {
         let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "server", InstallSource::Repository);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        let expected = persist_capability(&conn, trove_id, "/usr/bin/server");
-        let troves = vec![trove];
-        let files = vec![file_entry(
-            "/usr/bin/server",
-            &"6".repeat(64),
-            0o100755,
-            trove_id,
-        )];
+        let root = selected_root();
+        let troves = vec![trove(1, "tracked", InstallSource::AdoptedTrack)];
+        let files = vec![regular("/tracked", b"tracked", 1)];
 
-        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+        assert_eq!(inputs.adopted_track_count, 1);
+        assert!(inputs.generation.entries.is_empty());
+    }
 
-        assert_eq!(inputs.file_refs.len(), 1);
-        assert_eq!(inputs.file_refs[0].path, "/usr/bin/server");
-        assert_eq!(
-            inputs.file_refs[0].xattrs.get(SECURITY_CAPABILITY_XATTR),
-            Some(
-                &crate::generation::builder::file_capabilities::encode_security_capability_xattr(
-                    &expected
-                )
-                .unwrap()
+    #[test]
+    fn generation_claimant_keeps_a_non_generation_anchor_in_the_root() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let mut anchor_trove = Trove::new_with_source(
+            "tracked-anchor".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+            crate::repository::versioning::VersionScheme::Arch,
+        );
+        anchor_trove.architecture = Some("x86_64".to_string());
+        anchor_trove.native_package_identity = Some(
+            crate::packages::InstalledPackageIdentity::pacman(
+                "tracked-anchor",
+                "tracked-anchor",
+                "1",
+                "x86_64",
             )
+            .unwrap(),
+        );
+        let anchor_trove_id = anchor_trove.insert(&conn).unwrap();
+        let mut claimant_trove = Trove::new_with_source(
+            "repository-claimant".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+            crate::repository::versioning::VersionScheme::Conary,
+        );
+        let claimant_trove_id = claimant_trove.insert(&conn).unwrap();
+
+        let directory_node = directory("/shared-directory", anchor_trove_id).node;
+        let mut directory_anchor = FileEntry::new(
+            "/shared-directory".to_string(),
+            directory_node.clone(),
+            None,
+            anchor_trove_id,
+        );
+        directory_anchor.insert(&conn).unwrap();
+        DirectoryClaim::new(
+            "/shared-directory".to_string(),
+            claimant_trove_id,
+            directory_node,
+        )
+        .unwrap()
+        .insert(&conn)
+        .unwrap();
+
+        let symlink_node = symlink("/shared-link", "shared-directory", anchor_trove_id).node;
+        let mut symlink_anchor = FileEntry::new(
+            "/shared-link".to_string(),
+            symlink_node,
+            None,
+            anchor_trove_id,
+        );
+        symlink_anchor.insert(&conn).unwrap();
+        DirectoryClaim::new(
+            "/shared-link".to_string(),
+            claimant_trove_id,
+            directory("/shared-link", claimant_trove_id).node,
+        )
+        .unwrap()
+        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .insert(&conn)
+        .unwrap();
+
+        let inputs = collect_runtime_generation_inputs(
+            &conn,
+            &Trove::list_packages(&conn).unwrap(),
+            FileEntry::find_all_ordered(&conn).unwrap(),
+            root.path(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/shared-directory", "/shared-link"]
         );
     }
 
     #[test]
-    fn runtime_inputs_without_capabilities_keep_empty_xattr_maps() {
+    fn orphaned_file_authority_is_rejected() {
         let (_tmp, conn) = create_test_db();
-        let troves = vec![trove(1, "runtime", InstallSource::Repository)];
-        let files = vec![file_entry("/usr/bin/runtime", &"7".repeat(64), 0o100755, 1)];
-
-        let inputs = collect_runtime_generation_inputs(&conn, &troves, files).unwrap();
-
-        assert_eq!(inputs.file_refs.len(), 1);
-        assert_eq!(inputs.file_refs[0].path, "/usr/bin/runtime");
-        assert!(inputs.file_refs[0].xattrs.is_empty());
-    }
-
-    #[test]
-    fn persisted_capability_missing_file_fails_closed_with_package_and_path() {
-        let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "server", InstallSource::Repository);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        persist_capability(&conn, trove_id, "/usr/bin/missing");
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &[trove], vec![]),
-            &[
-                "package server",
-                "/usr/bin/missing",
-                "has no matching installed file entry",
-            ],
-        );
-    }
-
-    #[test]
-    fn persisted_capability_on_excluded_file_fails_closed_with_package_and_path() {
-        let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "logs", InstallSource::Repository);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        persist_capability(&conn, trove_id, "/var/log/service");
-        let files = vec![file_entry(
-            "/var/log/service",
-            &"8".repeat(64),
-            0o100755,
-            trove_id,
-        )];
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &[trove], files),
-            &[
-                "package logs",
-                "/var/log/service",
-                "excluded from generation",
-            ],
-        );
-    }
-
-    #[test]
-    fn persisted_capability_on_non_generation_source_fails_closed() {
-        let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "tracked", InstallSource::AdoptedTrack);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        persist_capability(&conn, trove_id, "/usr/bin/tracked");
-        let files = vec![file_entry(
-            "/usr/bin/tracked",
-            &"9".repeat(64),
-            0o100755,
-            trove_id,
-        )];
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &[trove], files),
-            &[
-                "package tracked",
-                "/usr/bin/tracked",
-                "non-generation install source",
-            ],
-        );
-    }
-
-    #[test]
-    fn persisted_capability_on_symlink_fails_closed() {
-        let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "links", InstallSource::Repository);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        persist_capability(&conn, trove_id, "/usr/bin/link");
-        let target = "real";
-        let files = vec![symlink_entry(
-            "/usr/bin/link",
-            target,
-            &CasStore::compute_symlink_hash(target),
-            0o120777,
-            trove_id,
-        )];
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &[trove], files),
-            &["package links", "/usr/bin/link", "symlink"],
-        );
-    }
-
-    #[test]
-    fn persisted_capability_on_directory_fails_closed() {
-        let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "dirs", InstallSource::Repository);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        persist_capability(&conn, trove_id, "/usr/lib/service");
-        let files = vec![file_entry(
-            "/usr/lib/service",
-            "directory-placeholder",
-            0o040755,
-            trove_id,
-        )];
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &[trove], files),
-            &["package dirs", "/usr/lib/service", "directory"],
-        );
-    }
-
-    #[test]
-    fn persisted_capability_on_special_file_fails_closed() {
-        let (_tmp, conn) = create_test_db();
-        let mut trove = trove(1, "devices", InstallSource::Repository);
-        let trove_id = trove.insert(&conn).expect("insert trove");
-        persist_capability(&conn, trove_id, "/etc/device");
-        let files = vec![file_entry(
-            "/etc/device",
-            &"a".repeat(64),
-            0o020600,
-            trove_id,
-        )];
-
-        assert_error_contains(
-            collect_runtime_generation_inputs(&conn, &[trove], files),
-            &["package devices", "/etc/device", "non-regular"],
-        );
+        let root = selected_root();
+        let error = collect_runtime_generation_inputs(
+            &conn,
+            &[trove(1, "runtime", InstallSource::Repository)],
+            vec![regular("/orphan", b"orphan", 99)],
+            root.path(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("orphaned file entry"));
     }
 }

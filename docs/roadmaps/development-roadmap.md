@@ -1,5 +1,7 @@
 ---
-last_updated: 2026-07-24
+last_updated: 2026-07-25
+revision: 4
+summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "v0.12.0 at eb256b19b4f04ca1d03b6af39a2819d746d3a22a; release and issue-remediation proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
@@ -21,12 +23,14 @@ identities. Explicit obsolete pre-rebase and disposable-rehearsal identifiers
 remain labeled as historical, and workflow runs created before the rewrite
 still display their original head IDs.
 
-The supported public package-manager preview is adoption-led and bounded to
-Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. It centers on the local CLI,
-reversible adoption/unadoption, and an operator-run Remi service. Native
-package managers remain authoritative for adopted packages until a user makes
-an explicit takeover decision. Generation, conaryd, and federation claims stay
-inside the narrower limits recorded below.
+The next supported package-manager preview is cross-distro and bounded to
+Fedora 44, Ubuntu 26.04 LTS, and Arch Linux. It centers on installing RPM, DEB,
+and Arch artifacts through Conary regardless of the host's native package
+format. Source format owns lifecycle, dependency, version, payload, and
+configuration semantics; the target supplies typed host capabilities. Adoption
+and unadoption remain a migration bridge for already-installed native packages,
+not the product's primary package path. Generation, conaryd, and federation
+claims stay inside the narrower limits recorded below.
 
 Remote Forge validation is paused pending a KVM-capable runner. The dated
 2026-05-21 Group O local QEMU run established the earlier export baseline. The
@@ -42,20 +46,24 @@ remote-validation claim.
 
 The first external tester milestone closes when ten unique people outside the
 existing project circle complete
-`install -> adopt -> list/search -> update --dry-run -> unadopt` on supported
-systems and report friction. Alternatively, a maintainer may record a pivot
-when a reproducible systemic blocker inside the supported scope is backed by
-the affected attempts and a chosen remediation or explicit scope change.
+`foreign artifact install -> list/query -> update --dry-run -> remove` on
+supported systems and report friction. The installed artifact's source format
+must differ from the host's native package format. Alternatively, a maintainer
+may record a pivot when a reproducible systemic blocker inside the supported
+scope is backed by the affected attempts and a chosen remediation or explicit
+scope change.
 
 Launching outreach, publishing a release, receiving partial reports, or seeing
 ordinary outreach difficulty does not satisfy the milestone. The active
-[milestone tracker](external-tester-milestone.md) currently records 1/10 from
-one external tester who completed the full flow on two supported hosts.
+[milestone tracker](external-tester-milestone.md) currently records 0/10 for
+the revised cross-distro flow. One external tester's two successful
+adoption-led reports remain useful historical evidence but do not satisfy the
+new source-format/host-format crossing requirement.
 
 ## Principles and Safety Boundaries
 
-- Prefer reversible adoption and explicit authority transfer over silent
-  takeover.
+- Make source-independent package installation the primary path. Preserve
+  reversible adoption and explicit authority transfer as migration tools.
 - Fail closed at public, security, persistence, and package-mutation
   boundaries; do not turn missing proof into optimistic behavior or copy.
 - Keep supported scope, execution status, and proof freshness as independent
@@ -63,6 +71,9 @@ one external tester who completed the full flow on two supported hosts.
 - Treat package-manager, scriptlet, trust, and release claims as evidence
   bearing. Focused tests do not substitute for an explicitly required QEMU,
   clean-host, installed-binary, or external-user proof.
+- Use heuristics only for diagnostics, redaction, discovery, and prioritization.
+  Compatibility, publication, mutation, and security authority require parsed
+  typed contracts plus payload or persisted-state validation.
 - Preserve privacy in tester and operator evidence. Do not request secrets,
   private keys, credential files, broad machine dumps, or live databases by
   default.
@@ -80,199 +91,65 @@ the stated scope, not whether a workstream happens to be active.
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
 | Packaging, static repositories, trust, and self-update | solid | `v0.12.0` has exact tag, artifact hashes, signature, supported Arch-path, deployment, and real installed-binary self-update proof. No SBOM/provenance sidecars are published or planned. |
-| CCS conversion and scriptlet authority | limited | The reviewed authority work has green local plus public-redownload QEMU file-capability fixture proof and is published in `v0.12.0`; the deliberately narrow public scriptlet scope remains separate. |
+| CCS conversion and native lifecycle authority | active hard switch | PR #61 replaces review/refusal-era scriptlet policy with exact RPM, Debian, and ALPM lifecycle transactions; release, deployment, and cross-distro matrix proof remain. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
 | Remi core and publication | solid | Operator-run limited-preview scope; distribution, cold-start readiness, and a wider stranger-operated path remain limited. |
-| conaryd package and query service | limited | System routes, authorization policy, restart semantics, dry-run behavior, deployment, and PolicyKit remain incomplete. |
+| conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
 | Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | One organic external tester completed the full flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the unique-person milestone is 1/10, the former 2026-07-20 through 2026-07-22 outreach slots passed without posts, and rescheduling waits on cached-history dereferencing plus fresh venue checks. |
+| External product readiness | unfinished | One organic tester completed the former adoption flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the revised cross-distro milestone is 0/10, the former 2026-07-20 through 2026-07-22 outreach slots passed without posts, and new outreach requires a released cross-distro matrix. |
 
 ## Workstreams
 
 ### W0 Neutral Planning Migration
 
-- **Outcome:** active repository planning is concise, tool-neutral, and
-  discoverable without retaining completed process history or losing current
-  product, release, or branch-resume truth.
-- **Current truth:** execution began from clean `main` at rewritten commit
-  `b5d7f479`, three commits ahead of `origin/main` at rewritten commit
-  `7202649b`. The old planning tree contained
-  176 tracked files and the retired assistant archive contained one file. The
-  authority worktree was clean at the pinned head. The public and detailed
-  roadmap, milestone tracker, and gated outreach draft are now active.
-  Comparison of the old limited-preview checkpoint with the release artifact
-  matrix was `verified-no-change`: the matrix already carries newer artifact,
-  checksum, signature, self-update, SBOM/provenance, source, and caveat truth.
-- **Execution status:** complete.
-- **Dependencies:** none remain inside W0.
-- **Next gate:** W1 completed the integrated candidate, authority reconciliation,
-  TGE05 proof, public v4 fixture publication, fresh-cache boot, and final
-  integrated gates. W2 subsequently completed and W3 is active.
-- **Proof:** on 2026-07-15, doc truth, its fixtures, agent-context fixtures and
-  validation, and optional review-helper fixtures passed. The maintainability
-  fixture reproduced its known federation `pipefail` false negative. Release
-  audit failed on unwaived `RUSTSEC-2026-0204` through
-  `crossbeam-epoch 0.9.18`; W0 must preserve that blocker for W1. A NUL-safe
-  inventory covered all 182 ignored local files (6,485,292 bytes): 2 progress
-  files, 42 task briefs/reports, 75 review diffs, 6 final-verification reports,
-  55 local plan reviews, and 2 ignore-scaffolding files. Full progress review
-  found no unfinished main task and reduced the authority resume state to the
-  W1 handoff below. Every referenced implementation commit exists; four missing
-  full base IDs are obsolete pre-rebase markers, and one stale report's
-  `f519bc42` sysctl-versioning reference maps by subject and task range to
-  canonical rewritten commit `72f58820`. No unique blocker, decision, or follow-up exists
-  only in local scratch. Head `11583a1c5e3e94155b5459b4f998887ee87c5669`
-  immediately precedes self-deletion: it removed the remaining 179 tracked
-  history/registry files after rehearsal, and the ignored main/authority SDD
-  state and local reviews were removed after handoff preservation. No
-  replacement planning archive exists. A permanent neutral-layout check and
-  its clean plus six negative fixture cases are implemented in the closeout
-  tree. Final 2026-07-15 acceptance passed shell syntax; documentation truth and
-  fixtures; 13-card routing validation and CCS/packaging packets; optional
-  review, support-bundle, line-count, maintainability, and workflow-runtime
-  fixtures; Rust formatting; the 28-suite/333-case harness inventory; tracked
-  Markdown local links; neutral-layout, archive, ignore, and stale-token scans;
-  workflow lint; diff hygiene; and the pinned clean authority-worktree check.
-  The release audit separately reproduced only unwaived `RUSTSEC-2026-0204`
-  plus the documented `RUSTSEC-2026-0173` and yanked-crate warnings. The final
-  live clean-worktree proof runs immediately after the closeout commit.
-- **Limitations:** at W0 closeout the release was not security-green and W1
-  still owned crossbeam remediation, authority integration, and TGE05 or the
-  exact risk decision. W1 has since closed those items plus authenticated v4
-  fixture publication and public fresh-cache proof.
-- **Non-goals:** Rust behavior changes, authority-branch integration, dependency
-  remediation, a release, or tester launch.
+- **Outcome:** complete. Repository guidance is tool-neutral, current roadmap
+  truth stays under `docs/roadmaps/`, durable decisions live with their
+  canonical architecture, module, or specification owner, and bounded
+  execution state lives in its issue and pull request.
+- **Durable guard:** documentation truth rejects retired planning trees and
+  replacement archives; feature cards and `scripts/agent-context.sh` own
+  assistant routing.
+- **Dependencies:** none. Git history owns the retired migration inventory and
+  closeout evidence.
 
 ### W1 Integrated Release-Green Baseline
 
-- **Outcome:** one clean integrated commit is safe to treat as the release
-  candidate, with authority work reconciled and current release gates green.
-- **Current truth:** W1 started from clean `main` at rewritten commit `b8be9f0d` and reconciles
-  the independently reviewed authority head
-  `b3bb30766b5c03a1e997c70e36b19afdd5f9e870` without restoring retired process
-  files. `Cargo.lock` now resolves `crossbeam-epoch 0.9.20`; the fresh release
-  audit no longer reports `RUSTSEC-2026-0204`. Both nonblocking authority-review
-  notes are closed: one regression crosses the raw private artifact writer and
-  sanitized admin response, and balanced quoted environment assignments now
-  cluster as `<env-assignment>`. The 2026-07-16 Fedora 44 local KVM Group O run
-  passed all five cases against `minimal-boot-v4`, including capability-absent
-  and capability-enabled TGE05 boots.
-- **Execution status:** complete; the integrated merge commit is the
-  release-green candidate consumed by W2.
-- **Dependencies:** none remain inside W1.
-- **Next gate:** W2 completed the post-integration preview release, compatible
-  Remi deployment, and representative clean-host smoke; W3 owns external
-  tester evidence.
-- **Proof:** formatting, workspace Clippy with warnings denied, owning
-  Conary/core/Remi/conaryd tests, the 28-suite/334-case `conary-test` inventory,
-  release audit, release-matrix validation, neutral documentation/routing
-  gates, and routed scriptlet/generation interaction proof passed on the W1
-  tree. The repaired runner uses Fedora's 4 MiB OVMF path as read-only pflash,
-  waits for systemd boot completion before adoption, and versions the cached
-  test identity with the active source image. On 2026-07-16 the complete Group
-  O run passed 5 / failed 0 / skipped 0 / cancelled 0: TGE01 36,281 ms, TGE03
-  625,760 ms, TGE04 1,725,736 ms, TGE05 3,024,480 ms, and TGE02 1,914,811 ms.
-  TGE05 also passed a focused run in 3,060,588 ms, and a recompiled-harness
-  TGE01 rerun passed in 36,068 ms with `conaryos-test-key-v4`. Authenticated
-  Remi staging and destination verification preserved the image and key hashes;
-  all three v4 artifact URLs returned HTTP 200. An isolated empty cache then
-  downloaded the public image and private test key with matching SHA-256 values
-  and passed TGE01 under KVM in 63,320 ms. The final formatting, Clippy,
-  owning-package, documentation, routing, release-matrix, and release-audit
-  gates passed after that proof.
-- **Limitations:** W1 establishes an integrated release candidate, not a new
-  tagged preview or stranger-operated service claim. W2 owns those outcomes.
-  The production merge did not resurrect retired process paths.
-- **Non-goals:** expanding public scriptlet authority, enabling federation, or
-  adding unrelated package-manager features.
-
-Branch canonical documentation to reconcile deliberately:
-
-1. `docs/ARCHITECTURE.md`
-2. `docs/INTEGRATION-TESTING.md`
-3. `docs/SCRIPTLET_SECURITY.md`
-4. `docs/conaryopedia-v2.md`
-5. `docs/modules/ccs.md`
-6. `docs/modules/remi.md`
-7. `docs/modules/test-fixtures.md`
-8. `docs/operations/post-generation-export-follow-up-roadmap.md`
-
-Branch process changes to discard are the modified generated-document
-inventory, per-file documentation-audit registry, and feature-claim registry,
-plus the completed branch-only plans for file-capability public policy, generation file-capability
-xattrs, LSM policy semantics, network/package recursion authority, PAM
-authority, publication-summary schema/docs truth, Remi local-only test serving,
-and sysctl target-profile public policy.
-
-The two nonblocking review notes for W1 or an explicitly owned follow-up are
-recorded exactly in the reconciliation map below.
+- **Outcome:** complete. The authority work, security-dependency remediation,
+  KVM generation proof, public test fixture, and release gates were integrated
+  into the baseline consumed by W2.
+- **Durable truth:** current behavior and proof commands live in their owning
+  canonical docs, feature cards, and tests rather than in this roadmap.
+- **Dependencies:** none. W3 owns current external-use evidence.
 
 ### W2 Preview Release and Remi Readiness
 
-- **Outcome:** external testers have one current pinned post-integration
-  release and a prepared compatible service path matching the integrated code
-  and documentation.
-- **Current truth:** `v0.11.1` is the pinned post-integration preview. Its exact
-  rewritten source/tag commit is `cb16f4876fdaa1ca422c3e9cce331788cacadfb1`;
-  the GitHub Release publishes Fedora 44, Ubuntu 26.04 LTS, Arch, and CCS
-  artifacts with `SHA256SUMS` and a detached CCS signature. Remi remains the
-  deliberately chosen maintainer-operated service and source-build preview,
-  not a public operator-artifact claim.
-- **Execution status:** complete.
-- **Dependencies:** none remain inside W2.
-- **Next gate:** W3 must close its current fix-now remediation and refresh the
-  release evidence before assigning a replacement Show HN, r/codex, and
-  r/ClaudeAI schedule.
-- **Proof:** release-build run `29540722051` and deploy-and-verify run
-  `29542934278` ran at pre-rewrite head
-  `4d4b422b45b055fa07a3885a68a4ab8e8d16b526`. The current rewritten tag
-  commit is `cb16f4876fdaa1ca422c3e9cce331788cacadfb1`; both commits have tree
-  `17c857bb27daa69b54a5c0688dc6892848da52b6`. Independent downloads
-  matched every entry in `SHA256SUMS`; the detached CCS signature verified
-  against the published CCS digest. The official preceding-preview Fedora RPM
-  binary, using an isolated schema-75 database, detected `v0.11.1`, printed
-  `Signature verified`, replaced itself, reported `conary 0.11.1`, and then
-  reported itself up to date. The release records the explicit decision not to
-  publish SBOM/provenance sidecars for this limited preview. Current compatible
-  Remi commit `27ec2eccb6befdf06d9a826b84cc5a6948eff5fb` and the deployed pre-rewrite
-  source commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` both have tree
-  `4307eea1f795056ce66d588d599082eb09690b78`. The deployed binary SHA-256 is
-  `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`;
-  its rollback/redeploy rehearsal and 10/10 public health passed, its
-  conversion-version-6 prewarm state contains 11 public rows and one
-  fail-closed private-review row, and a clean Fedora 44 host installed, ran,
-  and removed public `htop 3.4.1` after target normalization was corrected.
-- **Limitations:** the Remi operator path remains maintainer-led with a
-  source-build fallback, and `v0.11.1` has no SBOM/provenance sidecars. W2
-  completion prepares outreach but does not authorize or automate posting it.
-- **Non-goals:** distributing every workspace binary or claiming broad
-  production support.
-
-W2 also owns one compatibility/proof decision spanning Clap-time Remi target
-rejection, runtime target-ID normalization, and
-`repo add --remi-distro` validation. W0 changes none of that behavior.
-Debian-family identifiers in conversion tests remain internal package-family
-fixture coverage owned by `docs/modules/test-fixtures.md`; they are not public
-distro claims. The old generic dead-helper row had no evidence-backed surface
-and creates no roadmap item.
+- **Outcome:** complete. A pinned preview, compatible Remi deployment, release
+  artifacts, update proof, and representative install/remove smoke established
+  the service path later superseded by W3's current release evidence.
+- **Durable truth:** current release identity and artifact proof live in
+  `docs/operations/release-artifact-matrix.md`; supported fixture and service
+  behavior lives in the owning module docs and tests.
+- **Dependencies:** none. W3 owns current release, outreach, and tester status.
 
 ### W3 First External Tester Loop
 
-- **Outcome:** Conary has external evidence about whether its adoption-led
-  preview works for strangers on supported systems.
+- **Outcome:** Conary has external evidence that strangers can install and
+  remove a package whose source format differs from the supported host's native
+  format.
 - **Current truth:** the W3a publication and issue-remediation gate is complete
   at immutable `v0.12.0`. It preserves the preceding exact SONAME, ELF-class,
   and constraint-aware Arch fixes and adds safe in-root system-symlink
   traversal plus usable installed-host support diagnostics. No broad external
   venue post has been published. One organic external tester completed the
-  then-current full flow on Ubuntu 26.04 LTS and Fedora 44; the two host reports
-  count once toward the unique-person milestone, so the tracker remains 1/10.
+  former adoption-led flow on Ubuntu 26.04 LTS and Fedora 44. Those reports
+  remain valid release/onboarding evidence but do not count toward the revised
+  cross-distro milestone, so the tracker is 0/10.
   The former 2026-07-20 through 2026-07-22 outreach window passed without a
   post. Issue #41's reported Artix host and Fedora-form source route remain
-  outside supported-scope proof and require the repaired bundle's host-profile,
+  outside supported-scope proof and require the repaired bundle's source-selection,
   source-pin, and repository evidence before classification.
 - **Execution status:** active; release remediation is complete, but broad
   outreach and its replacement dates remain postponed.
@@ -317,10 +194,12 @@ and creates no roadmap item.
   repository Welcome Discussion remains live at discussion 36, and issue 35
   remains closed with its released-path proof; neither repository action
   launches broad outreach. Issues 37 and 38 remain two supported-host attempts
-  by one unique tester. Each later milestone completion belongs to a unique
-  outsider and covers exactly `install -> adopt -> list/search -> update
-  --dry-run -> unadopt` on a supported host with the pinned release. Record
-  failed attempts and triage every report as `fix-now`, `next-slice`,
+  by one unique tester. They are historical onboarding evidence, not
+  completions under the revised milestone. Each qualifying completion belongs
+  to a unique outsider and covers exactly `foreign artifact install ->
+  list/query -> update --dry-run -> remove` on a supported host with the pinned
+  release, where source and host native package formats differ. Record failed
+  attempts and triage every report as `fix-now`, `next-slice`,
   `validated-no-action`, or `declined-with-reason` with an owner.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
@@ -329,108 +208,14 @@ and creates no roadmap item.
 - **Non-goals:** automated posting, redefining partial attempts as completion,
   or broadening the supported scope to make the count easier.
 
-## Authority-Branch Reconciliation Map
-
-The authority worktree is read-only during W0. Its pinned head is
-`b3bb30766b5c03a1e997c70e36b19afdd5f9e870`, its merge base with the W0
-baseline is `7202649b6ea6df2d20a681601f9e763bc16147c7`, and it was tracked-clean
-on 2026-07-15. The branch contains 78 commits on its side of that merge base.
-Its final independent review found no Critical or Important issue and returned
-`Ready to merge? Yes`.
-
-| Reconciliation class | Count or exact scope | W0 rehearsal and later W1 disposition |
-| --- | --- | --- |
-| Branch product source and tests | 58 paths outside the process set and canonical-doc set | Preserve the authority-head blob or deletion state byte-for-byte. |
-| Canonical documentation | The eight files listed under W1 | Integrate branch product truth, then retain only W0's neutral path and proof wording where the concerns overlap. |
-| Modified branch registries | Generated-document inventory, per-file documentation-audit coverage, and feature-claim implementation truth | Delete as completed process bookkeeping. |
-| Completed branch-only plans | File-capability public policy, generation file-capability xattrs, LSM policy semantics, network/package recursion authority, PAM authority, publication-summary schema/docs truth, Remi local-only test serving, and sysctl target-profile public policy | Delete as completed process history; do not recreate under neutral planning paths. |
-| Remaining shipping gate | v4 fixture publication | Closed on 2026-07-16: the versioned v4 image/key set is public, an isolated download matched the source hashes, and TGE01 booted it under KVM. |
-| Production integration | The later real merge | Retired planning, audit, coherency, and local execution paths may not return. |
-
-### Authority A-I Disposition
-
-| Area | Durable disposition and owner |
-| --- | --- |
-| A. File-capability policy precision | Implemented at the pinned head. Canonical owners are `docs/SCRIPTLET_SECURITY.md` and `docs/modules/ccs.md`. |
-| B. Generation xattr propagation | Implemented at the pinned head and proven by the 2026-07-16 TGE05 local KVM pass plus public fixture redownload and KVM boot. |
-| C. Sysctl target-profile policy | Implemented at the pinned head. Canonical owner is `docs/modules/ccs.md`, backed by target-profile policy and conversion tests. |
-| D. LSM policy semantics | Implemented at the pinned head. Canonical owners are `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and `docs/modules/remi.md`. |
-| E. PAM, kernel, initramfs, and bootloader | PAM remains deliberately non-public. Later boot and security outcomes remain in the post-M1 horizon rather than becoming implied authority. |
-| F. Network and package-manager recursion | Deliberately blocked and non-public; exact owners and proof are transferred below. |
-| G. Remi non-public test serving | Implemented at the pinned head and canonical in `docs/modules/remi.md`. |
-| H. Publication schema and docs truth | Implemented at the pinned head. W1 closed both nonblocking review minors with the cross-boundary route regression and quoted-assignment normalization decision below. |
-| I. Enabling refactors | No standalone work item. Apply the existing maintainability boundary only when a product slice touches the hotspot. |
-
-### Branch-Only Claim Transfer
-
-| Claim | Canonical owners | Required focused proof |
-| --- | --- | --- |
-| Network fetch and package-manager recursion remain non-public and blocked. | `docs/SCRIPTLET_SECURITY.md`, `docs/modules/ccs.md`, and the CCS/Remi feature cards | `blocked_classes_block_live_fetch_and_package_manager_recursion`; `live_fetch_and_package_manager_classes_remain_blocked_without_native_adapters` and its fake-Known-row guard; `corpus_summary_marks_live_fetch_and_package_manager_recursion`; and `blocked_live_fetch_and_package_manager_reports_stay_private_and_non_public_only`. |
-| Stale publication summaries fail closed; public responses are sanitized while raw review artifacts remain private. | `docs/modules/remi.md` and `docs/SCRIPTLET_SECURITY.md` | `converted_ccs_path_for_download_rejects_stale_conversion_records`; `stale_converted_rows_are_not_scriptlet_public_ready`; `publication_report_sanitizes_boot_and_security_policy_intents`; `publication_report_sanitizes_unknown_commands_and_reasons_while_raw_report_retains_them`; `raw_publication_report_retains_private_intents_for_review_artifacts`; and the non-public/admin sanitization tests `non_public_test_serving_manifest_returns_sanitized_blocked_metadata` and `non_public_test_serving_manifest_sanitizes_private_intent_values`. |
-
-W1 closed the two nonblocking review notes as follows:
-
-1. `raw_review_artifact_and_admin_response_keep_separate_visibility` combines
-   the real raw private artifact writer with the authenticated admin response
-   route and proves the raw path and values remain absent from the response.
-2. Balanced quoted and unquoted environment assignments normalize to
-   `<env-assignment>` for clustering invariance, covered by
-   `balanced_quoted_env_assignments_cluster_with_unquoted_forms`.
-
-### Disposable Rehearsal Proof
-
-On 2026-07-15, the migration head now represented in rewritten history by
-`0cd45b180b0ce3cb9f934ba849a6926105a842f4` was cloned into a disposable
-repository. The rehearsal first committed deletion of the former planning
-tree, retired assistant archive, and five structural-registry scripts, then
-merged the authority head now represented by
-`b3bb30766b5c03a1e997c70e36b19afdd5f9e870`
-with `--no-commit --no-ff`. The merge stopped on five expected conflicts:
-`docs/SCRIPTLET_SECURITY.md`, `docs/modules/test-fixtures.md`, and the three
-retired branch registries for generated-document inventory, per-file audit
-coverage, and feature-claim truth.
-
-The three registries and eight completed branch plans stayed deleted.
-`docs/SCRIPTLET_SECURITY.md` took the authority branch's complete product truth.
-`docs/modules/test-fixtures.md` took the authority fixture additions plus W0's
-neutral frontmatter and docs-only proof command. The other canonical-doc merges
-were clean: six of eight canonical docs match the authority head byte-for-byte;
-the intentional differences are the fixture reconciliation and W0's dead-link
-cleanup in `docs/conaryopedia-v2.md`. All 58 branch-owned product source/test
-paths matched the authority-head blob or deletion state. No retired path or
-caller survived the staged scan. Naming the discarded files in the handoff had
-initially collided with that final token scan, so their durable dispositions
-are expressed here by purpose while the temporary W0 design and execution plan
-retain the exact historical path inventory.
-
-The following rehearsal gates passed:
-
-- documentation truth, its fixtures, agent-context fixtures, and validation of
-  13 feature cards;
-- `cargo fmt --all -- --check` plus worktree and staged diff checks;
-- `cargo test -p conary-core public_policy` (15 matched tests) and
-  `cargo test -p conary-core file_capability` (11);
-- `cargo test -p conary generation_file_capabilities` (7);
-- `cargo test -p remi publication` (18),
-  `cargo test -p remi non_public_test_serving` (11), and
-  `cargo test -p remi scriptlet_corpus` (5); and
-- `cargo run -p conary-test -- list` (28 suites, 334 cases).
-
-No selector correction was required because every named focused filter matched
-tests. Unreachable historical disposable-only rehearsal commit
-`5fb111b5f4b95758310dd8e44e6714d863afc924` had the then-current authority head
-as its second parent, and the authority-head ancestry check passed. Before this
-proof record was edited, both live worktrees were
-confirmed clean and the authority worktree remained at the pinned head.
-
 ## Post-Milestone Horizons
 
 ### Feedback-Driven Compatibility and Authority
 
 - Repair the highest-impact adoption, resolution, scriptlet, or service
   friction shown by real testers.
-- Expand public scriptlet authority only through positive target policy and
-  end-to-end preservation proof.
+- Expand public scriptlet authority only through formal package/helper
+  contracts, positive target policy, and end-to-end preservation proof.
 - Preserve fail-closed serving and explicit native-package-manager authority.
 - Refresh supported-distro proof before adding breadth.
 
@@ -454,8 +239,8 @@ confirmed clean and the authority worktree remained at the pinned head.
 
 ### Service and Operator Maturity
 
-- Resolve conaryd's root-only versus read-only authorization contract and
-  implement or remove unreachable PolicyKit behavior.
+- Prove conaryd's exact root/daemon/configured-group authorization contract
+  through packaged deployment and restart scenarios.
 - Replace echo-style dry runs with real resolver plans and prove restart safety
   before adding destructive routes.
 - Decide distribution and deployment support for Remi, conaryd, and the test
@@ -464,10 +249,18 @@ confirmed clean and the authority worktree remained at the pinned head.
 ### System Artifacts and Platform Breadth
 
 - Keep x86_64 generation boot proof repeatable on maintained fixtures.
+- Move boot activation to strict verity only when the kernel and image
+  pipeline can prove it, and remove developer live-switch machinery once
+  next-boot activation covers the maintained workflow.
 - Add signed boot-artifact authority and portable generation-bundle trust.
+- Make build and validation share one deterministic input-staging path, and
+  use disposable overlays or snapshot mode so reruns are pristine by default.
+- Derive raw, qcow2, ISO, OCI, and any future VMDK output from the canonical
+  generation artifact instead of adding provider-specific package state.
 - Add non-x86 architectures only with owned boot assets and proof.
 - Add distros only after the existing three-distro path is repeatable.
-- Address persistent scriptlet-effect rollback limitations explicitly.
+- Model any remaining non-filesystem lifecycle effects as typed generation or
+  external-transaction intents with exact retry and rollback semantics.
 
 ### Federation Runtime and Trust Closure
 
@@ -506,15 +299,18 @@ roadmap owns ordering, cross-issue blockers, and milestone truth. A broad
 workstream may span several issues and PRs, but the roadmap is not a substitute
 for the actionable issue queue.
 
-Active designs live under `docs/designs/`; active multi-step implementation
-plans live under `docs/plans/`; stable public or persisted contracts live under
-`docs/specs/`. Planning must be proportional to risk and tool-neutral.
+Record durable design decisions in the architecture, module, or `docs/specs/`
+document that owns the affected surface. The primary issue and draft pull
+request own bounded multi-step execution state; stable public or persisted
+contracts live under `docs/specs/`. Planning must be proportional to risk and
+tool-neutral.
 
-Close a design or plan only after implementation meets its acceptance
-condition, enduring truth is canonical, roadmap and release state are current,
+Close an implementation slice only after it meets its acceptance condition,
+enduring truth is canonical, roadmap and release state are current,
 verification lives with its owner, and no active branch or handoff depends on
-the file. Then delete it from the current tree and use Git history when the
-decision record is needed. Do not create a replacement planning archive.
+temporary planning material. Delete completed, superseded, or abandoned
+planning from the current tree and use Git history when historical context is
+needed. Do not create a replacement planning archive.
 
 New work enters the ordered sequence only when it advances the current
 milestone, resolves a safety or release blocker, or is explicitly accepted as

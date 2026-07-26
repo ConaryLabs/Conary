@@ -1,20 +1,18 @@
 // apps/conary/src/commands/remove/autoremove.rs
 
-use std::collections::HashSet;
-
 use anyhow::Result;
-use conary_core::db::models::Trove;
+use conary_core::db::models::{PackagePayloadOwnership, Trove};
+use conary_core::scriptlet::ExecutionMode;
+use std::collections::HashSet;
 use tracing::info;
 
-use super::legacy_replay::load_installed_legacy_remove_plan;
-use super::types::RemoveScriptletOptions;
-use crate::commands::{LegacyReplayOptions, SandboxMode, open_db};
+use super::types::RemoveLifecycleOptions;
+use crate::commands::{SandboxMode, open_db};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AutoremoveSkipReason {
     AdoptedNativeAuthority,
     Pinned,
-    Critical,
 }
 
 #[derive(Debug, Clone)]
@@ -27,14 +25,7 @@ struct AutoremovePlan {
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub async fn cmd_autoremove(
-    db_path: &str,
-    root: &str,
-    dry_run: bool,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
-    legacy_replay: LegacyReplayOptions,
-) -> Result<()> {
+pub async fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -> Result<()> {
     info!("Finding orphaned packages...");
 
     let conn = open_db(db_path)?;
@@ -98,7 +89,8 @@ pub async fn cmd_autoremove(
         preflight_autoremove_round(
             &conn,
             &current_plan.removable,
-            RemoveScriptletOptions::new(no_scripts, sandbox_mode, legacy_replay),
+            db_path,
+            RemoveLifecycleOptions::new(sandbox_mode),
         )?;
 
         let mut round_removed = 0;
@@ -107,13 +99,10 @@ pub async fn cmd_autoremove(
             match super::cmd_remove(
                 &trove.name,
                 db_path,
-                root,
                 Some(trove.version.clone()),
                 trove.architecture.clone(),
-                no_scripts,
                 sandbox_mode,
                 false,
-                legacy_replay,
             )
             .await
             {
@@ -152,23 +141,63 @@ pub async fn cmd_autoremove(
 fn preflight_autoremove_round(
     conn: &rusqlite::Connection,
     troves: &[Trove],
-    scriptlet_options: RemoveScriptletOptions,
+    db_path: &str,
+    lifecycle_options: RemoveLifecycleOptions,
 ) -> Result<()> {
     for trove in troves {
         let Some(trove_id) = trove.id else {
             anyhow::bail!(
-                "autoremove legacy replay preflight failed for {} {}: trove has no id",
+                "autoremove lifecycle execution preflight failed for {} {}: trove has no id",
                 trove.name,
                 trove.version
             );
         };
-        if let Err(error) = load_installed_legacy_remove_plan(conn, trove_id, scriptlet_options) {
+        let paths = PackagePayloadOwnership::load(conn, trove_id)?
+            .lifecycle_paths()
+            .to_vec();
+        let native_transaction =
+            crate::commands::install::native_events::PreparedNativeTransaction::prepare_remove(
+                conn,
+                trove_id,
+                &trove.name,
+                &trove.version,
+                paths,
+                false,
+            );
+        let native_transaction = match native_transaction {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                anyhow::bail!(
+                    "autoremove lifecycle execution preflight failed for {} {}: {error}",
+                    trove.name,
+                    trove.version
+                );
+            }
+        };
+        let selected = crate::commands::generation::selected_root::SelectedRootSession::begin(
+            conn,
+            db_path,
+            format!("Autoremove preflight {}-{}", trove.name, trove.version),
+        )?;
+        if let Err(error) =
+            native_transaction.preflight(selected.selected_root(), &ExecutionMode::Remove)
+        {
             anyhow::bail!(
-                "autoremove legacy replay preflight failed for {} {}: {error}",
+                "autoremove lifecycle execution preflight failed for {} {}: {error}",
                 trove.name,
                 trove.version
             );
         }
+        let selected_root = selected
+            .selected_root()
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("autoremove selected root is not valid UTF-8"))?;
+        super::preflight_ccs_remove_hook(
+            conn,
+            trove,
+            selected_root,
+            lifecycle_options.sandbox_mode,
+        )?;
     }
 
     Ok(())
@@ -183,8 +212,6 @@ fn plan_autoremove(orphaned: Vec<Trove>) -> AutoremovePlan {
             skipped.push((trove, AutoremoveSkipReason::AdoptedNativeAuthority));
         } else if trove.pinned {
             skipped.push((trove, AutoremoveSkipReason::Pinned));
-        } else if crate::commands::install::is_package_blocked(&trove.name) {
-            skipped.push((trove, AutoremoveSkipReason::Critical));
         } else {
             removable.push(trove);
         }
@@ -218,13 +245,13 @@ fn print_autoremove_skips(skipped: &[(Trove, AutoremoveSkipReason)]) {
         }
     }
 
-    let blocked = skipped
+    let protected = skipped
         .iter()
         .filter(|(_, reason)| *reason != AutoremoveSkipReason::AdoptedNativeAuthority)
         .collect::<Vec<_>>();
-    if !blocked.is_empty() {
-        println!("Skipping blocked orphaned package(s):");
-        for (trove, reason) in blocked {
+    if !protected.is_empty() {
+        println!("Skipping protected orphaned package(s):");
+        for (trove, reason) in protected {
             print!("  {} {}", trove.name, trove.version);
             if let Some(arch) = &trove.architecture {
                 print!(" [{}]", arch);
@@ -253,48 +280,57 @@ fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::legacy_scriptlets::{
-        DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
-        LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy,
-        PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
+    use conary_core::ccs::native_lifecycle::{
+        LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,
+        NativeLifecycleEntry, NativeLifecycleEntryKind, ScriptletFidelity, SourceFormat,
         TransactionOrder, VersionScheme,
     };
-    use conary_core::db::models::{InstallSource, InstalledLegacyScriptletBundle, TroveType};
-    use std::collections::BTreeMap;
+    use conary_core::db::models::{
+        InstallReason, InstallSource, InstalledNativeLifecycleBundle, TroveType,
+    };
     use tempfile::TempDir;
 
     #[test]
-    fn autoremove_plan_classifies_authority_and_safety_skips() {
+    fn autoremove_plan_uses_recorded_ownership_and_pin_state() {
         let owned = Trove::new_with_source(
             "owned-orphan".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let adopted = Trove::new_with_source(
             "adopted-orphan".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::AdoptedTrack,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let mut pinned = Trove::new_with_source(
             "pinned-orphan".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         pinned.pinned = true;
-        let critical = Trove::new_with_source(
+        let ordinary_named_bash = Trove::new_with_source(
             "bash".to_string(),
             "5.2.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
 
-        let plan = plan_autoremove(vec![owned, adopted, pinned, critical]);
+        let plan = plan_autoremove(vec![owned, adopted, pinned, ordinary_named_bash]);
 
-        assert_eq!(plan.removable.len(), 1);
-        assert_eq!(plan.removable[0].name, "owned-orphan");
+        assert_eq!(
+            plan.removable
+                .iter()
+                .map(|trove| trove.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["owned-orphan", "bash"]
+        );
         assert_eq!(
             plan.skipped
                 .iter()
@@ -306,132 +342,129 @@ mod tests {
                     &AutoremoveSkipReason::AdoptedNativeAuthority
                 ),
                 ("pinned-orphan", &AutoremoveSkipReason::Pinned),
-                ("bash", &AutoremoveSkipReason::Critical),
             ]
         );
     }
 
     #[tokio::test]
-    async fn autoremove_refuses_legacy_candidate_before_removing_any_package() {
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
+    async fn autoremove_automatically_replays_native_remove_lifecycle() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        conary_core::db::models::DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-        seed_dependency_trove(&conn, "aa-plain-orphan");
-        let legacy_trove_id = seed_dependency_trove(&conn, "zz-legacy-orphan");
-        seed_installed_legacy_bundle(&conn, legacy_trove_id, "zz-legacy-orphan");
-        drop(conn);
-
-        let err = cmd_autoremove(
-            db_path.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
-            false,
-            false,
-            SandboxMode::None,
-            LegacyReplayOptions::default(),
+        conary_core::db::models::DistroPin::set(
+            &conn,
+            "fedora-44",
+            conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
         )
-        .await
-        .unwrap_err()
-        .to_string();
-
-        assert!(err.contains("LegacyReplayFeatureDisabled"), "{err}");
-        let conn = conary_core::db::open(&db_path).unwrap();
-        assert_eq!(
-            Trove::find_by_name(&conn, "aa-plain-orphan").unwrap().len(),
-            1,
-            "autoremove must not remove earlier candidates before a later legacy refusal"
+        .unwrap();
+        seed_dependency_trove(
+            &conn,
+            "aa-plain-orphan",
+            "1.0.0",
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
-        assert_eq!(
-            Trove::find_by_name(&conn, "zz-legacy-orphan")
-                .unwrap()
-                .len(),
-            1
+        let native_trove_id = seed_dependency_trove(
+            &conn,
+            "zz-native-orphan",
+            "1.0.0-1.fc44",
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
-        assert_eq!(table_count(&conn, "changesets"), 0);
-        assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 1);
-    }
-
-    #[tokio::test]
-    async fn autoremove_with_legacy_replay_flag_removes_all_candidates() {
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        let db_path = root.join("conary.db");
-        conary_core::db::init(&db_path).unwrap();
-
-        let conn = conary_core::db::open(&db_path).unwrap();
-        conary_core::db::models::DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-        seed_dependency_trove(&conn, "aa-plain-orphan");
-        let legacy_trove_id = seed_dependency_trove(&conn, "zz-legacy-orphan");
-        seed_installed_legacy_bundle(&conn, legacy_trove_id, "zz-legacy-orphan");
+        seed_installed_native_lifecycle_bundle(&conn, native_trove_id, "zz-native-orphan");
         drop(conn);
 
         cmd_autoremove(
             db_path.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
             false,
-            false,
-            SandboxMode::None,
-            LegacyReplayOptions {
-                allow_legacy_replay: true,
-                allow_foreign_legacy_replay: false,
-            },
+            SandboxMode::Always,
         )
         .await
         .unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        assert_eq!(table_count(&conn, "troves"), 0);
-        assert_eq!(table_count(&conn, "installed_legacy_scriptlet_bundles"), 0);
+        assert_eq!(table_count(&conn, "troves"), 1);
+        assert!(
+            Trove::find_one_by_name(&conn, "test-runtime-base")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(table_count(&conn, "installed_native_lifecycle_bundles"), 0);
         assert_eq!(table_count(&conn, "changesets"), 2);
-        let metadata = changeset_metadata_by_description(&conn, "Remove zz-legacy-orphan-1.0.0");
-        let planned_entries = metadata["legacy_scriptlet_replay"]["planned_entries"]
-            .as_array()
-            .expect("planned entries array");
-        assert_eq!(planned_entries.len(), 1);
-        assert_eq!(planned_entries[0]["entry_id"], "rpm:%postun");
-        assert_eq!(planned_entries[0]["phase"], "post-remove");
-        assert!(planned_entries[0].get("outcome").is_some());
+        let metadata =
+            changeset_metadata_by_description(&conn, "Remove zz-native-orphan-1.0.0-1.fc44");
+        assert!(
+            metadata["removed_troves"][0]["native_lifecycle"]["bundle_toml"]
+                .as_str()
+                .unwrap()
+                .contains("rpm:%postun")
+        );
+
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+        let generation = conary_core::generation::mount::current_generation(runtime_root.root())
+            .unwrap()
+            .expect("autoremove should publish a generation");
+        let artifact = conary_core::generation::artifact::load_generation_artifact(
+            &runtime_root.generation_path(generation),
+        )
+        .unwrap();
+        let marker = artifact
+            .generation_root
+            .entries
+            .iter()
+            .find(|entry| entry.path == "/autoremove-native-lifecycle-ran")
+            .expect("RPM remove lifecycle marker in published root");
+        let content = marker.content.as_ref().expect("marker content authority");
+        assert_eq!(
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+                .unwrap()
+                .retrieve(&content.sha256)
+                .unwrap(),
+            b"zz-native-orphan"
+        );
     }
 
-    fn seed_dependency_trove(conn: &rusqlite::Connection, name: &str) -> i64 {
-        let mut trove = Trove::new_as_dependency(
+    fn seed_dependency_trove(
+        conn: &rusqlite::Connection,
+        name: &str,
+        version: &str,
+        version_scheme: conary_core::repository::versioning::VersionScheme,
+    ) -> i64 {
+        let mut trove = Trove::new_with_source(
             name.to_string(),
-            "1.0.0".to_string(),
+            version.to_string(),
             TroveType::Package,
-            "fixture-root",
+            InstallSource::Repository,
+            version_scheme,
         );
         trove.architecture = Some("x86_64".to_string());
+        trove.install_reason = InstallReason::Dependency;
+        trove.selection_reason = Some("Required by fixture-root".to_string());
         trove.insert(conn).unwrap()
     }
 
-    fn seed_installed_legacy_bundle(conn: &rusqlite::Connection, trove_id: i64, package: &str) {
-        let bundle = legacy_post_remove_bundle(package);
-        let target_id = conary_core::repository::distro::source_target_from_bundle(&bundle).to_id();
-        let mut installed = InstalledLegacyScriptletBundle::new(
-            trove_id,
-            None,
-            target_id,
-            "strict".to_string(),
-            false,
-            &bundle,
-        )
-        .unwrap();
+    fn seed_installed_native_lifecycle_bundle(
+        conn: &rusqlite::Connection,
+        trove_id: i64,
+        package: &str,
+    ) {
+        let bundle = native_post_remove_bundle(package);
+        let mut installed = InstalledNativeLifecycleBundle::new(trove_id, None, &bundle).unwrap();
         installed.insert_or_replace(conn).unwrap();
     }
 
-    fn legacy_post_remove_bundle(package: &str) -> LegacyScriptletBundle {
-        let entry = legacy_post_remove_entry();
-        LegacyScriptletBundle {
-            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
+    fn native_post_remove_bundle(package: &str) -> NativeLifecycleBundle {
+        let entry = native_post_remove_entry();
+        NativeLifecycleBundle {
+            schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+            schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
-            source_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora-44".to_string()),
             source_release: Some("44".to_string()),
             source_arch: Some("x86_64".to_string()),
             source_package: package.to_string(),
@@ -441,40 +474,28 @@ mod tests {
             conversion_tool: "test".to_string(),
             conversion_tool_version: "0.8.0".to_string(),
             conversion_policy: "goal6-autoremove-test".to_string(),
-            adapter_registry_digest: None,
-            target_policy_digest: None,
             evidence_digest: Some(conary_core::hash::sha256_prefixed(
-                format!("{package}-legacy-remove-evidence").as_bytes(),
+                format!("{package}-native-remove-evidence").as_bytes(),
             )),
-            target_compatibility: TargetCompatibility::SourceNative,
-            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-            foreign_replay_policy: ForeignReplayPolicy::Deny,
-            publication_policy: PublicationPolicy::LocalOnly,
-            publication_status: PublicationStatus::Public,
-            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
-            decision_counts: DecisionCounts {
-                replaced: 0,
-                legacy: 1,
-                blocked: 0,
-                review: 0,
-                extra: BTreeMap::new(),
-            },
-            unsupported_class_counts: BTreeMap::new(),
-            security_policy_intents: Vec::new(),
+            scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
             entries: vec![entry],
-            extra: BTreeMap::new(),
         }
     }
 
-    fn legacy_post_remove_entry() -> LegacyScriptletEntry {
-        let body = "echo replay-post-remove\n";
-        LegacyScriptletEntry {
+    fn native_post_remove_entry() -> NativeLifecycleEntry {
+        let body = r#"
+local marker = assert(io.open("/autoremove-native-lifecycle-ran", "w"))
+marker:write("zz-native-orphan")
+marker:close()
+"#;
+        NativeLifecycleEntry {
             id: "rpm:%postun".to_string(),
             native_slot: "%postun".to_string(),
+            kind: NativeLifecycleEntryKind::Executable,
             phase: LifecyclePath::PostRemove,
             lifecycle_paths: vec!["remove:post".to_string()],
-            interpreter: "/bin/sh".to_string(),
-            interpreter_args: vec!["-e".to_string()],
+            interpreter: "<lua>".to_string(),
+            interpreter_args: Vec::new(),
             body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
             body: body.to_string(),
             body_encoding: None,
@@ -483,34 +504,37 @@ mod tests {
                 environment: Vec::new(),
                 stdin: None,
                 chroot: None,
-                extra: BTreeMap::new(),
             },
             transaction_order: TransactionOrder {
                 position: "after-payload".to_string(),
                 before: Vec::new(),
                 after: Vec::new(),
-                extra: BTreeMap::new(),
             },
             timeout_ms: 30_000,
             sandbox: None,
             capabilities: Vec::new(),
-            decision: ScriptletDecision::Legacy,
-            reason_code: "legacy-replay-required".to_string(),
-            human_reason: Some("test fixture".to_string()),
             evidence_digest: Some(conary_core::hash::sha256_prefixed(
-                b"rpm:%postun:echo replay-post-remove",
+                b"rpm:%postun:print replay-post-remove",
             )),
             source_evidence_refs: vec!["capture:rpm:%postun".to_string()],
-            effects: Vec::new(),
-            unknown_commands: Vec::new(),
-            blocked_classes: Vec::new(),
-            boot_security_intents: Vec::new(),
-            security_policy_intents: Vec::new(),
             rpm_trigger: None,
+            rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
+                program: conary_core::ccs::native_lifecycle::RpmProgram::EmbeddedLua,
+                body_transforms: Vec::new(),
+                critical: false,
+                criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,
+                raw_flags: 0,
+                unknown_flags: 0,
+                install_prefixes: Vec::new(),
+                macro_context: Default::default(),
+                header_context: Default::default(),
+                package_rpm_version: None,
+            }),
+            rpm_sysusers: None,
             deb_maintainer: None,
             arch_install: None,
-            residual_replay: None,
-            extra: BTreeMap::new(),
+            arch_hook: None,
+            residual_lifecycle: None,
         }
     }
 

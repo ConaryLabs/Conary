@@ -4,7 +4,7 @@
 use super::metadata::{GenerationMetadata, generation_path};
 use anyhow::{Context, Result, anyhow};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 /// BLS entries directory
 const BLS_DIR: &str = "/boot/loader/entries";
@@ -48,8 +48,10 @@ pub fn write_bls_entry(gen_number: i64, root_uuid: &str) -> Result<PathBuf> {
         .as_deref()
         .ok_or_else(|| anyhow!("Generation {gen_number} has no kernel_version in metadata"))?;
 
-    let cmdline = read_cmdline_options();
-    let machine_id = read_machine_id().unwrap_or_default();
+    let cmdline = read_cmdline_options()?;
+    let machine_id_line = read_machine_id()?
+        .map(|machine_id| format!("machine-id {machine_id}\n"))
+        .unwrap_or_default();
 
     // Ensure BLS directory exists
     std::fs::create_dir_all(BLS_DIR)
@@ -70,7 +72,7 @@ pub fn write_bls_entry(gen_number: i64, root_uuid: &str) -> Result<PathBuf> {
          initrd     /initramfs-{kernel_version}.img\n\
          options    {options}\n\
          sort-key   conary-{gen_number:04}\n\
-         machine-id {machine_id}\n",
+         {machine_id_line}",
         date = metadata.created_at,
     );
 
@@ -95,7 +97,7 @@ pub fn write_grub_snippet(gen_number: i64, root_uuid: &str) -> Result<()> {
         .as_deref()
         .ok_or_else(|| anyhow!("Generation {gen_number} has no kernel_version in metadata"))?;
 
-    let cmdline = read_cmdline_options();
+    let cmdline = read_cmdline_options()?;
 
     let mut options = format!("root=UUID={root_uuid} conary.generation={gen_number}");
     if !cmdline.is_empty() {
@@ -141,19 +143,15 @@ menuentry "Conary Generation {gen_number} ({date})" {{
         let status = std::process::Command::new(&mkconfig)
             .arg("-o")
             .arg(grub_cfg)
-            .status();
+            .status()
+            .with_context(|| format!("Failed to run {mkconfig}"))?;
 
-        match status {
-            Ok(s) if s.success() => {
-                info!("Regenerated GRUB config: {grub_cfg}");
-            }
-            Ok(s) => {
-                warn!("grub-mkconfig exited with status {s}; boot entry may not be active");
-            }
-            Err(e) => {
-                warn!("Failed to run {mkconfig}: {e}; boot entry may not be active");
-            }
+        if !status.success() {
+            return Err(anyhow!(
+                "{mkconfig} exited with status {status}; boot entry is not active"
+            ));
         }
+        info!("Regenerated GRUB config: {grub_cfg}");
     }
 
     Ok(())
@@ -161,7 +159,8 @@ menuentry "Conary Generation {gen_number} ({date})" {{
 
 /// Detect the boot loader and write the appropriate boot entry for the given generation.
 ///
-/// Prints a warning if no recognized boot loader is found.
+/// Returns an error unless a supported loader is available and its configuration
+/// is updated successfully.
 pub fn write_boot_entry(gen_number: i64) -> Result<()> {
     let root_uuid = detect_root_uuid()?;
 
@@ -175,8 +174,9 @@ pub fn write_boot_entry(gen_number: i64) -> Result<()> {
             println!("GRUB snippet written for generation {gen_number}");
         }
         BootLoader::None => {
-            warn!("No recognized boot loader found; skipping boot entry");
-            crate::ui::warn("no recognized boot loader found, skipping boot entry");
+            return Err(anyhow!(
+                "No supported boot loader is available; expected BLS entries or grub-mkconfig"
+            ));
         }
     }
 
@@ -200,9 +200,10 @@ fn detect_root_uuid() -> Result<String> {
 }
 
 /// Read kernel command line, filtering out any `conary.generation=` parameter.
-fn read_cmdline_options() -> String {
-    let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
-    cmdline
+fn read_cmdline_options() -> Result<String> {
+    let cmdline =
+        std::fs::read_to_string("/proc/cmdline").context("Failed to read /proc/cmdline")?;
+    Ok(cmdline
         .split_whitespace()
         .filter(|param| !param.starts_with("conary.generation="))
         .map(|param| {
@@ -213,17 +214,21 @@ fn read_cmdline_options() -> String {
         })
         .filter(|param| !param.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" "))
 }
 
 /// Read the machine ID from `/etc/machine-id`.
-fn read_machine_id() -> Option<String> {
-    let contents = std::fs::read_to_string("/etc/machine-id").ok()?;
+fn read_machine_id() -> Result<Option<String>> {
+    let contents = match std::fs::read_to_string("/etc/machine-id") {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("Failed to read /etc/machine-id"),
+    };
     let trimmed = contents.trim().to_string();
     if trimmed.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(trimmed)
+        Ok(Some(trimmed))
     }
 }
 
@@ -254,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_read_cmdline_strips_generation() {
-        let result = read_cmdline_options();
+        let result = read_cmdline_options().unwrap();
         assert!(
             !result.contains("conary.generation="),
             "cmdline should not contain conary.generation param, got: {result}"

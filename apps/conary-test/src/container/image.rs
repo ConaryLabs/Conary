@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::backend::ContainerBackend;
+use crate::config::DistroBuildContext;
 
 struct StagedBuildContext {
     root: PathBuf,
@@ -100,6 +101,16 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
     if !fixture_root.is_dir() {
         return Ok(());
     }
+    let signing_key = crate::paths::fixture_ccs_key_path_for(fixtures_root);
+    let trust_policy = crate::paths::fixture_ccs_policy_path_for(fixtures_root);
+    for authority_path in [&signing_key, &trust_policy] {
+        if !authority_path.is_file() {
+            bail!(
+                "Phase 2 fixture authority is missing {}; regenerate apps/conary/tests/fixtures/ccs-test-authority",
+                authority_path.display()
+            );
+        }
+    }
 
     for version in ["v1", "v2"] {
         let version_root = fixture_root.join(version);
@@ -110,19 +121,12 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
         }
 
         let output_dir = version_root.join("output");
+        if output_dir.exists() {
+            fs::remove_dir_all(&output_dir)
+                .with_context(|| format!("failed to reset {}", output_dir.display()))?;
+        }
         fs::create_dir_all(&output_dir)
             .with_context(|| format!("failed to create {}", output_dir.display()))?;
-
-        let has_fixture = fs::read_dir(&output_dir)
-            .with_context(|| format!("failed to read {}", output_dir.display()))?
-            .any(|entry| {
-                entry
-                    .map(|entry| entry.path().extension().is_some_and(|ext| ext == "ccs"))
-                    .unwrap_or(false)
-            });
-        if has_fixture {
-            continue;
-        }
 
         let output = std::process::Command::new(conary_bin)
             .args(["ccs", "build"])
@@ -131,6 +135,8 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
             .arg(&source)
             .arg("--output")
             .arg(&output_dir)
+            .arg("--key")
+            .arg(&signing_key)
             .output()
             .with_context(|| {
                 format!(
@@ -150,12 +156,53 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
                 stderr.trim_end()
             );
         }
+
+        let packages = fs::read_dir(&output_dir)
+            .with_context(|| format!("failed to read {}", output_dir.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|extension| extension == "ccs"))
+            .collect::<Vec<_>>();
+        if packages.len() != 1 {
+            bail!(
+                "expected one signed Phase 2 fixture in {}, found {}",
+                output_dir.display(),
+                packages.len()
+            );
+        }
+        let verify = std::process::Command::new(conary_bin)
+            .args(["ccs", "verify"])
+            .arg(&packages[0])
+            .arg("--policy")
+            .arg(&trust_policy)
+            .output()
+            .with_context(|| {
+                format!(
+                    "failed to verify Phase 2 fixture {} with {}",
+                    packages[0].display(),
+                    conary_bin.display()
+                )
+            })?;
+        if !verify.status.success() {
+            let stdout = String::from_utf8_lossy(&verify.stdout);
+            let stderr = String::from_utf8_lossy(&verify.stderr);
+            bail!(
+                "Phase 2 fixture {} did not verify under {}\nstdout:\n{}\nstderr:\n{}",
+                packages[0].display(),
+                trust_policy.display(),
+                stdout.trim_end(),
+                stderr.trim_end()
+            );
+        }
     }
 
     Ok(())
 }
 
-fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuildContext> {
+fn stage_build_context(
+    containerfile: &Path,
+    distro: &str,
+    build_context: DistroBuildContext,
+) -> Result<StagedBuildContext> {
     let integration_root = containerfile
         .parent()
         .and_then(Path::parent)
@@ -209,7 +256,7 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
 
     ensure_phase2_fixture_outputs(&root.join("fixtures"), &binary)?;
 
-    if distro.starts_with("ubuntu-") {
+    if build_context == DistroBuildContext::WorkspaceSource {
         copy_dir_filtered(
             &project_root,
             &root.join("source"),
@@ -230,6 +277,7 @@ pub async fn build_distro_image(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
+    build_context: DistroBuildContext,
 ) -> Result<String> {
     let tag = format!("conary-test-{distro}:latest");
     let force_rebuild = std::env::var("CONARY_TEST_REBUILD_IMAGE")
@@ -240,22 +288,20 @@ pub async fn build_distro_image(
         .unwrap_or(false);
 
     if reuse_existing && !force_rebuild {
-        match tokio::process::Command::new("podman")
-            .args(["image", "exists", &tag])
-            .output()
+        let images = backend
+            .list_images()
             .await
+            .context("failed to inspect existing distro test images")?;
+        if images
+            .iter()
+            .any(|image| image.tags.iter().any(|candidate| candidate == &tag))
         {
-            Ok(output) if output.status.success() => {
-                tracing::info!(image = %tag, "reusing existing distro test image");
-                return Ok(tag);
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).context("failed to check existing distro test image"),
+            tracing::info!(image = %tag, "reusing existing distro test image");
+            return Ok(tag);
         }
     }
 
-    let staged = stage_build_context(containerfile, distro)?;
+    let staged = stage_build_context(containerfile, distro, build_context)?;
     backend
         .build_image(&staged.dockerfile, &tag, HashMap::new())
         .await
@@ -264,6 +310,7 @@ pub async fn build_distro_image(
 #[cfg(test)]
 mod tests {
     use super::{find_project_root, stage_build_context};
+    use crate::config::DistroBuildContext;
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -275,14 +322,18 @@ mod tests {
             .expect("system time before unix epoch")
             .as_nanos();
         let project_root = std::env::temp_dir().join(format!("conary-test-stage-context-{unique}"));
-        let remi_root = project_root.join("tests/integration/remi");
+        let remi_root = project_root.join("apps/conary/tests/integration/remi");
         let containerfile = remi_root.join("containers/Containerfile.fedora44");
 
         fs::create_dir_all(remi_root.join("containers")).expect("create containers");
-        fs::create_dir_all(project_root.join("tests/fixtures/recipes/simple-hello"))
+        fs::create_dir_all(project_root.join("apps/conary/tests/fixtures/recipes/simple-hello"))
             .expect("create fixtures");
-        fs::create_dir_all(project_root.join("tests/fixtures/conary-test-fixture/v1/output"))
-            .expect("create fixture output");
+        fs::create_dir_all(
+            project_root.join("apps/conary/tests/fixtures/conary-test-fixture/v1/output"),
+        )
+        .expect("create fixture output");
+        fs::create_dir_all(project_root.join("apps/conary/tests/fixtures/ccs-test-authority"))
+            .expect("create fixture authority");
         fs::create_dir_all(project_root.join("packaging/arch")).expect("create packaging");
 
         fs::write(
@@ -294,22 +345,34 @@ mod tests {
         fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
         fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
         fs::write(
-            project_root.join("tests/fixtures/recipes/simple-hello/recipe.toml"),
+            project_root.join("apps/conary/tests/fixtures/recipes/simple-hello/recipe.toml"),
             "name = 'simple-hello'\n",
         )
         .expect("write fixture");
         fs::write(
-            project_root.join("tests/fixtures/conary-test-fixture/v1/output/test.ccs"),
+            project_root.join("apps/conary/tests/fixtures/conary-test-fixture/v1/output/test.ccs"),
             "fixture-bytes",
         )
         .expect("write fixture output");
+        fs::write(
+            project_root
+                .join("apps/conary/tests/fixtures/ccs-test-authority/fixture-signing-key.private"),
+            "test private key\n",
+        )
+        .expect("write fixture private key");
+        fs::write(
+            project_root.join("apps/conary/tests/fixtures/ccs-test-authority/trust-policy.toml"),
+            "trusted_keys = [\"test\"]\n",
+        )
+        .expect("write fixture trust policy");
         fs::write(
             project_root.join("packaging/arch/PKGBUILD"),
             "pkgname=conary\n",
         )
         .expect("write pkgbuild");
 
-        let staged = stage_build_context(&containerfile, "fedora44").expect("stage build context");
+        let staged = stage_build_context(&containerfile, "fedora44", DistroBuildContext::Binary)
+            .expect("stage build context");
 
         assert!(
             staged
@@ -350,8 +413,9 @@ mod tests {
             .as_nanos();
         let project_root =
             std::env::temp_dir().join(format!("conary-test-phase2-fixtures-{unique}"));
-        let remi_root = project_root.join("tests/integration/remi");
-        let fixture_root = project_root.join("tests/fixtures/conary-test-fixture");
+        let remi_root = project_root.join("apps/conary/tests/integration/remi");
+        let fixture_root = project_root.join("apps/conary/tests/fixtures/conary-test-fixture");
+        let authority_root = project_root.join("apps/conary/tests/fixtures/ccs-test-authority");
         let containerfile = remi_root.join("containers/Containerfile.arch");
         let conary = project_root.join("conary");
 
@@ -360,6 +424,7 @@ mod tests {
             .expect("create v1 fixture source");
         fs::create_dir_all(fixture_root.join("v2/stage/usr/share/conary-test"))
             .expect("create v2 fixture source");
+        fs::create_dir_all(&authority_root).expect("create fixture authority");
         fs::write(
             project_root.join("Cargo.toml"),
             "[workspace]\nmembers = []\n",
@@ -380,16 +445,37 @@ mod tests {
         )
         .expect("write v2 source");
         fs::write(
+            authority_root.join("fixture-signing-key.private"),
+            "test private key\n",
+        )
+        .expect("write fixture private key");
+        fs::write(
+            authority_root.join("trust-policy.toml"),
+            "trusted_keys = [\"test\"]\n",
+        )
+        .expect("write fixture trust policy");
+        fs::write(
             &conary,
             r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1 $2" == "ccs verify" ]]; then
+  [[ "$4" == "--policy" ]]
+  exit 0
+fi
 manifest="$3"
-output="${!#}"
+output=""
+for ((i = 1; i <= $#; i++)); do
+  if [[ "${!i}" == "--output" ]]; then
+    next=$((i + 1))
+    output="${!next}"
+  fi
+done
 case "$manifest" in
-  */v1/ccs.toml) file="conary-test-fixture-1.0.0.ccs" ;;
-  */v2/ccs.toml) file="conary-test-fixture-2.0.0.ccs" ;;
+  */v1/ccs.toml) file="conary-test-fixture-1.0.0-1.ccs" ;;
+  */v2/ccs.toml) file="conary-test-fixture-2.0.0-1.ccs" ;;
   *) echo "unexpected manifest: $manifest" >&2; exit 2 ;;
 esac
+[[ -n "$output" ]]
 mkdir -p "$output"
 printf 'fixture\n' > "$output/$file"
 "#,
@@ -401,18 +487,19 @@ printf 'fixture\n' > "$output/$file"
         permissions.set_mode(0o755);
         fs::set_permissions(&conary, permissions).expect("make fake conary executable");
 
-        let staged = stage_build_context(&containerfile, "arch").expect("stage build context");
+        let staged = stage_build_context(&containerfile, "arch", DistroBuildContext::Binary)
+            .expect("stage build context");
 
         assert!(
             staged
                 .root
-                .join("fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs")
+                .join("fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs")
                 .is_file()
         );
         assert!(
             staged
                 .root
-                .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs")
+                .join("fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs")
                 .is_file()
         );
 
@@ -447,6 +534,59 @@ printf 'fixture\n' > "$output/$file"
         assert_eq!(found, workspace_root);
 
         fs::remove_dir_all(workspace_root).expect("cleanup workspace root");
+    }
+
+    #[test]
+    fn workspace_source_staging_is_controlled_by_typed_capability() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let project_root =
+            std::env::temp_dir().join(format!("conary-test-source-context-{unique}"));
+        let remi_root = project_root.join("apps/conary/tests/integration/remi");
+        let containerfile = remi_root.join("containers/Containerfile.custom");
+
+        fs::create_dir_all(remi_root.join("containers")).expect("create containers");
+        fs::create_dir_all(project_root.join("crates/example/src")).expect("create source");
+        fs::write(
+            project_root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .expect("write workspace manifest");
+        fs::write(
+            project_root.join("crates/example/src/lib.rs"),
+            "pub fn example() {}\n",
+        )
+        .expect("write source file");
+        fs::write(project_root.join("conary"), "binary").expect("write binary");
+        fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
+        fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
+
+        let source_staged = stage_build_context(
+            &containerfile,
+            "not-an-ubuntu-name",
+            DistroBuildContext::WorkspaceSource,
+        )
+        .expect("stage workspace source context");
+        assert!(
+            source_staged
+                .root
+                .join("source/crates/example/src/lib.rs")
+                .is_file()
+        );
+        drop(source_staged);
+
+        let binary_staged = stage_build_context(
+            &containerfile,
+            "ubuntu-name-does-not-matter",
+            DistroBuildContext::Binary,
+        )
+        .expect("stage binary context");
+        assert!(!binary_staged.root.join("source").exists());
+        drop(binary_staged);
+
+        fs::remove_dir_all(project_root).expect("cleanup project root");
     }
 
     #[test]

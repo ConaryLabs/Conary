@@ -1,12 +1,16 @@
+// conary-core/tests/canonical.rs
+
 //! Integration tests for canonical package identity system
 //!
 //! These tests exercise the full pipeline: schema setup, canonical package
 //! creation, implementation registration, distro pinning, and resolution.
 
-use conary_core::canonical::rules::{RulesEngine, parse_rules};
+use conary_core::Error;
+use conary_core::canonical::rules::parse_contract;
 use conary_core::db::models::{
-    CanonicalPackage, DistroPin, PackageImplementation, PackageOverride,
+    CanonicalMappingAuthority, CanonicalPackage, DistroPin, PackageImplementation,
 };
+use conary_core::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
 use conary_core::resolver::canonical::CanonicalResolver;
 use rusqlite::Connection;
 use tempfile::NamedTempFile;
@@ -15,7 +19,7 @@ fn setup_test_db() -> (NamedTempFile, Connection) {
     let temp = NamedTempFile::new().unwrap();
     let conn = Connection::open(temp.path()).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
     (temp, conn)
 }
 
@@ -32,25 +36,30 @@ fn test_full_canonical_resolution_pinned() {
 
     PackageImplementation::new(
         apache_id,
-        "fedora-41".into(),
+        "fedora-44".into(),
         "httpd".into(),
-        "curated".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
     .unwrap();
     PackageImplementation::new(
         apache_id,
-        "ubuntu-noble".into(),
+        "ubuntu-26.04".into(),
         "apache2".into(),
-        "curated".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
     .unwrap();
-    PackageImplementation::new(apache_id, "arch".into(), "apache".into(), "curated".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
+    PackageImplementation::new(
+        apache_id,
+        "arch".into(),
+        "apache".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
+    .unwrap();
 
-    DistroPin::set(&conn, "ubuntu-noble", "guarded").unwrap();
+    DistroPin::set(&conn, "ubuntu-26.04", DependencyMixingPolicy::Guarded).unwrap();
 
     let resolver = CanonicalResolver::new(&conn);
 
@@ -58,35 +67,47 @@ fn test_full_canonical_resolution_pinned() {
     assert_eq!(candidates.len(), 3);
 
     let ranked = resolver.rank_candidates(&candidates).unwrap();
-    assert_eq!(ranked[0].distro, "ubuntu-noble");
+    assert_eq!(ranked[0].distro, "ubuntu-26.04");
     assert_eq!(ranked[0].distro_name, "apache2");
 }
 
 #[test]
-fn test_full_canonical_resolution_unpinned_affinity() {
+fn test_unpinned_multi_profile_resolution_is_ambiguous_despite_affinity() {
     let (_t, conn) = setup_test_db();
 
     let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
     let curl_id = pkg.insert(&conn).unwrap();
 
-    PackageImplementation::new(curl_id, "fedora-41".into(), "curl".into(), "auto".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
-    PackageImplementation::new(curl_id, "ubuntu-noble".into(), "curl".into(), "auto".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
+    PackageImplementation::new(
+        curl_id,
+        "fedora-44".into(),
+        "curl".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
+    .unwrap();
+    PackageImplementation::new(
+        curl_id,
+        "ubuntu-26.04".into(),
+        "curl".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
+    .unwrap();
 
     conn.execute(
         "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) \
-         VALUES ('fedora-41', 80, 80.0, '2026-03-05')",
+         VALUES ('fedora-44', 80, 80.0, '2026-03-05')",
         [],
     )
     .unwrap();
 
     let resolver = CanonicalResolver::new(&conn);
     let candidates = resolver.expand("curl").unwrap();
-    let ranked = resolver.rank_candidates(&candidates).unwrap();
-    assert_eq!(ranked[0].distro, "fedora-41");
+    let error = resolver
+        .select_candidate_with_policy(&candidates, &ResolutionPolicy::new())
+        .unwrap_err();
+    assert!(matches!(error, Error::AmbiguousPackageSelection { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -100,57 +121,26 @@ fn test_distro_name_resolves_through_canonical() {
     let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
     let cid = pkg.insert(&conn).unwrap();
 
-    PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
     PackageImplementation::new(
         cid,
-        "ubuntu-noble".into(),
-        "apache2".into(),
-        "curated".into(),
+        "fedora-44".into(),
+        "httpd".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
+    .unwrap();
+    PackageImplementation::new(
+        cid,
+        "ubuntu-26.04".into(),
+        "apache2".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
     .unwrap();
 
     let resolver = CanonicalResolver::new(&conn);
     let candidates = resolver.expand("httpd").unwrap();
     assert_eq!(candidates.len(), 2);
-}
-
-// ---------------------------------------------------------------------------
-// Package overrides
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_package_override_bypasses_pin() {
-    let (_t, conn) = setup_test_db();
-
-    let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
-    let mesa_id = pkg.insert(&conn).unwrap();
-
-    PackageImplementation::new(
-        mesa_id,
-        "fedora-41".into(),
-        "mesa-fedora".into(),
-        "auto".into(),
-    )
-    .insert_or_ignore(&conn)
-    .unwrap();
-    PackageImplementation::new(
-        mesa_id,
-        "ubuntu-noble".into(),
-        "mesa-ubuntu".into(),
-        "auto".into(),
-    )
-    .insert_or_ignore(&conn)
-    .unwrap();
-
-    DistroPin::set(&conn, "ubuntu-noble", "strict").unwrap();
-    PackageOverride::set(&conn, mesa_id, "fedora-41", Some("want newer Mesa")).unwrap();
-
-    let resolver = CanonicalResolver::new(&conn);
-    let override_distro = resolver.get_override(mesa_id).unwrap();
-    assert_eq!(override_distro.as_deref(), Some("fedora-41"));
 }
 
 // ---------------------------------------------------------------------------
@@ -166,64 +156,35 @@ fn test_group_resolution() {
 
     PackageImplementation::new(
         group_id,
-        "ubuntu-noble".into(),
+        "ubuntu-26.04".into(),
         "build-essential".into(),
-        "curated".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
     .unwrap();
     PackageImplementation::new(
         group_id,
-        "fedora-41".into(),
+        "fedora-44".into(),
         "@development-tools".into(),
-        "curated".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
     .unwrap();
     PackageImplementation::new(
         group_id,
         "arch".into(),
         "base-devel".into(),
-        "curated".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
     .unwrap();
 
-    DistroPin::set(&conn, "fedora-41", "guarded").unwrap();
+    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
 
     let resolver = CanonicalResolver::new(&conn);
     let candidates = resolver.expand("dev-tools").unwrap();
     let ranked = resolver.rank_candidates(&candidates).unwrap();
     assert_eq!(ranked[0].distro_name, "@development-tools");
-}
-
-// ---------------------------------------------------------------------------
-// Mixing policy enforcement
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_mixing_policy_enforcement() {
-    let (_t, conn) = setup_test_db();
-
-    // Strict mode rejects cross-distro
-    DistroPin::set(&conn, "ubuntu-noble", "strict").unwrap();
-    let resolver = CanonicalResolver::new(&conn);
-    assert!(resolver.check_mixing_policy("fedora-41").is_err());
-
-    // Guarded mode warns
-    DistroPin::set_mixing_policy(&conn, "guarded").unwrap();
-    let result = resolver.check_mixing_policy("fedora-41").unwrap();
-    assert!(result.has_warning());
-
-    // Permissive mode: no warning
-    DistroPin::set_mixing_policy(&conn, "permissive").unwrap();
-    let result = resolver.check_mixing_policy("fedora-41").unwrap();
-    assert!(!result.has_warning());
-
-    // No pin = no policy
-    DistroPin::remove(&conn).unwrap();
-    let result = resolver.check_mixing_policy("fedora-41").unwrap();
-    assert!(!result.has_warning());
 }
 
 // ---------------------------------------------------------------------------
@@ -237,16 +198,21 @@ fn test_conflicts_between_canonical_equivalents() {
     let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
     let cid = pkg.insert(&conn).unwrap();
 
-    PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
     PackageImplementation::new(
         cid,
-        "ubuntu-noble".into(),
-        "apache2".into(),
-        "curated".into(),
+        "fedora-44".into(),
+        "httpd".into(),
+        CanonicalMappingAuthority::Contract,
     )
-    .insert_or_ignore(&conn)
+    .insert_or_verify(&conn)
+    .unwrap();
+    PackageImplementation::new(
+        cid,
+        "ubuntu-26.04".into(),
+        "apache2".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
     .unwrap();
 
     let resolver = CanonicalResolver::new(&conn);
@@ -264,137 +230,30 @@ fn test_no_conflicts_for_unknown_package() {
 }
 
 // ---------------------------------------------------------------------------
-// Rules engine (YAML parsing + resolution)
+// Exact canonical-map contract
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_rules_engine_exact_name() {
+fn exact_contract_preserves_literal_profile_package_mapping() {
     let yaml = r#"
-rules:
-  - name: httpd
-    setname: apache-httpd
-  - name: apache2
-    setname: apache-httpd
+version: 1
+mappings:
+  - canonical: apache-httpd
+    package: httpd
+    profiles: fedora-44
+  - canonical: apache-httpd
+    package: apache2
+    profiles: ubuntu-26.04
 "#;
-    let rules = parse_rules(yaml).unwrap();
-    let engine = RulesEngine::new(rules).unwrap();
-
-    assert_eq!(engine.resolve("httpd", None), Some("apache-httpd".into()));
-    assert_eq!(engine.resolve("apache2", None), Some("apache-httpd".into()));
-    assert_eq!(engine.resolve("nginx", None), None);
-}
-
-#[test]
-fn test_rules_engine_regex_pattern() {
-    let yaml = r#"
-rules:
-  - namepat: "^lib.+-dev$"
-    setname: dev-library
-"#;
-    let rules = parse_rules(yaml).unwrap();
-    let engine = RulesEngine::new(rules).unwrap();
-
-    // Regex matches any lib*-dev package
+    let contract = parse_contract(yaml).unwrap();
+    let mappings = contract.mappings().collect::<Vec<_>>();
+    assert_eq!(mappings.len(), 2);
+    assert_eq!(mappings[0].canonical, "apache-httpd");
+    assert_eq!(mappings[0].package, "httpd");
     assert_eq!(
-        engine.resolve("libssl-dev", None),
-        Some("dev-library".into())
+        mappings[0].profiles.iter().collect::<Vec<_>>(),
+        ["fedora-44"]
     );
-    assert_eq!(
-        engine.resolve("libcurl-dev", None),
-        Some("dev-library".into())
-    );
-    // Non-matching name returns None
-    assert_eq!(engine.resolve("curl", None), None);
-}
-
-#[test]
-fn test_rules_engine_repo_filter() {
-    let yaml = r#"
-rules:
-  - name: python3
-    repo: fedora_41
-    setname: python
-  - name: python3
-    setname: python3-generic
-"#;
-    let rules = parse_rules(yaml).unwrap();
-    let engine = RulesEngine::new(rules).unwrap();
-
-    assert_eq!(
-        engine.resolve("python3", Some("fedora_41")),
-        Some("python".into())
-    );
-    assert_eq!(
-        engine.resolve("python3", Some("ubuntu_noble")),
-        Some("python3-generic".into())
-    );
-}
-
-#[test]
-fn test_rules_engine_first_match_wins() {
-    let yaml = r#"
-rules:
-  - name: curl
-    setname: curl-first
-  - name: curl
-    setname: curl-second
-"#;
-    let rules = parse_rules(yaml).unwrap();
-    let engine = RulesEngine::new(rules).unwrap();
-    assert_eq!(engine.resolve("curl", None), Some("curl-first".into()));
-}
-
-// ---------------------------------------------------------------------------
-// End-to-end: rules engine + DB + resolver
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_end_to_end_rules_then_resolve() {
-    let (_t, conn) = setup_test_db();
-
-    // Step 1: Map distro name to canonical via rules engine
-    let yaml = r#"
-rules:
-  - name: httpd
-    setname: apache-httpd
-  - name: apache2
-    setname: apache-httpd
-"#;
-    let rules = parse_rules(yaml).unwrap();
-    let engine = RulesEngine::new(rules).unwrap();
-
-    let canonical_name = engine.resolve("httpd", None).unwrap();
-    assert_eq!(canonical_name, "apache-httpd");
-
-    // Step 2: Populate canonical DB
-    let mut pkg = CanonicalPackage::new(canonical_name.clone(), "package".into());
-    let cid = pkg.insert(&conn).unwrap();
-
-    PackageImplementation::new(cid, "fedora-41".into(), "httpd".into(), "curated".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
-    PackageImplementation::new(
-        cid,
-        "ubuntu-noble".into(),
-        "apache2".into(),
-        "curated".into(),
-    )
-    .insert_or_ignore(&conn)
-    .unwrap();
-
-    // Step 3: Pin to ubuntu and resolve
-    DistroPin::set(&conn, "ubuntu-noble", "guarded").unwrap();
-
-    let resolver = CanonicalResolver::new(&conn);
-    let candidates = resolver.expand(&canonical_name).unwrap();
-    let ranked = resolver.rank_candidates(&candidates).unwrap();
-
-    assert_eq!(ranked[0].distro, "ubuntu-noble");
-    assert_eq!(ranked[0].distro_name, "apache2");
-
-    // Step 4: Verify mixing policy
-    let mix = resolver.check_mixing_policy("fedora-41").unwrap();
-    assert!(mix.has_warning());
 }
 
 // ---------------------------------------------------------------------------
@@ -407,15 +266,25 @@ fn test_independent_canonical_packages() {
 
     let mut curl_pkg = CanonicalPackage::new("curl".into(), "package".into());
     let curl_id = curl_pkg.insert(&conn).unwrap();
-    PackageImplementation::new(curl_id, "fedora-41".into(), "curl".into(), "auto".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
+    PackageImplementation::new(
+        curl_id,
+        "fedora-44".into(),
+        "curl".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
+    .unwrap();
 
     let mut wget_pkg = CanonicalPackage::new("wget".into(), "package".into());
     let wget_id = wget_pkg.insert(&conn).unwrap();
-    PackageImplementation::new(wget_id, "fedora-41".into(), "wget".into(), "auto".into())
-        .insert_or_ignore(&conn)
-        .unwrap();
+    PackageImplementation::new(
+        wget_id,
+        "fedora-44".into(),
+        "wget".into(),
+        CanonicalMappingAuthority::Contract,
+    )
+    .insert_or_verify(&conn)
+    .unwrap();
 
     let resolver = CanonicalResolver::new(&conn);
 
@@ -431,24 +300,4 @@ fn test_independent_canonical_packages() {
     // No cross-conflicts
     let conflicts = resolver.get_conflicts("curl").unwrap();
     assert!(!conflicts.contains(&"wget".to_string()));
-}
-
-// ---------------------------------------------------------------------------
-// Override removal restores normal pin behaviour
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_override_removal() {
-    let (_t, conn) = setup_test_db();
-
-    let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
-    let mesa_id = pkg.insert(&conn).unwrap();
-
-    PackageOverride::set(&conn, mesa_id, "fedora-41", None).unwrap();
-
-    let resolver = CanonicalResolver::new(&conn);
-    assert!(resolver.get_override(mesa_id).unwrap().is_some());
-
-    PackageOverride::remove(&conn, mesa_id).unwrap();
-    assert!(resolver.get_override(mesa_id).unwrap().is_none());
 }

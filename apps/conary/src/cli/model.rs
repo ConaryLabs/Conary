@@ -181,7 +181,7 @@ pub enum ModelCommands {
         #[arg(long)]
         force: bool,
 
-        /// Path to Ed25519 signing key for collection signature
+        /// Path to Ed25519 signing key (required for HTTP/HTTPS publication)
         #[arg(long)]
         sign_key: Option<String>,
 

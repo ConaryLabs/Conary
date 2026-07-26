@@ -80,7 +80,7 @@ impl PolicyChain {
     }
 
     /// Create a policy chain from configuration
-    pub fn from_config(config: &BuildPolicyConfig) -> Result<Self> {
+    pub fn from_config(config: &BuildPolicyConfig) -> std::result::Result<Self, PolicyError> {
         let mut chain = Self::new();
 
         // Add DenyPaths if configured
@@ -224,7 +224,7 @@ pub struct DenyPathsPolicy {
 }
 
 impl DenyPathsPolicy {
-    pub fn new(patterns: &[String]) -> Result<Self> {
+    pub fn new(patterns: &[String]) -> std::result::Result<Self, PolicyError> {
         let mut compiled = Vec::new();
         for pat in patterns {
             let pattern = Pattern::new(pat).map_err(|e| {
@@ -320,9 +320,9 @@ impl BuildPolicy for StripSetuidPolicy {
             .iter()
             .any(|path| path == &ctx.entry.path);
         if allow_setuid {
-            ctx.entry.mode &= !0o2000;
+            ctx.entry.node.mode &= !0o2000;
         } else {
-            ctx.entry.mode &= !0o6000;
+            ctx.entry.node.mode &= !0o6000;
         }
         Ok(PolicyAction::Keep)
     }
@@ -344,7 +344,7 @@ impl StripBinariesPolicy {
 
     /// Check if file is executable
     fn is_executable(entry: &FileEntry) -> bool {
-        entry.mode & 0o111 != 0
+        entry.node.kind.is_regular() && entry.node.mode & 0o111 != 0
     }
 }
 
@@ -655,17 +655,15 @@ impl BuildPolicy for CompressManpagesPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::FileType;
-
     fn make_entry(path: &str, mode: u32) -> FileEntry {
         FileEntry {
             path: path.to_string(),
-            hash: String::new(),
-            size: 0,
-            mode,
+            node: crate::payload::PayloadNode::regular(mode),
+            content: Some(crate::payload::PayloadContentAuthority {
+                sha256: crate::hash::sha256(&[]),
+                size: 0,
+            }),
             component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
             chunks: None,
         }
     }
@@ -970,7 +968,7 @@ mod tests {
 
         let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
-        assert_eq!(ctx.entry.mode, 0o755);
+        assert_eq!(ctx.entry.node.mode, libc::S_IFREG | 0o755);
     }
 
     #[test]
@@ -990,6 +988,6 @@ mod tests {
 
         let result = policy.apply(&mut ctx).unwrap();
         assert!(matches!(result, PolicyAction::Keep));
-        assert_eq!(ctx.entry.mode, 0o4755);
+        assert_eq!(ctx.entry.node.mode, libc::S_IFREG | 0o4755);
     }
 }

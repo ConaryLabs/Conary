@@ -11,17 +11,13 @@
 //! - `ResolutionPolicy` filters candidates by request scope and mixing policy
 //! - Canonical expansion surfaces all cross-distro implementations for root requests
 
-use crate::db::models::{RepologyCacheEntry, Repository, RepositoryPackage};
+use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
-use crate::repository::LatestSignal;
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
+use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
 use crate::repository::versioning::{
     VersionScheme, compare_repo_package_versions, resolve_package_version_scheme,
 };
-use chrono::Utc;
 use rusqlite::Connection;
-use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
 
 /// Options for package selection
@@ -29,18 +25,30 @@ use tracing::{debug, info};
 pub struct SelectionOptions {
     /// Specific version to select (if None, select latest)
     pub version: Option<String>,
+    /// Exact signed CCS build release to select.
+    pub package_release: Option<String>,
     /// Specific repository to search (if None, search all enabled)
     pub repository: Option<String>,
     /// Specific architecture to filter (if None, use system architecture)
     pub architecture: Option<String>,
+    /// Whether discovery is target-native or intentionally all-architecture.
+    pub architecture_scope: ArchitectureScope,
     /// Resolution policy to apply when filtering candidates.
     /// When `None`, all candidates from enabled repositories are accepted.
     pub policy: Option<ResolutionPolicy>,
     /// Whether this selection is for a root (user-typed) request.
     /// Policy request-scope constraints only apply to root requests.
     pub is_root: bool,
-    /// The primary distro flavor of the system (for mixing policy checks).
-    pub primary_flavor: Option<RepositoryDependencyFlavor>,
+}
+
+/// Architecture discovery scope.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ArchitectureScope {
+    /// Return only candidates compatible with the target-native architecture.
+    #[default]
+    Native,
+    /// Return every explicitly declared architecture for typed solver filtering.
+    All,
 }
 
 /// Information about a package with its repository
@@ -59,21 +67,27 @@ impl PackageSelector {
         super::registry::detect_system_arch()
     }
 
-    /// Check if a package architecture is compatible with the system.
+    /// Check whether one exact source-native package architecture targets the
+    /// current machine.
     ///
     /// Handles the arch-independent markers from all three ecosystems:
     /// - RPM: `noarch`
     /// - Debian: `all`
     /// - Arch Linux / ALPM: `any`
     ///
-    /// Also handles cross-ecosystem arch name aliases (e.g. Debian `amd64`
-    /// matches RPM `x86_64`) via [`normalize_arch`].
-    pub fn is_architecture_compatible(pkg_arch: Option<&str>, system_arch: &str) -> bool {
-        match pkg_arch {
-            None => true,
-            Some("noarch" | "all" | "any") => true,
-            Some(arch) => normalize_arch(arch) == normalize_arch(system_arch),
-        }
+    /// Architecture-independent markers are interpreted only under the
+    /// package ecosystem that owns them. For example, Debian `all`, Arch
+    /// `any`, and RPM `noarch` are distinct signed tokens rather than generic
+    /// aliases.
+    pub fn is_architecture_compatible(
+        scheme: VersionScheme,
+        pkg_arch: Option<&str>,
+        system_arch: &str,
+    ) -> bool {
+        pkg_arch.is_some_and(|architecture| {
+            effective_machine_architecture(scheme, architecture, system_arch)
+                == native_machine_architecture(system_arch)
+        })
     }
 
     /// Search for packages by name with selection options
@@ -85,6 +99,9 @@ impl PackageSelector {
         package_name: &str,
         options: &SelectionOptions,
     ) -> Result<Vec<PackageWithRepo>> {
+        if let Some(policy) = &options.policy {
+            policy.validate_profile_ids().map_err(Error::ConfigError)?;
+        }
         let detected_arch = Self::detect_architecture();
         let system_arch = options.architecture.as_deref().unwrap_or(&detected_arch);
 
@@ -103,15 +120,33 @@ impl PackageSelector {
         // Get repository information for each package
         let mut results = Vec::new();
         for pkg in packages {
+            let scheme = resolve_package_version_scheme(&pkg);
+            let package_architecture = pkg.architecture.as_deref().ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "repository package '{}-{}' has no architecture authority",
+                    pkg.name, pkg.version
+                ))
+            })?;
             // Filter by version if specified
             if let Some(ref version) = options.version
                 && &pkg.version != version
             {
                 continue;
             }
+            if let Some(ref release) = options.package_release
+                && &pkg.package_release != release
+            {
+                continue;
+            }
 
             // Filter by architecture
-            if !Self::is_architecture_compatible(pkg.architecture.as_deref(), system_arch) {
+            if options.architecture_scope == ArchitectureScope::Native
+                && !Self::is_architecture_compatible(
+                    scheme,
+                    Some(package_architecture),
+                    system_arch,
+                )
+            {
                 debug!(
                     "Skipping package {} {} with incompatible arch {:?}",
                     pkg.name, pkg.version, pkg.architecture
@@ -143,9 +178,14 @@ impl PackageSelector {
                 continue;
             }
 
+            // Repository and package profile claims are one exact authority.
+            // Validate them even when no source policy was supplied so an
+            // unscoped request cannot admit contradictory metadata.
+            let candidate_profile = candidate_source_profile(&pkg, &repo)?;
+
             // Apply resolution policy filter
             if let Some(ref policy) = options.policy {
-                if !candidate_matches_allowed_distros(policy, &pkg, &repo) {
+                if !candidate_matches_allowed_distros(policy, &pkg, &repo)? {
                     debug!(
                         "Policy rejected package {} {} from repository {} due to allowlist mismatch",
                         pkg.name, pkg.version, repo.name
@@ -155,14 +195,10 @@ impl PackageSelector {
 
                 let mut policy_without_allowlist = policy.clone();
                 policy_without_allowlist.allowed_distros.clear();
-                let scheme =
-                    resolve_package_version_scheme(&pkg, &repo).unwrap_or(VersionScheme::Rpm);
                 if !policy_without_allowlist.accepts_candidate(
                     &repo.name,
-                    scheme,
-                    package_name,
+                    candidate_profile,
                     options.is_root,
-                    options.primary_flavor,
                 ) {
                     debug!(
                         "Policy rejected package {} {} from repository {} (scheme {:?})",
@@ -182,7 +218,7 @@ impl PackageSelector {
     }
 
     pub fn select_best_with_options(
-        conn: &Connection,
+        _conn: &Connection,
         mut candidates: Vec<PackageWithRepo>,
         options: &SelectionOptions,
     ) -> Result<PackageWithRepo> {
@@ -190,41 +226,17 @@ impl PackageSelector {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        let latest_positive_keys = latest_positive_keys(conn, &candidates, options)?;
-
-        candidates.sort_by(|a, b| {
-            let a_latest = candidate_latest_key(a)
-                .as_ref()
-                .is_some_and(|key| latest_positive_keys.contains(key));
-            let b_latest = candidate_latest_key(b)
-                .as_ref()
-                .is_some_and(|key| latest_positive_keys.contains(key));
-            if a_latest != b_latest {
-                return b_latest.cmp(&a_latest);
-            }
-
-            match b.repository.priority.cmp(&a.repository.priority) {
-                std::cmp::Ordering::Equal => match compare_repo_package_versions(
-                    &a.package,
-                    &a.repository,
-                    &b.package,
-                    &b.repository,
-                ) {
-                    Some(ord) => ord.reverse(),
-                    None => {
-                        debug!(
-                            "Incomparable version schemes for {} ({}) vs {} ({}); using repo name order",
-                            a.repository.name, a.package.version,
-                            b.repository.name, b.package.version,
-                        );
-                        a.repository.name.cmp(&b.repository.name)
-                    }
-                },
-                ord => ord,
-            }
+        let guarded_profile = options.policy.as_ref().and_then(|policy| {
+            (policy.mixing == DependencyMixingPolicy::Guarded)
+                .then(|| policy.primary_profile())
+                .flatten()
         });
-
-        let selected = candidates.into_iter().next().unwrap();
+        let selected_index = exact_winner_index(&candidates, |candidate| {
+            let candidate_profile =
+                candidate_source_profile(&candidate.package, &candidate.repository)?;
+            Ok(guarded_profile.is_some_and(|profile| candidate_profile == Some(profile)))
+        })?;
+        let selected = candidates.swap_remove(selected_index);
         info!(
             "Selected package {} {} from repository {} (priority {})",
             selected.package.name,
@@ -241,39 +253,16 @@ impl PackageSelector {
     /// Selection criteria (in order of priority):
     /// 1. Repository priority (higher is better)
     /// 2. Version (latest version, using scheme-aware comparison)
-    /// 3. Repository name as stable tie-breaker (avoids non-determinism)
+    ///
+    /// Equal-priority candidates that version authority cannot distinguish
+    /// return [`Error::AmbiguousPackageSelection`].
     pub fn select_best(mut candidates: Vec<PackageWithRepo>) -> Result<PackageWithRepo> {
         if candidates.is_empty() {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        candidates.sort_by(
-            |a, b| match b.repository.priority.cmp(&a.repository.priority) {
-                std::cmp::Ordering::Equal => match compare_repo_package_versions(
-                    &a.package,
-                    &a.repository,
-                    &b.package,
-                    &b.repository,
-                ) {
-                    Some(ord) => ord.reverse(),
-                    // Cross-scheme comparison is incomparable -- fall back to
-                    // repository name ordering so results are deterministic
-                    // without inventing a synthetic version ordering.
-                    None => {
-                        debug!(
-                            "Incomparable version schemes for {} ({}) vs {} ({}); using repo name order",
-                            a.repository.name, a.package.version,
-                            b.repository.name, b.package.version,
-                        );
-                        a.repository.name.cmp(&b.repository.name)
-                    }
-                },
-                ord => ord,
-            },
-        );
-
-        // Safe: we verified candidates is non-empty above
-        let selected = candidates.into_iter().next().unwrap();
+        let selected_index = exact_winner_index(&candidates, |_| Ok(false))?;
+        let selected = candidates.swap_remove(selected_index);
         info!(
             "Selected package {} {} from repository {} (priority {})",
             selected.package.name,
@@ -313,769 +302,243 @@ impl PackageSelector {
     }
 }
 
-fn candidate_distro_identifier<'a>(
-    pkg: &'a RepositoryPackage,
-    repo: &'a Repository,
-) -> Option<&'a str> {
-    pkg.distro
-        .as_deref()
-        .or(repo.default_strategy_distro.as_deref())
-}
-
-fn candidate_matches_allowed_distros(
-    policy: &ResolutionPolicy,
-    pkg: &RepositoryPackage,
-    repo: &Repository,
-) -> bool {
-    if policy.allowed_distros.is_empty() {
-        return true;
-    }
-
-    policy.allowed_distros.iter().any(|allowed| {
-        allowed == &repo.name
-            || candidate_distro_identifier(pkg, repo).is_some_and(|distro| {
-                allowed == distro
-                    || crate::repository::supported_profiles::profile_for_remi_target(distro)
-                        .is_some_and(|profile| allowed == profile.id())
-            })
-    })
-}
-
-fn candidate_latest_key(candidate: &PackageWithRepo) -> Option<(i64, String)> {
-    Some((
-        candidate.package.canonical_id?,
-        candidate_distro_identifier(&candidate.package, &candidate.repository)?.to_string(),
-    ))
-}
-
-fn latest_positive_keys(
-    conn: &Connection,
+fn exact_winner_index(
     candidates: &[PackageWithRepo],
-    options: &SelectionOptions,
-) -> Result<HashSet<(i64, String)>> {
-    if options
-        .policy
-        .as_ref()
-        .is_none_or(|policy| policy.selection_mode != SelectionMode::Latest)
-    {
-        return Ok(HashSet::new());
+    is_preferred: impl Fn(&PackageWithRepo) -> Result<bool>,
+) -> Result<usize> {
+    let preferences = candidates
+        .iter()
+        .map(&is_preferred)
+        .collect::<Result<Vec<_>>>()?;
+    let preferred_exists = preferences.iter().any(|preferred| *preferred);
+    let top_priority = candidates
+        .iter()
+        .zip(&preferences)
+        .filter(|(_, preferred)| **preferred == preferred_exists)
+        .map(|(candidate, _)| candidate.repository.priority)
+        .max()
+        .expect("selection rejects an empty candidate set before ranking");
+
+    let contenders = candidates
+        .iter()
+        .enumerate()
+        .filter(|(index, candidate)| {
+            preferences[*index] == preferred_exists && candidate.repository.priority == top_priority
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+
+    if contenders.len() == 1 {
+        return Ok(contenders[0]);
     }
 
-    let mut distros_by_canonical: HashMap<i64, HashSet<String>> = HashMap::new();
-    for candidate in candidates {
-        let Some((canonical_id, distro)) = candidate_latest_key(candidate) else {
-            continue;
-        };
-        distros_by_canonical
-            .entry(canonical_id)
-            .or_default()
-            .insert(distro);
+    let schemes = contenders
+        .iter()
+        .map(|index| {
+            let candidate = &candidates[*index];
+            resolve_package_version_scheme(&candidate.package)
+        })
+        .collect::<Vec<_>>();
+
+    if schemes.windows(2).any(|pair| pair[0] != pair[1]) {
+        return Err(ambiguous_selection(candidates, &contenders, &schemes));
     }
 
-    let now = Utc::now();
-    let mut positive = HashSet::new();
-    for (canonical_id, distros) in distros_by_canonical {
-        let distro_list = distros.into_iter().collect::<Vec<_>>();
-        let rows =
-            RepologyCacheEntry::find_for_canonical_and_distros(conn, canonical_id, &distro_list)?;
-        for row in rows {
-            let status = row.status.as_deref().unwrap_or("");
-            let signal =
-                LatestSignal::from_repology(status, row.version.as_deref(), &row.fetched_at, now)?;
-            if signal.is_positive() {
-                positive.insert((canonical_id, row.distro));
+    let mut best = contenders[0];
+    let mut tied = vec![best];
+    for contender in contenders.iter().copied().skip(1) {
+        let ordering = compare_repo_package_versions(
+            &candidates[contender].package,
+            &candidates[best].package,
+        )?;
+        match ordering {
+            std::cmp::Ordering::Greater => {
+                best = contender;
+                tied.clear();
+                tied.push(contender);
             }
+            std::cmp::Ordering::Equal => tied.push(contender),
+            std::cmp::Ordering::Less => {}
         }
     }
 
-    Ok(positive)
+    if tied.len() > 1 {
+        let tied_schemes = vec![schemes[0]; tied.len()];
+        return Err(ambiguous_selection(candidates, &tied, &tied_schemes));
+    }
+
+    Ok(best)
 }
 
-/// Normalize an architecture name to a canonical form.
+fn ambiguous_selection(
+    candidates: &[PackageWithRepo],
+    contender_indices: &[usize],
+    schemes: &[crate::repository::versioning::VersionScheme],
+) -> Error {
+    let package = candidates[contender_indices[0]].package.name.clone();
+    let candidates = contender_indices
+        .iter()
+        .zip(schemes)
+        .map(|(index, scheme)| {
+            let candidate = &candidates[*index];
+            format!(
+                "{}:{}:{}:{}",
+                candidate.repository.name,
+                candidate.package.version,
+                scheme.as_str(),
+                candidate.package.architecture.as_deref().unwrap_or("any")
+            )
+        })
+        .collect();
+    Error::AmbiguousPackageSelection {
+        package,
+        candidates,
+    }
+}
+
+/// Return the one exact public source profile jointly declared by a package
+/// row and its repository.
 ///
-/// Different package ecosystems use different names for the same CPU
-/// architecture.  This function maps all known aliases to a single
-/// canonical string so that comparisons work across ecosystems:
+/// Package-level metadata may repeat repository authority, but it may never
+/// contradict it. This is the shared projection used by selection,
+/// resolution, and transaction provenance.
+pub fn candidate_source_profile<'a>(
+    pkg: &'a RepositoryPackage,
+    repo: &'a Repository,
+) -> Result<Option<&'a str>> {
+    let profile = match (
+        pkg.source_profile.as_deref(),
+        repo.source_profile.as_deref(),
+    ) {
+        (Some(package_profile), Some(repository_profile))
+            if package_profile != repository_profile =>
+        {
+            return Err(Error::ConfigError(format!(
+                "repository package '{}-{}' declares source profile '{}' but repository '{}' declares '{}'",
+                pkg.name, pkg.version, package_profile, repo.name, repository_profile
+            )));
+        }
+        (Some(package_profile), _) => Some(package_profile),
+        (None, repository_profile) => repository_profile,
+    };
+    if let Some(profile) = profile
+        && crate::repository::supported_profiles::profile_by_public_id(profile).is_none()
+    {
+        return Err(Error::ConfigError(format!(
+            "repository package '{}-{}' resolves to unsupported source profile '{}'",
+            pkg.name, pkg.version, profile
+        )));
+    }
+    Ok(profile)
+}
+
+pub(crate) fn candidate_matches_allowed_distros(
+    policy: &ResolutionPolicy,
+    pkg: &RepositoryPackage,
+    repo: &Repository,
+) -> Result<bool> {
+    if policy.allowed_distros.is_empty() {
+        return candidate_source_profile(pkg, repo).map(|_| true);
+    }
+
+    let candidate_profile = candidate_source_profile(pkg, repo)?;
+    Ok(policy
+        .allowed_distros
+        .iter()
+        .any(|allowed| candidate_profile.is_some_and(|profile| allowed == profile)))
+}
+
+/// Compare two exact package architecture tokens under their owning package
+/// schemes. Architecture-independent tokens resolve to the native machine for
+/// this comparison; they are never rewritten in stored package identity.
+pub fn package_architectures_match(
+    left_scheme: VersionScheme,
+    left_architecture: &str,
+    right_scheme: VersionScheme,
+    right_architecture: &str,
+    native_architecture: &str,
+) -> bool {
+    effective_machine_architecture(left_scheme, left_architecture, native_architecture)
+        == effective_machine_architecture(right_scheme, right_architecture, native_architecture)
+}
+
+/// Typed machine identity shared only by architecture compatibility checks.
 ///
-/// | Canonical  | Aliases                     |
-/// |------------|-----------------------------|
-/// | `x86_64`   | `amd64`                     |
-/// | `aarch64`  | `arm64`                     |
-/// | `i686`     | `i386`, `i486`, `i586`      |
-///
-/// Unknown names are returned as-is (lowercase).
-pub fn normalize_arch(arch: &str) -> &str {
-    match arch {
-        "amd64" => "x86_64",
-        "arm64" => "aarch64",
-        "i386" | "i486" | "i586" => "i686",
-        // ARM 32-bit: Debian armhf, RPM armv7hl, and raw arm/armv7 all
-        // map to armv7l (the kernel's name for 32-bit ARM with hard-float)
-        "arm" | "armhf" | "armv7" | "armv7hl" => "armv7l",
-        // ppc64le aliases
-        "ppc64el" => "ppc64le",
-        other => other,
+/// The parser below encodes the source-owned tokens from dpkg's `cputable`,
+/// RPM's `rpmrc` architecture tables, and makepkg's `CARCH` contract. Unknown
+/// tokens retain exact identity and therefore only compare equal literally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MachineArchitecture {
+    X86_64,
+    X86_32,
+    Aarch64,
+    ArmV7HardFloat,
+    PowerPc64Le,
+    S390x,
+    RiscV64,
+    Exact(String),
+}
+
+fn effective_machine_architecture(
+    scheme: VersionScheme,
+    architecture: &str,
+    native_architecture: &str,
+) -> MachineArchitecture {
+    if is_architecture_independent(scheme, architecture) {
+        return native_machine_architecture(native_architecture);
+    }
+    package_machine_architecture(scheme, architecture)
+}
+
+fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> bool {
+    matches!(
+        (scheme, architecture),
+        (VersionScheme::Conary | VersionScheme::Rpm, "noarch")
+            | (VersionScheme::Debian, "all")
+            | (VersionScheme::Arch, "any")
+    )
+}
+
+fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> MachineArchitecture {
+    match (scheme, architecture) {
+        (VersionScheme::Debian, "amd64")
+        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "x86_64") => {
+            MachineArchitecture::X86_64
+        }
+        (VersionScheme::Debian, "i386")
+        | (VersionScheme::Rpm, "i386" | "i486" | "i586" | "i686")
+        | (VersionScheme::Arch | VersionScheme::Conary, "i686") => MachineArchitecture::X86_32,
+        (VersionScheme::Debian, "arm64")
+        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "aarch64") => {
+            MachineArchitecture::Aarch64
+        }
+        (VersionScheme::Debian, "armhf")
+        | (VersionScheme::Rpm, "armv7hl")
+        | (VersionScheme::Arch, "armv7h")
+        | (VersionScheme::Conary, "armv7") => MachineArchitecture::ArmV7HardFloat,
+        (VersionScheme::Debian, "ppc64el")
+        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "ppc64le") => {
+            MachineArchitecture::PowerPc64Le
+        }
+        (_, "s390x") => MachineArchitecture::S390x,
+        (_, "riscv64") => MachineArchitecture::RiscV64,
+        (_, exact) => MachineArchitecture::Exact(exact.to_string()),
+    }
+}
+
+fn native_machine_architecture(architecture: &str) -> MachineArchitecture {
+    match architecture {
+        "x86_64" | "amd64" => MachineArchitecture::X86_64,
+        "x86" | "i386" | "i686" => MachineArchitecture::X86_32,
+        "aarch64" | "arm64" => MachineArchitecture::Aarch64,
+        "arm" | "armv7" | "armhf" => MachineArchitecture::ArmV7HardFloat,
+        "powerpc64le" | "ppc64le" | "ppc64el" => MachineArchitecture::PowerPc64Le,
+        "s390x" => MachineArchitecture::S390x,
+        "riscv64" => MachineArchitecture::RiscV64,
+        exact => MachineArchitecture::Exact(exact.to_string()),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::models::{Repository, RepositoryPackage};
-    use crate::db::schema;
-    use crate::repository::resolution_policy::{
-        DependencyMixingPolicy, RequestScope, ResolutionPolicy,
-    };
-    use rusqlite::Connection;
-
-    #[test]
-    fn test_detect_architecture() {
-        let arch = PackageSelector::detect_architecture();
-        // Should return one of the known architectures
-        assert!(!arch.is_empty());
-        // On most development machines, this will be x86_64
-        println!("Detected architecture: {}", arch);
-    }
-
-    #[test]
-    fn test_architecture_compatibility() {
-        let system_arch = "x86_64";
-
-        // noarch is compatible with everything
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("noarch"),
-            system_arch
-        ));
-
-        // Exact match is compatible
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("x86_64"),
-            system_arch
-        ));
-
-        // Different arch is not compatible
-        assert!(!PackageSelector::is_architecture_compatible(
-            Some("aarch64"),
-            system_arch
-        ));
-
-        // None (unknown) is compatible
-        assert!(PackageSelector::is_architecture_compatible(
-            None,
-            system_arch
-        ));
-    }
-
-    #[test]
-    fn test_debian_amd64_compatible_with_x86_64() {
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("amd64"),
-            "x86_64"
-        ));
-    }
-
-    #[test]
-    fn test_debian_arm64_compatible_with_aarch64() {
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("arm64"),
-            "aarch64"
-        ));
-    }
-
-    #[test]
-    fn test_debian_i386_compatible_with_i686() {
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("i386"),
-            "i686"
-        ));
-    }
-
-    #[test]
-    fn test_normalize_arch_mappings() {
-        assert_eq!(normalize_arch("amd64"), "x86_64");
-        assert_eq!(normalize_arch("arm64"), "aarch64");
-        assert_eq!(normalize_arch("i386"), "i686");
-        assert_eq!(normalize_arch("i486"), "i686");
-        assert_eq!(normalize_arch("i586"), "i686");
-        assert_eq!(normalize_arch("x86_64"), "x86_64");
-        assert_eq!(normalize_arch("aarch64"), "aarch64");
-        assert_eq!(normalize_arch("riscv64"), "riscv64");
-    }
-
-    #[test]
-    fn test_debian_all_architecture_compatible() {
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("all"),
-            "x86_64"
-        ));
-    }
-
-    #[test]
-    fn test_arch_any_architecture_compatible() {
-        assert!(PackageSelector::is_architecture_compatible(
-            Some("any"),
-            "x86_64"
-        ));
-    }
-
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        conn
-    }
-
-    #[test]
-    fn select_best_uses_debian_version_ordering() {
-        let conn = test_db();
-
-        let mut repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        repo.priority = 10;
-        repo.insert(&conn).unwrap();
-        let repository = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-        let repo_id = repository.id.unwrap();
-
-        let mut prerelease = RepositoryPackage::new(
-            repo_id,
-            "demo".to_string(),
-            "1.0~beta1".to_string(),
-            "sha256:beta".to_string(),
-            1,
-            "https://archive.ubuntu.com/ubuntu/pool/demo_1.0~beta1_amd64.deb".to_string(),
-        );
-        prerelease.architecture = Some("x86_64".to_string());
-        prerelease.insert(&conn).unwrap();
-
-        let mut stable = RepositoryPackage::new(
-            repo_id,
-            "demo".to_string(),
-            "1.0".to_string(),
-            "sha256:stable".to_string(),
-            1,
-            "https://archive.ubuntu.com/ubuntu/pool/demo_1.0_amd64.deb".to_string(),
-        );
-        stable.architecture = Some("x86_64".to_string());
-        stable.insert(&conn).unwrap();
-
-        let candidates =
-            PackageSelector::search_packages(&conn, "demo", &SelectionOptions::default()).unwrap();
-        let selected = PackageSelector::select_best(candidates).unwrap();
-
-        assert_eq!(selected.package.version, "1.0");
-    }
-
-    #[test]
-    fn policy_repo_scope_filters_root_request() {
-        let conn = test_db();
-
-        // Create two repos: fedora and ubuntu
-        let mut fedora_repo = Repository::new(
-            "fedora-44".to_string(),
-            "https://mirrors.fedoraproject.org/metalink".to_string(),
-        );
-        fedora_repo.priority = 10;
-        fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-44")
-            .unwrap()
-            .unwrap();
-
-        let mut ubuntu_repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        ubuntu_repo.priority = 10;
-        ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-
-        // Add curl to both
-        let mut pkg_fed = RepositoryPackage::new(
-            fedora.id.unwrap(),
-            "curl".into(),
-            "8.9.1".into(),
-            "sha256:fed".into(),
-            1,
-            "https://example.com/curl.rpm".into(),
-        );
-        pkg_fed.architecture = Some("x86_64".into());
-        pkg_fed.insert(&conn).unwrap();
-
-        let mut pkg_ubu = RepositoryPackage::new(
-            ubuntu.id.unwrap(),
-            "curl".into(),
-            "8.5.0".into(),
-            "sha256:ubu".into(),
-            1,
-            "https://example.com/curl.deb".into(),
-        );
-        pkg_ubu.architecture = Some("x86_64".into());
-        pkg_ubu.insert(&conn).unwrap();
-
-        // With --repo fedora-44, root request should only find fedora
-        let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-44".into()));
-
-        let options = SelectionOptions {
-            policy: Some(policy),
-            is_root: true,
-            ..Default::default()
-        };
-        let candidates = PackageSelector::search_packages(&conn, "curl", &options).unwrap();
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].repository.name, "fedora-44");
-    }
-
-    #[test]
-    fn policy_repo_scope_does_not_filter_transitive_deps() {
-        let conn = test_db();
-
-        let mut fedora_repo = Repository::new(
-            "fedora-44".to_string(),
-            "https://mirrors.fedoraproject.org/metalink".to_string(),
-        );
-        fedora_repo.priority = 10;
-        fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-44")
-            .unwrap()
-            .unwrap();
-
-        let mut ubuntu_repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        ubuntu_repo.priority = 10;
-        ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-
-        let mut pkg_fed = RepositoryPackage::new(
-            fedora.id.unwrap(),
-            "libcurl".into(),
-            "8.9.1".into(),
-            "sha256:fed".into(),
-            1,
-            "https://example.com/libcurl.rpm".into(),
-        );
-        pkg_fed.architecture = Some("x86_64".into());
-        pkg_fed.insert(&conn).unwrap();
-
-        let mut pkg_ubu = RepositoryPackage::new(
-            ubuntu.id.unwrap(),
-            "libcurl".into(),
-            "8.5.0".into(),
-            "sha256:ubu".into(),
-            1,
-            "https://example.com/libcurl.deb".into(),
-        );
-        pkg_ubu.architecture = Some("x86_64".into());
-        pkg_ubu.insert(&conn).unwrap();
-
-        // Request scope targets fedora, but is_root=false so scope is ignored
-        let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-44".into()));
-
-        let options = SelectionOptions {
-            policy: Some(policy),
-            is_root: false,
-            ..Default::default()
-        };
-        let candidates = PackageSelector::search_packages(&conn, "libcurl", &options).unwrap();
-        assert_eq!(candidates.len(), 2, "transitive dep sees both repos");
-    }
-
-    #[test]
-    fn strict_policy_rejects_cross_flavor_dep() {
-        let conn = test_db();
-
-        let mut ubuntu_repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        ubuntu_repo.priority = 10;
-        ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            ubuntu.id.unwrap(),
-            "libssl3".into(),
-            "3.0.13".into(),
-            "sha256:ssl".into(),
-            1,
-            "https://example.com/libssl3.deb".into(),
-        );
-        pkg.architecture = Some("x86_64".into());
-        pkg.insert(&conn).unwrap();
-
-        // Strict policy with RPM primary flavor -- debian package should be rejected
-        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict);
-
-        let options = SelectionOptions {
-            policy: Some(policy),
-            is_root: false,
-            primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
-            ..Default::default()
-        };
-        let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
-        assert!(candidates.is_empty(), "strict policy rejects cross-flavor");
-    }
-
-    #[test]
-    fn strict_policy_accepts_candidate_by_stored_version_scheme_when_repo_shape_is_generic() {
-        let conn = test_db();
-
-        let mut repo = Repository::new(
-            "slice-d-local-update".to_string(),
-            "http://127.0.0.1:18087".to_string(),
-        );
-        repo.priority = 500;
-        repo.default_strategy_distro = Some("ubuntu".to_string());
-        repo.insert(&conn).unwrap();
-        let repo = Repository::find_by_name(&conn, "slice-d-local-update")
-            .unwrap()
-            .unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo.id.unwrap(),
-            "phase4-runtime-fixture".into(),
-            "1.0.1".into(),
-            "sha256:fixture".into(),
-            1,
-            "http://127.0.0.1:18087/phase4-runtime-fixture_1.0.1_amd64.deb".into(),
-        );
-        pkg.architecture = Some("amd64".into());
-        pkg.distro = Some("ubuntu".into());
-        pkg.version_scheme = Some("debian".into());
-        pkg.insert(&conn).unwrap();
-
-        let candidates = PackageSelector::search_packages(
-            &conn,
-            "phase4-runtime-fixture",
-            &SelectionOptions {
-                policy: Some(ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict)),
-                is_root: false,
-                primary_flavor: Some(RepositoryDependencyFlavor::Deb),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].repository.name, "slice-d-local-update");
-    }
-
-    #[test]
-    fn permissive_policy_allows_cross_flavor_dep() {
-        let conn = test_db();
-
-        let mut ubuntu_repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        ubuntu_repo.priority = 10;
-        ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            ubuntu.id.unwrap(),
-            "libssl3".into(),
-            "3.0.13".into(),
-            "sha256:ssl".into(),
-            1,
-            "https://example.com/libssl3.deb".into(),
-        );
-        pkg.architecture = Some("x86_64".into());
-        pkg.insert(&conn).unwrap();
-
-        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
-
-        let options = SelectionOptions {
-            policy: Some(policy),
-            is_root: false,
-            primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
-            ..Default::default()
-        };
-        let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
-        assert_eq!(candidates.len(), 1, "permissive policy allows cross-flavor");
-    }
-
-    #[test]
-    fn guarded_policy_allows_cross_flavor_dep() {
-        let conn = test_db();
-
-        let mut ubuntu_repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        ubuntu_repo.priority = 10;
-        ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            ubuntu.id.unwrap(),
-            "libssl3".into(),
-            "3.0.13".into(),
-            "sha256:ssl".into(),
-            1,
-            "https://example.com/libssl3.deb".into(),
-        );
-        pkg.architecture = Some("x86_64".into());
-        pkg.insert(&conn).unwrap();
-
-        // Guarded policy allows cross-flavor but callers should log warnings
-        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Guarded);
-
-        let options = SelectionOptions {
-            policy: Some(policy),
-            is_root: false,
-            primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
-            ..Default::default()
-        };
-        let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
-        assert_eq!(candidates.len(), 1, "guarded policy allows cross-flavor");
-    }
-
-    #[test]
-    fn incomparable_cross_scheme_falls_back_to_repo_name_order() {
-        let conn = test_db();
-
-        // Create fedora and ubuntu repos at same priority
-        let mut fedora_repo = Repository::new(
-            "fedora-44".to_string(),
-            "https://mirrors.fedoraproject.org/metalink".to_string(),
-        );
-        fedora_repo.priority = 10;
-        fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-44")
-            .unwrap()
-            .unwrap();
-
-        let mut ubuntu_repo = Repository::new(
-            "ubuntu-noble".to_string(),
-            "https://archive.ubuntu.com/ubuntu".to_string(),
-        );
-        ubuntu_repo.priority = 10;
-        ubuntu_repo.insert(&conn).unwrap();
-        let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
-            .unwrap()
-            .unwrap();
-
-        let mut pkg_fed = RepositoryPackage::new(
-            fedora.id.unwrap(),
-            "curl".into(),
-            "8.9.1-2.fc44".into(),
-            "sha256:fed".into(),
-            1,
-            "https://example.com/curl.rpm".into(),
-        );
-        pkg_fed.architecture = Some("x86_64".into());
-        pkg_fed.insert(&conn).unwrap();
-
-        let mut pkg_ubu = RepositoryPackage::new(
-            ubuntu.id.unwrap(),
-            "curl".into(),
-            "8.5.0-2ubuntu1".into(),
-            "sha256:ubu".into(),
-            1,
-            "https://example.com/curl.deb".into(),
-        );
-        pkg_ubu.architecture = Some("x86_64".into());
-        pkg_ubu.insert(&conn).unwrap();
-
-        // With permissive policy, both candidates are present
-        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
-
-        let options = SelectionOptions {
-            policy: Some(policy),
-            is_root: true,
-            ..Default::default()
-        };
-        let candidates = PackageSelector::search_packages(&conn, "curl", &options).unwrap();
-        assert_eq!(candidates.len(), 2);
-
-        // select_best should pick deterministically (alphabetical repo name)
-        let selected = PackageSelector::select_best(candidates).unwrap();
-        // "fedora-44" < "ubuntu-noble" alphabetically, so fedora wins
-        assert_eq!(selected.repository.name, "fedora-44");
-    }
-
-    #[test]
-    fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
-        let conn = test_db();
-        let fresh = chrono::Utc::now().to_rfc3339();
-
-        conn.execute(
-            "INSERT INTO canonical_packages (name, kind) VALUES ('python', 'package')",
-            [],
-        )
-        .unwrap();
-        let canonical_id = conn.last_insert_rowid();
-
-        let mut fedora_repo = Repository::new(
-            "fedora-remi".to_string(),
-            "https://example.invalid".to_string(),
-        );
-        fedora_repo.priority = 20;
-        fedora_repo.default_strategy_distro = Some("fedora".to_string());
-        fedora_repo.insert(&conn).unwrap();
-        let fedora = Repository::find_by_name(&conn, "fedora-remi")
-            .unwrap()
-            .unwrap();
-
-        let mut arch_repo = Repository::new(
-            "arch-core".to_string(),
-            "https://example.invalid".to_string(),
-        );
-        arch_repo.priority = 5;
-        arch_repo.default_strategy_distro = Some("arch".to_string());
-        arch_repo.insert(&conn).unwrap();
-        let arch = Repository::find_by_name(&conn, "arch-core")
-            .unwrap()
-            .unwrap();
-
-        let mut fedora_pkg = RepositoryPackage::new(
-            fedora.id.unwrap(),
-            "python".into(),
-            "3.12.2-1.fc44".into(),
-            "sha256:fedora".into(),
-            1,
-            "https://example.invalid/python-fedora.rpm".into(),
-        );
-        fedora_pkg.canonical_id = Some(canonical_id);
-        fedora_pkg.insert(&conn).unwrap();
-
-        let mut arch_pkg = RepositoryPackage::new(
-            arch.id.unwrap(),
-            "python".into(),
-            "3.13.0-1".into(),
-            "sha256:arch".into(),
-            1,
-            "https://example.invalid/python-arch.pkg.tar.zst".into(),
-        );
-        arch_pkg.canonical_id = Some(canonical_id);
-        arch_pkg.insert(&conn).unwrap();
-
-        crate::db::models::RepologyCacheEntry::insert_or_replace(
-            &conn,
-            &crate::db::models::RepologyCacheEntry {
-                project_name: "python".into(),
-                distro: "fedora".into(),
-                distro_name: "python".into(),
-                version: Some("3.12.2".into()),
-                status: Some("outdated".into()),
-                fetched_at: fresh.clone(),
-            },
-        )
-        .unwrap();
-        crate::db::models::RepologyCacheEntry::insert_or_replace(
-            &conn,
-            &crate::db::models::RepologyCacheEntry {
-                project_name: "python".into(),
-                distro: "arch".into(),
-                distro_name: "python".into(),
-                version: Some("3.13.0".into()),
-                status: Some("newest".into()),
-                fetched_at: fresh,
-            },
-        )
-        .unwrap();
-
-        let selected = PackageSelector::find_best_package(
-            &conn,
-            "python",
-            &SelectionOptions {
-                policy: Some(ResolutionPolicy::new().with_selection_mode(
-                    crate::repository::resolution_policy::SelectionMode::Latest,
-                )),
-                is_root: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(selected.repository.name, "arch-core");
-    }
-
-    #[test]
-    fn search_packages_respects_allowed_distros_by_distro_identifier() {
-        let conn = test_db();
-
-        let mut fedora_repo = Repository::new(
-            "fedora-remi".to_string(),
-            "https://example.invalid".to_string(),
-        );
-        fedora_repo.default_strategy_distro = Some("fedora".to_string());
-        fedora_repo.insert(&conn).unwrap();
-
-        let mut arch_repo = Repository::new(
-            "arch-core".to_string(),
-            "https://example.invalid".to_string(),
-        );
-        arch_repo.default_strategy_distro = Some("arch".to_string());
-        arch_repo.insert(&conn).unwrap();
-
-        let mut fedora_pkg = RepositoryPackage::new(
-            fedora_repo.id.unwrap(),
-            "python".into(),
-            "3.12.2-1.fc44".into(),
-            "sha256:fedora".into(),
-            1,
-            "https://example.invalid/python-fedora.rpm".into(),
-        );
-        fedora_pkg.insert(&conn).unwrap();
-
-        let mut arch_pkg = RepositoryPackage::new(
-            arch_repo.id.unwrap(),
-            "python".into(),
-            "3.13.0-1".into(),
-            "sha256:arch".into(),
-            1,
-            "https://example.invalid/python-arch.pkg.tar.zst".into(),
-        );
-        arch_pkg.insert(&conn).unwrap();
-
-        let candidates = PackageSelector::search_packages(
-            &conn,
-            "python",
-            &SelectionOptions {
-                policy: Some(
-                    ResolutionPolicy::new().with_allowed_distros(vec!["arch".to_string()]),
-                ),
-                is_root: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].repository.name, "arch-core");
-
-        let candidates = PackageSelector::search_packages(
-            &conn,
-            "python",
-            &SelectionOptions {
-                policy: Some(
-                    ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]),
-                ),
-                is_root: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].repository.name, "fedora-remi");
-    }
-}
+#[path = "selector/tests.rs"]
+mod tests;

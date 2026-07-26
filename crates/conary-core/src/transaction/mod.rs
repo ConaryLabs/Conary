@@ -2,33 +2,38 @@
 
 //! Composefs-native transaction engine.
 //!
-//! Every transaction follows: resolve -> fetch -> DB commit -> EROFS build -> select.
-//! No journal, no backup phase, no staging. Database is the source of truth.
-//! Everything after DB commit is re-derivable from the DB state.
+//! Package state and exact selected-root publication authority commit together.
+//! Payload-only bootstrap paths can derive a root manifest from installed rows;
+//! lifecycle-bearing mutations persist the cumulative selected-root manifest
+//! before the database commit. EROFS build and selection are retryable from
+//! that typed authority.
 //!
 //! # Transaction Lifecycle
 //!
 //! ```text
-//! NEW -> RESOLVED -> FETCHED -> COMMITTED -> BUILT -> SELECTED -> DONE
+//! NEW -> RESOLVED -> FETCHED -> [root authority durable] -> COMMITTED -> BUILT -> SELECTED -> DONE
 //! ```
 //!
-//! The point of no return is `Committed` — at that point the DB has the new
-//! package state. Building the EROFS image and selecting it via
-//! `/conary/current` are idempotent recovery operations that can be retried if
-//! they fail.
+//! The point of no return is `Committed`: at that point the DB has the new
+//! package state and any selected-root publication candidate is already
+//! durable. Building the EROFS image and selecting it are idempotent recovery
+//! operations.
 
-pub mod planner;
+pub mod package_relations;
 mod recovery;
-
-pub use planner::{
-    BackupInfo, ConflictInfo, PlannedOperation, StageInfo, TransactionPlan, TransactionPlanner,
-};
 
 use crate::Result;
 use crate::filesystem::CasStore;
 use crate::hash::HashAlgorithm;
 use crate::runtime_root::ConaryRuntimeRoot;
 use fs2::FileExt;
+pub use package_relations::{
+    IncomingPackageRelations, PackageRelationDeconfiguration, PackageRelationDeconfigurationCause,
+    PackageRelationIncomingIdentity, PackageRelationInstalledIdentity, PackageRelationPlan,
+    PackageRelationRemoval, plan_package_relation_batch_facts, plan_package_relation_facts,
+    plan_package_relations, validate_package_relation_plan, validate_package_relation_removals,
+    validate_package_relation_transitions,
+};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -147,6 +152,15 @@ impl TransactionConfig {
     /// generation, mount, and `/etc` state live under `/conary`.
     pub fn from_paths(_root: PathBuf, db_path: PathBuf) -> Self {
         let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
+        Self::for_runtime_root(&runtime_root)
+    }
+
+    /// Create a config for one explicit runtime root.
+    ///
+    /// Selected-root and try-session transactions use this constructor so the
+    /// global mutation lock and CAS always belong to the live runtime even when
+    /// package state is read from a copied database.
+    pub fn for_runtime_root(runtime_root: &ConaryRuntimeRoot) -> Self {
         Self {
             root: runtime_root.root().to_path_buf(),
             db_path: runtime_root.db_path().to_path_buf(),
@@ -265,52 +279,6 @@ impl TransactionEngine {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Types shared between the transaction planner and CLI install consumers
-// ---------------------------------------------------------------------------
-
-/// A file extracted from a package.
-///
-/// Used by both the transaction planner and the CLI install commands.
-#[derive(Debug, Clone)]
-pub struct ExtractedFile {
-    pub path: String,
-    pub content: Vec<u8>,
-    pub mode: u32,
-    pub is_symlink: bool,
-    pub symlink_target: Option<String>,
-}
-
-/// A file to be removed.
-#[derive(Debug, Clone)]
-pub struct FileToRemove {
-    pub path: String,
-    pub hash: String,
-    pub size: i64,
-    pub mode: u32,
-}
-
-/// File type for planning operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FileType {
-    Regular,
-    Directory,
-    Symlink,
-}
-
-/// Operation type for planning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OperationType {
-    Mkdir,
-    AddFile,
-    ReplaceFile,
-    RemoveFile,
-    AddSymlink,
-    ReplaceSymlink,
-    RemoveSymlink,
-    Rmdir,
-}
-
 /// Result of a completed transaction.
 #[derive(Debug, Clone)]
 pub struct TransactionResult {
@@ -321,9 +289,10 @@ pub struct TransactionResult {
 
 #[cfg(all(test, feature = "composefs-rs"))]
 mod integration_tests {
-    use crate::db::models::{FileEntry, SystemState, Trove, TroveType};
+    use crate::db::models::{SystemState, Trove, TroveType};
     use crate::filesystem::CasStore;
     use crate::generation::builder::build_generation_from_db_with_boot_root;
+    use crate::generation::builder::test_support::insert_regular_file_with_parents;
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
@@ -355,6 +324,7 @@ mod integration_tests {
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
@@ -363,22 +333,22 @@ mod integration_tests {
         let cas = CasStore::new(&objects_dir).unwrap();
         let hash = cas.store(b"hello").unwrap();
         let init_hash = cas.store(b"init").unwrap();
-        let mut fe = FileEntry::new(
-            "/usr/bin/hello".to_string(),
+        insert_regular_file_with_parents(
+            &conn,
+            "/usr/bin/hello",
             hash,
-            b"hello".len() as i64,
+            b"hello".len(),
             0o755,
             trove_id,
         );
-        fe.insert(&conn).unwrap();
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
             init_hash,
-            b"init".len() as i64,
+            b"init".len(),
             0o755,
             trove_id,
         );
-        init.insert(&conn).unwrap();
 
         // Run build_generation_from_db
         let result = build_generation_from_db_with_boot_root(
@@ -450,6 +420,7 @@ mod tests {
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
+    use crate::generation::test_support::write_root_manifests_with_objects;
     use tempfile::TempDir;
 
     fn write_valid_generation_artifact(root: &Path, generation: i64) {
@@ -470,6 +441,7 @@ mod tests {
             sha256: cas_hash,
             size: cas_bytes.len() as u64,
         }];
+        write_root_manifests_with_objects(&generation_dir, &cas_objects);
 
         let erofs_path = generation_dir.join(EROFS_IMAGE_NAME);
         std::fs::write(&erofs_path, b"root-erofs").unwrap();
@@ -496,7 +468,6 @@ mod tests {
             architecture: "x86_64",
             erofs_path: &erofs_path,
             cas_base_rel: "../../objects",
-            cas_objects,
             cas_verification: CasObjectVerification::AlreadyVerified,
             boot_assets,
         })
@@ -742,7 +713,7 @@ mod tests {
 
         // EROFS magic alone is not enough; recovery scanning now requires the
         // generation artifact contract and metadata.
-        let found = engine.find_latest_intact_generation();
+        let found = engine.find_latest_intact_generation().unwrap();
         assert!(found.is_none(), "magic-only generation must be skipped");
     }
 
@@ -861,7 +832,7 @@ mod tests {
             lock_file: None,
         };
 
-        let found = engine.find_latest_intact_generation();
+        let found = engine.find_latest_intact_generation().unwrap();
         assert!(
             found.is_none(),
             "no intact image should result in None from find_latest_intact_generation"
@@ -901,6 +872,6 @@ mod tests {
             lock_file: None,
         };
 
-        assert!(engine.find_latest_intact_generation().is_none());
+        assert!(engine.find_latest_intact_generation().unwrap().is_none());
     }
 }

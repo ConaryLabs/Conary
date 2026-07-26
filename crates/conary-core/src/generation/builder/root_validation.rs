@@ -2,58 +2,46 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{FileEntryRef, SymlinkEntryRef, hex_to_digest};
-use crate::generation::metadata::ROOT_SYMLINKS;
+use crate::generation::root_manifest::GenerationRootManifest;
+use crate::payload::PayloadNodeKind;
 
 pub(super) fn validate_runtime_generation_root_is_self_contained(
-    file_refs: &[FileEntryRef],
-    symlink_refs: &[SymlinkEntryRef],
+    manifest: &GenerationRootManifest,
 ) -> crate::Result<()> {
-    if generation_root_has_init_entrypoint(file_refs, symlink_refs) {
+    manifest.validate()?;
+    if generation_root_has_init_entrypoint(manifest) {
         return Ok(());
     }
 
-    Err(crate::error::Error::NotFound(
-        "exportable runtime generation is not self-contained: missing executable /sbin/init in the CAS-backed generation root; refusing to scrape the live host root to make the image bootable".to_string(),
+    Err(crate::Error::NotFound(
+        "runtime generation is not self-contained: its exact root manifest has no executable /sbin/init entrypoint"
+            .to_string(),
     ))
 }
 
-fn generation_root_has_init_entrypoint(
-    file_refs: &[FileEntryRef],
-    symlink_refs: &[SymlinkEntryRef],
-) -> bool {
-    let symlink_paths: HashSet<String> = symlink_refs
+fn generation_root_has_init_entrypoint(manifest: &GenerationRootManifest) -> bool {
+    let symlinks = manifest
+        .entries
         .iter()
-        .filter_map(|symlink| normalize_virtual_path(&symlink.path, "/"))
-        .collect();
-    let files: HashMap<String, u32> = file_refs
-        .iter()
-        .filter_map(|file| {
-            let path = normalize_virtual_path(&file.path, "/")?;
-            if symlink_paths.contains(&path) || hex_to_digest(&file.sha256_hash).is_err() {
-                return None;
-            }
-            Some((path, file.permissions))
+        .filter_map(|entry| match &entry.node.source.kind {
+            PayloadNodeKind::Symlink { target } => Some((entry.path.clone(), target.clone())),
+            _ => None,
         })
-        .collect();
-    let symlinks = generation_symlink_map(symlink_refs);
+        .collect::<HashMap<_, _>>();
+    let executable_paths = manifest
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.node.source.kind,
+                PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. }
+            ) && entry.node.source.mode & 0o111 != 0
+        })
+        .map(|entry| entry.path.clone())
+        .collect::<HashSet<_>>();
 
     resolve_virtual_path("/sbin/init", &symlinks)
-        .and_then(|resolved| files.get(&resolved).copied())
-        .is_some_and(|permissions| permissions & 0o111 != 0)
-}
-
-fn generation_symlink_map(symlink_refs: &[SymlinkEntryRef]) -> HashMap<String, String> {
-    let mut symlinks = HashMap::new();
-    for symlink in symlink_refs {
-        if let Some(path) = normalize_virtual_path(&symlink.path, "/") {
-            symlinks.insert(path, symlink.target.clone());
-        }
-    }
-    for (link, target) in ROOT_SYMLINKS {
-        symlinks.insert(format!("/{link}"), (*target).to_string());
-    }
-    symlinks
+        .is_some_and(|resolved| executable_paths.contains(&resolved))
 }
 
 fn resolve_virtual_path(path: &str, symlinks: &HashMap<String, String>) -> Option<String> {
@@ -71,12 +59,11 @@ fn rewrite_first_symlink_component(
     path: &str,
     symlinks: &HashMap<String, String>,
 ) -> Option<String> {
-    let components: Vec<&str> = path
+    let components = path
         .trim_start_matches('/')
         .split('/')
         .filter(|component| !component.is_empty())
-        .collect();
-
+        .collect::<Vec<_>>();
     for index in 0..components.len() {
         let prefix = format!("/{}", components[..=index].join("/"));
         let Some(target) = symlinks.get(&prefix) else {
@@ -92,7 +79,6 @@ fn rewrite_first_symlink_component(
         }
         return normalize_virtual_path(&rewritten, "/");
     }
-
     None
 }
 
@@ -125,28 +111,83 @@ fn parent_virtual_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{FileEntryRef, SymlinkEntryRef};
     use super::*;
+    use crate::generation::root_manifest::{GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry};
+    use crate::payload::{
+        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
+
+    fn resolved(node: PayloadNode) -> ResolvedPayloadNode {
+        ResolvedPayloadNode::from_numeric_source(node).unwrap()
+    }
 
     #[test]
-    fn runtime_root_init_detection_resolves_usr_merge_and_package_symlinks() {
-        let file_refs = vec![FileEntryRef {
-            path: "/usr/lib/systemd/systemd".to_string(),
-            sha256_hash: "a".repeat(64),
-            size: 6,
-            permissions: 0o755,
-            owner: None,
-            group_name: None,
-            xattrs: std::collections::BTreeMap::new(),
-        }];
-        let symlink_refs = vec![SymlinkEntryRef {
-            path: "/usr/sbin/init".to_string(),
-            target: "../lib/systemd/systemd".to_string(),
-        }];
+    fn init_detection_resolves_only_manifest_owned_symlinks() {
+        let manifest = manifest(vec![
+            directory("/usr"),
+            directory("/usr/lib"),
+            directory("/usr/lib/systemd"),
+            regular("/usr/lib/systemd/systemd", 0o755),
+            directory("/usr/sbin"),
+            symlink("/usr/sbin/init", "../lib/systemd/systemd"),
+            symlink("/sbin", "usr/sbin"),
+        ]);
+        assert!(generation_root_has_init_entrypoint(&manifest));
+    }
 
-        assert!(generation_root_has_init_entrypoint(
-            &file_refs,
-            &symlink_refs
-        ));
+    #[test]
+    fn init_detection_does_not_synthesize_usr_merge_links() {
+        let manifest = manifest(vec![
+            directory("/usr"),
+            directory("/usr/sbin"),
+            regular("/usr/sbin/init", 0o755),
+        ]);
+        assert!(!generation_root_has_init_entrypoint(&manifest));
+    }
+
+    fn manifest(entries: Vec<GenerationRootEntry>) -> GenerationRootManifest {
+        let mut root = PayloadNode::regular(0o755);
+        root.kind = PayloadNodeKind::Directory;
+        root.mode = libc::S_IFDIR | 0o755;
+        GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root: resolved(root),
+            entries,
+        }
+    }
+
+    fn directory(path: &str) -> GenerationRootEntry {
+        let mut node = PayloadNode::regular(0o755);
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: resolved(node),
+            content: None,
+        }
+    }
+
+    fn regular(path: &str, permissions: u32) -> GenerationRootEntry {
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: resolved(PayloadNode::regular(permissions)),
+            content: Some(PayloadContentAuthority {
+                sha256: "a".repeat(64),
+                size: 1,
+            }),
+        }
+    }
+
+    fn symlink(path: &str, target: &str) -> GenerationRootEntry {
+        let mut node = PayloadNode::regular(0o777);
+        node.kind = PayloadNodeKind::Symlink {
+            target: target.to_string(),
+        };
+        node.mode = libc::S_IFLNK | 0o777;
+        GenerationRootEntry {
+            path: path.to_string(),
+            node: resolved(node),
+            content: None,
+        }
     }
 }

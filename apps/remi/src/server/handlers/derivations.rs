@@ -22,7 +22,6 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -37,17 +36,6 @@ use tokio::sync::RwLock;
 /// alphanumeric + `[._-]` string up to 128 characters to be future-proof.
 fn is_valid_derivation_id(id: &str) -> bool {
     is_valid_path_param(id)
-}
-
-// ────────────────────────────────────────────────────────────
-// Structs for PUT body parsing
-// ────────────────────────────────────────────────────────────
-
-/// Minimal subset of the OutputManifest TOML we need to extract for indexing.
-#[derive(Deserialize)]
-struct ManifestFields {
-    package_name: String,
-    package_version: String,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -231,29 +219,30 @@ pub async fn put_derivation(
         return (StatusCode::BAD_REQUEST, "Request body must not be empty").into_response();
     }
 
-    // Parse TOML to extract required fields
+    // Parse and validate the complete current-format manifest before it can
+    // become remote cache authority.
     let body_str = match std::str::from_utf8(&body_bytes) {
         Ok(s) => s,
         Err(_) => {
             return (StatusCode::BAD_REQUEST, "Request body must be valid UTF-8").into_response();
         }
     };
-    let manifest: ManifestFields = match toml::from_str(body_str) {
+    let manifest = match conary_core::derivation::OutputManifest::from_toml(body_str) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("Invalid manifest TOML for {derivation_id}: {e}");
             return (
                 StatusCode::BAD_REQUEST,
-                "Invalid manifest TOML: missing package_name or package_version",
+                "Invalid derivation output manifest",
             )
                 .into_response();
         }
     };
 
-    if manifest.package_name.is_empty() || manifest.package_version.is_empty() {
+    if manifest.derivation_id != derivation_id {
         return (
             StatusCode::BAD_REQUEST,
-            "package_name and package_version must not be empty",
+            "Manifest derivation_id does not match request path",
         )
             .into_response();
     }
@@ -446,7 +435,7 @@ mod tests {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
         (conn, tmp)
     }
 

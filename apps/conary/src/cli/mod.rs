@@ -61,7 +61,7 @@ pub use bootstrap::BootstrapCommands;
 pub use cache::CacheCommands;
 pub use canonical::CanonicalCommands;
 pub use capability::CapabilityCommands;
-pub use ccs::{CcsBuildFormat, CcsCommands, CcsOutputFormat};
+pub use ccs::{CcsCommands, CcsOutputFormat};
 pub use collection::CollectionCommands;
 pub use config::ConfigCommands;
 pub use derivation::DerivationCommands;
@@ -77,9 +77,14 @@ pub use provenance::ProvenanceCommands;
 pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
 pub use registry::RegistryCommands;
-pub use repo::{CliSecurityAdvisorySupport, RepoCommands};
+pub use repo::{
+    CliArchDatabaseSignature, CliArchKeyringFormat, CliSecurityAdvisorySupport, RepoAddArgs,
+    RepoCommands,
+};
 pub use state::StateCommands;
-pub use system::{DbBackupCommands, SystemCommands, TakeoverLevel, UpdateChannelAction};
+pub use system::{
+    DbBackupCommands, NativePackageManager, SystemCommands, TakeoverLevel, UpdateChannelAction,
+};
 pub use trigger::TriggerCommands;
 pub use trust::TrustCommands;
 pub use verify::VerifyCommands;
@@ -91,19 +96,13 @@ pub use verify::VerifyCommands;
 /// conversion trivial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CliSandboxMode {
-    /// No sandboxing - direct execution
-    Never,
-    /// Automatic - sandbox based on script risk analysis
-    Auto,
-    /// Always sandbox all scripts
+    /// Require protected lifecycle execution
     Always,
 }
 
 impl From<CliSandboxMode> for SandboxMode {
     fn from(cli: CliSandboxMode) -> Self {
         match cli {
-            CliSandboxMode::Never => SandboxMode::None,
-            CliSandboxMode::Auto => SandboxMode::Auto,
             CliSandboxMode::Always => SandboxMode::Always,
         }
     }
@@ -137,17 +136,9 @@ pub struct CommonArgs {
     after_help = "Daily workflow examples:\n  sudo conary install nginx --dry-run\n  sudo conary install nginx --yes\n  sudo conary update --dry-run\n  sudo conary system adopt --refresh\n  conary system completions bash > /tmp/conary-completion.bash\n  sudo conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2\n  conaryd handles durable package jobs with the same apply-intent boundary\n\nAdvanced packaging and platform commands: run 'conary --help-advanced'"
 )]
 pub struct Cli {
-    /// Use seccomp warn mode for scriptlets instead of enforcing blocked syscalls
-    #[arg(long, global = true)]
-    pub seccomp_warn: bool,
-
     /// List advanced packaging and platform commands
     #[arg(long = "help-advanced")]
     pub help_advanced: bool,
-
-    /// Deprecated compatibility alias for old persisted retry commands.
-    #[arg(long, global = true, hide = true)]
-    pub allow_live_system_mutation: bool,
 
     /// Increase log verbosity (repeat for more: info, debug, trace)
     #[arg(long = "verbose", action = clap::ArgAction::Count)]
@@ -190,21 +181,9 @@ pub enum Commands {
         #[arg(long)]
         no_deps: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
@@ -212,39 +191,26 @@ pub enum Commands {
         #[arg(long)]
         allow_downgrade: bool,
 
-        /// Allow packages with capabilities that would normally require confirmation
-        #[arg(long)]
-        allow_capabilities: bool,
-
-        /// Convert legacy packages (RPM/DEB/Arch) to CCS format during install
-        ///
-        /// Scriptlets are automatically captured and converted to declarative hooks
-        /// unless --no-capture is specified.
+        /// Convert native-format packages (RPM/DEB/Arch) to CCS during install
         #[arg(long)]
         convert_to_ccs: bool,
-
-        /// Disable scriptlet capture during conversion (unsafe - runs scriptlets at install time)
-        #[arg(long)]
-        no_capture: bool,
 
         /// Skip optional packages (for collection installs)
         #[arg(long)]
         skip_optional: bool,
 
-        /// Force install even if the package is adopted from the system package manager
-        #[arg(long)]
-        force: bool,
-
-        /// How to handle dependencies: satisfy, adopt, takeover
+        /// How to handle an installed package with recorded external ownership
         ///
-        /// satisfy:  dependencies on disk satisfy requirements without changes
-        /// adopt:    auto-adopt system dependencies into Conary tracking
-        /// takeover: download CCS versions from Remi and fully own dependencies
+        /// preserve: retain its recorded external owner
+        /// takeover: explicitly transfer the selected package to Conary
+        ///
+        /// Dependencies are always satisfied from Conary's installed provider
+        /// graph and configured repositories.
         ///
         /// When omitted, the system model's convergence intent supplies the
         /// default; if no model exists, uses the preview cas-backed default.
         #[arg(long, value_enum)]
-        dep_mode: Option<crate::commands::DepMode>,
+        ownership: Option<crate::commands::OwnershipMode>,
 
         /// Install from a specific distro (cross-distro override)
         #[arg(long)]
@@ -271,31 +237,19 @@ pub enum Commands {
         #[arg(long = "arch")]
         architecture: Option<String>,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
         /// Confirm applying this command's active-system changes
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
-        /// Delete adopted package files from disk (default: DB-only removal)
+        /// Purge preserved config state and delete adopted package files
         #[arg(long)]
-        purge_files: bool,
+        purge: bool,
     },
 
     /// Check for and apply package updates
@@ -322,34 +276,24 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
 
-        /// How to handle dependencies: satisfy, adopt, takeover
+        /// How to handle an installed package with recorded external ownership
         ///
-        /// satisfy:  dependencies on disk satisfy requirements without changes
-        /// adopt:    auto-adopt system dependencies into Conary tracking
-        /// takeover: download CCS versions from Remi and fully own dependencies
+        /// preserve: retain its recorded external owner
+        /// takeover: explicitly transfer the selected package to Conary
+        ///
+        /// Dependencies are always satisfied from Conary's installed provider
+        /// graph and configured repositories.
         ///
         /// When omitted, the system model's convergence intent supplies the
         /// default; if no model exists, uses the preview cas-backed default.
         #[arg(long, value_enum)]
-        dep_mode: Option<crate::commands::DepMode>,
+        ownership: Option<crate::commands::OwnershipMode>,
 
         /// Assume yes to all prompts
         #[arg(short = 'y', long)]
@@ -411,25 +355,13 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
 
-        /// Suppress hooks where safe; does not bypass required legacy replay
-        #[arg(long)]
-        no_scripts: bool,
-
         /// Confirm applying this command's active-system changes
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Allow same-source raw legacy scriptlet replay when the bundle, target, sandbox, and local policy all pass
-        #[arg(long)]
-        allow_legacy_replay: bool,
-
-        /// Additionally allow explicitly compatible foreign raw replay only under permissive host policy
-        #[arg(long)]
-        allow_foreign_legacy_replay: bool,
-
-        /// Scriptlet isolation: auto, always, never (default: always).
-        /// Protected modes isolate PID/network/mounts and give live-root
-        /// scriptlets private writable /etc and /var layers
+        /// Scriptlet isolation (always protected).
+        /// Live-root execution isolates PID/network/mounts and gives
+        /// scriptlets private writable /etc and /var layers.
         #[arg(long, value_enum, default_value_t = CliSandboxMode::Always)]
         sandbox: CliSandboxMode,
     },
@@ -505,27 +437,17 @@ pub enum Commands {
         #[arg(long)]
         fetch_only: bool,
 
-        /// Print recipe inference trace
-        #[arg(long)]
-        explain: bool,
-
         /// Build inside the sandboxed isolation path
         #[arg(long)]
         isolated: bool,
 
-        /// Compatibility alias for the M1a host-build default
-        #[arg(long)]
-        #[arg(hide = true)]
-        no_isolation: bool,
-
-        /// Compatibility flag reserved for M2 hermetic cook/publish
-        #[arg(long)]
-        #[arg(hide = true)]
-        hermetic: bool,
-
         /// Emit structured M3a JSON output
         #[arg(long)]
         json: bool,
+
+        /// Private CCS authority key used to sign cooked package output
+        #[arg(long, value_name = "PATH")]
+        key: Option<String>,
 
         /// Run hidden experimental record-mode recipe drafting
         #[arg(long)]
@@ -552,43 +474,25 @@ pub enum Commands {
         #[arg(hide = true)]
         keep_raw_trace: bool,
 
-        /// Run record command on the host without sandbox containment
-        #[arg(long)]
-        #[arg(hide = true)]
-        record_unsafe_host: bool,
-
-        /// Reserved hidden flag; M3d fails closed when this is set
-        #[arg(long)]
-        #[arg(hide = true)]
-        record_allow_network: bool,
-
         /// Command to record, passed after `--`
         #[arg(last = true)]
         #[arg(hide = true)]
         record_command: Vec<String>,
     },
 
-    /// Create or infer a package recipe
+    /// Create a named package recipe scaffold
     #[command(hide = true)]
     New {
-        /// Package project name for scaffold mode
-        name: Option<String>,
+        /// Package project name
+        name: String,
 
-        /// Infer a recipe from an existing source tree, archive, or git URL
-        #[arg(long = "from")]
-        from: Option<String>,
-
-        /// Output directory for scaffold mode, or recipe path for --from mode
+        /// Output directory
         #[arg(short, long)]
         output: Option<String>,
 
         /// Overwrite an existing recipe.toml
         #[arg(long)]
         force: bool,
-
-        /// Print inference decisions
-        #[arg(long)]
-        explain: bool,
     },
 
     /// Try a package artifact with explicit keep or rollback
@@ -600,11 +504,11 @@ pub enum Commands {
         #[arg(long)]
         activate: bool,
 
-        /// Allow packages with irreversible hooks in activated mode
-        #[arg(long)]
-        allow_irreversible: bool,
+        /// CCS trust-policy file for a direct package try
+        #[arg(long, value_name = "PATH")]
+        policy: Option<String>,
 
-        /// Watch a recipe project or inferable source tree and refresh a namespace try session
+        /// Watch an explicit recipe project and refresh a namespace try session
         #[arg(long)]
         watch: bool,
 
@@ -615,6 +519,10 @@ pub enum Commands {
         /// Recipe file to use for watch mode
         #[arg(long)]
         recipe: Option<String>,
+
+        /// Private CCS authority key used for each watch-mode cook
+        #[arg(long, value_name = "PATH", requires = "watch")]
+        key: Option<String>,
 
         /// Stream watch events as newline-delimited JSON
         #[arg(long)]
@@ -653,14 +561,6 @@ pub enum Commands {
         #[arg(long)]
         refresh: bool,
 
-        /// Reinitialize repository identity at the destination
-        #[arg(long)]
-        force_reinit: bool,
-
-        /// Accept destination state below the local publish watermark
-        #[arg(long)]
-        accept_destination_state: bool,
-
         /// Rotate the active publish key
         #[arg(long)]
         rotate_publish_key: bool,
@@ -676,19 +576,6 @@ pub enum Commands {
         /// Emit structured M3a JSON output
         #[arg(long)]
         json: bool,
-    },
-
-    /// Convert an Arch Linux PKGBUILD to a Conary recipe
-    ///
-    /// Reads a PKGBUILD file and outputs the equivalent recipe in TOML format.
-    #[command(hide = true)]
-    ConvertPkgbuild {
-        /// Path to PKGBUILD file
-        pkgbuild: String,
-
-        /// Output file for the recipe (default: stdout)
-        #[arg(short, long)]
-        output: Option<String>,
     },
 
     /// Audit a recipe for missing build dependencies
@@ -816,10 +703,6 @@ pub enum Commands {
         /// Install a specific version
         #[arg(long)]
         version: Option<String>,
-
-        /// Skip signature verification (NOT RECOMMENDED)
-        #[arg(long)]
-        no_verify: bool,
 
         /// Verify a detached signature over a SHA-256 digest without downloading an update
         #[arg(long)]
@@ -956,1378 +839,4 @@ impl std::fmt::Debug for Commands {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, QueryCommands,
-        RepoCommands, SystemCommands,
-    };
-    use clap::{CommandFactory, Parser};
-
-    fn parse_cli<const N: usize>(args: [&str; N]) -> Result<Cli, clap::Error> {
-        let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
-
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(move || <Cli as Parser>::try_parse_from(args))
-            .expect("parser thread should spawn")
-            .join()
-            .expect("parser thread should not panic")
-    }
-
-    fn render_help_with_stack<F>(render: F) -> String
-    where
-        F: FnOnce() -> String + Send + 'static,
-    {
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(render)
-            .expect("help-render thread should spawn")
-            .join()
-            .expect("help-render thread should not panic")
-    }
-
-    #[test]
-    fn cli_accepts_seccomp_warn_flag() {
-        parse_cli(["conary", "--seccomp-warn", "list"])
-            .expect("--seccomp-warn should parse as a global CLI flag");
-    }
-
-    fn root_help() -> String {
-        render_help_with_stack(|| Cli::command().render_long_help().to_string())
-    }
-
-    fn subcommand_help(name: &str) -> String {
-        let name = name.to_string();
-        render_help_with_stack(move || {
-            let mut command = Cli::command();
-            command
-                .find_subcommand_mut(&name)
-                .unwrap_or_else(|| panic!("{name} subcommand should exist"))
-                .render_long_help()
-                .to_string()
-        })
-    }
-
-    fn nested_subcommand_help(parent: &str, child: &str) -> String {
-        let parent = parent.to_string();
-        let child = child.to_string();
-        render_help_with_stack(move || {
-            let mut command = Cli::command();
-            command
-                .find_subcommand_mut(&parent)
-                .unwrap_or_else(|| panic!("{parent} subcommand should exist"))
-                .find_subcommand_mut(&child)
-                .unwrap_or_else(|| panic!("{parent} {child} subcommand should exist"))
-                .render_long_help()
-                .to_string()
-        })
-    }
-
-    #[test]
-    fn hidden_authoring_surfaces_keep_command_help() {
-        let root = root_help();
-        assert!(root.contains("try"));
-        assert!(!root.contains("\n  cook "));
-        assert!(!root.contains("\n  new "));
-        assert!(!root.contains("Create or infer a package recipe"));
-        assert!(root.contains("Try a package artifact"));
-
-        let cook = subcommand_help("cook");
-        assert!(cook.contains("--explain"));
-        assert!(!cook.contains("M1a"));
-
-        let new = subcommand_help("new");
-        assert!(new.contains("--from"));
-        assert!(new.contains("--explain"));
-
-        let try_help = subcommand_help("try");
-        assert!(try_help.contains("--activate"));
-        assert!(try_help.contains("--allow-irreversible"));
-        assert!(try_help.contains("status"));
-        assert!(try_help.contains("rollback"));
-        assert!(try_help.contains("keep"));
-    }
-
-    #[test]
-    fn publish_help_exposes_attested_artifact_form() {
-        let cook = subcommand_help("cook");
-        assert!(!cook.contains("--hermetic"));
-        assert!(!cook.contains("foreign"));
-
-        let publish = subcommand_help("publish");
-        assert!(publish.contains("[TARGET]"), "{publish}");
-        assert!(publish.contains("attested CCS artifact"), "{publish}");
-        assert!(
-            publish.contains("Artifact-form destination target"),
-            "{publish}"
-        );
-
-        let try_help = subcommand_help("try");
-        assert!(try_help.contains("--watch"));
-        assert!(try_help.contains("--recipe"));
-        assert!(try_help.contains("--json"));
-        assert!(!try_help.contains("--record"));
-    }
-
-    #[test]
-    fn cook_accepts_optional_target_and_recipe_flag() {
-        assert!(parse_cli(["conary", "cook"]).is_ok());
-        assert!(parse_cli(["conary", "cook", "--recipe", "recipe.toml"]).is_ok());
-        assert!(parse_cli(["conary", "cook", "recipe.toml", "--isolated"]).is_ok());
-    }
-
-    #[test]
-    fn cook_accepts_hidden_m1a_compatibility_flags() {
-        assert!(parse_cli(["conary", "cook", "--hermetic", "recipe.toml"]).is_ok());
-        assert!(parse_cli(["conary", "cook", "--no-isolation", "recipe.toml"]).is_ok());
-    }
-
-    #[test]
-    fn cook_record_hidden_flags_parse_after_separator() {
-        let cli = parse_cli([
-            "conary",
-            "cook",
-            "--record",
-            "demo-source",
-            "--record-output",
-            "recorded/demo",
-            "--record-backend",
-            "inotify",
-            "--record-validate",
-            "--",
-            "make",
-            "install",
-            "DESTDIR=$CONARY_DESTDIR",
-        ])
-        .unwrap();
-
-        match cli.command {
-            Some(Commands::Cook {
-                target,
-                record,
-                record_output,
-                record_backend,
-                record_validate,
-                keep_raw_trace,
-                record_unsafe_host,
-                record_allow_network,
-                record_command,
-                ..
-            }) => {
-                assert_eq!(target.as_deref(), Some("demo-source"));
-                assert!(record);
-                assert_eq!(record_output.as_deref(), Some("recorded/demo"));
-                assert_eq!(record_backend.as_deref(), Some("inotify"));
-                assert!(record_validate);
-                assert!(!keep_raw_trace);
-                assert!(!record_unsafe_host);
-                assert!(!record_allow_network);
-                assert_eq!(
-                    record_command,
-                    ["make", "install", "DESTDIR=$CONARY_DESTDIR"]
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                );
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn public_cook_help_hides_record_mode_flags() {
-        let help = subcommand_help("cook");
-        assert!(!help.contains("--record"));
-        assert!(!help.contains("--record-output"));
-        assert!(!help.contains("--keep-raw-trace"));
-    }
-
-    #[test]
-    fn cook_accepts_explain() {
-        let cli = parse_cli(["conary", "cook", ".", "--explain"]).unwrap();
-        match cli.command {
-            Some(Commands::Cook { explain, .. }) => assert!(explain),
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn cook_publish_and_watch_accept_json_flags() {
-        let cook = parse_cli(["conary", "cook", ".", "--json"]).unwrap();
-        match cook.command {
-            Some(Commands::Cook { json, .. }) => assert!(json),
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let publish = parse_cli(["conary", "publish", "dist/pkg.ccs", "./repo", "--json"]).unwrap();
-        match publish.command {
-            Some(Commands::Publish { json, .. }) => assert!(json),
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let watch = parse_cli(["conary", "try", "--watch", "--json"]).unwrap();
-        match watch.command {
-            Some(Commands::Try { watch, json, .. }) => {
-                assert!(watch);
-                assert!(json);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn new_from_current_dir_parses_with_explain() {
-        let cli = parse_cli(["conary", "new", "--from", ".", "--explain"]).unwrap();
-        match cli.command {
-            Some(Commands::New { from, explain, .. }) => {
-                assert_eq!(from.as_deref(), Some("."));
-                assert!(explain);
-            }
-            _ => panic!("unexpected command"),
-        }
-    }
-
-    #[test]
-    fn publish_project_form_parses() {
-        let cli = parse_cli(["conary", "publish", "./repo", "--recipe", "recipe.toml"]).unwrap();
-        let Some(Commands::Publish {
-            what,
-            target,
-            recipe,
-            refresh,
-            ..
-        }) = cli.command
-        else {
-            panic!("expected publish command");
-        };
-
-        assert_eq!(what, "./repo");
-        assert_eq!(target, None);
-        assert_eq!(recipe.as_deref(), Some("recipe.toml"));
-        assert!(!refresh);
-    }
-
-    #[test]
-    fn publish_artifact_form_parses() {
-        let cli = parse_cli(["conary", "publish", "dist/pkg.ccs", "./repo"]).unwrap();
-        let Some(Commands::Publish {
-            what,
-            target,
-            recipe,
-            ..
-        }) = cli.command
-        else {
-            panic!("expected publish command");
-        };
-
-        assert_eq!(what, "dist/pkg.ccs");
-        assert_eq!(target.as_deref(), Some("./repo"));
-        assert_eq!(recipe, None);
-    }
-
-    #[test]
-    fn parses_hidden_mcp_packaging_command() {
-        let cli = parse_cli(["conary", "mcp", "packaging"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Mcp(McpCommands::Packaging))
-        ));
-    }
-
-    #[test]
-    fn repo_add_rejects_fingerprint_with_gpg_flags_at_parse_time() {
-        assert!(
-            parse_cli([
-                "conary",
-                "repo",
-                "add",
-                "acme",
-                "file:///tmp/repo",
-                "--fingerprint",
-                "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                "--no-gpg-check",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn repo_reset_trust_parses() {
-        let cli = parse_cli(["conary", "repo", "reset-trust", "acme"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Repo(RepoCommands::ResetTrust { .. }))
-        ));
-    }
-
-    #[test]
-    fn repo_add_replace_parses_for_static_repin() {
-        let cli = parse_cli([
-            "conary",
-            "repo",
-            "add",
-            "acme",
-            "file:///tmp/repo",
-            "--fingerprint",
-            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-            "--replace",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Repo(RepoCommands::Add { .. }))
-        ));
-    }
-
-    #[test]
-    fn repo_add_rejects_static_default_strategy_at_parse_time() {
-        assert!(
-            parse_cli([
-                "conary",
-                "repo",
-                "add",
-                "native",
-                "https://example.invalid/repo",
-                "--default-strategy",
-                "static",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn repo_add_accepts_exact_public_remi_distro() {
-        assert!(
-            parse_cli([
-                "conary",
-                "repo",
-                "add",
-                "remi-fedora",
-                "https://remi.example.invalid",
-                "--default-strategy",
-                "remi",
-                "--remi-endpoint",
-                "https://remi.example.invalid",
-                "--remi-distro",
-                "fedora-44",
-            ])
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn repo_add_rejects_internal_remi_route_slug_at_parse_time() {
-        assert!(
-            parse_cli([
-                "conary",
-                "repo",
-                "add",
-                "remi-fedora",
-                "https://remi.example.invalid",
-                "--default-strategy",
-                "remi",
-                "--remi-endpoint",
-                "https://remi.example.invalid",
-                "--remi-distro",
-                "fedora",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn system_init_accepts_only_exact_public_profiles() {
-        for expected in ["fedora-44", "ubuntu-26.04", "arch"] {
-            let cli = parse_cli(["conary", "system", "init", "--profile", expected]).unwrap();
-            match cli.command {
-                Some(Commands::System(SystemCommands::Init { profile, .. })) => {
-                    assert_eq!(profile, expected);
-                }
-                _ => panic!("expected system init command"),
-            }
-        }
-
-        for unsupported in ["fedora", "ubuntu", "debian-13"] {
-            assert!(
-                parse_cli(["conary", "system", "init", "--profile", unsupported]).is_err(),
-                "{unsupported} must not parse as a public profile"
-            );
-        }
-        assert!(parse_cli(["conary", "system", "init"]).is_err());
-    }
-
-    #[test]
-    fn install_defaults_to_always_sandbox() {
-        let cli = parse_cli(["conary", "install", "bash"]).unwrap();
-        match cli.command {
-            Some(Commands::Install { sandbox, .. }) => {
-                assert_eq!(sandbox, CliSandboxMode::Always);
-            }
-            _ => panic!("expected install command"),
-        }
-    }
-
-    #[test]
-    fn install_accepts_legacy_replay_flags_defaulting_false() {
-        let cli = parse_cli(["conary", "install", "bash"]).unwrap();
-        match cli.command {
-            Some(Commands::Install {
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(!allow_legacy_replay);
-                assert!(!allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected install command"),
-        }
-
-        let cli = parse_cli([
-            "conary",
-            "install",
-            "bash",
-            "--allow-legacy-replay",
-            "--allow-foreign-legacy-replay",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Commands::Install {
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(allow_legacy_replay);
-                assert!(allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected install command"),
-        }
-    }
-
-    #[test]
-    fn install_accepts_capability_approval_flag() {
-        let cli = parse_cli(["conary", "install", "htop", "--allow-capabilities"]).unwrap();
-        match cli.command {
-            Some(Commands::Install {
-                allow_capabilities, ..
-            }) => {
-                assert!(allow_capabilities);
-            }
-            _ => panic!("expected install command"),
-        }
-    }
-
-    #[test]
-    fn update_defaults_to_always_sandbox() {
-        let cli = parse_cli(["conary", "update"]).unwrap();
-        match cli.command {
-            Some(Commands::Update { sandbox, .. }) => {
-                assert_eq!(sandbox, CliSandboxMode::Always);
-            }
-            _ => panic!("expected update command"),
-        }
-    }
-
-    #[test]
-    fn update_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
-        let cli = parse_cli(["conary", "update"]).unwrap();
-        match cli.command {
-            Some(Commands::Update {
-                no_scripts,
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(!no_scripts);
-                assert!(!allow_legacy_replay);
-                assert!(!allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected update command"),
-        }
-
-        let cli = parse_cli([
-            "conary",
-            "update",
-            "bash",
-            "--no-scripts",
-            "--allow-legacy-replay",
-            "--allow-foreign-legacy-replay",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Commands::Update {
-                no_scripts,
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(no_scripts);
-                assert!(allow_legacy_replay);
-                assert!(allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected update command"),
-        }
-    }
-
-    #[test]
-    fn remove_accepts_legacy_replay_flags_defaulting_false() {
-        let cli = parse_cli(["conary", "remove", "bash"]).unwrap();
-        match cli.command {
-            Some(Commands::Remove {
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(!allow_legacy_replay);
-                assert!(!allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected remove command"),
-        }
-
-        let cli = parse_cli([
-            "conary",
-            "remove",
-            "bash",
-            "--allow-legacy-replay",
-            "--allow-foreign-legacy-replay",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Commands::Remove {
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(allow_legacy_replay);
-                assert!(allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected remove command"),
-        }
-    }
-
-    #[test]
-    fn autoremove_accepts_legacy_replay_flags_defaulting_false() {
-        let cli = parse_cli(["conary", "autoremove"]).unwrap();
-        match cli.command {
-            Some(Commands::Autoremove {
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(!allow_legacy_replay);
-                assert!(!allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected autoremove command"),
-        }
-
-        let cli = parse_cli([
-            "conary",
-            "autoremove",
-            "--allow-legacy-replay",
-            "--allow-foreign-legacy-replay",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Commands::Autoremove {
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            }) => {
-                assert!(allow_legacy_replay);
-                assert!(allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected autoremove command"),
-        }
-    }
-
-    #[test]
-    fn ccs_install_accepts_legacy_replay_flags_and_no_scripts_defaulting_false() {
-        let cli = parse_cli(["conary", "ccs", "install", "fixture.ccs"]).unwrap();
-        match cli.command {
-            Some(Commands::Ccs(CcsCommands::Install {
-                no_scripts,
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            })) => {
-                assert!(!no_scripts);
-                assert!(!allow_legacy_replay);
-                assert!(!allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected ccs install command"),
-        }
-
-        let cli = parse_cli([
-            "conary",
-            "ccs",
-            "install",
-            "fixture.ccs",
-            "--no-scripts",
-            "--allow-legacy-replay",
-            "--allow-foreign-legacy-replay",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Commands::Ccs(CcsCommands::Install {
-                no_scripts,
-                allow_legacy_replay,
-                allow_foreign_legacy_replay,
-                ..
-            })) => {
-                assert!(no_scripts);
-                assert!(allow_legacy_replay);
-                assert!(allow_foreign_legacy_replay);
-            }
-            _ => panic!("expected ccs install command"),
-        }
-    }
-
-    #[test]
-    fn update_dep_mode_omission_is_model_derived() {
-        let cli = parse_cli(["conary", "update"]).unwrap();
-        match cli.command {
-            Some(Commands::Update { dep_mode, .. }) => {
-                assert_eq!(dep_mode, None);
-            }
-            _ => panic!("expected update command"),
-        }
-    }
-
-    #[test]
-    fn update_dep_mode_help_is_model_derived() {
-        let help = subcommand_help("update");
-        let hard_coded_default = ["[default: ", "satisfy]"].concat();
-
-        assert!(
-            !help.contains(&hard_coded_default),
-            "update dep-mode must not hard-code satisfy as its CLI default:\n{help}"
-        );
-    }
-
-    fn command_help(command_name: &str) -> String {
-        subcommand_help(command_name)
-    }
-
-    #[test]
-    fn installed_package_commands_expose_arch_selector() {
-        for command_name in ["remove", "update", "pin", "unpin", "list"] {
-            let help = command_help(command_name);
-            assert!(
-                help.contains("--arch"),
-                "{command_name} help should expose --arch:\n{help}"
-            );
-        }
-    }
-
-    #[test]
-    fn installed_package_commands_expose_version_selector() {
-        for command_name in ["update", "pin", "unpin", "list"] {
-            let help = command_help(command_name);
-            assert!(
-                help.contains("--version"),
-                "{command_name} help should expose --version:\n{help}"
-            );
-        }
-    }
-
-    #[test]
-    fn system_adopt_full_help_only_names_consuming_modes() {
-        let help = nested_subcommand_help("system", "adopt");
-
-        assert!(
-            help.contains("Used by: default (package adopt), --system"),
-            "system adopt --full help should name its consuming modes:\n{help}"
-        );
-        assert!(
-            !help.contains("Used by: default (package adopt), --system, --refresh"),
-            "system adopt --full help must not claim --refresh consumes --full:\n{help}"
-        );
-    }
-
-    #[test]
-    fn export_rejects_legacy_db_argument() {
-        let err = match parse_cli(["conary", "export", "--output", "oci-out", "--db", "old.db"]) {
-            Ok(_) => panic!("legacy export --db argument should be rejected"),
-            Err(err) => err,
-        };
-
-        assert!(
-            err.to_string().contains("unexpected argument '--db'"),
-            "legacy export --db argument should be rejected, got {err}"
-        );
-    }
-
-    #[test]
-    fn cli_accepts_allow_live_system_mutation_as_global_flag() {
-        let cli = parse_cli([
-            "conary",
-            "--allow-live-system-mutation",
-            "system",
-            "generation",
-            "switch",
-            "7",
-        ])
-        .expect("global live-mutation flag should parse before nested commands");
-
-        assert!(cli.allow_live_system_mutation);
-    }
-
-    #[test]
-    fn global_log_verbose_does_not_collide_with_command_verbose_flags() {
-        let local = parse_cli(["conary", "query", "scripts", "pkg.ccs", "--verbose"])
-            .expect("query scripts --verbose should parse as command verbosity");
-        assert_eq!(local.log_verbose, 0);
-        match local.command {
-            Some(Commands::Query(QueryCommands::Scripts { verbose, .. })) => {
-                assert!(verbose);
-            }
-            _ => panic!("expected query scripts command"),
-        }
-
-        let global = parse_cli(["conary", "--verbose", "query", "scripts", "pkg.ccs"])
-            .expect("top-level --verbose should parse as log verbosity");
-        assert_eq!(global.log_verbose, 1);
-        match global.command {
-            Some(Commands::Query(QueryCommands::Scripts { verbose, .. })) => {
-                assert!(!verbose);
-            }
-            _ => panic!("expected query scripts command"),
-        }
-    }
-
-    #[test]
-    fn cli_accepts_yes_for_remove_autoremove_and_ccs_install() {
-        let remove = parse_cli(["conary", "remove", "nginx", "--yes"]).unwrap();
-        assert!(matches!(
-            remove.command,
-            Some(Commands::Remove { yes: true, .. })
-        ));
-
-        let autoremove = parse_cli(["conary", "autoremove", "--yes"]).unwrap();
-        assert!(matches!(
-            autoremove.command,
-            Some(Commands::Autoremove { yes: true, .. })
-        ));
-
-        let ccs = parse_cli(["conary", "ccs", "install", "pkg.ccs", "--yes"]).unwrap();
-        assert!(matches!(
-            ccs.command,
-            Some(Commands::Ccs(crate::cli::CcsCommands::Install {
-                yes: true,
-                ..
-            }))
-        ));
-    }
-
-    #[test]
-    fn cli_accepts_yes_for_state_and_generation_apply_commands() {
-        let revert = parse_cli(["conary", "system", "state", "revert", "1", "--yes"]).unwrap();
-        assert!(matches!(
-            revert.command,
-            Some(Commands::System(crate::cli::SystemCommands::State(
-                crate::cli::StateCommands::Revert { yes: true, .. }
-            )))
-        ));
-
-        let build = parse_cli([
-            "conary",
-            "system",
-            "generation",
-            "build",
-            "--summary",
-            "after install",
-            "--yes",
-        ])
-        .unwrap();
-        assert!(matches!(
-            build.command,
-            Some(Commands::System(crate::cli::SystemCommands::Generation(
-                crate::cli::GenerationCommands::Build { yes: true, .. }
-            )))
-        ));
-    }
-
-    #[test]
-    fn parses_system_unadopt_all() {
-        let cli = parse_cli(["conary", "system", "unadopt", "--all"])
-            .expect("system unadopt --all should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Unadopt {
-                packages,
-                all,
-                dry_run,
-                keep_hooks,
-                ..
-            })) => {
-                assert!(packages.is_empty());
-                assert!(all);
-                assert!(!dry_run);
-                assert!(!keep_hooks);
-            }
-            _ => panic!("expected system unadopt command"),
-        }
-    }
-
-    #[test]
-    fn parses_system_unadopt_package_dry_run() {
-        let cli = parse_cli([
-            "conary",
-            "system",
-            "unadopt",
-            "curl",
-            "--dry-run",
-            "--keep-hooks",
-        ])
-        .expect("system unadopt curl --dry-run should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Unadopt {
-                packages,
-                all,
-                dry_run,
-                keep_hooks,
-                ..
-            })) => {
-                assert_eq!(packages, vec!["curl"]);
-                assert!(!all);
-                assert!(dry_run);
-                assert!(keep_hooks);
-            }
-            _ => panic!("expected system unadopt command"),
-        }
-    }
-
-    #[test]
-    fn rejects_system_unadopt_without_scope() {
-        let err = match parse_cli(["conary", "system", "unadopt"]) {
-            Ok(_) => panic!("system unadopt must require --all or package names"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-    }
-
-    #[test]
-    fn rejects_system_unadopt_all_with_packages() {
-        let err = match parse_cli(["conary", "system", "unadopt", "--all", "curl"]) {
-            Ok(_) => panic!("system unadopt --all must reject package names"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn parses_system_adopt_system_dry_run_filters() {
-        let cli = parse_cli([
-            "conary",
-            "system",
-            "adopt",
-            "--system",
-            "--dry-run",
-            "--pattern",
-            "lib*",
-            "--exclude",
-            "kernel*",
-            "--explicit-only",
-        ])
-        .expect("system adopt --system dry-run filters should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Adopt {
-                packages,
-                full,
-                system,
-                status,
-                dry_run,
-                pattern,
-                exclude,
-                explicit_only,
-                refresh,
-                convert,
-                sync_hook,
-                ..
-            })) => {
-                assert!(packages.is_empty());
-                assert!(!full);
-                assert!(system);
-                assert!(!status);
-                assert!(dry_run);
-                assert_eq!(pattern.as_deref(), Some("lib*"));
-                assert_eq!(exclude.as_deref(), Some("kernel*"));
-                assert!(explicit_only);
-                assert!(!refresh);
-                assert!(!convert);
-                assert!(!sync_hook);
-            }
-            _ => panic!("expected system adopt command"),
-        }
-    }
-
-    #[test]
-    fn parses_system_adopt_refresh_quiet_from_sync_hook() {
-        let cli = parse_cli([
-            "conary",
-            "system",
-            "adopt",
-            "--refresh",
-            "--quiet",
-            "--from-sync-hook",
-        ])
-        .expect("installed sync hook refresh path should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Adopt {
-                packages,
-                full,
-                system,
-                status,
-                dry_run,
-                refresh,
-                convert,
-                sync_hook,
-                quiet,
-                from_sync_hook,
-                ..
-            })) => {
-                assert!(packages.is_empty());
-                assert!(!full);
-                assert!(!system);
-                assert!(!status);
-                assert!(!dry_run);
-                assert!(refresh);
-                assert!(!convert);
-                assert!(!sync_hook);
-                assert!(quiet);
-                assert!(from_sync_hook);
-            }
-            _ => panic!("expected system adopt command"),
-        }
-    }
-
-    #[test]
-    fn rejects_system_adopt_from_sync_hook_with_full() {
-        let err = match parse_cli([
-            "conary",
-            "system",
-            "adopt",
-            "--refresh",
-            "--quiet",
-            "--from-sync-hook",
-            "--full",
-        ]) {
-            Ok(_) => panic!("--from-sync-hook must conflict with --full"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn parses_system_adopt_convert_dry_run_jobs() {
-        let cli = parse_cli([
-            "conary",
-            "system",
-            "adopt",
-            "--convert",
-            "--dry-run",
-            "--jobs",
-            "4",
-            "--no-chunking",
-        ])
-        .expect("system adopt --convert dry-run jobs should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Adopt {
-                packages,
-                convert,
-                dry_run,
-                jobs,
-                no_chunking,
-                system,
-                status,
-                refresh,
-                sync_hook,
-                ..
-            })) => {
-                assert!(packages.is_empty());
-                assert!(convert);
-                assert!(dry_run);
-                assert_eq!(jobs, Some(4));
-                assert!(no_chunking);
-                assert!(!system);
-                assert!(!status);
-                assert!(!refresh);
-                assert!(!sync_hook);
-            }
-            _ => panic!("expected system adopt command"),
-        }
-    }
-
-    #[test]
-    fn parses_system_adopt_sync_hook_remove_hook() {
-        let cli = parse_cli(["conary", "system", "adopt", "--sync-hook", "--remove-hook"])
-            .expect("system adopt --sync-hook --remove-hook should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Adopt {
-                packages,
-                sync_hook,
-                remove_hook,
-                system,
-                status,
-                refresh,
-                convert,
-                ..
-            })) => {
-                assert!(packages.is_empty());
-                assert!(sync_hook);
-                assert!(remove_hook);
-                assert!(!system);
-                assert!(!status);
-                assert!(!refresh);
-                assert!(!convert);
-            }
-            _ => panic!("expected system adopt command"),
-        }
-    }
-
-    #[test]
-    fn parses_system_adopt_package_dry_run_preview_surface() {
-        let cli = parse_cli(["conary", "system", "adopt", "curl", "--dry-run"])
-            .expect("single-package dry-run preview should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Adopt {
-                packages,
-                full,
-                system,
-                status,
-                dry_run,
-                refresh,
-                convert,
-                sync_hook,
-                ..
-            })) => {
-                assert_eq!(packages, vec!["curl".to_string()]);
-                assert!(!full);
-                assert!(!system);
-                assert!(!status);
-                assert!(dry_run);
-                assert!(!refresh);
-                assert!(!convert);
-                assert!(!sync_hook);
-            }
-            _ => panic!("expected system adopt command"),
-        }
-    }
-
-    #[test]
-    fn rejects_system_adopt_package_with_refresh_mode() {
-        let err = match parse_cli(["conary", "system", "adopt", "curl", "--refresh"]) {
-            Ok(_) => panic!("package adopt must conflict with --refresh mode"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn rejects_system_adopt_quiet_without_refresh() {
-        let err = match parse_cli(["conary", "system", "adopt", "--quiet"]) {
-            Ok(_) => panic!("--quiet must remain scoped to --refresh"),
-            Err(err) => err,
-        };
-
-        let rendered = err.to_string();
-        assert!(
-            rendered.contains("--refresh"),
-            "quiet error should point users back to --refresh: {rendered}"
-        );
-    }
-
-    #[test]
-    fn cli_rejects_bootstrap_image_from_generation() {
-        let err = match parse_cli([
-            "conary",
-            "bootstrap",
-            "image",
-            "--from-generation",
-            "output/generations/1",
-        ]) {
-            Ok(_) => panic!("--from-generation must be removed from bootstrap image"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
-    #[test]
-    fn cli_accepts_generation_export_from_explicit_path() {
-        let cli = parse_cli([
-            "conary",
-            "system",
-            "generation",
-            "export",
-            "--path",
-            "output/generations/1",
-            "--format",
-            "raw",
-            "--output",
-            "gen1.raw",
-        ])
-        .expect("generation export from path should parse");
-
-        match cli.command {
-            Some(Commands::System(SystemCommands::Generation(GenerationCommands::Export {
-                generation,
-                path,
-                format,
-                output,
-                size,
-            }))) => {
-                assert_eq!(generation, None);
-                assert_eq!(path.as_deref(), Some("output/generations/1"));
-                assert_eq!(format, "raw");
-                assert_eq!(output, "gen1.raw");
-                assert_eq!(size, None);
-            }
-            _ => panic!("expected system generation export command"),
-        }
-    }
-
-    #[test]
-    fn cli_accepts_generation_db_backup_verification_and_recovery() {
-        let verify = parse_cli([
-            "conary",
-            "system",
-            "generation",
-            "verify-db-backup",
-            "--current",
-        ])
-        .expect("generation DB backup verification should parse");
-        match verify.command {
-            Some(Commands::System(SystemCommands::Generation(
-                GenerationCommands::VerifyDbBackup {
-                    current,
-                    generation,
-                    ..
-                },
-            ))) => {
-                assert!(current);
-                assert_eq!(generation, None);
-            }
-            _ => panic!("expected generation verify-db-backup command"),
-        }
-
-        let recover = parse_cli([
-            "conary",
-            "system",
-            "generation",
-            "recover-db",
-            "--generation",
-            "7",
-            "--dry-run",
-        ])
-        .expect("generation DB recovery dry-run should parse");
-        match recover.command {
-            Some(Commands::System(SystemCommands::Generation(GenerationCommands::RecoverDb {
-                generation,
-                dry_run,
-                yes,
-                ..
-            }))) => {
-                assert_eq!(generation, 7);
-                assert!(dry_run);
-                assert!(!yes);
-            }
-            _ => panic!("expected generation recover-db command"),
-        }
-    }
-
-    #[test]
-    fn cli_rejects_generation_export_path_and_number_together() {
-        let err = match parse_cli([
-            "conary",
-            "system",
-            "generation",
-            "export",
-            "7",
-            "--path",
-            "output/generations/1",
-            "--format",
-            "raw",
-            "--output",
-            "gen.raw",
-        ]) {
-            Ok(_) => panic!("--path must conflict with positional generation number"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
-    }
-
-    #[test]
-    fn try_package_parses() {
-        let cli =
-            parse_cli(["conary", "try", "pkg.ccs"]).expect("try package command should parse");
-        match cli.command {
-            Some(Commands::Try {
-                target,
-                activate,
-                allow_irreversible,
-                run,
-                ..
-            }) => {
-                assert_eq!(target.as_deref(), Some("pkg.ccs"));
-                assert!(!activate);
-                assert!(!allow_irreversible);
-                assert!(run.is_empty());
-            }
-            _ => panic!("expected try package command"),
-        }
-
-        let with_run = parse_cli(["conary", "try", "pkg.ccs", "--", "/usr/bin/hello"])
-            .expect("try package run command should parse");
-        match with_run.command {
-            Some(Commands::Try { target, run, .. }) => {
-                assert_eq!(target.as_deref(), Some("pkg.ccs"));
-                assert_eq!(run, vec!["/usr/bin/hello"]);
-            }
-            _ => panic!("expected try package command with runner"),
-        }
-
-        let activated = parse_cli(["conary", "try", "pkg.ccs", "--activate"])
-            .expect("activated try package command should parse");
-        match activated.command {
-            Some(Commands::Try {
-                target, activate, ..
-            }) => {
-                assert_eq!(target.as_deref(), Some("pkg.ccs"));
-                assert!(activate);
-            }
-            _ => panic!("expected activated try package command"),
-        }
-
-        let irreversible = parse_cli([
-            "conary",
-            "try",
-            "pkg.ccs",
-            "--allow-irreversible",
-            "--activate",
-        ])
-        .expect("activated irreversible try package command should parse");
-        match irreversible.command {
-            Some(Commands::Try {
-                target,
-                activate,
-                allow_irreversible,
-                ..
-            }) => {
-                assert_eq!(target.as_deref(), Some("pkg.ccs"));
-                assert!(activate);
-                assert!(allow_irreversible);
-            }
-            _ => panic!("expected activated irreversible try package command"),
-        }
-    }
-
-    #[test]
-    fn try_watch_parses_project_recipe_and_json_forms() {
-        let default_target = parse_cli(["conary", "try", "--watch"]).unwrap();
-        match default_target.command {
-            Some(Commands::Try {
-                target,
-                watch,
-                recipe,
-                json,
-                isolated,
-                activate,
-                allow_irreversible,
-                run,
-                ..
-            }) => {
-                assert_eq!(target, None);
-                assert!(watch);
-                assert_eq!(recipe, None);
-                assert!(!json);
-                assert!(!isolated);
-                assert!(!activate);
-                assert!(!allow_irreversible);
-                assert!(run.is_empty());
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-
-        let recipe = parse_cli([
-            "conary",
-            "try",
-            "--watch",
-            ".",
-            "--recipe",
-            "packaging/recipe.toml",
-            "--json",
-            "--isolated",
-        ])
-        .unwrap();
-        match recipe.command {
-            Some(Commands::Try {
-                target,
-                watch,
-                recipe,
-                json,
-                isolated,
-                ..
-            }) => {
-                assert_eq!(target.as_deref(), Some("."));
-                assert!(watch);
-                assert_eq!(recipe.as_deref(), Some("packaging/recipe.toml"));
-                assert!(json);
-                assert!(isolated);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn try_action_words_parse() {
-        for action in ["status", "rollback", "keep"] {
-            let cli = parse_cli(["conary", "try", action]).expect("try action word should parse");
-            match cli.command {
-                Some(Commands::Try {
-                    target,
-                    activate,
-                    allow_irreversible,
-                    run,
-                    ..
-                }) => {
-                    assert_eq!(target.as_deref(), Some(action));
-                    assert!(!activate);
-                    assert!(!allow_irreversible);
-                    assert!(run.is_empty());
-                }
-                _ => panic!("expected try action command"),
-            }
-        }
-    }
-
-    #[test]
-    fn self_update_accepts_offline_signature_verification_flags() {
-        let cli = parse_cli([
-            "conary",
-            "self-update",
-            "--verify-sha256",
-            "abc123def456",
-            "--verify-signature-file",
-            "/tmp/conary.sig",
-            "--trusted-key",
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-        ])
-        .expect("offline self-update verification flags should parse");
-
-        match cli.command {
-            Some(Commands::SelfUpdate { .. }) => {}
-            _ => panic!("expected self-update command"),
-        }
-    }
-}
+mod tests;

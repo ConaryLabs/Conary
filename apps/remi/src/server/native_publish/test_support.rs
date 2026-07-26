@@ -17,12 +17,15 @@ pub fn seed_native_publication(
     architecture: &str,
     package_path: &str,
 ) {
+    let profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
     use rusqlite::params;
 
     conn.execute(
-        "INSERT OR IGNORE INTO repositories (name, url, enabled, tuf_enabled)
-         VALUES (?1, ?2, 1, 1)",
-        params![distro, format!("remi-release://{distro}")],
+        "INSERT OR IGNORE INTO repositories
+         (name, url, enabled, tuf_enabled, source_profile)
+         VALUES (?1, ?2, 1, 1, ?3)",
+        params![distro, format!("remi-release://{distro}"), profile.id()],
     )
     .unwrap();
     let repo_id: i64 = conn
@@ -53,8 +56,8 @@ pub fn seed_native_publication(
     conn.execute(
         "INSERT INTO repository_packages
          (repository_id, name, version, package_release, architecture, description,
-          checksum, size, download_url, metadata, distro)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'native test package', ?6, 42, ?7, ?8, ?9)",
+          checksum, size, download_url, metadata, source_profile, version_scheme)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'native test package', ?6, 42, ?7, ?8, ?9, 'conary')",
         params![
             repo_id,
             name,
@@ -64,14 +67,14 @@ pub fn seed_native_publication(
             content_hash,
             format!("/v1/chunks/{content_hash}"),
             metadata,
-            distro,
+            profile.id(),
         ],
     )
     .unwrap();
     let repo_package_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO native_package_publications (
-            repository_id, repository_package_id, distro, name, version, package_release,
+            repository_id, repository_package_id, source_profile, name, version, package_release,
             architecture, package_kind, authority_format_version, status, content_hash,
             chunk_hashes_json, total_size, package_path, target_path, trust_status
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'package', 2, 'public', ?8, ?9,
@@ -79,7 +82,7 @@ pub fn seed_native_publication(
         params![
             repo_id,
             repo_package_id,
-            distro,
+            profile.id(),
             name,
             version,
             package_release,

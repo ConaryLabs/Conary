@@ -1,10 +1,11 @@
 // conary-core/src/packages/registry.rs
 
-//! Package format registry and detection
+//! Package format registry and structural identification
 //!
-//! Provides centralized detection and parsing of various package formats
-//! using both magic bytes and file extensions.
+//! Provides centralized identification and parsing from package-owned format
+//! markers. File names and extensions are never format authority.
 
+use crate::compression::{self, CompressionFormat};
 use crate::error::{Error, Result};
 use crate::packages::traits::PackageFormat;
 use crate::packages::{arch, deb, rpm};
@@ -29,17 +30,16 @@ impl PackageFormatType {
             Self::Arch => "arch",
         }
     }
+
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        self.name()
+    }
 }
 
-/// Detect the format of a package file
-///
-/// Uses magic bytes for reliable detection, falling back to file extensions.
-/// Returns an error if the file cannot be opened (e.g., permission denied,
-/// missing file with no recognizable extension).
+/// Identify a package format from exact on-disk format markers.
 pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
     let path = path.as_ref();
-
-    // Try magic bytes first
     let mut file = File::open(path).map_err(|e| {
         Error::InitError(format!(
             "Failed to open package file {}: {}",
@@ -48,51 +48,67 @@ pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
         ))
     })?;
 
-    let mut magic = [0u8; 8];
-    if let Ok(n) = file.read(&mut magic) {
-        if n >= 4 && magic[0..4] == [0xED, 0xAB, 0xEE, 0xDB] {
-            return Ok(PackageFormatType::Rpm);
-        }
-        if n >= 7 && magic[0..7] == *b"!<arch>" {
-            return Ok(PackageFormatType::Deb);
-        }
-
-        // Arch packages are tarballs, check for common compression magic
-        // Zstd: 28 b5 2f fd
-        if n >= 4 && magic[0..4] == [0x28, 0xB5, 0x2F, 0xFD] && is_arch_extension(path) {
-            return Ok(PackageFormatType::Arch);
-        }
-        // XZ: fd 37 7a 58 5a 00
-        if n >= 6 && magic[0..6] == [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00] && is_arch_extension(path)
-        {
-            return Ok(PackageFormatType::Arch);
-        }
-        // Gzip: 1f 8b
-        if n >= 2 && magic[0..2] == [0x1F, 0x8B] && is_arch_extension(path) {
-            return Ok(PackageFormatType::Arch);
-        }
+    let mut magic = [0_u8; 8];
+    let bytes_read = file.read(&mut magic)?;
+    if bytes_read >= 4 && magic[0..4] == [0xED, 0xAB, 0xEE, 0xDB] {
+        return Ok(PackageFormatType::Rpm);
+    }
+    if bytes_read >= 8 && &magic == b"!<arch>\n" && has_debian_binary_member(path)? {
+        return Ok(PackageFormatType::Deb);
     }
 
-    // Fallback to extensions
-    let path_str = path.to_string_lossy().to_lowercase();
-    if path_str.ends_with(".rpm") {
-        Ok(PackageFormatType::Rpm)
-    } else if path_str.ends_with(".deb") {
-        Ok(PackageFormatType::Deb)
-    } else if is_arch_extension(path) {
-        Ok(PackageFormatType::Arch)
-    } else {
-        Err(Error::InitError(format!(
-            "Unknown package format for file: {}",
-            path.display()
-        )))
+    let compression = CompressionFormat::from_magic_bytes(&magic[..bytes_read]);
+    if compression != CompressionFormat::None && has_arch_pkginfo(path, compression)? {
+        return Ok(PackageFormatType::Arch);
     }
+
+    Err(Error::InitError(format!(
+        "file does not contain a supported RPM, Debian, or ALPM package contract: {}",
+        path.display()
+    )))
 }
 
-/// Check if a path has an Arch Linux package extension
-fn is_arch_extension(path: &Path) -> bool {
-    let s = path.to_string_lossy();
-    s.ends_with(".pkg.tar.zst") || s.ends_with(".pkg.tar.xz") || s.ends_with(".pkg.tar.gz")
+fn has_debian_binary_member(path: &Path) -> Result<bool> {
+    let file = File::open(path)?;
+    let mut archive = ar::Archive::new(file);
+    let mut entries_seen = 0_usize;
+    while let Some(entry) = archive.next_entry() {
+        entries_seen += 1;
+        compression::check_archive_entry_limit(entries_seen, "Debian package")
+            .map_err(|error| Error::InitError(error.to_string()))?;
+        let mut entry = entry?;
+        let identifier = String::from_utf8_lossy(entry.header().identifier());
+        if identifier.trim_end_matches('/') != "debian-binary" {
+            continue;
+        }
+        if entry.header().size() > 16 {
+            return Ok(false);
+        }
+        let mut version = Vec::new();
+        entry.read_to_end(&mut version)?;
+        return Ok(version == b"2.0\n");
+    }
+    Ok(false)
+}
+
+fn has_arch_pkginfo(path: &Path, format: CompressionFormat) -> Result<bool> {
+    let file = File::open(path)?;
+    let reader =
+        compression::create_decoder_limited(file, format, compression::MAX_DECOMPRESS_SIZE)
+            .map_err(|error| Error::InitError(error.to_string()))?;
+    let mut archive = tar::Archive::new(reader);
+    let mut entries_seen = 0_usize;
+    for entry in archive.entries()? {
+        entries_seen += 1;
+        compression::check_archive_entry_limit(entries_seen, "ALPM package")
+            .map_err(|error| Error::InitError(error.to_string()))?;
+        let entry = entry?;
+        let path = entry.path()?;
+        if path == Path::new(".PKGINFO") || path == Path::new("./.PKGINFO") {
+            return Ok(entry.header().entry_type().is_file());
+        }
+    }
+    Ok(false)
 }
 
 /// Parse a package file into a boxed PackageFormat implementation
@@ -124,16 +140,16 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_deb_magic() {
+    fn ar_magic_without_debian_contract_is_rejected() {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"!<arch>\ncontrol.tar.gz").unwrap();
-        assert_eq!(detect_format(file.path()).unwrap(), PackageFormatType::Deb);
+        assert!(detect_format(file.path()).is_err());
     }
 
     #[test]
-    fn test_detect_arch_extension() {
-        assert!(is_arch_extension(Path::new("test.pkg.tar.zst")));
-        assert!(is_arch_extension(Path::new("test.pkg.tar.xz")));
-        assert!(!is_arch_extension(Path::new("test.rpm")));
+    fn misleading_extensions_are_not_format_authority() {
+        let mut file = NamedTempFile::with_suffix(".rpm").unwrap();
+        file.write_all(b"not an rpm").unwrap();
+        assert!(detect_format(file.path()).is_err());
     }
 }

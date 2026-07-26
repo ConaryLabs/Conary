@@ -60,6 +60,49 @@ make_site_staging() {
     printf 'console.log("ok");\n' >"$staging/assets/app.js"
 }
 
+make_fake_remi_bundle() {
+    local bundle="$1"
+    local version="$2"
+    local build_dir="${tmpdir}/fake-remi-${version}"
+    local candidate="${build_dir}/remi-${version}-linux-x64"
+
+    mkdir -p "$build_dir"
+    cat >"$candidate" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then
+    echo "remi ${version}"
+    exit 0
+fi
+if [[ "\${1:-}" == "deployment" && "\${2:-}" == "prepare" ]]; then
+    shift 2
+    config=""
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --config)
+                config="\$2"
+                shift 2
+                ;;
+            *)
+                shift
+                [[ \$# -gt 0 ]] && shift
+                ;;
+        esac
+    done
+    transition="\${config}.transition.json"
+    printf '{}\n' >"\$transition"
+    echo "\$transition"
+    exit 0
+fi
+if [[ "\${1:-}" == "deployment" && "\${2:-}" == "rollback" ]]; then
+    exit 0
+fi
+exit 2
+EOF
+    chmod 0755 "$candidate"
+    tar czf "$bundle" -C "$build_dir" "$(basename "$candidate")"
+}
+
 run_helper() {
     local fake_root="$1"
     shift
@@ -181,23 +224,38 @@ test_deploy_site_rejects_unknown_target() {
     expect_fail "unknown site target" run_helper "$fake_root" deploy-site admin "$staging"
 }
 
-test_configure_concurrency_updates_config() {
-    local fake_root="${tmpdir}/root-config"
+test_deploy_remi_uses_candidate_owned_transition() {
+    local fake_root="${tmpdir}/root-remi"
+    local bundle="${tmpdir}/remi-0.8.0.tar.gz"
+    local repositories="${tmpdir}/repositories.toml"
     write_config "$fake_root"
+    mkdir -p "$fake_root/usr/local/bin"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
 
-    run_helper "$fake_root" configure-concurrency 32
+    run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
 
-    grep -q '^max_concurrent = 32$' "$fake_root/etc/conary/remi.toml"
+    test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.0"
+    test ! -e "$bundle"
+    test ! -e "$repositories"
 }
 
-test_configure_concurrency_accepts_skip_restart_flag() {
-    local fake_root="${tmpdir}/root-config-skip"
-    write_config "$fake_root"
+test_install_helper_requires_exact_digest() {
+    local fake_root="${tmpdir}/root-helper"
+    local staged="${tmpdir}/staged-helper"
+    local digest
+    mkdir -p "$fake_root/usr/local/sbin"
+    cp "$helper" "$staged"
+    digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
 
-    CONARY_REMI_DEPLOY_ROOT="$fake_root" \
-        bash "$helper" configure-concurrency 16 --skip-restart
+    run_helper "$fake_root" install-helper "$digest" "$staged"
+    test -x "$fake_root/usr/local/sbin/conary-remi-deploy"
 
-    grep -q '^max_concurrent = 16$' "$fake_root/etc/conary/remi.toml"
+    cp "$helper" "$staged"
+    expect_fail "helper digest mismatch" \
+        run_helper "$fake_root" install-helper \
+        0000000000000000000000000000000000000000000000000000000000000000 \
+        "$staged"
 }
 
 main() {
@@ -209,8 +267,8 @@ main() {
     test_deploy_site_replaces_site_root_from_staging
     test_deploy_site_replaces_web_root_from_staging
     test_deploy_site_rejects_unknown_target
-    test_configure_concurrency_updates_config
-    test_configure_concurrency_accepts_skip_restart_flag
+    test_deploy_remi_uses_candidate_owned_transition
+    test_install_helper_requires_exact_digest
 
     echo "remi deploy helper smoke passed"
 }

@@ -7,15 +7,21 @@
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
 Conary is an early Linux system manager written in Rust. It can install
-native RPM, DEB, Arch, and CCS packages, record package transactions as
-changesets, adopt packages that already exist on a Fedora, Ubuntu, or Arch
-host, and build immutable system generations for rollback and image export.
+RPM, DEB, Arch, and CCS packages through one source-independent transaction
+model, record package changes as changesets, adopt packages that already exist
+on a Fedora, Ubuntu, or Arch host, and build immutable system generations for
+rollback and image export.
 
-The short-term goal is not to replace mature distro package managers. It is to
-make a safer path for trying Conary on an existing Linux system: observe or
-adopt native packages first, keep the native package manager authoritative
-until the user explicitly crosses that boundary, and collect real failure data
-from package installs that do not work yet.
+The primary adoption path is cross-distro package installation: an RPM keeps
+RPM lifecycle and dependency semantics on Ubuntu or Arch, a DEB keeps Debian
+semantics on Fedora or Arch, and an Arch package keeps ALPM semantics on Fedora
+or Ubuntu. Conary owns the resulting install, update, remove, and rollback
+transaction. The source package format defines the package ABI; the target
+supplies an explicitly inventoried set of host capabilities.
+
+Adoption remains available as a migration bridge for packages already owned by
+dnf, apt, or pacman. Those native package managers are not runtime authority
+for normal Conary-owned package operations.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager))
 from rPath, but this is an independent project. It is not affiliated with,
@@ -26,20 +32,21 @@ endorsed by, or maintained by rPath, SAS, or the original Conary developers.
 Conary is still early. Expect failures.
 
 Use a VM or disposable host first. The current public preview is useful for
-testing adoption, Remi package conversion, simple installs such as `htop`,
-transaction history, and self-update. It is not ready to run a critical system
-unattended.
+testing cross-distro package installation, Remi conversion, exact transaction
+history, removal, and self-update. Adoption is the secondary migration lane for
+an existing system. Conary is not ready to run a critical system unattended.
 
-The most important failure class right now is package scriptlets. Remi converts
-packages from upstream Fedora, Ubuntu, and Arch repositories into CCS, but many
-real packages run maintainer scripts for systemd, triggers, users/groups,
-SELinux, alternatives, caches, and other host integration. Some of those paths
-are native-free and install cleanly. Others are queued for scriptlet review,
-blocked by conservative policy, or still expose bugs. That is expected during
-the preview, and those failures are the data we need.
+The highest-risk failure class is source-package lifecycle execution. RPM,
+Debian, and ALPM expose finite documented transaction ABIs plus package-authored
+programs. Conary preserves those native slots, arguments, ordering, triggers,
+configuration semantics, and payload visibility, then executes them against
+typed target capabilities without invoking the source package manager. A
+missing model or capability is an engineering defect or an exact target
+preflight error—not a reason to guess semantics or route a package into an
+indefinite manual-review queue.
 
 If you hit a failure, capture the command, distro, package name, Conary
-version, and any refusal text. For first-wave testing, use the
+version, source package format, and exact error. For first-wave testing, use the
 [agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md) and
 attach only a reviewed support bundle.
 
@@ -51,22 +58,37 @@ release page publishes `SHA256SUMS`, verify the package checksum, and install it
 only on a VM or non-critical host. Release artifact expectations are tracked in
 [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
-Then try the smallest package loop:
+Then choose a source whose package format differs from the host and run the
+complete bounded loop:
 
 ```bash
+source=ubuntu-26.04  # Fedora/Arch hosts; use fedora-44 on Ubuntu
 sudo conary repo list
 sudo conary repo sync remi
-sudo conary install htop --dry-run --allow-capabilities
-sudo conary install htop --yes --allow-capabilities
+sudo conary install htop --from "$source" --dry-run
+sudo conary install htop --from "$source" --yes
 sudo conary list htop --info
+sudo conary query depends htop
+sudo conary update htop --dry-run
+sudo conary remove htop --yes
 ```
 
-For this package, `--allow-capabilities` explicitly approves the capability
-declared by the conversion. Review the dry-run first, and apply the live install
-only when that capability is expected.
+You can also pass a local RPM, DEB, or Arch artifact on any supported target:
 
-The RPM, DEB, and Arch packages initialize the root-owned system database with
-the exact host profile during installation. Do not add a second Remi source.
+```bash
+sudo conary install ./package.rpm --dry-run
+sudo conary install ./package.deb --dry-run
+sudo conary install ./package.pkg.tar.zst --dry-run
+```
+
+Conary validates exact package-declared capabilities against the selected
+target during preflight and applies the executor-owned enforcement contract
+automatically. An unsupported declaration fails before mutation; there is no
+blanket capability-approval bypass.
+
+The RPM, DEB, and Arch packages initialize the root-owned system database and
+all built-in RPM, DEB, and Arch source feeds during installation. The host
+distribution does not select which package ecosystems Conary may resolve.
 
 To test reversible adoption without handing package ownership to Conary:
 
@@ -85,9 +107,11 @@ first when the command supports it.
 ## What Works Today
 
 - Package-manager preview on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
+- Source-independent installation of RPM, DEB, and Arch artifacts through
+  typed native lifecycle, dependency, payload, and configuration contracts.
 - Native package adoption and non-destructive unadoption.
-- Installing CCS packages and converted RPM/DEB/Arch packages when dependency
-  and scriptlet policy allow it.
+- Installing CCS packages and converted RPM/DEB/Arch packages with Conary as
+  package authority.
 - Atomic package-state changesets, history, and rollback-oriented state
   tracking.
 - Immutable EROFS/composefs generations on hosts with the needed kernel and
@@ -98,9 +122,10 @@ first when the command supports it.
 
 ## What Will Break
 
-- Many scriptlet-heavy packages still need review or adapter work.
-- Critical system packages and packages requiring privileged runtime
-  capabilities may be refused before conversion.
+- A package that needs a target capability the host does not provide fails
+  exact preflight before mutation.
+- Source lifecycle forms outside the implemented RPM, Debian, or ALPM ABI are
+  bugs to model and test; Conary does not invent behavior from command text.
 - Security-only updates fail closed unless a repository declares trusted
   advisory metadata support.
 - Native transaction-history import is not implemented.
@@ -167,12 +192,11 @@ Conary requires Rust 1.96+ on Linux.
 git clone https://github.com/ConaryLabs/Conary.git
 cd Conary
 cargo build -p conary
-sudo ./target/debug/conary system init --profile fedora-44
+sudo ./target/debug/conary system init
 ```
 
-Use `--profile ubuntu-26.04` or `--profile arch` on those supported hosts. For
-an isolated non-root development database, pass both the exact profile and a
-writable `--db-path`; subsequent commands must use the same path.
+For an isolated non-root development database, pass a writable `--db-path`;
+subsequent commands must use the same path.
 
 Useful verification commands:
 
@@ -192,7 +216,9 @@ cargo fmt --check
 Remi is Conary's public on-demand conversion service at
 [remi.conary.io](https://remi.conary.io). It converts supported Fedora,
 Ubuntu, and Arch packages into CCS artifacts, serves public release metadata,
-and records scriptlet evidence for packages that need review.
+and validates the exact source-format lifecycle contract carried by each
+converted artifact. There is no operator-review lane between conversion and
+serving.
 
 Remi public serving is intentionally conservative while the scriptlet adapter
 surface matures. A package may fail even when the upstream package exists and

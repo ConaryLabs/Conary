@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-15
-revision: 8
+last_updated: 2026-07-25
+revision: 9
 summary: Decision record for Conary's stateless MCP adapter path and its current code and test evidence
 ---
 
@@ -32,7 +32,7 @@ discovery behavior on the existing session-based `rmcp` path.
 - `apps/conary-test` exposes `POST /mcp/stateless` as the first live
   stateless adapter gate. It handles `server/discover`, `resources/list`, and
   `resources/read` for `conary-local://bootstrap/status` and
-  `conary-test://suites`, and keeps the legacy `/mcp` session-based tool
+  `conary-test://suites`, and keeps the existing `/mcp` session-based tool
   surface unchanged.
 - The raw HTTP adapter support does not mount routes, bind sockets, register
   product resources by itself, register tools, register prompts, or depend on
@@ -87,7 +87,7 @@ harness: it moved the workspace to the latest compatible `rmcp` crate version
 and added draft-shaped validation, discovery, cacheable-result, and guard tests
 in `crates/conary-mcp` without adding live MCP resources, tools, prompts,
 routes, or discovery behavior. This keeps Conary aimed at the MCP draft while
-avoiding fresh investment in the legacy session path.
+avoiding fresh investment in the session-based path.
 
 Current evidence lives in `crates/conary-mcp/src/stateless.rs`,
 `crates/conary-mcp/tests/stateless_dependency_boundary.rs`, and the owning

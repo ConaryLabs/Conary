@@ -6,7 +6,6 @@ use super::error::{EnhancementError, EnhancementResult};
 use super::registry::EnhancementRegistry;
 use super::{ENHANCEMENT_VERSION, EnhancementResult_, EnhancementStatus, EnhancementType};
 use rusqlite::Connection;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, info, warn};
@@ -18,14 +17,8 @@ pub struct EnhancementOptions {
     pub types: Vec<EnhancementType>,
     /// Force re-enhancement even if already done
     pub force: bool,
-    /// Install root path (default: /)
-    pub install_root: PathBuf,
     /// Stop on first error
     pub fail_fast: bool,
-    /// Enable parallel file analysis within packages
-    pub parallel: bool,
-    /// Number of worker threads for parallel analysis (0 = auto)
-    pub parallel_workers: usize,
     /// Cancellation token for aborting enhancement
     pub cancel_token: Option<Arc<AtomicBool>>,
 }
@@ -35,10 +28,7 @@ impl Default for EnhancementOptions {
         Self {
             types: EnhancementType::all().to_vec(),
             force: false,
-            install_root: PathBuf::from("/"),
             fail_fast: false,
-            parallel: true,      // Enable by default for performance
-            parallel_workers: 0, // Auto-detect
             cancel_token: None,
         }
     }
@@ -56,24 +46,6 @@ impl EnhancementOptions {
     /// Enable force mode
     pub fn force(mut self) -> Self {
         self.force = true;
-        self
-    }
-
-    /// Set install root
-    pub fn install_root(mut self, path: impl Into<PathBuf>) -> Self {
-        self.install_root = path.into();
-        self
-    }
-
-    /// Enable or disable parallel processing
-    pub fn parallel(mut self, enabled: bool) -> Self {
-        self.parallel = enabled;
-        self
-    }
-
-    /// Set number of parallel workers
-    pub fn workers(mut self, count: usize) -> Self {
-        self.parallel_workers = count;
         self
     }
 
@@ -137,8 +109,7 @@ impl<'a> EnhancementRunner<'a> {
         info!("Enhancing trove_id={}", trove_id);
 
         // Create enhancement context
-        let mut ctx =
-            EnhancementContext::new(self.conn, trove_id, self.options.install_root.clone())?;
+        let mut ctx = EnhancementContext::new(self.conn, trove_id)?;
 
         // Mark as in progress
         ctx.set_status(EnhancementStatus::InProgress)?;
@@ -529,28 +500,24 @@ mod tests {
     fn test_enhancement_options_default() {
         let opts = EnhancementOptions::default();
         assert!(!opts.force);
-        assert_eq!(opts.install_root, PathBuf::from("/"));
-        assert_eq!(opts.types.len(), 3);
+        assert_eq!(opts.types, vec![EnhancementType::Provenance]);
     }
 
     #[test]
     fn test_enhancement_options_builder() {
-        let opts = EnhancementOptions::with_types(vec![EnhancementType::Capabilities])
-            .force()
-            .install_root("/custom");
+        let opts = EnhancementOptions::with_types(vec![EnhancementType::Provenance]).force();
 
         assert!(opts.force);
-        assert_eq!(opts.install_root, PathBuf::from("/custom"));
         assert_eq!(opts.types.len(), 1);
     }
 
     #[test]
     fn test_enhancement_summary() {
         let mut r1 = EnhancementResult_::new(1);
-        r1.record_success(EnhancementType::Capabilities);
+        r1.record_success(EnhancementType::Provenance);
 
         let mut r2 = EnhancementResult_::new(2);
-        r2.record_failure(EnhancementType::Capabilities, "test error");
+        r2.record_failure(EnhancementType::Provenance, "test error");
 
         let summary = EnhancementSummary::from_results(vec![r1, r2]);
         assert_eq!(summary.total, 2);
@@ -643,13 +610,5 @@ mod tests {
 
         token.store(true, Ordering::Relaxed);
         assert!(opts.is_cancelled());
-    }
-
-    #[test]
-    fn test_parallel_options() {
-        let opts = EnhancementOptions::default().parallel(true).workers(4);
-
-        assert!(opts.parallel);
-        assert_eq!(opts.parallel_workers, 4);
     }
 }

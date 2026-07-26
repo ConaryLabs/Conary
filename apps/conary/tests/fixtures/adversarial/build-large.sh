@@ -3,13 +3,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONARY_BIN="${1:-${CONARY_BIN:-$(pwd)/target/debug/conary}}"
+DEFAULT_CONARY_BIN="${CARGO_TARGET_DIR:-$(pwd)/target}/debug/conary"
+CONARY_BIN="${1:-${CONARY_BIN:-$DEFAULT_CONARY_BIN}}"
 LARGE_DIR="$SCRIPT_DIR/large"
+source "$SCRIPT_DIR/../ccs-test-authority/env.sh"
+fixture_ccs_require_authority
 
 LARGE_PACKAGE_MB="${LARGE_PACKAGE_MB:-128}"
 LARGE_PACKAGE_FILE_COUNT="${LARGE_PACKAGE_FILE_COUNT:-64}"
 TEN_K_FILE_COUNT="${TEN_K_FILE_COUNT:-10000}"
 DEEP_TREE_DEPTH="${DEEP_TREE_DEPTH:-128}"
+TRACKED_FIXTURE_MAX_BYTES=$((90 * 1024 * 1024))
 TEMP_ROOT=""
 
 cleanup() {
@@ -37,6 +41,9 @@ build_fixture() {
 [package]
 name = "$package_name"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "$description"
 license = "MIT"
 
@@ -49,10 +56,6 @@ libc = "gnu"
 capabilities = ["$package_name"]
 binaries = []
 
-[requires]
-capabilities = []
-packages = []
-
 [components]
 default = ["runtime"]
 
@@ -61,7 +64,8 @@ EOF
 
     "$CONARY_BIN" ccs build "$manifest_path" \
         --source "$source_dir" \
-        --output "$output_dir/"
+        --output "$output_dir/" \
+        --key "$FIXTURE_CCS_KEY"
 
     built_ccs="$(find "$output_dir" -maxdepth 1 -name '*.ccs' | head -1)"
     if [ -z "$built_ccs" ]; then
@@ -72,6 +76,16 @@ EOF
 
     mv "$built_ccs" "$LARGE_DIR/$final_name"
     rm -rf "$work_dir"
+}
+
+assert_fixture_is_trackable() {
+    local fixture_path="$1"
+    local fixture_bytes
+    fixture_bytes="$(wc -c < "$fixture_path")"
+    if [ "$fixture_bytes" -gt "$TRACKED_FIXTURE_MAX_BYTES" ]; then
+        echo "FATAL: tracked fixture exceeds ${TRACKED_FIXTURE_MAX_BYTES} bytes: $fixture_path ($fixture_bytes bytes)" >&2
+        exit 1
+    fi
 }
 
 generate_large_package_stage() {
@@ -88,18 +102,22 @@ generate_large_package_stage() {
         fi
         python3 - "$stage_dir/usr/share/large-package/blob-$(printf '%03d' "$i").bin" "$file_mib" <<'PY'
 from pathlib import Path
-import os
 import sys
 
 path = Path(sys.argv[1])
 size_bytes = int(sys.argv[2]) * 1024 * 1024
 chunk_size = 1024 * 1024
+# Keep the installed footprint large while allowing the tracked archive to
+# compress. Unique headers keep each logical payload distinguishable.
+header = f"conary-large-fixture:{path.name}\n".encode()
+zero_chunk = bytes(chunk_size)
 
 with path.open("wb") as fh:
-    remaining = size_bytes
+    fh.write(header)
+    remaining = size_bytes - len(header)
     while remaining > 0:
         chunk = min(chunk_size, remaining)
-        fh.write(os.urandom(chunk))
+        fh.write(zero_chunk[:chunk])
         remaining -= chunk
 PY
     done
@@ -177,6 +195,10 @@ main() {
         "deep-tree.ccs" \
         "deep-tree" \
         "Deeply nested directory fixture for path traversal and tree-walk stress"
+
+    assert_fixture_is_trackable "$LARGE_DIR/large-package.ccs"
+    assert_fixture_is_trackable "$LARGE_DIR/10k-files.ccs"
+    assert_fixture_is_trackable "$LARGE_DIR/deep-tree.ccs"
 
     echo "[OK] Large fixtures built:"
     printf '  %s\n' \

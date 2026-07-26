@@ -15,16 +15,20 @@ const MAX_NAME_SIZE: u64 = 4096;
 const MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
 
 /// Extracted CPIO entry metadata
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CpioEntry {
     pub name: String,
     pub size: u64,
     pub mode: u32,
-    pub mtime: u64,
+    pub mtime: u32,
     pub uid: u32,
     pub gid: u32,
     pub ino: u32,
     pub nlink: u32,
+    pub dev_major: u32,
+    pub dev_minor: u32,
+    pub rdev_major: u32,
+    pub rdev_minor: u32,
 }
 
 /// A reader for CPIO (New ASCII) archives
@@ -89,19 +93,25 @@ impl<R: Read> CpioReader<R> {
             })
         };
 
+        let ino = parse_hex_u32(6, 8)?;
         let mode = parse_hex_u32(14, 8)?;
         let uid = parse_hex_u32(22, 8)?;
         let gid = parse_hex_u32(30, 8)?;
         let nlink = parse_hex_u32(38, 8)?;
-        let mtime = parse_hex(46, 8)?;
+        let mtime = parse_hex_u32(46, 8)?;
         let filesize = parse_hex(54, 8)?;
+        let dev_major = parse_hex_u32(62, 8)?;
+        let dev_minor = parse_hex_u32(70, 8)?;
+        let rdev_major = parse_hex_u32(78, 8)?;
+        let rdev_minor = parse_hex_u32(86, 8)?;
         let namesize = parse_hex(94, 8)?;
+        let check = parse_hex_u32(102, 8)?;
 
         // Guard against unreasonable filename sizes
-        if namesize > MAX_NAME_SIZE {
+        if namesize == 0 || namesize > MAX_NAME_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("CPIO entry name size {namesize} exceeds maximum {MAX_NAME_SIZE}"),
+                format!("CPIO entry name size {namesize} is outside 1..={MAX_NAME_SIZE}"),
             ));
         }
 
@@ -109,19 +119,29 @@ impl<R: Read> CpioReader<R> {
         let mut name_buf = vec![0u8; namesize as usize];
         self.reader.read_exact(&mut name_buf)?;
 
-        // Remove trailing NUL
-        let name = if let Some(last) = name_buf.last() {
-            if *last == 0 {
-                String::from_utf8_lossy(&name_buf[..name_buf.len() - 1]).to_string()
-            } else {
-                String::from_utf8_lossy(&name_buf).to_string()
-            }
-        } else {
-            String::new()
-        };
+        if name_buf.last() != Some(&0) || name_buf[..name_buf.len() - 1].contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "CPIO entry name must contain exactly one trailing NUL",
+            ));
+        }
+        let name = std::str::from_utf8(&name_buf[..name_buf.len() - 1])
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("CPIO entry name is not UTF-8: {error}"),
+                )
+            })?
+            .to_string();
 
         // Check for trailer
         if name == "TRAILER!!!" {
+            if filesize != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "CPIO TRAILER!!! entry must have zero size",
+                ));
+            }
             return Ok(None);
         }
 
@@ -144,6 +164,12 @@ impl<R: Read> CpioReader<R> {
         if pad > 0 {
             let mut skip = [0u8; 3];
             self.reader.read_exact(&mut skip[..pad])?;
+            if skip[..pad].iter().any(|byte| *byte != 0) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "CPIO filename padding must be zero",
+                ));
+            }
         }
 
         // Guard against unreasonable file content sizes
@@ -176,12 +202,34 @@ impl<R: Read> CpioReader<R> {
         // Read file content
         let mut content = vec![0u8; filesize as usize];
         self.reader.read_exact(&mut content)?;
+        if magic == MAGIC_CRC {
+            let actual = content
+                .iter()
+                .fold(0_u32, |sum, byte| sum.wrapping_add(u32::from(*byte)));
+            if actual != check {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("CPIO CRC mismatch: expected {check:#x}, got {actual:#x}"),
+                ));
+            }
+        } else if check != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "CPIO newc checksum field must be zero",
+            ));
+        }
 
         // Skip padding after content (align to 4 bytes)
         let pad = (4 - (filesize as usize % 4)) % 4;
         if pad > 0 {
             let mut skip = [0u8; 3];
             self.reader.read_exact(&mut skip[..pad])?;
+            if skip[..pad].iter().any(|byte| *byte != 0) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "CPIO content padding must be zero",
+                ));
+            }
         }
 
         Ok(Some((
@@ -192,8 +240,12 @@ impl<R: Read> CpioReader<R> {
                 mtime,
                 uid,
                 gid,
-                ino: 0, // Ignored
+                ino,
                 nlink,
+                dev_major,
+                dev_minor,
+                rdev_major,
+                rdev_minor,
             },
             content,
         )))

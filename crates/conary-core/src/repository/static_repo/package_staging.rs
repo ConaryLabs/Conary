@@ -7,19 +7,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::ccs::builder::{BuildResult, write_signed_ccs_package};
 use crate::ccs::package::CcsPackage;
 use crate::ccs::signing::SigningKeyPair;
+use crate::ccs::v2::schema::{DependencyKindV2, ProvidedCapabilityV2};
+use crate::ccs::verify::{TrustPolicy, verify_package};
 use crate::hash;
 use crate::packages::traits::PackageFormat;
+use crate::repository::dependency_model::{
+    ProvideArchitectureQualifier, RepositoryCapabilityKind, RepositoryProvide,
+    RepositoryRequirementGroup,
+};
+use crate::repository::static_repo::publish_gate::AcceptedStaticSignerSet;
 use crate::repository::static_repo::{StaticPackageEntry, validate_repo_relative_path};
 
 const ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 1024;
 static ATOMIC_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+type ProvideIdentity = (
+    RepositoryCapabilityKind,
+    String,
+    Option<String>,
+    Option<crate::repository::dependency_model::ProvideVersionRelation>,
+    ProvideArchitectureQualifier,
+);
+
 #[derive(Default)]
 pub(crate) struct PendingPackageWrites {
     pub(crate) writes: Vec<PendingPackageWrite>,
+    entries: Vec<StaticPackageEntry>,
     committed: bool,
 }
 
@@ -32,14 +47,14 @@ pub(crate) struct PendingPackageWrite {
 
 impl PendingPackageWrites {
     pub(crate) fn package_entries(&self) -> Vec<&StaticPackageEntry> {
-        self.writes.iter().map(|write| &write.entry).collect()
+        self.entries.iter().collect()
     }
 
     pub(crate) fn target_entry(&self, relative: &str) -> Option<(u64, String)> {
-        self.writes
+        self.entries
             .iter()
-            .find(|write| write.entry.path == relative)
-            .map(|write| (write.entry.size, write.entry.sha256.clone()))
+            .find(|entry| entry.path == relative)
+            .map(|entry| (entry.size, entry.sha256.clone()))
     }
 
     pub(crate) fn promote(&mut self) -> Result<()> {
@@ -97,21 +112,40 @@ impl Drop for PendingPackageWrites {
 pub(crate) fn stage_packages(
     repo_root: &Path,
     package_paths: &[PathBuf],
+    accepted_signers: &AcceptedStaticSignerSet,
     publish_key: &SigningKeyPair,
 ) -> Result<PendingPackageWrites> {
+    let trust_policy = TrustPolicy::strict(accepted_signers.trusted_public_keys());
     let mut pending = PendingPackageWrites::default();
     for package_path in package_paths {
-        let package = CcsPackage::parse(package_path.to_str().ok_or_else(|| {
+        let verified = verify_package(package_path, &trust_policy)
+            .with_context(|| format!("verify CCS package {}", package_path.display()))?;
+        let package_path_str = package_path.to_str().ok_or_else(|| {
             anyhow!(
                 "package path is not valid UTF-8: {}",
                 package_path.display()
             )
-        })?)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("parse CCS package {}", package_path.display()))?;
-        let signed_bytes = sign_package_bytes(&package, publish_key)
-            .with_context(|| format!("sign CCS package {}", package_path.display()))?;
-        let relative = package_relative_path(&package);
+        })?;
+        let package = CcsPackage::from_verified_archive(package_path_str, &verified)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("open verified CCS package {}", package_path.display()))?;
+        let signed_bytes = if verified.signature().public_key == publish_key.public_key_base64() {
+            fs::read(package_path)
+                .with_context(|| format!("read verified CCS package {}", package_path.display()))?
+        } else {
+            resign_current_package_bytes(&package, &verified, publish_key)
+                .with_context(|| format!("sign current CCS package {}", package_path.display()))?
+        };
+        let relative = package_relative_path(&package)?;
+        let entry = package_entry_from_package(&relative, &package, &signed_bytes)?;
+        if pending
+            .entries
+            .iter()
+            .any(|staged| staged.path == entry.path)
+        {
+            bail!("package publish input repeats immutable artifact {relative}");
+        }
+        pending.entries.push(entry.clone());
         let destination = repo_root.join(&relative);
         if let Some(existing) = read_optional(repo_root, &relative)? {
             if existing != signed_bytes {
@@ -121,7 +155,7 @@ pub(crate) fn stage_packages(
         }
         let pending_path = write_pending_package(&destination, &signed_bytes)?;
         pending.writes.push(PendingPackageWrite {
-            entry: package_entry_from_package(&relative, &package, &signed_bytes)?,
+            entry,
             pending_path,
             final_path: destination,
             promoted: false,
@@ -131,35 +165,39 @@ pub(crate) fn stage_packages(
     Ok(pending)
 }
 
-pub(crate) fn collect_package_entries(repo_root: &Path) -> Result<Vec<StaticPackageEntry>> {
-    let packages_root = repo_root.join("packages");
-    if !packages_root.exists() {
-        return Ok(Vec::new());
-    }
+fn resign_current_package_bytes(
+    package: &CcsPackage,
+    verified: &crate::ccs::verify::VerifiedCcsArchive,
+    publish_key: &SigningKeyPair,
+) -> Result<Vec<u8>> {
+    use crate::ccs::v2::schema::PackageKindV2;
 
-    let mut package_paths = Vec::new();
-    collect_ccs_paths(&packages_root, &mut package_paths)?;
-    package_paths.sort();
+    let PackageKindV2::Package(_) = &verified.authority().kind else {
+        bail!("static repository publication only stages CCS package payloads");
+    };
 
-    let mut entries = Vec::new();
-    for path in package_paths {
-        let relative = path
-            .strip_prefix(repo_root)
-            .map_err(|_| anyhow!("package path escaped repo root: {}", path.display()))?
-            .to_string_lossy()
-            .replace('\\', "/");
-        validate_repo_relative_path(&relative)?;
-        let package = CcsPackage::parse(
-            path.to_str()
-                .ok_or_else(|| anyhow!("package path is not valid UTF-8: {}", path.display()))?,
-        )
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("parse published CCS package {}", path.display()))?;
-        let bytes = fs::read(&path).with_context(|| format!("read package {}", path.display()))?;
-        entries.push(package_entry_from_package(&relative, &package, &bytes)?);
-    }
-
-    Ok(entries)
+    let output = tempfile::NamedTempFile::new()?;
+    let debug_toml = verified
+        .debug_toml()
+        .map(std::str::from_utf8)
+        .transpose()
+        .context("decode verified CCS debug projection as UTF-8")?;
+    crate::ccs::builder::write_v2_ccs_package_from_sources(
+        verified.authority(),
+        package.payload().files(),
+        output.path(),
+        publish_key,
+        debug_toml,
+        verified.build_attestation(),
+        verified.foreign_conversion_boundary(),
+    )?;
+    verify_package(
+        output.path(),
+        &TrustPolicy::strict(vec![publish_key.public_key_base64()]),
+    )
+    .context("verify re-signed static repository package")?;
+    fs::read(output.path())
+        .with_context(|| format!("read re-signed package {}", output.path().display()))
 }
 
 fn write_pending_package(final_path: &Path, bytes: &[u8]) -> Result<PathBuf> {
@@ -177,34 +215,17 @@ fn write_pending_package(final_path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     Ok(pending_path)
 }
 
-fn sign_package_bytes(package: &CcsPackage, publish_key: &SigningKeyPair) -> Result<Vec<u8>> {
-    let build_result = BuildResult {
-        manifest: package.manifest().clone(),
-        components: package.components().clone(),
-        files: package.file_entries().to_vec(),
-        blobs: package.extract_all_content().map_err(anyhow::Error::from)?,
-        total_size: package.file_entries().iter().map(|entry| entry.size).sum(),
-        chunked: package
-            .file_entries()
-            .iter()
-            .any(|entry| entry.chunks.is_some()),
-        chunk_stats: None,
-    };
-    let signed_package = tempfile::NamedTempFile::new()?;
-    write_signed_ccs_package(&build_result, signed_package.path(), publish_key)?;
-    fs::read(signed_package.path())
-        .with_context(|| format!("read signed package {}", signed_package.path().display()))
-}
-
-fn package_relative_path(package: &CcsPackage) -> String {
-    let arch = package.architecture().unwrap_or("noarch");
-    format!(
-        "packages/{}/{}-{}-1-{}.ccs",
+fn package_relative_path(package: &CcsPackage) -> Result<String> {
+    let arch = required_package_architecture(package)?;
+    let release = required_package_release(package)?;
+    Ok(format!(
+        "packages/{}/{}-{}-{}-{}.ccs",
         package.name(),
         package.name(),
         package.version(),
+        release,
         arch
-    )
+    ))
 }
 
 fn package_entry_from_package(
@@ -212,75 +233,198 @@ fn package_entry_from_package(
     package: &CcsPackage,
     bytes: &[u8],
 ) -> Result<StaticPackageEntry> {
-    let (name, version, release, arch) = parse_package_filename(relative)?;
-    if package.name() != name || package.version() != version {
-        bail!(
-            "package metadata {}-{} does not match artifact path {}-{}",
-            package.name(),
-            package.version(),
-            name,
-            version
-        );
-    }
-    if package.architecture().unwrap_or("noarch") != arch {
-        bail!(
-            "package architecture {:?} does not match artifact path {arch}",
-            package.architecture()
-        );
-    }
-    Ok(StaticPackageEntry {
-        name,
-        version,
-        release,
-        arch,
+    let entry = StaticPackageEntry {
+        name: package.name().to_string(),
+        version: package.version().to_string(),
+        version_scheme: package.manifest().package.version_scheme,
+        release: required_package_release(package)?.to_string(),
+        arch: required_package_architecture(package)?.to_string(),
         path: relative.to_string(),
         sha256: hash::sha256(bytes),
         size: bytes.len() as u64,
         description: package.description().map(str::to_string),
-        dependencies: package
-            .dependencies()
-            .iter()
-            .map(|dep| match &dep.version {
-                Some(version) => format!("{} {}", dep.name, version),
-                None => dep.name.clone(),
-            })
-            .collect(),
+        provides: static_provides(package)?,
+        requirements: static_requirements(package)?,
+        relations: package.relations().to_vec(),
+    };
+    entry.validate()?;
+    Ok(entry)
+}
+
+fn required_package_architecture(package: &CcsPackage) -> Result<&str> {
+    package
+        .architecture()
+        .filter(|architecture| !architecture.is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "CCS package '{}-{}' has no declared architecture; static publication will not invent one",
+                package.name(),
+                package.version()
+            )
+        })
+}
+
+fn required_package_release(package: &CcsPackage) -> Result<&str> {
+    let release = package.manifest().package.release.as_str();
+    if release.is_empty() {
+        bail!(
+            "CCS package '{}-{}' has no declared release",
+            package.name(),
+            package.version()
+        );
+    }
+    Ok(release)
+}
+
+fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
+    let mut provides = vec![RepositoryProvide::package_name(
+        package.name().to_string(),
+        Some(package.version().to_string()),
+    )];
+    let mut seen = std::collections::HashSet::from([(
+        RepositoryCapabilityKind::PackageName,
+        package.name().to_string(),
+        Some(package.version().to_string()),
+        Some(crate::repository::dependency_model::ProvideVersionRelation::Equal),
+        ProvideArchitectureQualifier::Implicit,
+    )]);
+
+    if let Some(authority) = package.v2_authority() {
+        for provide in &authority.provides {
+            let provide = project_v2_provide(provide)?;
+            let key = (
+                provide.kind,
+                provide.name.clone(),
+                provide.version.clone(),
+                provide.version_relation,
+                provide.architecture_qualifier.clone(),
+            );
+            if seen.insert(key) {
+                provides.push(provide);
+            }
+        }
+        return Ok(provides);
+    }
+
+    let manifest = package.manifest();
+    for capability in &manifest.provides.capabilities {
+        if capability != package.name() {
+            push_provide(
+                &mut provides,
+                &mut seen,
+                RepositoryProvide {
+                    name: capability.clone(),
+                    kind: RepositoryCapabilityKind::Generic,
+                    version: None,
+                    version_relation: None,
+                    architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                    native_text: Some(capability.clone()),
+                },
+            );
+        }
+    }
+    for soname in &manifest.provides.sonames {
+        push_provide(
+            &mut provides,
+            &mut seen,
+            RepositoryProvide {
+                name: format!("soname({soname})"),
+                kind: RepositoryCapabilityKind::Soname,
+                version: None,
+                version_relation: None,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                native_text: Some(soname.clone()),
+            },
+        );
+    }
+    for binary in &manifest.provides.binaries {
+        push_provide(
+            &mut provides,
+            &mut seen,
+            RepositoryProvide {
+                name: format!("binary({binary})"),
+                kind: RepositoryCapabilityKind::Generic,
+                version: None,
+                version_relation: None,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                native_text: Some(binary.clone()),
+            },
+        );
+    }
+    for pkgconfig in &manifest.provides.pkgconfig {
+        push_provide(
+            &mut provides,
+            &mut seen,
+            RepositoryProvide {
+                name: format!("pkgconfig({pkgconfig})"),
+                kind: RepositoryCapabilityKind::Generic,
+                version: None,
+                version_relation: None,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                native_text: Some(pkgconfig.clone()),
+            },
+        );
+    }
+    Ok(provides)
+}
+
+fn push_provide(
+    provides: &mut Vec<RepositoryProvide>,
+    seen: &mut std::collections::HashSet<ProvideIdentity>,
+    provide: RepositoryProvide,
+) {
+    let key = (
+        provide.kind,
+        provide.name.clone(),
+        provide.version.clone(),
+        provide.version_relation,
+        provide.architecture_qualifier.clone(),
+    );
+    if seen.insert(key) {
+        provides.push(provide);
+    }
+}
+
+fn project_v2_provide(entry: &ProvidedCapabilityV2) -> Result<RepositoryProvide> {
+    if entry.target.is_some() || entry.component.is_some() {
+        bail!(
+            "CCS v2 provide '{}' has target/component selectors that the static index contract cannot represent",
+            entry.name
+        );
+    }
+    let kind = project_v2_capability(entry.kind);
+    Ok(RepositoryProvide {
+        name: entry.name.clone(),
+        kind,
+        version: entry.provider_version.clone(),
+        version_relation: entry.version_relation,
+        architecture_qualifier: entry.architecture_qualifier.clone(),
+        native_text: Some(entry.name.clone()),
     })
 }
 
-fn collect_ccs_paths(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("read directory {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_ccs_paths(&path, out)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "ccs") {
-            out.push(path);
-        }
+fn static_requirements(package: &CcsPackage) -> Result<Vec<RepositoryRequirementGroup>> {
+    let requirements = package.requirements().to_vec();
+    for requirement in &requirements {
+        crate::repository::requirement::validate_requirement_group(
+            requirement,
+            package.version_scheme(),
+        )
+        .map_err(anyhow::Error::msg)?;
     }
-    Ok(())
+    Ok(requirements)
 }
 
-fn parse_package_filename(relative: &str) -> Result<(String, String, String, String)> {
-    let filename = relative
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| anyhow!("package path has no filename: {relative}"))?;
-    let stem = filename
-        .strip_suffix(".ccs")
-        .ok_or_else(|| anyhow!("package path is not a .ccs artifact: {relative}"))?;
-    let mut parts = stem.rsplitn(4, '-').collect::<Vec<_>>();
-    if parts.len() != 4 {
-        bail!("package filename must be <name>-<version>-<release>-<arch>.ccs: {relative}");
+const fn project_v2_capability(kind: DependencyKindV2) -> RepositoryCapabilityKind {
+    match kind {
+        DependencyKindV2::Package => RepositoryCapabilityKind::PackageName,
+        DependencyKindV2::Capability => RepositoryCapabilityKind::Virtual,
+        DependencyKindV2::File => RepositoryCapabilityKind::File,
+        DependencyKindV2::Path => RepositoryCapabilityKind::Path,
+        DependencyKindV2::Binary => RepositoryCapabilityKind::Binary,
+        DependencyKindV2::Soname => RepositoryCapabilityKind::Soname,
+        DependencyKindV2::PkgConfig => RepositoryCapabilityKind::PkgConfig,
     }
-    parts.reverse();
-    Ok((
-        parts[0].to_string(),
-        parts[1].to_string(),
-        parts[2].to_string(),
-        parts[3].to_string(),
-    ))
 }
 
 fn read_optional(root: &Path, relative: &str) -> Result<Option<Vec<u8>>> {
@@ -326,4 +470,129 @@ fn write_atomic_temp_file(path: &Path, file: &mut File, bytes: &[u8]) -> Result<
         .with_context(|| format!("write temp file {}", path.display()))?;
     file.sync_all()
         .with_context(|| format!("sync temp file {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dependency(kind: DependencyKindV2, name: &str) -> ProvidedCapabilityV2 {
+        ProvidedCapabilityV2 {
+            kind,
+            name: name.to_string(),
+            provider_version: None,
+            version_relation: None,
+            version_scheme: crate::repository::versioning::VersionScheme::Conary,
+            architecture_qualifier: Default::default(),
+            target: None,
+            component: None,
+        }
+    }
+
+    fn requirement(
+        name: &str,
+        capability_kind: RepositoryCapabilityKind,
+    ) -> RepositoryRequirementGroup {
+        RepositoryRequirementGroup::simple(
+            crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+            crate::repository::dependency_model::RepositoryRequirementClause {
+                name: name.to_string(),
+                capability_kind: Some(capability_kind),
+                version_constraint: None,
+                architecture_qualifier: Default::default(),
+                native_text: None,
+            },
+        )
+    }
+
+    #[test]
+    fn v2_static_projection_uses_declared_kinds_not_name_shape() {
+        let mut authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("typed-static");
+        authority.provides = vec![
+            dependency(DependencyKindV2::Capability, "/looks/like/a/path.so"),
+            dependency(DependencyKindV2::Soname, "libtyped.so.1"),
+            dependency(DependencyKindV2::File, "/usr/lib/libtyped.so"),
+        ];
+        authority.requirements = vec![
+            requirement(
+                "/also/looks/like/a/path.so",
+                RepositoryCapabilityKind::Virtual,
+            ),
+            requirement("binary(sh)", RepositoryCapabilityKind::Generic),
+        ];
+        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+
+        let provides = static_provides(&package).unwrap();
+        assert!(provides.iter().any(|provide| {
+            provide.name == "/looks/like/a/path.so"
+                && provide.kind == RepositoryCapabilityKind::Virtual
+        }));
+        assert!(provides.iter().any(|provide| {
+            provide.name == "libtyped.so.1" && provide.kind == RepositoryCapabilityKind::Soname
+        }));
+        assert!(provides.iter().any(|provide| {
+            provide.name == "/usr/lib/libtyped.so" && provide.kind == RepositoryCapabilityKind::File
+        }));
+
+        let requirements = static_requirements(&package).unwrap();
+        assert!(requirements.iter().any(|group| {
+            let clause = &group.alternatives[0];
+            clause.name == "/also/looks/like/a/path.so"
+                && clause.capability_kind == Some(RepositoryCapabilityKind::Virtual)
+        }));
+        assert!(requirements.iter().any(|group| {
+            let clause = &group.alternatives[0];
+            clause.name == "binary(sh)"
+                && clause.capability_kind == Some(RepositoryCapabilityKind::Generic)
+        }));
+    }
+
+    #[test]
+    fn static_projection_preserves_exact_v2_requirement_constraints() {
+        let mut authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("targeted-static");
+        let mut requirement = requirement("target-runtime", RepositoryCapabilityKind::PackageName);
+        requirement.alternatives[0].version_constraint = Some(">= 2.0.0".to_string());
+        requirement.expression =
+            crate::repository::dependency_model::RepositoryRequirementExpression::Atom(
+                requirement.alternatives[0].clone(),
+            );
+        authority.requirements.push(requirement);
+        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+
+        let requirements = static_requirements(&package).unwrap();
+        assert_eq!(
+            requirements[0].alternatives[0]
+                .version_constraint
+                .as_deref(),
+            Some(">= 2.0.0")
+        );
+    }
+
+    #[test]
+    fn static_publication_rejects_missing_architecture_instead_of_inventing_noarch() {
+        let mut authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("missing-arch");
+        authority.identity.architecture = None;
+        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+
+        let error = package_relative_path(&package).unwrap_err().to_string();
+
+        assert!(error.contains("has no declared architecture"), "{error}");
+        assert!(error.contains("will not invent one"), "{error}");
+    }
+
+    #[test]
+    fn static_publication_uses_the_exact_signed_release_identity() {
+        let mut authority =
+            crate::ccs::v2::test_support::package_authority_with_one_file("exact-release");
+        authority.identity.release = "7".to_string();
+        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+
+        assert_eq!(
+            package_relative_path(&package).unwrap(),
+            "packages/exact-release/exact-release-1.0.0-7-x86_64.ccs"
+        );
+    }
 }

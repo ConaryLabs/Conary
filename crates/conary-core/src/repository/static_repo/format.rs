@@ -2,9 +2,15 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::VerifyingKey;
+
+use crate::repository::dependency_model::{
+    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryProvide,
+    RepositoryRequirementGroup, RepositoryRequirementKind,
+};
+use crate::repository::versioning::{VersionScheme, parse_repo_constraint};
 
 use super::paths::validate_repo_relative_path;
 
@@ -108,6 +114,7 @@ pub struct StaticIndex {
 pub struct StaticPackageEntry {
     pub name: String,
     pub version: String,
+    pub version_scheme: VersionScheme,
     pub release: String,
     pub arch: String,
     pub path: String,
@@ -115,15 +122,22 @@ pub struct StaticPackageEntry {
     pub size: u64,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
-    pub dependencies: Vec<String>,
+    /// Exact positive capability contracts declared by the package.
+    pub provides: Vec<RepositoryProvide>,
+    /// Authoritative typed positive requirement expressions.
+    pub requirements: Vec<RepositoryRequirementGroup>,
+    /// Authoritative typed negative and replacement relation expressions.
+    pub relations: Vec<RepositoryRequirementGroup>,
 }
 
 impl StaticPackageEntry {
     pub fn validate(&self) -> Result<()> {
         validate_non_empty(&self.name, "package.name")?;
         validate_non_empty(&self.version, "package.version")?;
-        validate_non_empty(&self.release, "package.release")?;
+        crate::repository::versioning::validate_repo_version(self.version_scheme, &self.version)
+            .context("package.version does not satisfy package.version_scheme")?;
+        crate::repository::versioning::validate_package_release(&self.release)
+            .context("package.release is not a positive CCS release number")?;
         validate_non_empty(&self.arch, "package.arch")?;
         validate_non_empty(&self.path, "package.path")?;
         validate_lower_hex(&self.sha256, SHA256_HEX_LEN, "package.sha256")?;
@@ -132,6 +146,10 @@ impl StaticPackageEntry {
         if self.size > i64::MAX as u64 {
             bail!("package.size {} exceeds i64::MAX", self.size);
         }
+
+        self.validate_provides()?;
+        self.validate_requirements()?;
+        self.validate_relations()?;
 
         let expected_prefix = format!("packages/{}/", self.name);
         if !self.path.starts_with(&expected_prefix) {
@@ -149,6 +167,123 @@ impl StaticPackageEntry {
             );
         }
 
+        Ok(())
+    }
+
+    fn validate_provides(&self) -> Result<()> {
+        let mut seen = HashSet::new();
+        let mut self_provides = 0;
+        for provide in &self.provides {
+            validate_non_empty(&provide.name, "package.provides[].name")?;
+            if provide.version.as_deref().is_some_and(str::is_empty) {
+                bail!("package.provides[].version must not be empty");
+            }
+            if !seen.insert((
+                provide.kind,
+                provide.name.as_str(),
+                provide.version.as_deref(),
+            )) {
+                bail!(
+                    "duplicate package provide {:?} {} {:?}",
+                    provide.kind,
+                    provide.name,
+                    provide.version
+                );
+            }
+            if provide.kind == RepositoryCapabilityKind::PackageName && provide.name == self.name {
+                if provide.version.as_deref() != Some(self.version.as_str()) {
+                    bail!(
+                        "package-name provide '{}' version {:?} does not match package version '{}'",
+                        provide.name,
+                        provide.version,
+                        self.version
+                    );
+                }
+                self_provides += 1;
+            }
+        }
+        if self_provides != 1 {
+            bail!(
+                "package '{}' must declare exactly one matching package-name self-provide",
+                self.name
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_requirements(&self) -> Result<()> {
+        for group in &self.requirements {
+            if matches!(
+                group.kind,
+                RepositoryRequirementKind::Conflict
+                    | RepositoryRequirementKind::Breaks
+                    | RepositoryRequirementKind::Replace
+                    | RepositoryRequirementKind::Obsolete
+            ) {
+                bail!(
+                    "package '{}' static index contains unsupported negative relation {:?}",
+                    self.name,
+                    group.kind
+                );
+            }
+            if group.alternatives.is_empty() {
+                bail!(
+                    "package '{}' requirement group must contain at least one clause",
+                    self.name
+                );
+            }
+            let expression_atoms = group.expression.atoms();
+            if expression_atoms.len() != group.alternatives.len()
+                || expression_atoms
+                    .iter()
+                    .zip(&group.alternatives)
+                    .any(|(expression, indexed)| *expression != indexed)
+            {
+                bail!(
+                    "package '{}' requirement clause index disagrees with its authoritative expression",
+                    self.name
+                );
+            }
+            let expected_behavior = if group.expression.is_conditional() {
+                ConditionalRequirementBehavior::Conditional
+            } else {
+                ConditionalRequirementBehavior::Hard
+            };
+            if group.behavior != expected_behavior {
+                bail!(
+                    "package '{}' requirement behavior {:?} disagrees with its expression",
+                    self.name,
+                    group.behavior
+                );
+            }
+            for clause in expression_atoms {
+                validate_non_empty(&clause.name, "package.requirements[].expression.name")?;
+                if let Some(constraint) = clause.version_constraint.as_deref() {
+                    parse_repo_constraint(self.version_scheme, constraint).with_context(|| {
+                        format!(
+                            "package '{}' requirement '{}' has invalid {:?} constraint '{}'",
+                            self.name, clause.name, self.version_scheme, constraint
+                        )
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_relations(&self) -> Result<()> {
+        for relation in &self.relations {
+            crate::repository::package_relation::validate_native_relation(
+                relation,
+                self.version_scheme,
+            )
+            .map_err(|error| {
+                anyhow!(
+                    "package '{}' has invalid relation authority: {error}",
+                    self.name
+                )
+            })?;
+        }
         Ok(())
     }
 }
@@ -383,25 +518,152 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     {{
       "name": "acme-widget",
       "version": "1.4.2",
+      "version_scheme": "conary",
       "release": "1",
       "arch": "x86_64",
       "path": "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
       "sha256": "{VALID_SHA256}",
-      "size": 1048576
+      "size": 1048576,
+      "provides": [{{
+        "name": "acme-widget",
+        "kind": "PackageName",
+        "version": "1.4.2",
+        "architecture_qualifier": {{ "kind": "implicit" }},
+        "native_text": null
+      }}],
+      "requirements": [],
+
+    "relations": []
     }},
     {{
       "name": "acme-widget",
       "version": "1.4.2",
+      "version_scheme": "conary",
       "release": "1",
       "arch": "x86_64",
       "path": "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
       "sha256": "{VALID_SHA256}",
-      "size": 1048576
+      "size": 1048576,
+      "provides": [{{
+        "name": "acme-widget",
+        "kind": "PackageName",
+        "version": "1.4.2",
+        "architecture_qualifier": {{ "kind": "implicit" }},
+        "native_text": null
+      }}],
+      "requirements": [],
+
+    "relations": []
     }}
   ]
 }}"#
         );
         assert!(StaticIndex::parse(&input).is_err());
+    }
+
+    #[test]
+    fn static_index_rejects_string_dependency_contract() {
+        let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
+            1,
+            "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        ))
+        .unwrap();
+        let package = value["packages"][0].as_object_mut().unwrap();
+        package.remove("provides");
+        package.remove("requirements");
+        package.insert(
+            "dependencies".to_string(),
+            serde_json::json!(["libfoo >= 2.0"]),
+        );
+
+        let error = StaticIndex::parse(&serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("provides"), "{error}");
+    }
+
+    #[test]
+    fn static_index_rejects_negative_requirement_groups() {
+        let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
+            1,
+            "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        ))
+        .unwrap();
+        value["packages"][0]["requirements"] = serde_json::json!([{
+            "kind": "Conflict",
+            "behavior": "Hard",
+            "expression": {
+                "operator": "atom",
+                "operands": {
+                    "name": "incompatible-widget",
+                    "capability_kind": null,
+                    "version_constraint": null,
+                    "native_text": null
+                }
+            },
+            "alternatives": [{
+                "name": "incompatible-widget",
+                "capability_kind": null,
+                "version_constraint": null,
+                "native_text": null
+            }],
+            "description": null,
+            "native_text": "incompatible-widget"
+        }]);
+
+        let error = StaticIndex::parse(&serde_json::to_string(&value).unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported negative relation"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn static_index_round_trips_typed_relation_authority() {
+        let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
+            1,
+            "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        ))
+        .unwrap();
+        let relation = crate::repository::package_relation::parse_native_relation(
+            crate::repository::dependency_model::RepositoryRequirementKind::Conflict,
+            crate::repository::versioning::VersionScheme::Conary,
+            "incompatible-widget",
+        )
+        .unwrap();
+        value["packages"][0]["relations"] = serde_json::to_value([&relation]).unwrap();
+
+        let index = StaticIndex::parse(&serde_json::to_string(&value).unwrap()).unwrap();
+
+        assert_eq!(index.packages[0].relations, vec![relation]);
+    }
+
+    #[test]
+    fn static_index_rejects_malformed_typed_relation_constraint() {
+        let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
+            1,
+            "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        ))
+        .unwrap();
+        let mut relation = crate::repository::package_relation::parse_native_relation(
+            crate::repository::dependency_model::RepositoryRequirementKind::Replace,
+            crate::repository::versioning::VersionScheme::Conary,
+            "old-widget<2.0.0",
+        )
+        .unwrap();
+        relation.alternatives[0].version_constraint = Some(">=".to_string());
+        if let crate::repository::dependency_model::RepositoryRequirementExpression::Atom(clause) =
+            &mut relation.expression
+        {
+            clause.version_constraint = Some(">=".to_string());
+        }
+        value["packages"][0]["relations"] = serde_json::to_value([relation]).unwrap();
+
+        let error = StaticIndex::parse(&serde_json::to_string(&value).unwrap()).unwrap_err();
+
+        assert!(error.to_string().contains("invalid"), "{error}");
     }
 
     #[test]
@@ -458,11 +720,22 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     {{
       "name": "acme-widget",
       "version": "1.4.2",
+      "version_scheme": "conary",
       "release": "1",
       "arch": "x86_64",
       "path": "{path}",
       "sha256": "{VALID_SHA256}",
-      "size": {size}
+      "size": {size},
+      "provides": [{{
+        "name": "acme-widget",
+        "kind": "PackageName",
+        "version": "1.4.2",
+        "architecture_qualifier": {{ "kind": "implicit" }},
+        "native_text": null
+      }}],
+      "requirements": [],
+
+    "relations": []
     }}
   ]
 }}"#

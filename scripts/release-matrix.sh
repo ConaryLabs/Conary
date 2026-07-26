@@ -71,16 +71,6 @@ deploy_mode_for() {
     esac
 }
 
-accepted_legacy_prefixes_for() {
-    case "$1" in
-        conary) return 0 ;;
-        remi) printf '%s\n' 'server-v' ;;
-        conaryd) return 0 ;;
-        conary-test) printf '%s\n' 'test-v' ;;
-        *) return 1 ;;
-    esac
-}
-
 version_owned_manifests_for() {
     case "$1" in
         conary)
@@ -182,7 +172,6 @@ field_value() {
 
     case "$field" in
         canonical_tag_prefix) canonical_tag_prefix_for "$product" ;;
-        accepted_legacy_prefixes) accepted_legacy_prefixes_for "$product" ;;
         bundle_name) bundle_name_for "$product" ;;
         deploy_mode) deploy_mode_for "$product" ;;
         version_owned_manifests) version_owned_manifests_for "$product" ;;
@@ -236,14 +225,6 @@ resolve_tag_to_product() {
             product=conary-test
             prefix='conary-test-v'
             ;;
-        server-v*)
-            product=remi
-            prefix='server-v'
-            ;;
-        test-v*)
-            product=conary-test
-            prefix='test-v'
-            ;;
         *)
             die "unknown tag prefix: $tag"
             ;;
@@ -270,7 +251,6 @@ tag_version_for_product() {
         remi)
             case "$tag" in
                 remi-v*) prefix='remi-v' ;;
-                server-v*) prefix='server-v' ;;
                 *) return 1 ;;
             esac
             ;;
@@ -283,7 +263,6 @@ tag_version_for_product() {
         conary-test)
             case "$tag" in
                 conary-test-v*) prefix='conary-test-v' ;;
-                test-v*) prefix='test-v' ;;
                 *) return 1 ;;
             esac
             ;;

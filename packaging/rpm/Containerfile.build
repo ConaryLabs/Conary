@@ -11,6 +11,7 @@ RUN dnf install -y \
         rpm-build \
         openssl-devel \
         xz-devel \
+        libseccomp-devel \
         pkg-config \
         gcc \
         cmake \

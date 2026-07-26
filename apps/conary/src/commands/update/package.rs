@@ -3,24 +3,19 @@
 //! Single-package update command execution.
 
 use super::super::install::{
-    CcsTransactionInstallOptions, ComponentSelection, DepMode,
-    repository_install_provenance_from_package, resolve_default_dep_mode_from_model,
-    verify_static_repository_ccs_package_if_needed,
+    CcsEnvelopeAuthority, OwnershipMode, repository_install_provenance_from_package,
+    verify_ccs_package_authority,
 };
 use super::super::progress::{UpdatePhase, UpdateProgress};
-use super::super::{
-    InstallOptions, InstalledPackageSelector, LegacyReplayOptions, SandboxMode, cmd_install,
-    open_db, resolve_installed_package,
-};
+use super::super::{InstallOptions, SandboxMode, cmd_install, open_db};
 use super::adopted_authority::{
     AdoptedUpdateDecision, AdoptedUpdateSkip, AdoptedUpdateSkipReason, adopted_update_decision,
     native_manager_for_trove, no_update_message, render_adopted_skip_sample,
 };
 use super::selection::{
     SecurityMetadataUnavailable, SelectedUpdateCandidate, UpdateCandidateSelection,
-    print_security_metadata_unavailable, print_source_switch_preview,
-    render_security_update_marker, requires_source_switch_confirmation,
-    security_metadata_unavailable_error, select_update_candidate,
+    installed_troves_for_update, print_security_metadata_unavailable,
+    render_security_update_marker, security_metadata_unavailable_error, select_update_candidate,
 };
 use super::source_policy::print_source_policy_update_preview;
 use anyhow::{Context, Result};
@@ -28,11 +23,8 @@ use conary_core::ccs::CcsPackage;
 use conary_core::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
 use conary_core::db::paths::objects_dir;
 use conary_core::delta::DeltaApplier;
-use conary_core::packages::{PackageFormat, SystemPackageManager};
 use conary_core::repository::{
-    self, DownloadOptions, PackageSource, ResolutionOptions,
-    dependency_model::RepositoryDependencyFlavor, resolution_policy::ResolutionPolicy,
-    resolve_package,
+    self, PackageSource, ResolutionOptions, resolution_policy::ResolutionPolicy, resolve_package,
 };
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -50,34 +42,38 @@ fn resolution_options_for_selected_update(
     repo_pkg: &RepositoryPackage,
     repo: &Repository,
     temp_dir: &Path,
-    keyring_dir: &Path,
+    _keyring_dir: &Path,
     policy: &ResolutionPolicy,
-    primary_flavor: Option<RepositoryDependencyFlavor>,
-) -> ResolutionOptions {
-    ResolutionOptions {
+) -> Result<ResolutionOptions> {
+    let mut transaction_policy = policy.clone();
+    let exact_profile = conary_core::repository::selector::candidate_source_profile(
+        repo_pkg, repo,
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "selected update package '{}-{}' has no exact source profile",
+            repo_pkg.name,
+            repo_pkg.version
+        )
+    })?;
+    transaction_policy.set_primary_profile(Some(exact_profile.to_string()));
+    transaction_policy
+        .validate_profile_ids()
+        .map_err(anyhow::Error::msg)?;
+    Ok(ResolutionOptions {
         version: Some(repo_pkg.version.clone()),
+        package_release: (!repo_pkg.package_release.is_empty())
+            .then(|| repo_pkg.package_release.clone()),
         repository: Some(repo.name.clone()),
         architecture: repo_pkg.architecture.clone(),
         output_dir: Some(PathBuf::from(temp_dir)),
-        gpg_options: if repo.gpg_check {
-            Some(DownloadOptions {
-                gpg_check: true,
-                gpg_strict: repo.gpg_strict,
-                keyring_dir: keyring_dir.to_path_buf(),
-                repository_name: repo.name.clone(),
-            })
-        } else {
-            None
-        },
         // Update has already selected a repository package. Do not let the
-        // generic resolver short-circuit on an installed same-version trove,
-        // because source-switch updates can intentionally reinstall the same
-        // version from a different authority.
-        skip_cas: true,
-        policy: Some(policy.clone()),
+        // generic resolver short-circuit on the installed trove; execution
+        // must consume the exact repository row selected by update planning.
+        skip_installed: true,
+        policy: Some(transaction_policy),
         is_root: false,
-        primary_flavor,
-    }
+    })
 }
 
 fn mark_pending_changeset_rolled_back(
@@ -147,14 +143,9 @@ async fn prepare_full_updates_before_changeset(
     conn: &rusqlite::Connection,
     full_updates: Vec<(Trove, RepositoryPackage, Repository)>,
     db_path: &str,
-    root: &str,
     temp_dir: &Path,
     keyring_dir: &Path,
     policy: &ResolutionPolicy,
-    primary_flavor: Option<RepositoryDependencyFlavor>,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
-    legacy_replay: LegacyReplayOptions,
 ) -> Result<Vec<PreparedFullUpdate>> {
     let mut prepared = Vec::with_capacity(full_updates.len());
 
@@ -165,8 +156,7 @@ async fn prepare_full_updates_before_changeset(
             temp_dir,
             keyring_dir,
             policy,
-            primary_flavor,
-        );
+        )?;
 
         let source = resolve_package(conn, &trove.name, &options)
             .await
@@ -178,20 +168,16 @@ async fn prepare_full_updates_before_changeset(
             })?;
         let pkg_path = source
             .path()
-            .ok_or_else(|| anyhow::anyhow!("LocalCas not yet supported for {}", trove.name))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "selected update for {} resolved without a package payload",
+                    trove.name
+                )
+            })?
             .to_path_buf();
 
-        preflight_prepared_full_update_legacy_replay(
-            conn,
-            &trove,
-            &repo_pkg,
-            &repo,
-            &pkg_path,
-            db_path,
-            root,
-            no_scripts,
-            sandbox_mode,
-            legacy_replay,
+        preflight_prepared_full_update_native_lifecycle(
+            conn, &trove, &repo_pkg, &repo, &pkg_path, db_path,
         )?;
 
         prepared.push(PreparedFullUpdate {
@@ -207,59 +193,36 @@ async fn prepare_full_updates_before_changeset(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn preflight_prepared_full_update_legacy_replay(
+fn preflight_prepared_full_update_native_lifecycle(
     conn: &rusqlite::Connection,
     trove: &Trove,
     repo_pkg: &RepositoryPackage,
     repo: &Repository,
     pkg_path: &Path,
     db_path: &str,
-    root: &str,
-    no_scripts: bool,
-    sandbox_mode: SandboxMode,
-    legacy_replay: LegacyReplayOptions,
 ) -> Result<()> {
     if pkg_path.extension().and_then(|ext| ext.to_str()) != Some("ccs") {
         return Ok(());
     }
 
     let repository_provenance = repository_install_provenance_from_package(repo_pkg, repo)?;
-    verify_static_repository_ccs_package_if_needed(
+    let verified = verify_ccs_package_authority(
         db_path,
         pkg_path,
+        &CcsEnvelopeAuthority::Repository,
         Some(&repository_provenance),
     )?;
-    let pkg = CcsPackage::parse(&pkg_path.to_string_lossy())
+    let pkg = CcsPackage::from_verified_archive(&pkg_path.to_string_lossy(), &verified)
         .with_context(|| format!("failed to parse selected update CCS {}", pkg_path.display()))?;
-    let ccs_opts = CcsTransactionInstallOptions {
-        db_path,
-        root,
-        dry_run: false,
-        defer_generation: false,
-        quiet: false,
-        no_scripts,
-        sandbox_mode,
-        allow_downgrade: false,
-        reinstall: false,
-        selection_reason: Some("Updated by conary update"),
-        component_selection: ComponentSelection::Defaults,
-        selected_manifest_components: None,
-        repository_provenance: Some(repository_provenance),
-        legacy_replay,
-    };
-
-    let mut state = super::super::install::plan_ccs_fresh_install_legacy_replay(
-        conn,
-        pkg.manifest().legacy_scriptlets.as_ref(),
-        &ccs_opts,
-        true,
-    )?;
-    let old_state = super::super::install::plan_ccs_old_installed_upgrade_legacy_replay(
-        conn,
-        Some(trove),
-        &ccs_opts,
-    )?;
-    super::super::install::merge_old_upgrade_legacy_replay_state(&mut state, old_state);
+    if let Some(bundle) = pkg.manifest().native_lifecycle.as_ref() {
+        bundle.validate()?;
+    }
+    if let Some(trove_id) = trove.id
+        && let Some(installed) =
+            conary_core::db::models::InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)?
+    {
+        installed.bundle()?;
+    }
 
     Ok(())
 }
@@ -268,22 +231,18 @@ fn preflight_prepared_full_update_legacy_replay(
 fn install_options_for_update<'a>(
     db_path: &'a str,
     root: &'a str,
-    no_scripts: bool,
     sandbox_mode: SandboxMode,
-    dep_mode: DepMode,
+    ownership: OwnershipMode,
     yes: bool,
-    legacy_replay: LegacyReplayOptions,
     repo_pkg: &RepositoryPackage,
     repo: &Repository,
 ) -> Result<InstallOptions<'a>> {
     Ok(InstallOptions {
         db_path,
         root,
-        no_scripts,
         sandbox_mode,
-        dep_mode: Some(dep_mode),
+        ownership: Some(ownership),
         yes,
-        legacy_replay,
         repository_provenance: Some(repository_install_provenance_from_package(repo_pkg, repo)?),
         ..Default::default()
     })
@@ -300,13 +259,11 @@ pub async fn cmd_update(
     root: &str,
     security_only: bool,
     dry_run: bool,
-    no_scripts: bool,
     sandbox_mode: SandboxMode,
-    dep_mode: Option<DepMode>,
+    ownership: Option<OwnershipMode>,
     yes: bool,
     package_version: Option<String>,
     architecture: Option<String>,
-    legacy_replay: LegacyReplayOptions,
 ) -> Result<()> {
     if security_only {
         info!("Checking for security updates only");
@@ -314,8 +271,8 @@ pub async fn cmd_update(
         info!("Checking for package updates");
     }
 
-    let requested_dep_mode = dep_mode;
-    let dep_mode = requested_dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
+    let requested_ownership = ownership;
+    let ownership = requested_ownership.unwrap_or_default();
 
     let mut conn = open_db(db_path)?;
     let effective_source_policy = conary_core::repository::load_effective_policy(
@@ -323,7 +280,6 @@ pub async fn cmd_update(
         conary_core::repository::resolution_policy::RequestScope::Any,
     )?;
     let policy = effective_source_policy.resolution.clone();
-    let primary_flavor = effective_source_policy.primary_flavor;
 
     if package.is_none() {
         print_source_policy_update_preview(&conn)?;
@@ -350,7 +306,6 @@ pub async fn cmd_update(
     let mut updates_available: Vec<(Trove, SelectedUpdateCandidate)> = Vec::new();
     let mut pinned_skipped: Vec<String> = Vec::new();
 
-    let detected_pkg_mgr = SystemPackageManager::detect();
     let mut adopted_skipped: Vec<AdoptedUpdateSkip> = Vec::new();
     let mut security_metadata_unavailable: Vec<SecurityMetadataUnavailable> = Vec::new();
 
@@ -362,66 +317,48 @@ pub async fn cmd_update(
         }
 
         let adopted_decision = if trove.install_source.is_adopted() {
-            Some(adopted_update_decision(trove, dep_mode, requested_dep_mode))
+            Some(adopted_update_decision(ownership, requested_ownership))
         } else {
             None
         };
         let enforce_security_metadata = security_only
             && !matches!(
                 adopted_decision,
-                Some(
-                    AdoptedUpdateDecision::SkipNativeAuthority
-                        | AdoptedUpdateDecision::BlockCritical
-                )
+                Some(AdoptedUpdateDecision::SkipNativeAuthority)
             );
 
-        let selected = match select_update_candidate(
-            &conn,
-            trove,
-            enforce_security_metadata,
-            &policy,
-            primary_flavor,
-        )? {
-            UpdateCandidateSelection::Selected(selected) => *selected,
-            UpdateCandidateSelection::NoEligibleUpdate => continue,
-            UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
-                security_metadata_unavailable.push(unavailable);
-                continue;
-            }
-        };
+        let selected =
+            match select_update_candidate(&conn, trove, enforce_security_metadata, &policy)? {
+                UpdateCandidateSelection::Selected(selected) => *selected,
+                UpdateCandidateSelection::NoEligibleUpdate => continue,
+                UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
+                    security_metadata_unavailable.push(unavailable);
+                    continue;
+                }
+            };
 
         // For adopted packages, native package-manager authority is preserved
         // unless the user explicitly asks Conary to take ownership.
         if trove.install_source.is_adopted() {
-            let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
+            let native_manager = native_manager_for_trove(trove);
             match adopted_decision.expect("adopted trove must have an update decision") {
                 AdoptedUpdateDecision::SkipNativeAuthority => {
+                    let guidance = native_manager.map_or_else(
+                        || "use the recorded external owner".to_string(),
+                        |manager| format!("use '{}'", manager.update_command(&trove.name)),
+                    );
                     println!(
-                        "  {} {} -> {} (adopted as {}, native authority: use '{}')",
+                        "  {} {} -> {} (adopted as {}, external authority: {})",
                         trove.name,
                         trove.version,
                         selected.package.version,
                         trove.install_source.as_str(),
-                        native_manager.update_command(&trove.name),
+                        guidance,
                     );
                     adopted_skipped.push(AdoptedUpdateSkip {
                         package: trove.name.clone(),
                         manager: native_manager,
                         reason: AdoptedUpdateSkipReason::NativeAuthority,
-                    });
-                    continue;
-                }
-                AdoptedUpdateDecision::BlockCritical => {
-                    println!(
-                        "  {} {} (blocked - critical adopted package remains under native authority: use '{}')",
-                        trove.name,
-                        trove.version,
-                        native_manager.update_command(&trove.name),
-                    );
-                    adopted_skipped.push(AdoptedUpdateSkip {
-                        package: trove.name.clone(),
-                        manager: native_manager,
-                        reason: AdoptedUpdateSkipReason::CriticalBlocked,
                     });
                     continue;
                 }
@@ -473,23 +410,11 @@ pub async fn cmd_update(
             println!(
                 "Run 'conary system adopt --refresh' after native package-manager changes before retrying Conary workflows."
             );
-            if !matches!(requested_dep_mode, Some(DepMode::Takeover)) {
+            if !matches!(requested_ownership, Some(OwnershipMode::Takeover)) {
                 println!(
-                    "Use --dep-mode takeover to request Conary takeover for non-critical adopted packages."
+                    "Use --ownership takeover to request Conary takeover for adopted packages."
                 );
             }
-        }
-
-        let critical_blocked: Vec<&AdoptedUpdateSkip> = adopted_skipped
-            .iter()
-            .filter(|skip| skip.reason == AdoptedUpdateSkipReason::CriticalBlocked)
-            .collect();
-        if !critical_blocked.is_empty() {
-            println!(
-                "Blocked {} critical adopted package(s) from takeover; native package-manager authority remains required: {}",
-                critical_blocked.len(),
-                render_adopted_skip_sample(&critical_blocked)
-            );
         }
     }
 
@@ -529,18 +454,6 @@ pub async fn cmd_update(
         );
     }
 
-    print_source_switch_preview(&updates_available);
-
-    let selected_updates: Vec<_> = updates_available
-        .iter()
-        .map(|(_, selected)| selected.clone())
-        .collect();
-    if requires_source_switch_confirmation(&selected_updates, yes) {
-        anyhow::bail!(
-            "One or more updates would switch package sources. Review the preview above and rerun with --yes to confirm, or use --dry-run first."
-        );
-    }
-
     if dry_run {
         println!("\nDry run: no updates were applied.");
         return Ok(());
@@ -553,18 +466,17 @@ pub async fn cmd_update(
     for (trove, selected) in updates_available {
         let repo_pkg = selected.package;
         let repo = selected.repository;
-        if let Ok(Some(delta_info)) =
-            PackageDelta::find_delta(&conn, &trove.name, &trove.version, &repo_pkg.version)
-        {
-            println!(
-                "  {} has delta: {} bytes ({:.1}% of full)",
-                trove.name,
-                delta_info.delta_size,
-                delta_info.compression_ratio * 100.0
-            );
-            delta_updates.push((trove, repo_pkg, repo, delta_info));
-        } else {
-            full_updates.push((trove, repo_pkg, repo));
+        match PackageDelta::find_delta(&conn, &trove.name, &trove.version, &repo_pkg.version)? {
+            Some(delta_info) => {
+                println!(
+                    "  {} has delta: {} bytes ({:.1}% of full)",
+                    trove.name,
+                    delta_info.delta_size,
+                    delta_info.compression_ratio * 100.0
+                );
+                delta_updates.push((trove, repo_pkg, repo, delta_info));
+            }
+            None => full_updates.push((trove, repo_pkg, repo)),
         }
     }
 
@@ -593,14 +505,9 @@ pub async fn cmd_update(
         &conn,
         delta_admission_updates,
         db_path,
-        root,
         &temp_dir,
         &keyring_dir,
         &policy,
-        primary_flavor,
-        no_scripts,
-        sandbox_mode,
-        legacy_replay,
     )
     .await?;
     for prepared in prepared_delta_admissions {
@@ -611,14 +518,9 @@ pub async fn cmd_update(
         &conn,
         full_updates,
         db_path,
-        root,
         &temp_dir,
         &keyring_dir,
         &policy,
-        primary_flavor,
-        no_scripts,
-        sandbox_mode,
-        legacy_replay,
     )
     .await?;
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
@@ -684,11 +586,9 @@ pub async fn cmd_update(
                                             InstallOptions {
                                                 db_path,
                                                 root,
-                                                no_scripts,
                                                 sandbox_mode,
-                                                dep_mode: Some(dep_mode),
+                                                ownership: Some(ownership),
                                                 yes,
-                                                legacy_replay,
                                                 repository_provenance: Some(
                                                     repository_install_provenance_from_package(
                                                         &repo_pkg, &repo,
@@ -729,18 +629,7 @@ pub async fn cmd_update(
                             } else {
                                 // Fall back to full download
                                 delta_failures += 1;
-                                if let Ok(Some(repo)) =
-                                    Repository::find_by_id(&conn, repo_pkg.repository_id)
-                                {
-                                    full_updates.push((trove, repo_pkg, repo));
-                                } else {
-                                    required_failures.push(UpdatePackageFailure {
-                                        package: trove.name,
-                                        version: repo_pkg.version,
-                                        reason: "delta failed and fallback repository was not found"
-                                            .to_string(),
-                                    });
-                                }
+                                full_updates.push((trove, repo_pkg, repo));
                             }
                         }
                         Err(e) => {
@@ -749,19 +638,7 @@ pub async fn cmd_update(
                                 e
                             );
                             delta_failures += 1;
-                            // Get repository for fallback download
-                            if let Ok(Some(repo)) =
-                                Repository::find_by_id(&conn, repo_pkg.repository_id)
-                            {
-                                full_updates.push((trove, repo_pkg, repo));
-                            } else {
-                                required_failures.push(UpdatePackageFailure {
-                                    package: trove.name,
-                                    version: repo_pkg.version,
-                                    reason: "delta application failed and fallback repository was not found"
-                                        .to_string(),
-                                });
-                            }
+                            full_updates.push((trove, repo_pkg, repo));
                         }
                     }
                     let _ = std::fs::remove_file(&actual_delta_path);
@@ -769,17 +646,7 @@ pub async fn cmd_update(
                 Err(e) => {
                     warn!("  Delta download failed: {}, will download full package", e);
                     delta_failures += 1;
-                    // Get repository for fallback download
-                    if let Ok(Some(repo)) = Repository::find_by_id(&conn, repo_pkg.repository_id) {
-                        full_updates.push((trove, repo_pkg, repo));
-                    } else {
-                        required_failures.push(UpdatePackageFailure {
-                            package: trove.name,
-                            version: repo_pkg.version,
-                            reason: "delta download failed and fallback repository was not found"
-                                .to_string(),
-                        });
-                    }
+                    full_updates.push((trove, repo_pkg, repo));
                 }
             }
         }
@@ -800,7 +667,10 @@ pub async fn cmd_update(
                 _source,
             } in prepared_full_updates
             {
-                info!("Installing prepared update {} from {}", trove.name, repo.name);
+                info!(
+                    "Installing prepared update {} from {}",
+                    trove.name, repo.name
+                );
                 progress.set_phase(&trove.name, UpdatePhase::Installing);
 
                 let path_str = pkg_path.to_string_lossy().to_string();
@@ -810,11 +680,9 @@ pub async fn cmd_update(
                     install_options_for_update(
                         db_path,
                         root,
-                        no_scripts,
                         sandbox_mode,
-                        dep_mode,
+                        ownership,
                         yes,
-                        legacy_replay,
                         &repo_pkg,
                         &repo,
                     )?,
@@ -842,14 +710,24 @@ pub async fn cmd_update(
                 info!("Resolving {} from {}", trove.name, repo.name);
                 progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
 
-                let options = resolution_options_for_selected_update(
+                let options = match resolution_options_for_selected_update(
                     &repo_pkg,
                     &repo,
                     &temp_dir,
                     &keyring_dir,
                     &policy,
-                    primary_flavor,
-                );
+                ) {
+                    Ok(options) => options,
+                    Err(error) => {
+                        progress.fail_package(&trove.name, &error.to_string());
+                        required_failures.push(UpdatePackageFailure {
+                            package: trove.name.clone(),
+                            version: repo_pkg.version.clone(),
+                            reason: error.to_string(),
+                        });
+                        continue;
+                    }
+                };
 
                 // Use unified resolver - respects remi/binary/recipe strategies
                 let source = match resolve_package(&conn, &trove.name, &options).await {
@@ -870,25 +748,9 @@ pub async fn cmd_update(
                 let pkg_path = match &source {
                     PackageSource::Binary { path, .. } => path.clone(),
                     PackageSource::Ccs { path, .. } => path.clone(),
-                    PackageSource::Delta { delta_path, .. } => delta_path.clone(),
-                    PackageSource::LocalCas { hash } => {
-                        // Check if this is an "already installed" marker
-                        if hash.starts_with("installed:") {
-                            info!("{} is already at the latest version (skipping)", trove.name);
-                            progress.complete_package(&trove.name);
-                            continue;
-                        }
-                        // Future: handle actual CAS content hashes
-                        progress.fail_package(&trove.name, "LocalCas not yet supported");
-                        warn!(
-                            "LocalCas resolution not yet implemented for {}: {}",
-                            trove.name, hash
-                        );
-                        required_failures.push(UpdatePackageFailure {
-                            package: trove.name.clone(),
-                            version: repo_pkg.version.clone(),
-                            reason: format!("LocalCas not yet supported: {hash}"),
-                        });
+                    PackageSource::Installed { .. } => {
+                        info!("{} is already at the latest version (skipping)", trove.name);
+                        progress.complete_package(&trove.name);
                         continue;
                     }
                 };
@@ -902,11 +764,9 @@ pub async fn cmd_update(
                     install_options_for_update(
                         db_path,
                         root,
-                        no_scripts,
                         sandbox_mode,
-                        dep_mode,
+                        ownership,
                         yes,
-                        legacy_replay,
                         &repo_pkg,
                         &repo,
                     )?,
@@ -997,709 +857,5 @@ pub async fn cmd_update(
     }
 }
 
-fn installed_troves_for_update(
-    conn: &rusqlite::Connection,
-    package: Option<String>,
-    package_version: Option<String>,
-    architecture: Option<String>,
-) -> Result<Vec<Trove>> {
-    if let Some(pkg_name) = package {
-        let selector = InstalledPackageSelector::new(pkg_name, package_version, architecture);
-        return Ok(vec![resolve_installed_package(conn, &selector)?.trove]);
-    }
-
-    if package_version.is_some() || architecture.is_some() {
-        anyhow::bail!("A package name is required with --version or --arch for update");
-    }
-
-    Ok(Trove::list_all(conn)?)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::test_helpers::create_test_db;
-    use conary_core::ccs::builder::{CcsBuilder, write_ccs_package};
-    use conary_core::ccs::legacy_scriptlets::{
-        DecisionCounts, ForeignReplayPolicy, LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle,
-        LegacyScriptletEntry, LifecyclePath, NativeInvocation, PublicationPolicy,
-        PublicationStatus, ScriptletDecision, ScriptletFidelity, SourceFormat, TargetCompatibility,
-        TransactionOrder, VersionScheme,
-    };
-    use conary_core::ccs::manifest::{CcsManifest, Platform};
-    use conary_core::db::models::{
-        Changeset, ChangesetStatus, DistroPin, InstallSource, PackageDelta, PackageResolution,
-        PrimaryStrategy, Repository, ResolutionStrategy, Trove, TroveType,
-    };
-    use conary_core::filesystem::{CasStore, object_path};
-    use conary_core::repository::resolution_policy::ResolutionPolicy;
-    use std::collections::BTreeMap;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::path::{Path, PathBuf};
-
-    fn build_test_ccs_package_with_bundle(
-        dir: &Path,
-        name: &str,
-        version: &str,
-        legacy_scriptlets: Option<LegacyScriptletBundle>,
-    ) -> PathBuf {
-        let source_dir = dir.join("src");
-        std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
-        std::fs::write(
-            source_dir.join("usr/bin").join(name),
-            format!("#!/bin/sh\necho {name} {version}\n"),
-        )
-        .unwrap();
-
-        let mut manifest = CcsManifest::new_minimal(name, version);
-        manifest.package.platform = Some(Platform {
-            os: "linux".to_string(),
-            arch: Some("x86_64".to_string()),
-            libc: "gnu".to_string(),
-            abi: None,
-        });
-        manifest.legacy_scriptlets = legacy_scriptlets;
-
-        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
-        let package_path = dir.join(format!("{name}-{version}.ccs"));
-        write_ccs_package(&result, &package_path).unwrap();
-        package_path
-    }
-
-    fn legacy_upgrade_bundle(package: &str, version: &str) -> LegacyScriptletBundle {
-        let entry = legacy_upgrade_entry();
-        LegacyScriptletBundle {
-            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
-            source_format: SourceFormat::Rpm,
-            source_family: "fedora-rhel".to_string(),
-            source_distro: Some("fedora".to_string()),
-            source_release: Some("44".to_string()),
-            source_arch: Some("x86_64".to_string()),
-            source_package: package.to_string(),
-            source_version: version.to_string(),
-            source_checksum: None,
-            version_scheme: VersionScheme::Rpm,
-            conversion_tool: "remi".to_string(),
-            conversion_tool_version: "0.8.0".to_string(),
-            conversion_policy: "goal6-update-test".to_string(),
-            adapter_registry_digest: None,
-            target_policy_digest: None,
-            evidence_digest: Some(conary_core::hash::sha256_prefixed(
-                format!("{package}-{version}-legacy-upgrade").as_bytes(),
-            )),
-            target_compatibility: TargetCompatibility::SourceNative,
-            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-            foreign_replay_policy: ForeignReplayPolicy::Deny,
-            publication_policy: PublicationPolicy::LocalOnly,
-            publication_status: PublicationStatus::Public,
-            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
-            decision_counts: DecisionCounts {
-                replaced: 0,
-                legacy: 1,
-                blocked: 0,
-                review: 0,
-                extra: BTreeMap::new(),
-            },
-            unsupported_class_counts: BTreeMap::new(),
-            security_policy_intents: Vec::new(),
-            entries: vec![entry],
-            extra: BTreeMap::new(),
-        }
-    }
-
-    fn legacy_upgrade_entry() -> LegacyScriptletEntry {
-        let body = "echo replay-upgrade-new-pre\n";
-        LegacyScriptletEntry {
-            id: "rpm:%pre".to_string(),
-            native_slot: "%pre".to_string(),
-            phase: LifecyclePath::PreUpgrade,
-            lifecycle_paths: vec!["upgrade:new-pre".to_string()],
-            interpreter: "/bin/sh".to_string(),
-            interpreter_args: Vec::new(),
-            body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
-            body: body.to_string(),
-            body_encoding: None,
-            native_invocation: NativeInvocation::default(),
-            transaction_order: TransactionOrder {
-                position: "before-payload".to_string(),
-                before: vec!["payload".to_string()],
-                after: Vec::new(),
-                extra: BTreeMap::new(),
-            },
-            timeout_ms: 30_000,
-            sandbox: None,
-            capabilities: Vec::new(),
-            decision: ScriptletDecision::Legacy,
-            reason_code: "legacy-replay-required".to_string(),
-            human_reason: Some("fixture legacy pre-upgrade".to_string()),
-            evidence_digest: None,
-            source_evidence_refs: Vec::new(),
-            effects: Vec::new(),
-            unknown_commands: Vec::new(),
-            blocked_classes: Vec::new(),
-            boot_security_intents: Vec::new(),
-            security_policy_intents: Vec::new(),
-            rpm_trigger: None,
-            deb_maintainer: None,
-            arch_install: None,
-            residual_replay: None,
-            extra: BTreeMap::new(),
-        }
-    }
-
-    fn serve_test_file(file_path: PathBuf) -> (String, std::thread::JoinHandle<()>) {
-        let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
-        let bytes = std::fs::read(&file_path).unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let handle = std::thread::spawn(move || {
-            for _ in 0..4 {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut request = [0_u8; 1024];
-                let _ = stream.read(&mut request);
-                let headers = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-                    bytes.len()
-                );
-                stream.write_all(headers.as_bytes()).unwrap();
-                stream.write_all(&bytes).unwrap();
-            }
-        });
-        (format!("http://{addr}/{filename}"), handle)
-    }
-
-    fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
-        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-            row.get(0)
-        })
-        .unwrap()
-    }
-
-    #[test]
-    fn package_specific_update_requires_selector_for_ambiguous_variants() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
-
-        for arch in ["x86_64", "aarch64"] {
-            let mut trove = Trove::new("demo".to_string(), "1.0.0".to_string(), TroveType::Package);
-            trove.architecture = Some(arch.to_string());
-            trove.insert(&conn).unwrap();
-        }
-
-        let err = installed_troves_for_update(&conn, Some("demo".to_string()), None, None)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Multiple installed variants"), "{err}");
-        assert!(err.contains("--arch"), "{err}");
-
-        let selected = installed_troves_for_update(
-            &conn,
-            Some("demo".to_string()),
-            Some("1.0.0".to_string()),
-            Some("aarch64".to_string()),
-        )
-        .unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].architecture.as_deref(), Some("aarch64"));
-    }
-
-    #[test]
-    fn update_selector_without_package_refuses() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
-
-        let err = installed_troves_for_update(&conn, None, None, Some("x86_64".to_string()))
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("A package name is required"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn update_refuses_legacy_replay_before_creating_changeset() {
-        let (_temp, db_path) = create_test_db();
-        let root = tempfile::tempdir().unwrap();
-        let package_dir = tempfile::tempdir().unwrap();
-        let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
-
-        let package_path = build_test_ccs_package_with_bundle(
-            package_dir.path(),
-            "vim",
-            "2.0.0",
-            Some(legacy_upgrade_bundle("vim", "2.0.0")),
-        );
-        let package_bytes = std::fs::read(&package_path).unwrap();
-        let package_checksum = conary_core::hash::sha256(&package_bytes);
-        let package_size = i64::try_from(package_bytes.len()).unwrap();
-        let (package_url, _server_handle) = serve_test_file(package_path);
-
-        let mut conn = crate::commands::open_db(&db_path).unwrap();
-        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-        let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
-        repo.gpg_check = false;
-        repo.gpg_strict = false;
-        repo.default_strategy_distro = Some("fedora-44".to_string());
-        let repo_id = repo.insert(&conn).unwrap();
-
-        conary_core::db::transaction(&mut conn, |tx| {
-            let mut changeset = Changeset::new("Install vim-1.0.0".to_string());
-            let changeset_id = changeset.insert(tx)?;
-            let mut installed = Trove::new_with_source(
-                "vim".to_string(),
-                "1.0.0".to_string(),
-                TroveType::Package,
-                InstallSource::Repository,
-            );
-            installed.architecture = Some("x86_64".to_string());
-            installed.source_distro = Some("fedora-44".to_string());
-            installed.version_scheme = Some("rpm".to_string());
-            installed.installed_from_repository_id = Some(repo_id);
-            installed.installed_by_changeset_id = Some(changeset_id);
-            installed.insert(tx)?;
-            changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok::<_, conary_core::Error>(())
-        })
-        .unwrap();
-
-        let mut repo_pkg = RepositoryPackage::new(
-            repo_id,
-            "vim".to_string(),
-            "2.0.0".to_string(),
-            package_checksum.clone(),
-            package_size,
-            package_url.clone(),
-        );
-        repo_pkg.architecture = Some("x86_64".to_string());
-        repo_pkg.distro = Some("fedora-44".to_string());
-        repo_pkg.version_scheme = Some("rpm".to_string());
-        repo_pkg.insert(&conn).unwrap();
-
-        let mut resolution = PackageResolution::new(
-            repo_id,
-            "vim".to_string(),
-            vec![ResolutionStrategy::Binary {
-                url: package_url,
-                checksum: package_checksum,
-                delta_base: None,
-            }],
-        );
-        resolution.version = Some("2.0.0".to_string());
-        resolution.primary_strategy = PrimaryStrategy::Binary;
-        resolution.insert(&conn).unwrap();
-
-        let before_changesets = table_count(&conn, "changesets");
-        drop(conn);
-
-        let err = cmd_update(
-            Some("vim".to_string()),
-            &db_path,
-            root.path().to_str().unwrap(),
-            false,
-            false,
-            false,
-            SandboxMode::None,
-            None,
-            true,
-            None,
-            Some("x86_64".to_string()),
-            crate::commands::LegacyReplayOptions::default(),
-        )
-        .await
-        .expect_err("update should fail closed before admitting a raw legacy replay package");
-        let message = err.to_string();
-        assert!(message.contains("LegacyReplayFeatureDisabled"), "{message}");
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        assert_eq!(
-            table_count(&conn, "changesets"),
-            before_changesets,
-            "legacy replay refusal must happen before update changeset insertion"
-        );
-        let installed_versions = Trove::find_by_name(&conn, "vim")
-            .unwrap()
-            .into_iter()
-            .filter(|trove| trove.trove_type == TroveType::Package)
-            .map(|trove| trove.version)
-            .collect::<Vec<_>>();
-        assert_eq!(installed_versions, vec!["1.0.0".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn static_ccs_update_verifies_signature_before_legacy_replay_preflight() {
-        let (_temp, db_path) = create_test_db();
-        let root = tempfile::tempdir().unwrap();
-        let package_dir = tempfile::tempdir().unwrap();
-        let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
-
-        let package_path = build_test_ccs_package_with_bundle(
-            package_dir.path(),
-            "vim",
-            "2.0.0",
-            Some(legacy_upgrade_bundle("vim", "2.0.0")),
-        );
-        let package_bytes = std::fs::read(&package_path).unwrap();
-        let package_checksum = conary_core::hash::sha256(&package_bytes);
-        let package_size = i64::try_from(package_bytes.len()).unwrap();
-        let (package_url, _server_handle) = serve_test_file(package_path);
-
-        let mut conn = crate::commands::open_db(&db_path).unwrap();
-        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-        let mut repo = Repository::new("static-test".to_string(), package_url.clone());
-        repo.gpg_check = false;
-        repo.gpg_strict = false;
-        repo.default_strategy = Some("static".to_string());
-        repo.default_strategy_distro = Some("fedora-44".to_string());
-        let repo_id = repo.insert(&conn).unwrap();
-
-        conary_core::db::transaction(&mut conn, |tx| {
-            let mut changeset = Changeset::new("Install vim-1.0.0".to_string());
-            let changeset_id = changeset.insert(tx)?;
-            let mut installed = Trove::new_with_source(
-                "vim".to_string(),
-                "1.0.0".to_string(),
-                TroveType::Package,
-                InstallSource::Repository,
-            );
-            installed.architecture = Some("x86_64".to_string());
-            installed.source_distro = Some("fedora-44".to_string());
-            installed.version_scheme = Some("rpm".to_string());
-            installed.installed_from_repository_id = Some(repo_id);
-            installed.installed_by_changeset_id = Some(changeset_id);
-            installed.insert(tx)?;
-            changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok::<_, conary_core::Error>(())
-        })
-        .unwrap();
-
-        let mut repo_pkg = RepositoryPackage::new(
-            repo_id,
-            "vim".to_string(),
-            "2.0.0".to_string(),
-            package_checksum.clone(),
-            package_size,
-            package_url.clone(),
-        );
-        repo_pkg.architecture = Some("x86_64".to_string());
-        repo_pkg.distro = Some("fedora-44".to_string());
-        repo_pkg.version_scheme = Some("rpm".to_string());
-        repo_pkg.insert(&conn).unwrap();
-
-        let mut resolution = PackageResolution::new(
-            repo_id,
-            "vim".to_string(),
-            vec![ResolutionStrategy::Binary {
-                url: package_url,
-                checksum: package_checksum,
-                delta_base: None,
-            }],
-        );
-        resolution.version = Some("2.0.0".to_string());
-        resolution.primary_strategy = PrimaryStrategy::Binary;
-        resolution.insert(&conn).unwrap();
-
-        let before_changesets = table_count(&conn, "changesets");
-        drop(conn);
-
-        let err = cmd_update(
-            Some("vim".to_string()),
-            &db_path,
-            root.path().to_str().unwrap(),
-            false,
-            false,
-            false,
-            SandboxMode::None,
-            None,
-            true,
-            None,
-            Some("x86_64".to_string()),
-            crate::commands::LegacyReplayOptions::default(),
-        )
-        .await
-        .expect_err("static unsigned update must fail before CCS preflight parses scriptlets");
-        let message = format!("{err:?}");
-        assert!(
-            message.contains("Static repository package signature verification failed"),
-            "{message}"
-        );
-        assert!(
-            !message.contains("LegacyReplayFeatureDisabled"),
-            "{message}"
-        );
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        assert_eq!(
-            table_count(&conn, "changesets"),
-            before_changesets,
-            "static signature refusal must happen before update changeset insertion"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_delta_candidate_refuses_legacy_replay_before_creating_changeset() {
-        let (_temp, db_path) = create_test_db();
-        let root = tempfile::tempdir().unwrap();
-        let package_dir = tempfile::tempdir().unwrap();
-        let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
-
-        let package_path = build_test_ccs_package_with_bundle(
-            package_dir.path(),
-            "vim",
-            "2.0.0",
-            Some(legacy_upgrade_bundle("vim", "2.0.0")),
-        );
-        let package_bytes = std::fs::read(&package_path).unwrap();
-        let package_checksum = conary_core::hash::sha256(&package_bytes);
-        let package_size = i64::try_from(package_bytes.len()).unwrap();
-        let (package_url, _server_handle) = serve_test_file(package_path);
-
-        let mut conn = crate::commands::open_db(&db_path).unwrap();
-        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-        let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
-        repo.gpg_check = false;
-        repo.gpg_strict = false;
-        repo.default_strategy_distro = Some("fedora-44".to_string());
-        let repo_id = repo.insert(&conn).unwrap();
-
-        conary_core::db::transaction(&mut conn, |tx| {
-            let mut changeset = Changeset::new("Install vim-1.0.0".to_string());
-            let changeset_id = changeset.insert(tx)?;
-            let mut installed = Trove::new_with_source(
-                "vim".to_string(),
-                "1.0.0".to_string(),
-                TroveType::Package,
-                InstallSource::Repository,
-            );
-            installed.architecture = Some("x86_64".to_string());
-            installed.source_distro = Some("fedora-44".to_string());
-            installed.version_scheme = Some("rpm".to_string());
-            installed.installed_from_repository_id = Some(repo_id);
-            installed.installed_by_changeset_id = Some(changeset_id);
-            installed.insert(tx)?;
-            changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok::<_, conary_core::Error>(())
-        })
-        .unwrap();
-
-        let mut repo_pkg = RepositoryPackage::new(
-            repo_id,
-            "vim".to_string(),
-            "2.0.0".to_string(),
-            package_checksum.clone(),
-            package_size,
-            package_url.clone(),
-        );
-        repo_pkg.architecture = Some("x86_64".to_string());
-        repo_pkg.distro = Some("fedora-44".to_string());
-        repo_pkg.version_scheme = Some("rpm".to_string());
-        repo_pkg.insert(&conn).unwrap();
-
-        let mut resolution = PackageResolution::new(
-            repo_id,
-            "vim".to_string(),
-            vec![ResolutionStrategy::Binary {
-                url: package_url,
-                checksum: package_checksum,
-                delta_base: None,
-            }],
-        );
-        resolution.version = Some("2.0.0".to_string());
-        resolution.primary_strategy = PrimaryStrategy::Binary;
-        resolution.insert(&conn).unwrap();
-
-        let from_hash = conary_core::hash::sha256(b"old-package-placeholder");
-        let to_hash = conary_core::hash::sha256(b"new-package-placeholder");
-        for hash in [&from_hash, &to_hash] {
-            conn.execute(
-                "INSERT INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, 0)",
-                rusqlite::params![hash, format!("objects/{hash}")],
-            )
-            .unwrap();
-        }
-
-        let mut delta = PackageDelta::new(
-            "vim".to_string(),
-            "1.0.0".to_string(),
-            "2.0.0".to_string(),
-            from_hash,
-            to_hash,
-            "http://127.0.0.1:9/vim.delta".to_string(),
-            1,
-            conary_core::hash::sha256(b"unused-delta"),
-            package_size,
-        );
-        delta.insert(&conn).unwrap();
-
-        let before_changesets = table_count(&conn, "changesets");
-        drop(conn);
-
-        let err = cmd_update(
-            Some("vim".to_string()),
-            &db_path,
-            root.path().to_str().unwrap(),
-            false,
-            false,
-            false,
-            SandboxMode::None,
-            None,
-            true,
-            None,
-            Some("x86_64".to_string()),
-            crate::commands::LegacyReplayOptions::default(),
-        )
-        .await
-        .expect_err("delta update should fail closed during admission preflight");
-        let message = err.to_string();
-        assert!(message.contains("LegacyReplayFeatureDisabled"), "{message}");
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        assert_eq!(
-            table_count(&conn, "changesets"),
-            before_changesets,
-            "delta legacy replay refusal must happen before update changeset insertion"
-        );
-        let installed_versions = Trove::find_by_name(&conn, "vim")
-            .unwrap()
-            .into_iter()
-            .filter(|trove| trove.trove_type == TroveType::Package)
-            .map(|trove| trove.version)
-            .collect::<Vec<_>>();
-        assert_eq!(installed_versions, vec!["1.0.0".to_string()]);
-    }
-
-    #[test]
-    fn update_repository_install_provenance_uses_selected_package_metadata() {
-        let mut repo = Repository::new(
-            "slice-d-local-update".to_string(),
-            "https://example.test/slice-d".to_string(),
-        );
-        repo.default_strategy_distro = Some("fedora".to_string());
-        repo.id = Some(42);
-
-        let mut package = RepositoryPackage::new(
-            42,
-            "phase4-runtime-fixture".to_string(),
-            "1.0.1-1".to_string(),
-            "sha256:fixture".to_string(),
-            123,
-            "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
-        );
-        package.architecture = Some("x86_64".to_string());
-        package.distro = Some("fedora".to_string());
-        package.version_scheme = Some("rpm".to_string());
-
-        let provenance = repository_install_provenance_from_package(&package, &repo).unwrap();
-
-        assert_eq!(provenance.repository_id, 42);
-        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
-        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
-    }
-
-    #[test]
-    fn selected_update_resolution_bypasses_local_cas_shortcut() {
-        let temp = tempfile::tempdir().unwrap();
-        let keyring_dir = temp.path().join("keyrings");
-        let repo = Repository::new(
-            "slice-d-source-switch".to_string(),
-            "https://example.test/slice-d".to_string(),
-        );
-        let mut package = RepositoryPackage::new(
-            42,
-            "phase4-runtime-fixture".to_string(),
-            "1.0.1-1".to_string(),
-            "sha256:fixture".to_string(),
-            123,
-            "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
-        );
-        package.architecture = Some("x86_64".to_string());
-
-        let options = resolution_options_for_selected_update(
-            &package,
-            &repo,
-            temp.path(),
-            &keyring_dir,
-            &ResolutionPolicy::new(),
-            Some(RepositoryDependencyFlavor::Rpm),
-        );
-
-        assert!(options.skip_cas);
-        assert_eq!(options.version.as_deref(), Some("1.0.1-1"));
-        assert_eq!(options.repository.as_deref(), Some("slice-d-source-switch"));
-        assert_eq!(options.architecture.as_deref(), Some("x86_64"));
-    }
-
-    #[test]
-    fn partial_update_failure_message_is_not_clean_success() {
-        let failures = vec![UpdatePackageFailure {
-            package: "broken".to_string(),
-            version: "2.0.0".to_string(),
-            reason: "resolver failed".to_string(),
-        }];
-
-        let message = update_required_failure_message(&failures, 2).unwrap();
-
-        assert!(message.contains("1 of 2"));
-        assert!(message.contains("broken"));
-        assert!(!message.contains("All packages are up to date"));
-    }
-
-    #[test]
-    fn delta_result_uses_verified_cas_retrieval() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let cas = CasStore::new(temp_dir.path()).unwrap();
-        let expected_hash = conary_core::hash::sha256(b"expected-bytes");
-        let corrupted_path = object_path(temp_dir.path(), &expected_hash).unwrap();
-        std::fs::create_dir_all(corrupted_path.parent().unwrap()).unwrap();
-        std::fs::write(&corrupted_path, b"corrupted-bytes").unwrap();
-
-        assert!(read_delta_result_from_cas(&cas, &expected_hash).is_err());
-    }
-
-    #[test]
-    fn mark_pending_changeset_rolled_back_updates_pending_rows() {
-        let (_temp, db_path) = create_test_db();
-        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
-        let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
-            let mut changeset = conary_core::db::models::Changeset::new("test update".to_string());
-            changeset.insert(tx)
-        })
-        .unwrap();
-
-        assert!(mark_pending_changeset_rolled_back(&mut conn, changeset_id).unwrap());
-
-        let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            changeset.status,
-            conary_core::db::models::ChangesetStatus::RolledBack
-        );
-    }
-
-    #[test]
-    fn mark_pending_changeset_rolled_back_leaves_applied_rows_alone() {
-        let (_temp, db_path) = create_test_db();
-        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
-        let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
-            let mut changeset =
-                conary_core::db::models::Changeset::new("applied update".to_string());
-            let id = changeset.insert(tx)?;
-            changeset.update_status(tx, conary_core::db::models::ChangesetStatus::Applied)?;
-            Ok::<_, conary_core::Error>(id)
-        })
-        .unwrap();
-
-        assert!(!mark_pending_changeset_rolled_back(&mut conn, changeset_id).unwrap());
-
-        let changeset = conary_core::db::models::Changeset::find_by_id(&conn, changeset_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            changeset.status,
-            conary_core::db::models::ChangesetStatus::Applied
-        );
-    }
-}
+mod tests;

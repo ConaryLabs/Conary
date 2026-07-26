@@ -144,10 +144,6 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
     },
 
     /// Build Phase 2: Temporary tools (LFS Chapters 6-7)
@@ -168,10 +164,6 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
     },
 
     /// Build Phase 3: Final system (LFS Chapter 8)
@@ -192,10 +184,6 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
     },
 
     /// Run Phase 4: System configuration (LFS Chapter 9)
@@ -311,10 +299,6 @@ pub enum BootstrapCommands {
         /// Show verbose build output
         #[arg(short, long)]
         verbose: bool,
-
-        /// Skip checksum verification (development only)
-        #[arg(long)]
-        skip_verify: bool,
     },
 
     /// Apply the self-host guest access profile to the built sysroot

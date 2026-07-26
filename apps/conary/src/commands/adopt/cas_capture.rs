@@ -1,90 +1,62 @@
 // apps/conary/src/commands/adopt/cas_capture.rs
 
-use anyhow::{Result, anyhow};
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::path::Path;
+
+use anyhow::{Context, Result, anyhow};
+use conary_core::db::models::FileEntry;
 use conary_core::filesystem::CasStore;
-use conary_core::generation::metadata::is_excluded;
+use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 
 use super::FileInfoTuple;
 
-const S_IFMT: i32 = 0o170000;
-const S_IFREG: i32 = 0o100000;
-const S_IFDIR: i32 = 0o040000;
-const S_IFLNK: i32 = 0o120000;
+/// Exact live payload captured before an adoption database transaction.
+///
+/// Package-manager tuples retain discovery evidence only. Installed
+/// correctness comes from the typed live node and the exact bytes captured
+/// here, never from package-manager digests, mode guesses, or placeholders.
+#[derive(Debug, Clone)]
+pub(crate) struct CapturedAdoptionFile {
+    pub(crate) source: FileInfoTuple,
+    pub(crate) node: ResolvedPayloadNode,
+    pub(crate) content: Option<PayloadContentAuthority>,
+}
 
-pub(crate) fn compute_cas_backed_file_hash(
-    file_path: &str,
-    file_mode: i32,
-    file_digest: Option<&str>,
-    link_target: Option<&str>,
-    cas: &CasStore,
-) -> Result<String> {
-    if is_excluded(file_path) {
-        return Ok(file_digest
-            .map(str::to_string)
-            .unwrap_or_else(|| stable_placeholder("excluded", file_path)));
-    }
-
-    if let Some(target) = link_target.filter(|target| !target.is_empty()) {
-        return Ok(CasStore::compute_symlink_hash(target));
-    }
-
-    match file_mode & S_IFMT {
-        S_IFLNK => {
-            let target = std::fs::read_link(file_path).map_err(|e| {
-                anyhow!("{file_path}: symlink target is required and could not be read: {e}")
-            })?;
-            Ok(CasStore::compute_symlink_hash(&target.to_string_lossy()))
-        }
-        S_IFDIR => Ok(file_digest
-            .map(str::to_string)
-            .unwrap_or_else(|| stable_placeholder("directory", file_path))),
-        S_IFREG | 0 => {
-            let path = std::path::Path::new(file_path);
-            let metadata = std::fs::metadata(path).map_err(|e| {
-                anyhow!("{file_path}: regular file must be readable before CAS storage: {e}")
-            })?;
-            if !metadata.file_type().is_file() {
-                return Err(anyhow!(
-                    "{file_path}: regular file must be readable before CAS storage"
-                ));
-            }
-            cas.store_file_copy_from_existing(path)
-                .map_err(|e| anyhow!("{file_path}: regular file could not be stored in CAS: {e}"))
-        }
-        other => Err(anyhow!(
-            "{file_path}: unsupported special file mode {other:o} for full adoption"
-        )),
+impl CapturedAdoptionFile {
+    pub(crate) fn file_entry(&self, trove_id: i64) -> FileEntry {
+        FileEntry::new(
+            self.source.0.clone(),
+            self.node.clone(),
+            self.content.clone(),
+            trove_id,
+        )
     }
 }
 
-pub(crate) fn prepare_cas_backed_package_files(
+pub(crate) fn capture_package_files(
     package_name: &str,
     files: &[FileInfoTuple],
-    cas: &CasStore,
-) -> Result<Vec<(FileInfoTuple, String)>> {
+    cas: Option<&CasStore>,
+) -> Result<Vec<CapturedAdoptionFile>> {
     files
         .iter()
         .map(|file| {
-            compute_cas_backed_file_hash(&file.0, file.2, file.3.as_deref(), file.6.as_deref(), cas)
-                .map(|hash| (file.clone(), hash))
-                .map_err(|error| {
-                    anyhow!(
-                        "package {package_name} has unresolved CAS-backed path {}: {error}",
-                        file.0
-                    )
-                })
+            capture_file(file, cas).map_err(|error| {
+                anyhow!(
+                    "package {package_name} has unresolved live payload path {}: {error}",
+                    file.0
+                )
+            })
         })
         .collect()
 }
 
-pub(crate) fn validate_cas_backed_package_files(
-    package_name: &str,
-    files: &[FileInfoTuple],
-) -> Result<()> {
+pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]) -> Result<()> {
     for file in files {
-        validate_cas_backed_file(&file.0, file.2, file.6.as_deref()).map_err(|error| {
+        validate_file(file).map_err(|error| {
             anyhow!(
-                "package {package_name} has unresolved CAS-backed path {}: {error}",
+                "package {package_name} has unresolved live payload path {}: {error}",
                 file.0
             )
         })?;
@@ -92,46 +64,69 @@ pub(crate) fn validate_cas_backed_package_files(
     Ok(())
 }
 
-fn validate_cas_backed_file(
-    file_path: &str,
-    file_mode: i32,
-    link_target: Option<&str>,
-) -> Result<()> {
-    if is_excluded(file_path) || link_target.is_some_and(|target| !target.is_empty()) {
-        return Ok(());
-    }
-
-    match file_mode & S_IFMT {
-        S_IFLNK => {
-            std::fs::read_link(file_path).map_err(|error| {
-                anyhow!("{file_path}: symlink target is required and could not be read: {error}")
-            })?;
-            Ok(())
-        }
-        S_IFDIR => Ok(()),
-        S_IFREG | 0 => {
-            let path = std::path::Path::new(file_path);
-            let metadata = std::fs::metadata(path).map_err(|error| {
-                anyhow!("{file_path}: regular file must be readable before CAS storage: {error}")
-            })?;
-            if !metadata.file_type().is_file() {
-                return Err(anyhow!(
-                    "{file_path}: regular file must be readable before CAS storage"
-                ));
-            }
-            std::fs::File::open(path).map_err(|error| {
-                anyhow!("{file_path}: regular file must be readable before CAS storage: {error}")
-            })?;
-            Ok(())
-        }
-        other => Err(anyhow!(
-            "{file_path}: unsupported special file mode {other:o} for full adoption"
-        )),
-    }
+fn capture_file(file: &FileInfoTuple, cas: Option<&CasStore>) -> Result<CapturedAdoptionFile> {
+    let path = Path::new(&file.0);
+    let node = conary_core::generation::root_manifest::capture_existing_payload_node(path)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to capture exact node {}", file.0))?;
+    let content = if matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
+        let bytes = read_regular_without_following(path)?;
+        let sha256 = if let Some(cas) = cas {
+            cas.store_private_copy(&bytes)
+                .with_context(|| format!("failed to store {} in private CAS", file.0))?
+        } else {
+            conary_core::hash::sha256(&bytes)
+        };
+        Some(PayloadContentAuthority {
+            sha256,
+            size: bytes.len() as u64,
+        })
+    } else {
+        None
+    };
+    node.source.validate_content(content.as_ref())?;
+    Ok(CapturedAdoptionFile {
+        source: file.clone(),
+        node,
+        content,
+    })
 }
 
-fn stable_placeholder(prefix: &str, file_path: &str) -> String {
-    format!("{prefix}-{}", file_path.replace('/', "_"))
+fn validate_file(file: &FileInfoTuple) -> Result<()> {
+    let path = Path::new(&file.0);
+    let node = conary_core::generation::root_manifest::capture_existing_payload_node(path)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("failed to capture exact node {}", file.0))?;
+    if matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
+        read_regular_without_following(path)?;
+    }
+    Ok(())
+}
+
+fn read_regular_without_following(path: &Path) -> Result<Vec<u8>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("regular file {} is not safely readable", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect opened regular file {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        return Err(anyhow!(
+            "{} changed node type while its payload was captured",
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read regular file {}", path.display()))?;
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -184,17 +179,22 @@ mod tests {
         let source = source.strip_prefix(cwd).unwrap();
         let cas = CasStore::new(tmp.path().join("objects")).unwrap();
 
-        let hash = compute_cas_backed_file_hash(
-            source.to_str().unwrap(),
-            0o100644,
-            Some("package-manager-digest"),
-            None,
-            &cas,
+        let captured = capture_package_files(
+            "fixture",
+            &[file_tuple(
+                source.to_str().unwrap(),
+                5,
+                0o100644,
+                Some("package-manager-digest"),
+                None,
+            )],
+            Some(&cas),
         )
         .unwrap();
+        let authority = captured[0].content.as_ref().unwrap();
 
-        assert_ne!(hash, "package-manager-digest");
-        assert_eq!(cas.retrieve(&hash).unwrap(), b"hello");
+        assert_ne!(authority.sha256, "package-manager-digest");
+        assert_eq!(cas.retrieve(&authority.sha256).unwrap(), b"hello");
     }
 
     #[test]
@@ -206,18 +206,23 @@ mod tests {
         let source_arg = source.strip_prefix(cwd).unwrap();
         let cas = CasStore::new(tmp.path().join("objects")).unwrap();
 
-        let hash = compute_cas_backed_file_hash(
-            source_arg.to_str().unwrap(),
-            0o100644,
-            Some("package-manager-digest"),
-            None,
-            &cas,
+        let captured = capture_package_files(
+            "fixture",
+            &[file_tuple(
+                source_arg.to_str().unwrap(),
+                14,
+                0o100644,
+                Some("package-manager-digest"),
+                None,
+            )],
+            Some(&cas),
         )
         .unwrap();
+        let hash = &captured[0].content.as_ref().unwrap().sha256;
 
         std::fs::write(&source, b"mutated bytes").unwrap();
 
-        assert_eq!(cas.retrieve(&hash).unwrap(), b"original bytes");
+        assert_eq!(cas.retrieve(hash).unwrap(), b"original bytes");
     }
 
     #[test]
@@ -232,15 +237,21 @@ mod tests {
         let source_arg = source.strip_prefix(cwd).unwrap();
         let cas = CasStore::new(tmp.path().join("objects")).unwrap();
 
-        let hash = compute_cas_backed_file_hash(
-            source_arg.to_str().unwrap(),
-            0o100644,
-            Some("package-manager-digest"),
-            None,
-            &cas,
+        let captured = capture_package_files(
+            "fixture",
+            &[file_tuple(
+                source_arg.to_str().unwrap(),
+                19,
+                0o100644,
+                Some("package-manager-digest"),
+                None,
+            )],
+            Some(&cas),
         )
         .unwrap();
-        let cas_path = cas.hash_to_path(&hash).unwrap();
+        let cas_path = cas
+            .hash_to_path(&captured[0].content.as_ref().unwrap().sha256)
+            .unwrap();
 
         assert_ne!(
             std::fs::metadata(&source).unwrap().ino(),
@@ -250,59 +261,86 @@ mod tests {
     }
 
     #[test]
-    fn full_adoption_symlink_hashes_target() {
+    fn full_adoption_symlink_persists_typed_target_without_fake_content() {
         let tmp = tempfile::TempDir::new().unwrap();
         let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let link = tmp.path().join("libfoo.so");
+        std::os::unix::fs::symlink("libfoo.so.1", &link).unwrap();
 
-        let hash = compute_cas_backed_file_hash(
-            "/usr/lib/libfoo.so",
-            0o120777,
-            Some("package-manager-digest"),
-            Some("libfoo.so.1"),
-            &cas,
+        let captured = capture_package_files(
+            "fixture",
+            &[file_tuple(
+                link.to_str().unwrap(),
+                11,
+                0o120777,
+                Some("package-manager-digest"),
+                Some("wrong-discovery-target"),
+            )],
+            Some(&cas),
         )
         .unwrap();
 
-        assert_eq!(hash, CasStore::compute_symlink_hash("libfoo.so.1"));
+        assert!(captured[0].content.is_none());
+        assert_eq!(
+            captured[0].node.source.kind,
+            PayloadNodeKind::Symlink {
+                target: "libfoo.so.1".to_string()
+            }
+        );
     }
 
     #[test]
     fn full_adoption_directory_does_not_require_cas_content() {
         let tmp = tempfile::TempDir::new().unwrap();
         let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let directory = tmp.path().join("doc");
+        std::fs::create_dir(&directory).unwrap();
 
-        let hash = compute_cas_backed_file_hash(
-            "/usr/share/doc",
-            0o040755,
-            Some("directory-digest"),
-            None,
-            &cas,
+        let captured = capture_package_files(
+            "fixture",
+            &[file_tuple(
+                directory.to_str().unwrap(),
+                0,
+                0o040755,
+                Some("directory-digest"),
+                None,
+            )],
+            Some(&cas),
         )
         .unwrap();
 
-        assert_eq!(hash, "directory-digest");
+        assert!(captured[0].content.is_none());
+        assert!(matches!(
+            captured[0].node.source.kind,
+            PayloadNodeKind::Directory
+        ));
     }
 
     #[test]
-    fn full_adoption_excluded_paths_do_not_block_on_special_or_missing_files() {
+    fn full_adoption_special_nodes_have_typed_authority_without_fake_content() {
         let tmp = tempfile::TempDir::new().unwrap();
         let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let socket = tmp.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
 
-        let hash =
-            compute_cas_backed_file_hash("/var/run/socket", 0o140777, None, None, &cas).unwrap();
+        let captured = capture_package_files(
+            "fixture",
+            &[file_tuple(
+                socket.to_str().unwrap(),
+                0,
+                0o140777,
+                None,
+                None,
+            )],
+            Some(&cas),
+        )
+        .unwrap();
 
-        assert_eq!(hash, "excluded-_var_run_socket");
-    }
-
-    #[test]
-    fn full_adoption_non_excluded_special_file_fails() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
-
-        let error =
-            compute_cas_backed_file_hash("/etc/kmsg", 0o020600, None, None, &cas).unwrap_err();
-
-        assert_error_contains(error, &["/etc/kmsg", "unsupported special file"]);
+        assert!(captured[0].content.is_none());
+        assert!(matches!(
+            captured[0].node.source.kind,
+            PayloadNodeKind::Socket
+        ));
     }
 
     #[test]
@@ -319,7 +357,7 @@ mod tests {
             None,
         )];
 
-        validate_cas_backed_package_files("preview", &files).unwrap();
+        validate_package_files("preview", &files).unwrap();
 
         assert!(!objects.exists());
     }
@@ -336,14 +374,14 @@ mod tests {
             None,
         )];
 
-        let error = prepare_cas_backed_package_files("broken", &files, &cas).unwrap_err();
+        let error = capture_package_files("broken", &files, Some(&cas)).unwrap_err();
 
         assert_error_contains(
             error,
             &[
                 "package broken",
                 "/usr/bin/missing",
-                "regular file must be readable",
+                "failed to capture exact node",
             ],
         );
     }

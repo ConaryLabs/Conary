@@ -1,27 +1,11 @@
 // conary-core/src/scriptlet/runtime.rs
 
-use crate::capability::enforcement::EnforcementMode;
-use crate::child_wait::wait_with_output;
-use crate::error::{Error, Result};
+use crate::child_wait::wait_with_output_process_group;
+use crate::error::{Error, Result, ScriptletFailureKind};
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
 use std::process::{Command, ExitStatus};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tracing::{info, warn};
-
-static SECCOMP_WARN_OVERRIDE: AtomicBool = AtomicBool::new(false);
-
-#[cfg(test)]
-pub(super) static ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
-
-/// Write script content to a file and set it executable (mode 0o700).
-///
-/// Delegates to [`crate::container::write_executable_script`].
-pub(super) fn write_executable_script(path: &Path, content: &str) -> Result<()> {
-    crate::container::write_executable_script(path, content)
-}
 
 pub(super) fn apply_sanitized_command_env(cmd: &mut Command, env: &[(&str, &str)]) {
     cmd.env_clear()
@@ -59,32 +43,16 @@ fn check_scriptlet_status(phase: &str, status: ExitStatus, context: &str) -> Res
         info!("{} scriptlet completed successfully{}", phase, context);
         Ok(())
     } else {
-        let code = status.code().unwrap_or(-1);
-        Err(Error::ScriptletError(format!(
-            "{} scriptlet failed with exit code {}{}",
-            phase, code, context
-        )))
+        let failure = match (status.code(), status.signal()) {
+            (Some(code), _) => format!("failed with exit code {code}"),
+            (None, Some(signal)) => format!("terminated by signal {signal}"),
+            (None, None) => "terminated without an exit code or signal".to_string(),
+        };
+        Err(Error::scriptlet(
+            ScriptletFailureKind::ScriptExited,
+            format!("{phase} scriptlet {failure}{context}"),
+        ))
     }
-}
-
-pub fn set_seccomp_warn_override(enabled: bool) {
-    SECCOMP_WARN_OVERRIDE.store(enabled, Ordering::Relaxed);
-}
-
-pub(super) fn current_seccomp_mode() -> EnforcementMode {
-    if SECCOMP_WARN_OVERRIDE.load(Ordering::Relaxed) {
-        EnforcementMode::Warn
-    } else {
-        EnforcementMode::Enforce
-    }
-}
-
-pub(super) fn chroot_namespace_flags() -> nix::sched::CloneFlags {
-    nix::sched::CloneFlags::CLONE_NEWNS
-}
-
-pub(super) fn chroot_mount_private_flags() -> nix::mount::MsFlags {
-    nix::mount::MsFlags::MS_PRIVATE | nix::mount::MsFlags::MS_REC
 }
 
 /// Wait for a child process to exit (with timeout), capture its stdout/stderr,
@@ -98,7 +66,7 @@ pub(super) fn wait_and_capture(
     phase: &str,
     context: &str,
 ) -> Result<()> {
-    let outcome = wait_with_output(child, timeout)?;
+    let outcome = wait_with_output_process_group(child, timeout)?;
     let stdout = String::from_utf8_lossy(&outcome.stdout);
     let stderr = String::from_utf8_lossy(&outcome.stderr);
 
@@ -111,13 +79,16 @@ pub(super) fn wait_and_capture(
         let suffix = signal
             .map(|sig| format!(" (killed with signal {sig})"))
             .unwrap_or_default();
-        Err(Error::ScriptletError(format!(
-            "{} scriptlet timed out after {} seconds{}{}",
-            phase,
-            timeout.as_secs(),
-            context,
-            suffix
-        )))
+        Err(Error::scriptlet(
+            ScriptletFailureKind::ScriptTimedOut,
+            format!(
+                "{} scriptlet timed out after {} seconds{}{}",
+                phase,
+                timeout.as_secs(),
+                context,
+                suffix
+            ),
+        ))
     } else {
         check_scriptlet_status(
             phase,
@@ -129,76 +100,19 @@ pub(super) fn wait_and_capture(
     }
 }
 
-/// Build a seccomp BPF filter for scriptlet execution
-///
-/// Uses the Scriptlet profile with the given enforcement mode.
-/// Returns `None` if seccomp is not supported on this kernel.
-pub(super) fn build_scriptlet_seccomp(mode: EnforcementMode) -> Option<seccompiler::BpfProgram> {
-    use crate::capability::SyscallCapabilities;
-    use crate::capability::enforcement::seccomp_enforce;
-
-    if !seccomp_enforce::check_seccomp_support() {
-        return None;
-    }
-
-    let caps = SyscallCapabilities {
-        profile: Some("scriptlet".to_string()),
-        allow: Vec::new(),
-        deny: Vec::new(),
-    };
-
-    match seccomp_enforce::build_seccomp_filter(&caps, mode) {
-        Ok(bpf) => {
-            info!("Built seccomp filter for scriptlet execution ({mode} mode)");
-            Some(bpf)
-        }
-        Err(e) => {
-            warn!("Failed to build scriptlet seccomp filter: {e}");
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::enforcement::EnforcementMode;
 
     #[test]
-    fn test_build_scriptlet_seccomp_returns_filter() {
-        // On Linux with seccomp support, this should return Some(bpf).
-        // On other platforms or kernels without seccomp, it returns None.
-        let result = build_scriptlet_seccomp(EnforcementMode::Warn);
-        // We cannot assert Some unconditionally (CI may lack seccomp),
-        // but we verify the function does not panic and returns a valid option.
-        if crate::capability::enforcement::seccomp_enforce::check_seccomp_support() {
-            assert!(
-                result.is_some(),
-                "build_scriptlet_seccomp should return Some when seccomp is supported"
-            );
-        } else {
-            assert!(
-                result.is_none(),
-                "build_scriptlet_seccomp should return None when seccomp is unsupported"
-            );
-        }
-    }
+    fn signal_terminated_scriptlet_reports_the_exact_signal() {
+        let status = ExitStatus::from_raw(libc::SIGSYS);
+        let error = check_scriptlet_status("post-install", status, " (package: example)")
+            .expect_err("signal termination must fail the scriptlet");
 
-    #[test]
-    fn test_current_seccomp_mode_defaults_to_enforce() {
-        set_seccomp_warn_override(false);
-        assert_eq!(current_seccomp_mode(), EnforcementMode::Enforce);
-    }
-
-    #[test]
-    fn test_chroot_namespace_flags_include_mount_namespace() {
-        assert!(chroot_namespace_flags().contains(nix::sched::CloneFlags::CLONE_NEWNS));
-    }
-
-    #[test]
-    fn test_chroot_mount_propagation_is_private_recursive() {
-        let flags = chroot_mount_private_flags();
-        assert!(flags.contains(nix::mount::MsFlags::MS_PRIVATE));
-        assert!(flags.contains(nix::mount::MsFlags::MS_REC));
+        assert!(error.to_string().contains(&format!(
+            "post-install scriptlet terminated by signal {} (package: example)",
+            libc::SIGSYS
+        )));
     }
 }

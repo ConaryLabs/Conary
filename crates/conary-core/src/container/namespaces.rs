@@ -9,7 +9,7 @@ use std::path::Path;
 use nix::sched::CloneFlags;
 use nix::unistd::{ForkResult, Pid, fork};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ScriptletFailureKind};
 
 pub(super) struct UserNamespaceSync {
     pub(super) request_fd: OwnedFd,
@@ -24,7 +24,10 @@ pub(super) fn fork_process() -> nix::Result<ForkResult> {
 
 pub(super) fn adopt_raw_fd(raw_fd: RawFd) -> Result<OwnedFd> {
     if raw_fd < 0 {
-        return Err(Error::ScriptletError(format!("invalid stdio fd: {raw_fd}")));
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!("invalid stdio fd: {raw_fd}"),
+        ));
     }
 
     // SAFETY: The caller hands us ownership of a valid raw file descriptor.
@@ -71,6 +74,16 @@ pub(super) fn set_rlimit_syscall(
     }
 }
 
+pub(super) fn set_parent_death_signal(signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: PR_SET_PDEATHSIG accepts the signal number as its second
+    // argument and does not dereference any caller-owned memory.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 pub(super) fn sandbox_namespace_flags(flags: CloneFlags) -> CloneFlags {
     if flags.is_empty() {
         flags
@@ -100,8 +113,12 @@ pub(super) fn namespace_map_contents(host_id: u32) -> String {
 }
 
 fn write_namespace_map(path: &str, contents: &str) -> Result<()> {
-    fs::write(path, contents)
-        .map_err(|e| Error::ScriptletError(format!("Failed to write {path}: {e}")))?;
+    fs::write(path, contents).map_err(|e| {
+        Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!("Failed to write {path}: {e}"),
+        )
+    })?;
     Ok(())
 }
 
@@ -150,15 +167,23 @@ pub(super) fn signal_parent_user_namespace_ready(
 
     let message = if user_namespace_enabled { b"U" } else { b"N" };
     nix::unistd::write(&sync.request_fd, message).map_err(|e| {
-        Error::ScriptletError(format!("User namespace handshake request failed: {e}"))
+        Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!("User namespace handshake request failed: {e}"),
+        )
     })?;
 
     let mut ack = [0_u8; 1];
-    let bytes_read = nix::unistd::read(&sync.ack_fd, &mut ack)
-        .map_err(|e| Error::ScriptletError(format!("User namespace handshake ack failed: {e}")))?;
+    let bytes_read = nix::unistd::read(&sync.ack_fd, &mut ack).map_err(|e| {
+        Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!("User namespace handshake ack failed: {e}"),
+        )
+    })?;
     if bytes_read != 1 || ack[0] != b'O' {
-        return Err(Error::ScriptletError(
-            "User namespace handshake was not acknowledged".to_string(),
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            "User namespace handshake was not acknowledged",
         ));
     }
 

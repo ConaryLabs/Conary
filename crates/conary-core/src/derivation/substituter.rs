@@ -61,7 +61,7 @@ pub struct SubstituterPeer {
 pub enum CacheQueryResult {
     /// A pre-built manifest was found on `peer`.
     Hit {
-        manifest: OutputManifest,
+        manifest: Box<OutputManifest>,
         peer: String,
     },
     /// No peer holds a pre-built output for this derivation.
@@ -258,11 +258,11 @@ impl DerivationSubstituter {
 
             match self.client.get(&url).send().await {
                 Ok(resp) if resp.status() == StatusCode::OK => match resp.text().await {
-                    Ok(body) => match toml::from_str::<OutputManifest>(&body) {
+                    Ok(body) => match OutputManifest::from_toml(&body) {
                         Ok(manifest) => {
                             record_health(&mut self.peer_health, &endpoint, true);
                             return CacheQueryResult::Hit {
-                                manifest,
+                                manifest: Box::new(manifest),
                                 peer: endpoint,
                             };
                         }
@@ -323,13 +323,17 @@ impl DerivationSubstituter {
             bytes_transferred: 0,
         };
 
-        for file in &manifest.files {
-            if cas.exists(&file.hash) {
-                debug!("CAS hit for chunk {}", file.hash);
+        for entry in manifest.regular_entries() {
+            let content = entry
+                .content
+                .as_ref()
+                .expect("regular_entries yields content-bearing entries");
+            if cas.exists(&content.sha256) {
+                debug!("CAS hit for chunk {}", content.sha256);
                 continue;
             }
 
-            let url = format!("{}/v1/chunks/{}", peer_endpoint, file.hash);
+            let url = format!("{}/v1/chunks/{}", peer_endpoint, content.sha256);
             let resp = self
                 .client
                 .get(&url)
@@ -341,7 +345,7 @@ impl DerivationSubstituter {
                 return Err(SubstituterError::Http(format!(
                     "chunk fetch returned {} for hash {}",
                     resp.status(),
-                    file.hash
+                    content.sha256
                 )));
             }
 
@@ -352,14 +356,22 @@ impl DerivationSubstituter {
 
             let byte_count = bytes.len() as u64;
 
-            store_fetched_object(cas, &file.hash, &bytes)?;
+            if bytes.len() as u64 != content.size {
+                return Err(SubstituterError::Io(format!(
+                    "chunk {} has size {}, manifest requires {}",
+                    content.sha256,
+                    bytes.len(),
+                    content.size
+                )));
+            }
+            store_fetched_object(cas, &content.sha256, &bytes)?;
 
             report.objects_fetched += 1;
             report.bytes_transferred += byte_count;
 
             debug!(
                 "Fetched chunk {} ({} bytes) from {}",
-                file.hash, byte_count, peer_endpoint
+                content.sha256, byte_count, peer_endpoint
             );
         }
 
@@ -481,7 +493,7 @@ mod tests {
     fn seed_peers_inserts_new() {
         use rusqlite::Connection;
         let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         DerivationSubstituter::seed_peers(&conn, &["https://a.com".to_owned()]).unwrap();
         DerivationSubstituter::seed_peers(
@@ -500,7 +512,7 @@ mod tests {
     fn from_db_returns_no_peers_error_when_empty() {
         use rusqlite::Connection;
         let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
         let result = DerivationSubstituter::from_db(&conn);
         assert!(matches!(result, Err(SubstituterError::NoPeers)));
     }

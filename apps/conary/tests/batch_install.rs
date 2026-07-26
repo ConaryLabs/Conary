@@ -8,6 +8,8 @@
 //! 3. Rollback works correctly when installation fails
 //! 4. All packages share a single changeset
 
+mod common;
+
 use conary_core::db;
 use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};
 use tempfile::TempDir;
@@ -42,48 +44,45 @@ fn test_batch_install_creates_single_changeset() {
         let changeset_id = changeset.insert(tx)?;
 
         // First package (dependency 1)
-        let mut pkg1 = Trove::new("dep1".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut pkg1 = Trove::new(
+            "dep1".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         pkg1.installed_by_changeset_id = Some(changeset_id);
         pkg1.selection_reason = Some("Required by pkgA".to_string());
         let pkg1_id = pkg1.insert(tx)?;
 
-        let mut f1 = FileEntry::new(
-            "/usr/lib/libdep1.so".to_string(),
-            "hash1".to_string(),
-            1024,
-            0o755,
-            pkg1_id,
-        );
+        let mut f1 = common::regular_file_entry("/usr/lib/libdep1.so", b"dep1", 0o755, pkg1_id);
         f1.insert(tx)?;
 
         // Second package (dependency 2)
-        let mut pkg2 = Trove::new("dep2".to_string(), "2.0.0".to_string(), TroveType::Package);
+        let mut pkg2 = Trove::new(
+            "dep2".to_string(),
+            "2.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         pkg2.installed_by_changeset_id = Some(changeset_id);
         pkg2.selection_reason = Some("Required by pkgA".to_string());
         let pkg2_id = pkg2.insert(tx)?;
 
-        let mut f2 = FileEntry::new(
-            "/usr/lib/libdep2.so".to_string(),
-            "hash2".to_string(),
-            2048,
-            0o755,
-            pkg2_id,
-        );
+        let mut f2 = common::regular_file_entry("/usr/lib/libdep2.so", b"dep2", 0o755, pkg2_id);
         f2.insert(tx)?;
 
         // Main package
-        let mut pkg_a = Trove::new("pkgA".to_string(), "1.0.0".to_string(), TroveType::Package);
+        let mut pkg_a = Trove::new(
+            "pkgA".to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         pkg_a.installed_by_changeset_id = Some(changeset_id);
         pkg_a.selection_reason = Some("Explicitly installed by user".to_string());
         let pkg_a_id = pkg_a.insert(tx)?;
 
-        let mut f3 = FileEntry::new(
-            "/usr/bin/pkgA".to_string(),
-            "hash3".to_string(),
-            4096,
-            0o755,
-            pkg_a_id,
-        );
+        let mut f3 = common::regular_file_entry("/usr/bin/pkgA", b"pkgA", 0o755, pkg_a_id);
         f3.insert(tx)?;
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
@@ -136,6 +135,7 @@ fn test_batch_install_rollback_removes_all() {
             "good-pkg".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         pkg1.installed_by_changeset_id = Some(changeset_id);
         pkg1.insert(tx)?;
@@ -176,56 +176,33 @@ fn test_batch_install_file_tracking() {
         let changeset_id = changeset.insert(tx)?;
 
         // Package 1 with 2 files
-        let mut pkg1 = Trove::new("lib-a".to_string(), "1.0".to_string(), TroveType::Package);
+        let mut pkg1 = Trove::new(
+            "lib-a".to_string(),
+            "1.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         pkg1.installed_by_changeset_id = Some(changeset_id);
         let pkg1_id = pkg1.insert(tx)?;
 
-        FileEntry::new(
-            "/usr/lib/liba.so.1".to_string(),
-            "h1".to_string(),
-            100,
-            0o755,
-            pkg1_id,
-        )
-        .insert(tx)?;
-        FileEntry::new(
-            "/usr/lib/liba.so".to_string(),
-            "h2".to_string(),
-            50,
-            0o777,
-            pkg1_id,
-        )
-        .insert(tx)?;
+        common::regular_file_entry("/usr/lib/liba.so.1", b"liba.so.1", 0o755, pkg1_id)
+            .insert(tx)?;
+        common::regular_file_entry("/usr/lib/liba.so", b"liba.so", 0o777, pkg1_id).insert(tx)?;
 
         // Package 2 with 3 files
-        let mut pkg2 = Trove::new("lib-b".to_string(), "2.0".to_string(), TroveType::Package);
+        let mut pkg2 = Trove::new(
+            "lib-b".to_string(),
+            "2.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         pkg2.installed_by_changeset_id = Some(changeset_id);
         let pkg2_id = pkg2.insert(tx)?;
 
-        FileEntry::new(
-            "/usr/lib/libb.so.1".to_string(),
-            "h3".to_string(),
-            200,
-            0o755,
-            pkg2_id,
-        )
-        .insert(tx)?;
-        FileEntry::new(
-            "/usr/lib/libb.so".to_string(),
-            "h4".to_string(),
-            50,
-            0o777,
-            pkg2_id,
-        )
-        .insert(tx)?;
-        FileEntry::new(
-            "/usr/include/b.h".to_string(),
-            "h5".to_string(),
-            500,
-            0o644,
-            pkg2_id,
-        )
-        .insert(tx)?;
+        common::regular_file_entry("/usr/lib/libb.so.1", b"libb.so.1", 0o755, pkg2_id)
+            .insert(tx)?;
+        common::regular_file_entry("/usr/lib/libb.so", b"libb.so", 0o777, pkg2_id).insert(tx)?;
+        common::regular_file_entry("/usr/include/b.h", b"header b", 0o644, pkg2_id).insert(tx)?;
 
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok((pkg1_id, pkg2_id))
@@ -261,14 +238,24 @@ fn test_batch_preserves_dependency_reasons() {
         let changeset_id = changeset.insert(tx)?;
 
         // Dependency with "Required by" reason
-        let mut dep = Trove::new("libfoo".to_string(), "1.0".to_string(), TroveType::Package);
+        let mut dep = Trove::new(
+            "libfoo".to_string(),
+            "1.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         dep.installed_by_changeset_id = Some(changeset_id);
         dep.selection_reason = Some("Required by myapp".to_string());
         dep.install_reason = conary_core::db::models::InstallReason::Dependency;
         dep.insert(tx)?;
 
         // Main package with explicit reason
-        let mut app = Trove::new("myapp".to_string(), "2.0".to_string(), TroveType::Package);
+        let mut app = Trove::new(
+            "myapp".to_string(),
+            "2.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         app.installed_by_changeset_id = Some(changeset_id);
         app.selection_reason = Some("Explicitly installed by user".to_string());
         app.install_reason = conary_core::db::models::InstallReason::Explicit;

@@ -7,6 +7,7 @@
 
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
+use crate::repository::RepositoryParserConfig;
 use rusqlite::Connection;
 use tracing::info;
 
@@ -15,6 +16,8 @@ pub fn add_repository(
     conn: &Connection,
     name: String,
     url: String,
+    parser_config: RepositoryParserConfig,
+    source_profile: Option<String>,
     enabled: bool,
     priority: i32,
 ) -> Result<Repository> {
@@ -26,6 +29,8 @@ pub fn add_repository(
     }
 
     let mut repo = Repository::new(name, url);
+    repo.set_parser_config(parser_config)?;
+    repo.source_profile = source_profile;
     repo.enabled = enabled;
     repo.priority = priority;
 

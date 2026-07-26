@@ -3,8 +3,7 @@
 //! Component model for Conary packages
 //!
 //! This module implements first-class components - independently installable
-//! units within packages. Components are classified by file paths and have
-//! their own dependency relationships.
+//! units declared by package metadata with their own dependency relationships.
 //!
 //! # Component Types
 //!
@@ -21,34 +20,18 @@
 //! # Usage
 //!
 //! ```ignore
-//! use conary_core::components::{ComponentType, ComponentClassifier};
+//! use conary_core::components::ComponentType;
 //!
-//! // Classify a single file
-//! let comp = ComponentClassifier::classify(Path::new("/usr/lib/libssl.so.3"));
-//! assert_eq!(comp, ComponentType::Lib);
-//!
-//! // Check if component is installed by default
+//! // Parse an exact component name declared by package metadata.
+//! let comp = ComponentType::parse("lib");
+//! assert_eq!(comp, Some(ComponentType::Lib));
 //! assert!(ComponentType::Runtime.is_default());
 //! assert!(!ComponentType::Doc.is_default());
 //! ```
 //!
-//! # External Filters
-//!
-//! Custom classification rules can be loaded from configuration files:
-//!
-//! ```ignore
-//! use conary_core::components::{FilterSet, FilteredClassifier};
-//!
-//! let filters = FilterSet::load_from_file(Path::new("/etc/conary/filters.d/custom.conf"))?;
-//! let classifier = FilteredClassifier::new(filters);
-//! let comp = classifier.classify("/opt/myapp/bin/foo");
-//! ```
+mod types;
 
-mod classifier;
-mod filters;
-
-pub use classifier::{ComponentClassifier, ComponentType};
-pub use filters::{FilterRule, FilterSet, FilteredClassifier};
+pub use types::ComponentType;
 
 /// Parse a component spec string like "package:component"
 ///
@@ -80,16 +63,6 @@ pub fn format_component_spec(package: &str, component: &str) -> String {
     format!("{}:{}", package, component)
 }
 
-/// Check if scriptlets should run based on installed components
-///
-/// Scriptlets only run when `:runtime` or `:lib` is being installed.
-/// This prevents crashes when scripts try to run binaries that aren't present.
-pub fn should_run_scriptlets(installed_components: &[ComponentType]) -> bool {
-    installed_components
-        .iter()
-        .any(|c| matches!(c, ComponentType::Runtime | ComponentType::Lib))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,35 +92,5 @@ mod tests {
     fn test_format_component_spec() {
         assert_eq!(format_component_spec("nginx", "lib"), "nginx:lib");
         assert_eq!(format_component_spec("openssl", "devel"), "openssl:devel");
-    }
-
-    #[test]
-    fn test_should_run_scriptlets_with_runtime() {
-        assert!(should_run_scriptlets(&[ComponentType::Runtime]));
-        assert!(should_run_scriptlets(&[
-            ComponentType::Runtime,
-            ComponentType::Doc
-        ]));
-    }
-
-    #[test]
-    fn test_should_run_scriptlets_with_lib() {
-        assert!(should_run_scriptlets(&[ComponentType::Lib]));
-        assert!(should_run_scriptlets(&[
-            ComponentType::Lib,
-            ComponentType::Devel
-        ]));
-    }
-
-    #[test]
-    fn test_should_run_scriptlets_without_runtime_or_lib() {
-        assert!(!should_run_scriptlets(&[ComponentType::Devel]));
-        assert!(!should_run_scriptlets(&[ComponentType::Doc]));
-        assert!(!should_run_scriptlets(&[ComponentType::Config]));
-        assert!(!should_run_scriptlets(&[
-            ComponentType::Devel,
-            ComponentType::Doc
-        ]));
-        assert!(!should_run_scriptlets(&[]));
     }
 }

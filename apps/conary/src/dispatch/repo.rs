@@ -8,24 +8,36 @@ use conary_core::db::models::SecurityAdvisorySupport;
 
 pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result<()> {
     match repo_cmd {
-        cli::RepoCommands::Add {
-            name,
-            url,
-            db,
-            content_url,
-            priority,
-            disabled,
-            gpg_key,
-            no_gpg_check,
-            gpg_strict,
-            fingerprints,
-            yes,
-            replace,
-            default_strategy,
-            remi_endpoint,
-            remi_distro,
-            security_advisories,
-        } => {
+        cli::RepoCommands::Add { args } => {
+            let cli::RepoAddArgs {
+                name,
+                url,
+                package_format,
+                distribution,
+                component,
+                architecture,
+                database,
+                db,
+                content_url,
+                priority,
+                disabled,
+                debian_release_keys,
+                rpm_metadata_keys,
+                rpm_metalink,
+                rpm_package_keys,
+                arch_keyring,
+                arch_keyring_format,
+                arch_master_keys,
+                arch_packager_key_threshold,
+                arch_database_signature,
+                fingerprints,
+                yes,
+                replace,
+                default_strategy,
+                remi_endpoint,
+                source_profile,
+                security_advisories,
+            } = *args;
             let security_advisory_support = match security_advisories {
                 cli::CliSecurityAdvisorySupport::Unknown => SecurityAdvisorySupport::Unknown,
                 cli::CliSecurityAdvisorySupport::Unsupported => {
@@ -36,19 +48,46 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
             commands::cmd_repo_add(commands::RepoAddOptions {
                 name,
                 url,
+                package_format: package_format.map(Into::into),
+                distribution,
+                component,
+                architecture,
+                database,
                 db_path: db.db_path,
                 content_url,
                 priority,
                 disabled,
-                gpg_key,
-                no_gpg_check,
-                gpg_strict,
+                debian_release_keys,
+                rpm_metadata_keys,
+                rpm_metalink,
+                rpm_package_keys,
+                arch_keyring,
+                arch_keyring_format: arch_keyring_format.map(|format| match format {
+                    cli::CliArchKeyringFormat::OpenPgp => {
+                        conary_core::repository::ArchKeyringFormat::OpenPgp
+                    }
+                    cli::CliArchKeyringFormat::AlpmPackageZstd => {
+                        conary_core::repository::ArchKeyringFormat::AlpmPackageZstd
+                    }
+                }),
+                arch_master_keys,
+                arch_packager_key_threshold,
+                arch_database_signature: arch_database_signature.map(
+                    |requirement| match requirement {
+                        cli::CliArchDatabaseSignature::Required => {
+                            conary_core::repository::ArchSignatureRequirement::Required
+                        }
+                        cli::CliArchDatabaseSignature::Optional => {
+                            conary_core::repository::ArchSignatureRequirement::Optional
+                        }
+                    },
+                ),
                 fingerprints,
                 yes,
                 replace,
                 default_strategy,
                 remi_endpoint,
-                remi_distro,
+                source_profile,
                 security_advisory_support,
             })
             .await
@@ -74,18 +113,6 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
 
         cli::RepoCommands::Sync { name, db, force } => {
             commands::cmd_repo_sync(name, &db.db_path, force).await
-        }
-
-        cli::RepoCommands::KeyImport {
-            repository,
-            key,
-            db,
-        } => commands::cmd_key_import(&repository, &key, &db.db_path).await,
-
-        cli::RepoCommands::KeyList { db } => commands::cmd_key_list(&db.db_path).await,
-
-        cli::RepoCommands::KeyRemove { repository, db } => {
-            commands::cmd_key_remove(&repository, &db.db_path).await
         }
     }
 }

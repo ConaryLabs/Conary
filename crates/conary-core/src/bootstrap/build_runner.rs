@@ -6,7 +6,7 @@
 //! logic that was duplicated across Stage 1, Stage 2, and Base builders.
 
 use super::build_helpers;
-use super::config::BootstrapConfig;
+use crate::hash::{Hash, HashAlgorithm, verify_file};
 use crate::recipe::{Recipe, SourceSection, is_remote_url};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,14 +37,13 @@ pub enum BuildContext {
     Native,
 }
 
-/// Checksum verification policy for a bootstrap phase.
+/// Checksum contract for a bootstrap phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChecksumPolicy {
-    /// Preserve the current behavior for earlier phases: verify `sha256`,
-    /// reject placeholders, and warn on legacy/unknown algorithms.
-    Legacy,
-    /// Self-hosting / Tier 2 behavior: only `sha256` is accepted.
-    StrictSha256,
+pub enum ChecksumContract {
+    /// Verify every checksum algorithm implemented by Conary.
+    Supported,
+    /// Accept only SHA-256 for security-sensitive self-hosting inputs.
+    Sha256Only,
 }
 
 /// Errors from the shared build runner
@@ -72,10 +71,8 @@ pub enum BuildRunnerError {
 pub struct PackageBuildRunner {
     /// Source cache directory (shared across stages)
     sources_dir: PathBuf,
-    /// Whether to skip checksum verification
-    skip_verify: bool,
-    /// Checksum verification policy for this build phase.
-    checksum_policy: ChecksumPolicy,
+    /// Checksum contract for this build phase.
+    checksum_contract: ChecksumContract,
     /// Optional build context for cross-compilation or chroot builds
     context: Option<BuildContext>,
 }
@@ -95,11 +92,10 @@ fn gnu_fetch_candidates(url: &str) -> Vec<String> {
 
 impl PackageBuildRunner {
     /// Create a new build runner
-    pub fn new(sources_dir: &Path, config: &BootstrapConfig) -> Self {
+    pub fn new(sources_dir: &Path) -> Self {
         Self {
             sources_dir: sources_dir.to_path_buf(),
-            skip_verify: config.skip_verify,
-            checksum_policy: ChecksumPolicy::Legacy,
+            checksum_contract: ChecksumContract::Supported,
             context: None,
         }
     }
@@ -114,10 +110,10 @@ impl PackageBuildRunner {
         self
     }
 
-    /// Override the checksum policy for this runner.
+    /// Override the checksum contract for this runner.
     #[must_use]
-    pub fn with_checksum_policy(mut self, checksum_policy: ChecksumPolicy) -> Self {
-        self.checksum_policy = checksum_policy;
+    pub fn with_checksum_contract(mut self, checksum_contract: ChecksumContract) -> Self {
+        self.checksum_contract = checksum_contract;
         self
     }
 
@@ -223,68 +219,45 @@ impl PackageBuildRunner {
         self.fetch_artifact_to_cache(pkg_name, &url, &source.checksum, &filename)
     }
 
-    /// Verify a SHA-256 checksum, rejecting placeholders unless `skip_verify` is set.
+    /// Verify a typed checksum, rejecting placeholder identities.
     pub fn verify_checksum(
         &self,
         pkg_name: &str,
         expected: &str,
         path: &Path,
     ) -> Result<(), BuildRunnerError> {
-        // Reject placeholder checksums unless skip_verify is enabled
         if expected.contains("VERIFY_BEFORE_BUILD") || expected.contains("FIXME") {
-            if self.skip_verify {
-                warn!(
-                    "  Skipping placeholder checksum (--skip-verify enabled): {}",
-                    expected
-                );
-                return Ok(());
+            return Err(BuildRunnerError::SourceFetchFailed {
+                package: pkg_name.to_string(),
+                reason: format!("Recipe has placeholder checksum '{expected}'"),
+            });
+        }
+
+        let expected_hash = Hash::parse_prefixed(expected).map_err(|error| {
+            BuildRunnerError::SourceFetchFailed {
+                package: pkg_name.to_string(),
+                reason: format!("Invalid checksum: {error}"),
             }
+        })?;
+
+        if self.checksum_contract == ChecksumContract::Sha256Only
+            && expected_hash.algorithm != HashAlgorithm::Sha256
+        {
             return Err(BuildRunnerError::SourceFetchFailed {
                 package: pkg_name.to_string(),
                 reason: format!(
-                    "Recipe has placeholder checksum '{}' -- provide a real SHA-256 or use --skip-verify",
-                    expected
+                    "Checksum contract requires sha256, got {}",
+                    expected_hash.algorithm
                 ),
             });
         }
 
-        let (algo, hash) =
-            expected
-                .split_once(':')
-                .ok_or_else(|| BuildRunnerError::SourceFetchFailed {
-                    package: pkg_name.to_string(),
-                    reason: "Invalid checksum format".to_string(),
-                })?;
-
-        match algo {
-            "sha256" => {
-                let output = Command::new("sha256sum").arg(path).output().map_err(|e| {
-                    BuildRunnerError::SourceFetchFailed {
-                        package: pkg_name.to_string(),
-                        reason: e.to_string(),
-                    }
-                })?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let computed = stdout.split_whitespace().next().unwrap_or("");
-                if computed != hash {
-                    return Err(BuildRunnerError::SourceFetchFailed {
-                        package: pkg_name.to_string(),
-                        reason: format!("Checksum mismatch: expected {}, got {}", hash, computed),
-                    });
-                }
+        verify_file(path, &expected_hash.value, expected_hash.algorithm).map_err(|error| {
+            BuildRunnerError::SourceFetchFailed {
+                package: pkg_name.to_string(),
+                reason: error.to_string(),
             }
-            other if self.checksum_policy == ChecksumPolicy::StrictSha256 => {
-                return Err(BuildRunnerError::SourceFetchFailed {
-                    package: pkg_name.to_string(),
-                    reason: format!("Unsupported checksum algorithm in strict mode: {other}"),
-                });
-            }
-            other => {
-                warn!("  Unknown checksum algorithm: {}", other);
-            }
-        }
-
-        Ok(())
+        })
     }
 
     /// Stage additional sources into the package root and optionally extract them.
@@ -479,36 +452,22 @@ mod tests {
         );
     }
 
-    fn strict_mode_runner(sources_dir: &Path) -> PackageBuildRunner {
-        let config = BootstrapConfig::new();
-        PackageBuildRunner::new(sources_dir, &config)
-            .with_checksum_policy(ChecksumPolicy::StrictSha256)
+    fn sha256_only_runner(sources_dir: &Path) -> PackageBuildRunner {
+        PackageBuildRunner::new(sources_dir).with_checksum_contract(ChecksumContract::Sha256Only)
     }
 
     #[test]
     fn test_build_runner_new() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
         assert_eq!(runner.sources_dir, dir.path());
-        assert!(!runner.skip_verify);
-        assert_eq!(runner.checksum_policy, ChecksumPolicy::Legacy);
-    }
-
-    #[test]
-    fn test_build_runner_skip_verify() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = BootstrapConfig::new();
-        config.skip_verify = true;
-        let runner = PackageBuildRunner::new(dir.path(), &config);
-        assert!(runner.skip_verify);
+        assert_eq!(runner.checksum_contract, ChecksumContract::Supported);
     }
 
     #[test]
     fn test_verify_checksum_placeholder_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
 
         let file = dir.path().join("test.tar.gz");
         std::fs::write(&file, b"test").unwrap();
@@ -518,24 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_checksum_placeholder_skipped() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = BootstrapConfig::new();
-        config.skip_verify = true;
-        let runner = PackageBuildRunner::new(dir.path(), &config);
-
-        let file = dir.path().join("test.tar.gz");
-        std::fs::write(&file, b"test").unwrap();
-
-        let result = runner.verify_checksum("test", "VERIFY_BEFORE_BUILD", &file);
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn test_verify_checksum_invalid_format() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
 
         let file = dir.path().join("test.tar.gz");
         std::fs::write(&file, b"test").unwrap();
@@ -545,22 +489,37 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_checksum_unknown_algo_allowed_in_legacy_mode() {
+    fn test_verify_checksum_supported_md5_is_verified() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
 
         let file = dir.path().join("test.tar.gz");
-        std::fs::write(&file, b"test").unwrap();
+        std::fs::write(&file, b"").unwrap();
 
         let result = runner.verify_checksum("test", "md5:d41d8cd98f00b204e9800998ecf8427e", &file);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_verify_checksum_unknown_algo_rejected_in_strict_sha256_mode() {
+    fn test_verify_checksum_unknown_algorithm_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let runner = strict_mode_runner(dir.path());
+        let runner = PackageBuildRunner::new(dir.path());
+
+        let file = dir.path().join("test.tar.gz");
+        std::fs::write(&file, b"test").unwrap();
+
+        let result = runner.verify_checksum(
+            "test",
+            "sha1:0000000000000000000000000000000000000000",
+            &file,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_verify_checksum_md5_rejected_by_sha256_only_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = sha256_only_runner(dir.path());
 
         let file = dir.path().join("test.tar.gz");
         std::fs::write(&file, b"test").unwrap();
@@ -593,8 +552,7 @@ mod tests {
     #[test]
     fn test_stage_additional_sources_preserves_raw_archive_in_package_root() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
         let package_root = dir.path().join("pkg");
         let src_dir = package_root.join("src");
         fs::create_dir_all(&src_dir).unwrap();
@@ -639,8 +597,7 @@ install = "true"
     #[test]
     fn test_stage_additional_sources_skips_extraction_when_disabled() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
         let package_root = dir.path().join("pkg");
         let src_dir = package_root.join("src");
         fs::create_dir_all(&src_dir).unwrap();
@@ -683,8 +640,7 @@ install = "true"
     #[test]
     fn test_stage_and_apply_patches_copies_remote_patch_then_applies_it() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
         let package_root = dir.path().join("pkg");
         let src_dir = package_root.join("src");
         fs::create_dir_all(&src_dir).unwrap();
@@ -737,8 +693,7 @@ install = "true"
     #[test]
     fn test_prepare_build_dirs() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
 
         let (src_dir, build_dir) = runner.prepare_build_dirs(dir.path(), "test-pkg").unwrap();
         assert!(src_dir.exists());
@@ -750,8 +705,7 @@ install = "true"
     #[test]
     fn test_prepare_build_dirs_cleans_previous() {
         let dir = tempfile::tempdir().unwrap();
-        let config = BootstrapConfig::new();
-        let runner = PackageBuildRunner::new(dir.path(), &config);
+        let runner = PackageBuildRunner::new(dir.path());
 
         // Create a file in the build dir
         let build_base = dir.path().join("build").join("test-pkg");

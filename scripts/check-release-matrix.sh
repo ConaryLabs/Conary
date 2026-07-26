@@ -8,6 +8,9 @@ release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 artifact_matrix="docs/operations/release-artifact-matrix.md"
+feedback_template=".github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
+site_preview_release="site/src/lib/preview-release.ts"
+site_install_page="site/src/routes/install/+page.svelte"
 rpm_containerfile="packaging/rpm/Containerfile.build"
 deb_containerfile="packaging/deb/Containerfile.build"
 arch_containerfile="packaging/arch/Containerfile.build"
@@ -149,6 +152,9 @@ validate_deploy_routing_pairs() {
 
 for required_file in \
     "$artifact_matrix" \
+    "$feedback_template" \
+    "$site_preview_release" \
+    "$site_install_page" \
     "$rpm_containerfile" \
     "$deb_containerfile" \
     "$arch_containerfile" \
@@ -158,6 +164,16 @@ for required_file in \
     "$ccs_build_script"; do
     [[ -f "$required_file" ]] || fail "missing $required_file"
 done
+
+if rg -n -i -- '\bbeta\b|beta[-_]feedback|beta_feedback' .github docs site/src; then
+    fail "public maturity surfaces must identify this project as pre-alpha, not beta"
+fi
+require_match "$feedback_template" '^name: Pre-Alpha Tester Feedback$' 'pre-alpha feedback template name'
+require_match "$feedback_template" '^labels: pre-alpha-feedback$' 'pre-alpha feedback label'
+require_match "$release_build" 'issues/new\?template=pre_alpha_feedback\.md' 'pre-alpha release-note feedback URL'
+require_match "$artifact_matrix" '\.github/ISSUE_TEMPLATE/pre_alpha_feedback\.md' 'pre-alpha artifact-matrix feedback path'
+require_match "$site_preview_release" 'issues/new\?template=pre_alpha_feedback\.md' 'pre-alpha site feedback URL'
+require_match "$site_install_page" 'Open pre-alpha feedback' 'pre-alpha site feedback label'
 
 require_match "$release_build" 'conary-test-v\*' 'conary-test release trigger'
 require_match "$release_build" 'scripts/release-matrix\.sh resolve-tag' 'helper-based tag resolution'

@@ -66,10 +66,6 @@ pub enum AutomationCommands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
-
-        /// Skip running package scriptlets
-        #[arg(long)]
-        no_scripts: bool,
     },
 
     /// Configure automation settings

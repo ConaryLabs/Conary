@@ -22,14 +22,28 @@ pub enum TakeoverLevel {
     Generation,
 }
 
+/// Explicit native package-manager authority for mixed-manager hosts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum NativePackageManager {
+    Rpm,
+    Dpkg,
+    Pacman,
+}
+
+impl From<NativePackageManager> for conary_core::packages::SystemPackageManager {
+    fn from(value: NativePackageManager) -> Self {
+        match value {
+            NativePackageManager::Rpm => Self::Rpm,
+            NativePackageManager::Dpkg => Self::Dpkg,
+            NativePackageManager::Pacman => Self::Pacman,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum SystemCommands {
     /// Initialize a new Conary database
     Init {
-        /// Exact supported host profile for seeded repositories
-        #[arg(long, value_name = "PROFILE", value_parser = super::repo::parse_public_profile_id)]
-        profile: String,
-
         #[command(flatten)]
         db: DbArgs,
     },
@@ -86,31 +100,34 @@ pub enum SystemCommands {
     /// Use --system to adopt all packages, or specify package names.
     /// Use --status to show adoption progress.
     /// Use --refresh to detect version drift and update adopted packages.
-    /// Use --convert to batch convert adopted packages to CCS format.
     Adopt {
         /// Package name(s) to adopt (ignored if --system, --status, --refresh, etc.)
-        #[arg(required_unless_present_any = ["system", "status", "refresh", "convert", "sync_hook"])]
-        #[arg(conflicts_with_all = ["system", "status", "refresh", "convert", "sync_hook", "from_sync_hook"])]
+        #[arg(required_unless_present_any = ["system", "status", "refresh", "sync_hook"])]
+        #[arg(conflicts_with_all = ["system", "status", "refresh", "sync_hook", "from_sync_hook"])]
         packages: Vec<String>,
 
         #[command(flatten)]
         db: DbArgs,
 
+        /// Select native authority when more than one package database is populated
+        #[arg(long, value_enum)]
+        package_manager: Option<NativePackageManager>,
+
         /// Copy files to CAS for full management (enables rollback)
         /// Used by: default (package adopt), --system
-        #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook", "from_sync_hook"])]
+        #[arg(long, conflicts_with_all = ["status", "sync_hook", "from_sync_hook"])]
         full: bool,
 
         /// Adopt all installed system packages
-        #[arg(long, conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["status", "refresh", "sync_hook"])]
         system: bool,
 
         /// Show adoption status
-        #[arg(long, conflicts_with_all = ["system", "refresh", "convert", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["system", "refresh", "sync_hook"])]
         status: bool,
 
         /// Show what would be adopted without making changes
-        /// Used by: package names, --system, --convert, and --refresh. Package
+        /// Used by: package names, --system, and --refresh. Package
         /// preview shares discovery and policy with apply without writing
         /// SQLite, CAS, native package-manager, generation, hook, or live-root state.
         #[arg(long, conflicts_with_all = ["status", "sync_hook"])]
@@ -118,37 +135,25 @@ pub enum SystemCommands {
 
         /// Only adopt packages matching this glob pattern (e.g., "lib*")
         /// Used by: --system only
-        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "sync_hook"])]
         pattern: Option<String>,
 
         /// Skip packages matching this glob pattern (e.g., "kernel*")
         /// Used by: --system only
-        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "sync_hook"])]
         exclude: Option<String>,
 
         /// Only adopt explicitly installed packages (skip auto-installed deps)
         /// Used by: --system only
-        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "sync_hook"])]
         explicit_only: bool,
 
         /// Check adopted packages for version drift and update changed ones
-        #[arg(long, conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["system", "status", "sync_hook"])]
         refresh: bool,
 
-        /// Convert adopted packages to CCS format
-        #[arg(long, conflicts_with_all = ["system", "status", "refresh", "sync_hook"])]
-        convert: bool,
-
-        /// Number of parallel conversion threads (default: CPU count), requires --convert
-        #[arg(long, requires = "convert")]
-        jobs: Option<usize>,
-
-        /// Disable CDC chunking during conversion, requires --convert
-        #[arg(long, requires = "convert")]
-        no_chunking: bool,
-
         /// Install/remove system PM sync hooks
-        #[arg(long, conflicts_with_all = ["system", "status", "refresh", "convert"])]
+        #[arg(long, conflicts_with_all = ["system", "status", "refresh"])]
         sync_hook: bool,
 
         /// Remove sync hooks instead of installing (requires --sync-hook)
@@ -157,14 +162,14 @@ pub enum SystemCommands {
 
         /// Suppress output (for use by PM hooks and --refresh)
         /// Used by: --refresh only
-        #[arg(long, requires = "refresh", conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
+        #[arg(long, requires = "refresh", conflicts_with_all = ["system", "status", "sync_hook"])]
         quiet: bool,
 
         /// Internal path used by installed native package-manager sync hooks.
         ///
         /// Requires --refresh --quiet and cannot be combined with --full; hook
         /// install/remove remains the explicit consent point.
-        #[arg(long, hide = true, requires_all = ["refresh", "quiet"], conflicts_with_all = ["system", "status", "convert", "sync_hook", "full"])]
+        #[arg(long, hide = true, requires_all = ["refresh", "quiet"], conflicts_with_all = ["system", "status", "sync_hook", "full"])]
         from_sync_hook: bool,
     },
 
@@ -225,32 +230,6 @@ pub enum SystemCommands {
         keep_hooks: bool,
     },
 
-    /// Garbage collect unreferenced files from CAS storage
-    ///
-    /// Removes files from the content-addressable store that are no longer
-    /// referenced by any installed package. Preserves files needed for rollback
-    /// by keeping references from file_history within the retention period.
-    Gc {
-        #[command(flatten)]
-        db: DbArgs,
-
-        /// Path to CAS objects directory
-        #[arg(long, default_value = "/var/lib/conary/objects")]
-        objects_dir: String,
-
-        /// Days of history to preserve for rollback (default: 30)
-        #[arg(long, default_value = "30")]
-        keep_days: u32,
-
-        /// Show what would be removed without actually deleting
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Also garbage collect orphaned chunks from local disk
-        #[arg(long)]
-        chunks: bool,
-    },
-
     /// Generate SBOM (Software Bill of Materials) for a package
     ///
     /// Outputs a CycloneDX 1.5 format SBOM in JSON. This is useful for
@@ -302,6 +281,10 @@ pub enum SystemCommands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Select native authority when more than one package database is populated
+        #[arg(long, value_enum)]
+        package_manager: Option<NativePackageManager>,
 
         #[command(flatten)]
         db: DbArgs,

@@ -56,15 +56,15 @@ struct NativeHandoffEnvironment {
 }
 
 impl NativeHandoffEnvironment {
-    fn detect() -> Self {
+    fn detect() -> Result<Self> {
         let fail_after_current_cleared = std::env::var("CONARY_TEST_NATIVE_HANDOFF_FAIL_AFTER")
             .map(|value| value == "current-cleared")
             .unwrap_or(false);
 
-        Self {
-            package_manager: SystemPackageManager::detect(),
+        Ok(Self {
+            package_manager: SystemPackageManager::detect()?,
             fail_after_current_cleared,
-        }
+        })
     }
 }
 
@@ -170,7 +170,7 @@ pub async fn cmd_native_handoff(
     cmd_native_handoff_with_environment(
         options,
         db_path,
-        NativeHandoffEnvironment::detect(),
+        NativeHandoffEnvironment::detect()?,
         remove_detected_sync_hooks,
     )
 }
@@ -562,7 +562,7 @@ mod tests {
     use conary_core::db;
     use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, Trove, TroveType};
     use conary_core::generation::mount::current_generation;
-    use conary_core::packages::SystemPackageManager;
+    use conary_core::packages::{InstalledPackageIdentity, SystemPackageManager};
     use conary_core::runtime_root::ConaryRuntimeRoot;
 
     use super::*;
@@ -596,12 +596,37 @@ mod tests {
         db::transaction(&mut conn, |tx| {
             let mut changeset = Changeset::new(format!("Seed {name}"));
             let changeset_id = changeset.insert(tx)?;
+            let version = if source.is_adopted() {
+                "1.0.0-1"
+            } else {
+                "1.0.0"
+            };
+            let version_scheme = if source.is_adopted() {
+                conary_core::repository::versioning::VersionScheme::Rpm
+            } else {
+                conary_core::repository::versioning::VersionScheme::Conary
+            };
             let mut trove = Trove::new_with_source(
                 name.to_string(),
-                "1.0.0".to_string(),
+                version.to_string(),
                 TroveType::Package,
-                source,
+                source.clone(),
+                version_scheme,
             );
+            if source.is_adopted() {
+                trove.architecture = Some("x86_64".to_string());
+                trove.native_package_identity = Some(
+                    InstalledPackageIdentity::rpm(
+                        format!("{name}-1.0.0-1.x86_64"),
+                        name,
+                        None,
+                        "1.0.0",
+                        "1",
+                        "x86_64",
+                    )
+                    .unwrap(),
+                );
+            }
             trove.installed_by_changeset_id = Some(changeset_id);
             let trove_id = trove.insert(tx)?;
             changeset.update_status(tx, ChangesetStatus::Applied)?;

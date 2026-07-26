@@ -195,11 +195,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - fix(packaging): skip try preflight for DB-free commands
 - security(packaging): gate unsafe try hooks
 - feat(try): persist try sessions
-- feat(packaging): cook inferred source trees
-- feat(packaging): resolve inference targets
-- feat(packaging): materialize inferred recipes
-- feat(packaging): infer recipes from source trees
-- feat(packaging): add inference trace model
 - security(static-repo): fail closed on publisher state
 - feat(static-repo): publish file-based repositories
 - security(keys): create private keys with restrictive modes
@@ -248,20 +243,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - test(core): gate scriptlet adapter parity with golden evidence
 - refactor(core): keep regex scriptlet analysis advisory
 - test(remi): cover scriptlet publication golden outcomes
-- test(cli): cover legacy scriptlet lifecycle refusals
-- test(core): add legacy scriptlet golden classification corpus
-- test(core): cover legacy scriptlet support matrix fixtures
-- fix(core): shrink legacy replay refusal error path
-- feat(cli): gate legacy replay with host compatibility policy
-- feat(core): add legacy replay compatibility matrix
-- test(ccs): cover no-scripts legacy replay
-- security(ccs): harden foreign legacy replay
-- security(install): fail closed for batch legacy replay
-- security(remove): execute installed legacy replay
-- feat(scriptlets): plumb legacy replay options
+- test(cli): cover native lifecycle lifecycle refusals
+- test(core): add native lifecycle golden classification corpus
+- test(core): cover native lifecycle support matrix fixtures
+- fix(core): shrink lifecycle execution refusal error path
+- feat(cli): gate lifecycle execution with host compatibility policy
+- feat(core): add lifecycle execution compatibility matrix
+- test(ccs): cover mandatory lifecycle execution
+- security(ccs): harden foreign lifecycle execution
+- security(install): fail closed for batch lifecycle execution
+- security(remove): execute installed lifecycle execution
+- feat(scriptlets): plumb lifecycle execution options
 - feat(scriptlets): add legacy executor contracts
 - feat(scriptlets): persist installed legacy bundles
-- feat(scriptlets): add legacy replay planner
+- feat(scriptlets): add lifecycle execution planner
 - docs(remi): document scriptlet publication gate
 - feat(remi): add scriptlet review artifacts
 - feat(remi): gate chunk blobs by public reachability
@@ -296,11 +291,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - feat(packages): extract deb native scriptlet abi
 - feat(packages): extract arch native scriptlet abi
 - feat(packages): add native scriptlet abi model
-- style: format legacy scriptlet bundle work
-- feat(ccs): preserve legacy scriptlet bundles in archives
-- feat(ccs): embed legacy scriptlet bundle in manifests
-- feat(ccs): validate legacy scriptlet bundles
-- feat(ccs): add legacy scriptlet bundle schema
+- style: format native lifecycle bundle work
+- feat(ccs): preserve native lifecycle bundles in archives
+- feat(ccs): embed native lifecycle bundle in manifests
+- feat(ccs): validate native lifecycle bundles
+- feat(ccs): add native lifecycle bundle schema
 - fix(remi): clean up benchmark clippy findings
 - feat(remi): add conversion benchmark command
 - feat(remi): record conversion phase timing
@@ -688,13 +683,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - feat(packaging): build throwaway try generations
 - security(packaging): gate unsafe try hooks
 - feat(try): persist try sessions
-- test(packaging): cover inferred cook targets
-- feat(packaging): cook inferred source trees
-- feat(packaging): resolve inference targets
-- feat(packaging): add recipe materialization command
-- feat(packaging): materialize inferred recipes
-- feat(packaging): infer recipes from source trees
-- feat(packaging): add inference trace model
 - security(static-repo): fail closed on publisher state
 - test(static-repo): cover M1a publish install loop
 - feat(publish): add static repo project publish
@@ -765,46 +753,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - refactor(ccs): move payload path helpers
 - refactor(install): extract ccs transaction adapter
 - refactor(install): add ccs transaction module
-- refactor(conary): extract install legacy replay adapter
+- refactor(conary): extract install lifecycle execution adapter
 - test(cli): keep retired command sweep clean
 - fix(cli): prune stale public help strings
 - test(conary): serialize generation mount env guards
 - test(core): gate scriptlet adapter parity with golden evidence
 - refactor(core): keep regex scriptlet analysis advisory
-- test(cli): cover legacy scriptlet lifecycle refusals
-- test(cli): add legacy scriptlet golden conversion coverage
-- test(core): add legacy scriptlet golden classification corpus
-- test(core): cover legacy scriptlet support matrix fixtures
-- fix(core): shrink legacy replay refusal error path
-- test(cli): cover legacy replay compatibility matrix gates
-- feat(cli): audit legacy replay compatibility decisions
-- feat(cli): gate legacy replay with host compatibility policy
-- feat(core): add legacy replay compatibility matrix
+- test(cli): cover native lifecycle lifecycle refusals
+- test(cli): add native lifecycle golden conversion coverage
+- test(core): add native lifecycle golden classification corpus
+- test(core): cover native lifecycle support matrix fixtures
+- fix(core): shrink lifecycle execution refusal error path
+- test(cli): cover lifecycle execution compatibility matrix gates
+- feat(cli): audit lifecycle execution compatibility decisions
+- feat(cli): gate lifecycle execution with host compatibility policy
+- feat(core): add lifecycle execution compatibility matrix
 - test(ccs): add foreign replay verification
-- test(ccs): verify legacy replay audit metadata
-- test(ccs): cover no-scripts legacy replay
-- security(ccs): harden foreign legacy replay
+- test(ccs): verify lifecycle execution audit metadata
+- test(ccs): cover mandatory lifecycle execution
+- security(ccs): harden foreign lifecycle execution
 - security(model): guide legacy replatform refusals
 - security(remove): preflight legacy autoremove replay
-- security(update): gate legacy replay before changesets
-- security(restore): gate legacy replay before mutation
-- security(install): fail closed for batch legacy replay
+- security(update): gate lifecycle execution before changesets
+- security(restore): gate lifecycle execution before mutation
+- security(install): fail closed for batch lifecycle execution
 - feat(query): show installed scriptlet replay state
-- security(system): fail closed rollback legacy replay
+- security(system): fail closed rollback lifecycle execution
 - security(install): replay legacy bundles on upgrade
-- security(remove): execute installed legacy replay
-- security(remove): gate installed legacy replay
-- security(install): record legacy replay audit metadata
+- security(remove): execute installed lifecycle execution
+- security(remove): gate installed lifecycle execution
+- security(install): record lifecycle execution audit metadata
 - security(install): skip flattened bundle scriptlets
 - security(install): persist accepted legacy bundles
 - security(install): execute accepted legacy CCS replay
 - security(install): gate legacy CCS admission
-- feat(scriptlets): add legacy replay install carriers
-- feat(scriptlets): expose legacy replay cli flags
-- feat(scriptlets): plumb legacy replay options
+- feat(scriptlets): add lifecycle execution install carriers
+- feat(scriptlets): expose lifecycle execution cli flags
+- feat(scriptlets): plumb lifecycle execution options
 - feat(scriptlets): add legacy executor contracts
 - feat(scriptlets): persist installed legacy bundles
-- feat(scriptlets): add legacy replay planner
+- feat(scriptlets): add lifecycle execution planner
 - feat(remi): gate chunk blobs by public reachability
 - feat(remi): hide non-public conversions from discovery
 - feat(remi): add scriptlet publication policy
@@ -833,14 +821,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - feat(packages): extract deb native scriptlet abi
 - feat(packages): extract arch native scriptlet abi
 - feat(packages): add native scriptlet abi model
-- style: format legacy scriptlet bundle work
-- test(query): cover legacy scriptlet bundle output
+- style: format native lifecycle bundle work
+- test(query): cover native lifecycle bundle output
 - feat(cli): add script bundle query flags
-- feat(query): render legacy scriptlet bundles
-- feat(ccs): preserve legacy scriptlet bundles in archives
-- feat(ccs): embed legacy scriptlet bundle in manifests
-- feat(ccs): validate legacy scriptlet bundles
-- feat(ccs): add legacy scriptlet bundle schema
+- feat(query): render native lifecycle bundles
+- feat(ccs): preserve native lifecycle bundles in archives
+- feat(ccs): embed native lifecycle bundle in manifests
+- feat(ccs): validate native lifecycle bundles
+- feat(ccs): add native lifecycle bundle schema
 - security(scriptlets): harden live-root trust semantics
 - fix(recovery): add generation db backups
 - docs(release): add preview support loop
@@ -2261,9 +2249,9 @@ Major release covering 10 months of development. Every subsystem listed below is
 - Chroot filesystem isolation
 - Bind mounts with read-only defaults for controlled host access
 - Rootless fallback with resource limits (CPU, memory, file size, process count)
-- Dangerous script detection with automatic risk analysis
+- Structured script-risk diagnostics that do not select execution authority
 - Cross-distro scriptlet support (RPM, DEB, Arch calling conventions)
-- `--sandbox` flag: auto, always, never
+- `--sandbox=always`: mandatory protected or typed target-root execution
 - Native chroot with seccomp enforcement in pre_exec (replaces external chroot command)
 
 #### Bootstrap System

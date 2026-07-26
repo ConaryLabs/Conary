@@ -4,8 +4,7 @@
 //!
 //! Provides:
 //! - Peer credential extraction (SO_PEERCRED)
-//! - Permission checking (root and daemon identity)
-//! - Fail-closed PolicyKit authorization stub
+//! - Permission checking (root, daemon identity, and configured socket group)
 //! - Audit logging
 //!
 //! # Security Model
@@ -14,21 +13,9 @@
 //!
 //! - **Root users** (UID 0): Full access to all operations
 //! - **Daemon identity**: Access to daemon-owned local API operations
-//! - **Other users**: Read-only access by default; write access is denied while
-//!   PolicyKit remains an unimplemented fail-closed stub
-//!
-//! # PolicyKit
-//!
-//! PolicyKit authorization is not implemented yet. Both the `polkit` feature
-//! path and the non-`polkit` build path deny write authorization for non-root
-//! users until Conary has a real DBus authorization check and installed policy
-//! file contract.
-//!
-//! Reserved future policy actions:
-//! - `com.conary.daemon.install` - Install packages
-//! - `com.conary.daemon.remove` - Remove packages
-//! - `com.conary.daemon.update` - Update packages
-//! - `com.conary.daemon.rollback` - System rollback
+//! - **Configured socket group**: Full access after primary or supplementary
+//!   group membership is verified against the live peer process
+//! - **Other users and non-Unix transports**: No daemon API access
 
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -192,13 +179,11 @@ impl PeerCredentials {
     }
 }
 
-/// Permission level for an operation
+/// Permission level for an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Permission {
     /// Denied
     Denied,
-    /// Read-only access (queries, status)
-    ReadOnly,
     /// Full access (all operations)
     Full,
 }
@@ -214,57 +199,17 @@ pub enum Action {
     Remove,
     /// Update packages
     Update,
-    /// System rollback
-    Rollback,
-    /// System verification
-    Verify,
-    /// Garbage collection
-    GarbageCollect,
     /// Background capability/metadata enhancement of converted packages
     Enhance,
     /// Cancel a job
     CancelJob,
 }
 
-impl Action {
-    /// Get the PolicyKit action ID for this action
-    pub fn polkit_action(&self) -> &'static str {
-        match self {
-            Action::Query => "com.conary.daemon.query",
-            Action::Install => "com.conary.daemon.install",
-            Action::Remove => "com.conary.daemon.remove",
-            Action::Update => "com.conary.daemon.update",
-            Action::Rollback => "com.conary.daemon.rollback",
-            Action::Verify => "com.conary.daemon.verify",
-            Action::GarbageCollect => "com.conary.daemon.gc",
-            Action::Enhance => "com.conary.daemon.enhance",
-            Action::CancelJob => "com.conary.daemon.cancel",
-        }
-    }
-
-    /// Check if this is a read-only action
-    pub fn is_read_only(&self) -> bool {
-        matches!(self, Action::Query)
-    }
-}
-
 /// Authorization checker
+#[derive(Default)]
 pub struct AuthChecker {
-    /// Require PolicyKit for non-root write operations
-    require_polkit: bool,
-    /// Explicit future-policy/test hook for trusted GIDs.
-    ///
-    /// Empty by default while PolicyKit remains the fail-closed production path.
+    /// Exact GIDs authorized by the Unix socket contract.
     trusted_gids: Vec<u32>,
-}
-
-impl Default for AuthChecker {
-    fn default() -> Self {
-        Self {
-            require_polkit: true,
-            trusted_gids: Vec::new(),
-        }
-    }
 }
 
 impl AuthChecker {
@@ -273,16 +218,7 @@ impl AuthChecker {
         Self::default()
     }
 
-    /// Disable PolicyKit requirement (all authenticated users get full access)
-    pub fn disable_polkit(mut self) -> Self {
-        self.require_polkit = false;
-        self
-    }
-
-    /// Add an explicit trusted GID for tests or future reviewed policy.
-    ///
-    /// This is not used by the production default. The default checker keeps
-    /// non-root writes fail-closed until a real PolicyKit policy path exists.
+    /// Authorize members of an exact configured Unix socket group.
     pub fn add_trusted_gid(mut self, gid: u32) -> Self {
         self.trusted_gids.push(gid);
         self.trusted_gids.sort_unstable();
@@ -290,33 +226,8 @@ impl AuthChecker {
         self
     }
 
-    /// Check PolicyKit authorization for an action
-    #[cfg(feature = "polkit")]
-    fn check_polkit(&self, creds: &PeerCredentials, action: Action) -> Permission {
-        // TODO: Implement proper PolicyKit check via DBus
-        // This is a placeholder that always denies
-        log::warn!(
-            "PolicyKit check requested for action {:?} (UID {}), but implementation incomplete",
-            action,
-            creds.uid
-        );
-        Permission::Denied
-    }
-
-    /// Check PolicyKit authorization for an action (stub when polkit feature disabled)
-    #[cfg(not(feature = "polkit"))]
-    fn check_polkit(&self, creds: &PeerCredentials, action: Action) -> Permission {
-        log::warn!(
-            "PolicyKit check required for action {:?} (UID {}), but `polkit` feature not enabled. \
-            Enable the feature and install PolicyKit policy files.",
-            action,
-            creds.uid
-        );
-        Permission::Denied
-    }
-
     /// Check permission for an action
-    pub fn check(&self, creds: &PeerCredentials, action: Action) -> Permission {
+    pub fn check(&self, creds: &PeerCredentials, _action: Action) -> Permission {
         // Root always gets full access
         if creds.is_root() {
             return Permission::Full;
@@ -327,34 +238,19 @@ impl AuthChecker {
             return Permission::Full;
         }
 
-        // Explicit trusted-GID hooks are disabled by default while PolicyKit is
-        // stubbed. If a future reviewed policy opts in, check primary and
-        // supplementary groups with PID/UID revalidation in `has_any_gid`.
+        // The configured socket group is the complete non-root authorization
+        // contract. Check primary and supplementary groups with PID/UID
+        // revalidation in `has_any_gid`.
         if creds.has_any_gid(&self.trusted_gids) {
             return Permission::Full;
         }
 
-        // Read-only actions are always allowed
-        if action.is_read_only() {
-            return Permission::ReadOnly;
-        }
-
-        // For write operations, check PolicyKit
-        if self.require_polkit {
-            return self.check_polkit(creds, action);
-        }
-
-        // If PolicyKit is disabled, allow all authenticated users
-        Permission::Full
+        Permission::Denied
     }
 
     /// Check if an action is allowed (convenience method)
     pub fn is_allowed(&self, creds: &PeerCredentials, action: Action) -> bool {
-        match self.check(creds, action) {
-            Permission::Full => true,
-            Permission::ReadOnly => action.is_read_only(),
-            Permission::Denied => false,
-        }
+        self.check(creds, action) == Permission::Full
     }
 }
 
@@ -600,19 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn test_action_is_read_only() {
-        assert!(Action::Query.is_read_only());
-        assert!(!Action::Install.is_read_only());
-        assert!(!Action::Remove.is_read_only());
-        assert!(!Action::Enhance.is_read_only());
-    }
-
-    #[test]
-    fn test_action_enhance_polkit_action() {
-        assert_eq!(Action::Enhance.polkit_action(), "com.conary.daemon.enhance");
-    }
-
-    #[test]
     fn test_auth_checker_root() {
         let checker = AuthChecker::new();
         let root = PeerCredentials {
@@ -648,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_checker_does_not_trust_distribution_admin_gids() {
+    fn test_default_checker_does_not_trust_undeclared_gids() {
         let checker = AuthChecker::new();
 
         for gid in [10, 27] {
@@ -658,14 +541,14 @@ mod tests {
                 gid,
             };
 
-            assert_eq!(checker.check(&user, Action::Query), Permission::ReadOnly);
+            assert_eq!(checker.check(&user, Action::Query), Permission::Denied);
             assert_eq!(checker.check(&user, Action::Install), Permission::Denied);
             assert_eq!(checker.check(&user, Action::CancelJob), Permission::Denied);
         }
     }
 
     #[test]
-    fn test_explicit_trusted_gid_helper_grants_full_access() {
+    fn test_configured_socket_gid_grants_full_access() {
         let user = synthetic_non_daemon_user();
         let checker = AuthChecker::new().add_trusted_gid(user.gid);
 
@@ -678,20 +561,8 @@ mod tests {
         let checker = AuthChecker::new();
         let user = synthetic_non_daemon_user();
 
-        // Read-only allowed
-        assert_eq!(checker.check(&user, Action::Query), Permission::ReadOnly);
-
-        // Write operations denied (would need PolicyKit)
+        assert_eq!(checker.check(&user, Action::Query), Permission::Denied);
         assert_eq!(checker.check(&user, Action::Install), Permission::Denied);
-    }
-
-    #[test]
-    fn test_auth_checker_disabled_polkit() {
-        let checker = AuthChecker::new().disable_polkit();
-        let user = synthetic_non_daemon_user();
-
-        // Without PolicyKit requirement, all authenticated users get full access
-        assert_eq!(checker.check(&user, Action::Install), Permission::Full);
     }
 
     #[test]

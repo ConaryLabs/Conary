@@ -21,6 +21,10 @@ struct Args {
     #[arg(long, default_value = DaemonConfig::DEFAULT_SOCKET_PATH)]
     socket: String,
 
+    /// Exact Unix group authorized through the daemon socket
+    #[arg(long)]
+    socket_group: Option<String>,
+
     /// Optional TCP bind address (e.g., 127.0.0.1:7890)
     #[arg(long)]
     tcp: Option<String>,
@@ -44,6 +48,7 @@ fn main() -> Result<()> {
     let config = DaemonConfig {
         db_path: PathBuf::from(args.db),
         socket_path: PathBuf::from(args.socket),
+        socket_group: args.socket_group,
         enable_tcp: args.tcp.is_some(),
         tcp_bind: args.tcp,
         ..Default::default()
@@ -67,6 +72,13 @@ mod tests {
         let args = Args::parse_from(["conaryd"]);
         assert_eq!(args.db, DaemonConfig::DEFAULT_DB_PATH);
         assert_eq!(args.socket, DaemonConfig::DEFAULT_SOCKET_PATH);
+        assert_eq!(args.socket_group, None);
         assert_eq!(args.tcp, None);
+    }
+
+    #[test]
+    fn test_socket_group_is_explicit() {
+        let args = Args::parse_from(["conaryd", "--socket-group", "conary"]);
+        assert_eq!(args.socket_group.as_deref(), Some("conary"));
     }
 }

@@ -9,7 +9,6 @@
 use crate::ccs::manifest::{ManifestProvenance, ProvenanceDep, ProvenancePatch};
 use crate::hash;
 use crate::recipe::hermetic::HermeticBuildEvidence;
-use crate::recipe::inference::{SourceTargetKind, SourceTargetProvenance};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::fs;
@@ -50,11 +49,8 @@ pub struct ProvenanceCapture {
     /// Individual file hashes for merkle tree
     file_hashes: BTreeMap<String, String>,
 
-    // === Inference Layer ===
     /// Override for manifest origin_class.
     pub origin_class: Option<String>,
-    /// Source target provenance captured before inferred recipe cooking.
-    pub source_provenance: Option<SourceTargetProvenance>,
     /// Unsigned M2a hermetic build evidence to embed in CCS provenance.
     pub hermetic_evidence: Option<HermeticBuildEvidence>,
     /// Explicit hardening level when a higher-level build mode has stronger evidence.
@@ -166,6 +162,7 @@ impl ProvenanceCapture {
     }
 
     /// Add a build dependency
+    #[cfg(test)]
     pub fn add_build_dep(&mut self, name: &str, version: &str, dna_hash: Option<&str>) {
         self.build_deps.push(CapturedDep {
             name: name.to_string(),
@@ -207,20 +204,19 @@ impl ProvenanceCapture {
     /// Compute the DNA hash from all provenance data
     pub fn compute_dna_hash(&self) -> String {
         let mut hasher = hash::Hasher::new(hash::HashAlgorithm::Sha256);
-        let (upstream_url, upstream_hash, git_commit) = self.manifest_source_fields();
 
         // Source layer
-        if let Some(url) = &upstream_url {
+        if let Some(url) = &self.upstream_url {
             hasher.update(b"source_url:");
             hasher.update(url.as_bytes());
             hasher.update(b"\n");
         }
-        if let Some(hash) = &upstream_hash {
+        if let Some(hash) = &self.upstream_hash {
             hasher.update(b"source_hash:");
             hasher.update(hash.as_bytes());
             hasher.update(b"\n");
         }
-        if let Some(commit) = &git_commit {
+        if let Some(commit) = &self.git_commit {
             hasher.update(b"git_commit:");
             hasher.update(commit.as_bytes());
             hasher.update(b"\n");
@@ -266,44 +262,15 @@ impl ProvenanceCapture {
         format!("sha256:{}", dna.value)
     }
 
-    fn manifest_source_fields(&self) -> (Option<String>, Option<String>, Option<String>) {
-        let mut upstream_url = self.upstream_url.clone();
-        let mut upstream_hash = self.upstream_hash.clone();
-        let mut git_commit = self.git_commit.clone();
-
-        if let Some(source) = &self.source_provenance {
-            match source.kind {
-                SourceTargetKind::Archive => {
-                    upstream_url = Some(source.original.clone());
-                    upstream_hash = source.archive_checksum.clone();
-                    git_commit = None;
-                }
-                SourceTargetKind::Git => {
-                    upstream_url = Some(source.original.clone());
-                    upstream_hash = None;
-                    git_commit = source.git_commit.clone();
-                }
-                SourceTargetKind::Directory => {
-                    upstream_url = Some(format!("local:{}", source.original));
-                    upstream_hash = None;
-                    git_commit = None;
-                }
-            }
-        }
-
-        (upstream_url, upstream_hash, git_commit)
-    }
-
     /// Convert to ManifestProvenance for inclusion in CCS manifest
     pub fn to_manifest_provenance(&self) -> ManifestProvenance {
         let dna_hash = self.compute_dna_hash();
-        let (upstream_url, upstream_hash, git_commit) = self.manifest_source_fields();
 
         ManifestProvenance {
             // Source layer
-            upstream_url,
-            upstream_hash,
-            git_commit,
+            upstream_url: self.upstream_url.clone(),
+            upstream_hash: self.upstream_hash.clone(),
+            git_commit: self.git_commit.clone(),
             fetch_timestamp: self.fetch_timestamp.map(|t| t.to_rfc3339()),
             patches: self
                 .patches
@@ -363,8 +330,8 @@ mod tests {
     use super::*;
     use crate::recipe::hermetic::{
         BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
-        BuilderEnvironmentKind, DependencyLock, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1,
-        HermeticBuildEvidence, RecipeIdentity, ReproducibilityRecord, SourceIdentity,
+        BuilderEnvironmentKind, DependencyLock, HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence,
+        RecipeIdentity, ReproducibilityRecord, SourceIdentity,
     };
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -541,7 +508,7 @@ mod tests {
 
     fn dummy_hermetic_evidence() -> HermeticBuildEvidence {
         HermeticBuildEvidence {
-            schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+            schema_version: HERMETIC_EVIDENCE_SCHEMA,
             build_input: BuildInputIdentity {
                 recipe: RecipeIdentity::ExplicitRecipe {
                     path: "recipe.toml".to_string(),
@@ -554,7 +521,6 @@ mod tests {
                 additional_sources: Vec::new(),
                 patches: Vec::new(),
                 local_tree: None,
-                ecosystem_dependencies: Vec::new(),
                 builder_environment: BuilderEnvironmentIdentity {
                     kind: BuilderEnvironmentKind::Pristine,
                     sysroot_hash: Some("sha256:sysroot".to_string()),
@@ -563,8 +529,7 @@ mod tests {
                 },
             },
             dependency_lock: DependencyLock::default(),
-            ecosystem_policy: EcosystemPolicyReport::clean("unknown"),
-            command_risk: BuildCommandRiskReport::clean(),
+            command_risk: BuildCommandRiskReport::no_findings(),
             reproducibility: ReproducibilityRecord {
                 source_date_epoch: Some(0),
                 path_remap_count: 2,

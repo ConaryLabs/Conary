@@ -1,4 +1,4 @@
-// src/commands/export.rs
+// conary/src/commands/export.rs
 //! Export Conary generations as OCI container images.
 //!
 //! Produces a standards-compliant OCI Image Layout directory from a
@@ -393,6 +393,13 @@ mod tests {
         GenerationArtifact, load_generation_artifact, write_generation_artifact,
     };
     use conary_core::generation::metadata::GENERATION_FORMAT;
+    use conary_core::generation::root_manifest::{
+        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+        MutableStateManifest,
+    };
+    use conary_core::payload::{
+        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -405,6 +412,38 @@ mod tests {
             sha256,
             size: bytes.len() as u64,
         }
+    }
+
+    fn write_test_root_manifests(generation_dir: &Path, objects: &[CasObjectRef]) {
+        let mut root = PayloadNode::regular(0o755);
+        root.kind = PayloadNodeKind::Directory;
+        root.mode = libc::S_IFDIR | 0o755;
+        let root = ResolvedPayloadNode::from_numeric_source(root).unwrap();
+        let mut entries = vec![GenerationRootEntry {
+            path: "/objects".to_string(),
+            node: root.clone(),
+            content: None,
+        }];
+        entries.extend(objects.iter().map(|object| GenerationRootEntry {
+            path: format!("/objects/{}", object.sha256),
+            node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
+            content: Some(PayloadContentAuthority {
+                sha256: object.sha256.clone(),
+                size: object.size,
+            }),
+        }));
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+
+        GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root,
+            entries,
+        }
+        .write_to(generation_dir)
+        .unwrap();
+        MutableStateManifest::empty()
+            .write_to(generation_dir)
+            .unwrap();
     }
 
     /// Create a minimal artifact-backed generation directory for testing.
@@ -425,6 +464,7 @@ mod tests {
 
         let object_one = write_cas_object(&objects_dir, b"file-content-one");
         let object_two = write_cas_object(&objects_dir, b"file-content-two");
+        write_test_root_manifests(&gen_dir, &[object_one, object_two]);
 
         let boot_assets = BootAssetsManifest {
             version: 1,
@@ -446,7 +486,6 @@ mod tests {
             architecture: "x86_64",
             erofs_path: &gen_dir.join(EROFS_IMAGE_NAME),
             cas_base_rel: "../../objects",
-            cas_objects: vec![object_one, object_two],
             cas_verification: CasObjectVerification::Deep,
             boot_assets,
         })

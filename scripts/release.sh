@@ -104,36 +104,21 @@ bump_version() {
 matching_tags_for_product() {
     local product="$1"
     local canonical_prefix
-    local legacy_prefix
 
     canonical_prefix="$(matrix_field "$product" canonical_tag_prefix)"
     git tag --list "${canonical_prefix}*"
-
-    while IFS= read -r legacy_prefix; do
-        [[ -n "$legacy_prefix" ]] || continue
-        git tag --list "${legacy_prefix}*"
-    done < <(matrix_field "$product" accepted_legacy_prefixes)
 }
 
 tag_version_for_product() {
     local product="$1"
     local tag="$2"
     local canonical_prefix
-    local legacy_prefix
 
     canonical_prefix="$(matrix_field "$product" canonical_tag_prefix)"
     if [[ "$tag" == "${canonical_prefix}"* ]]; then
         printf '%s\n' "${tag#"$canonical_prefix"}"
         return 0
     fi
-
-    while IFS= read -r legacy_prefix; do
-        [[ -n "$legacy_prefix" ]] || continue
-        if [[ "$tag" == "${legacy_prefix}"* ]]; then
-            printf '%s\n' "${tag#"$legacy_prefix"}"
-            return 0
-        fi
-    done < <(matrix_field "$product" accepted_legacy_prefixes)
 
     return 1
 }
@@ -169,14 +154,6 @@ history_baseline_tag() {
     for tag in "${tags[@]}"; do
         version="$(tag_version_for_product "$product" "$tag")" || continue
         if [[ "$version" == "$history_version" && "$tag" == "${canonical_prefix}"* ]]; then
-            printf '%s\n' "$tag"
-            return 0
-        fi
-    done
-
-    for tag in "${tags[@]}"; do
-        version="$(tag_version_for_product "$product" "$tag")" || continue
-        if [[ "$version" == "$history_version" ]]; then
             printf '%s\n' "$tag"
             return 0
         fi

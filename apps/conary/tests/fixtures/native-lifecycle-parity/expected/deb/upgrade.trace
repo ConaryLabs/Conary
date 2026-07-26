@@ -1,0 +1,3 @@
+v1-post|argc=2|argv=[configure][]|stdin=none|payload=v1
+v1-pre-remove|argc=2|argv=[upgrade][1.0.1-1]|stdin=none|payload=v1
+v2-post|argc=2|argv=[configure][1.0.0-1]|stdin=none|payload=v2

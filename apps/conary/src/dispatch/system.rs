@@ -17,14 +17,9 @@ use crate::cli::{self, Cli};
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
-pub(super) async fn dispatch_system_command(
-    sys_cmd: cli::SystemCommands,
-    allow_live_system_mutation: bool,
-) -> Result<()> {
+pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Result<()> {
     match sys_cmd {
-        cli::SystemCommands::Init { profile, db } => {
-            commands::cmd_init(&db.db_path, &profile).await
-        }
+        cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path).await,
 
         cli::SystemCommands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -48,7 +43,7 @@ pub(super) async fn dispatch_system_command(
             yes,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system restore"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -66,12 +61,14 @@ pub(super) async fn dispatch_system_command(
                     dry_run,
                 )
                 .await
+                .map(|_| ())
             }
         }
 
         cli::SystemCommands::Adopt {
             packages,
             db,
+            package_manager,
             full,
             system,
             status,
@@ -80,34 +77,40 @@ pub(super) async fn dispatch_system_command(
             exclude,
             explicit_only,
             refresh,
-            convert,
-            jobs,
-            no_chunking,
             sync_hook,
             remove_hook,
             quiet,
             from_sync_hook: _,
         } => {
+            let package_manager = package_manager.map(Into::into);
             if sync_hook {
-                commands::cmd_sync_hook_install(remove_hook).await
-            } else if convert {
-                commands::cmd_adopt_convert(&db.db_path, jobs, no_chunking, dry_run).await
+                commands::cmd_sync_hook_install(remove_hook, package_manager).await
             } else if status {
-                commands::cmd_adopt_status(&db.db_path).await
+                commands::cmd_adopt_status(&db.db_path, package_manager).await
             } else if refresh {
-                commands::cmd_adopt_refresh(&db.db_path, full, dry_run, quiet).await
+                commands::cmd_adopt_refresh(&db.db_path, full, dry_run, quiet, package_manager)
+                    .await
             } else if system {
-                commands::cmd_adopt_system(
+                let outcome = commands::cmd_adopt_system(
                     &db.db_path,
                     full,
                     dry_run,
                     pattern.as_deref(),
                     exclude.as_deref(),
                     explicit_only,
+                    package_manager,
                 )
-                .await
+                .await?;
+                if outcome.is_complete() {
+                    Ok(())
+                } else {
+                    anyhow::bail!(
+                        "Bulk adoption was incomplete:\n  {}",
+                        outcome.failure_records().join("\n  ")
+                    )
+                }
             } else {
-                commands::cmd_adopt(&packages, &db.db_path, full, dry_run).await
+                commands::cmd_adopt(&packages, &db.db_path, full, dry_run, package_manager).await
             }
         }
 
@@ -120,7 +123,7 @@ pub(super) async fn dispatch_system_command(
             keep_hooks,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system unadopt"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -146,7 +149,7 @@ pub(super) async fn dispatch_system_command(
             keep_hooks,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system native-handoff"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -163,14 +166,6 @@ pub(super) async fn dispatch_system_command(
             .await
             .map(|_| ())
         }
-
-        cli::SystemCommands::Gc {
-            db,
-            objects_dir,
-            keep_days,
-            dry_run,
-            chunks,
-        } => commands::cmd_gc(&db.db_path, &objects_dir, keep_days, dry_run, chunks).await,
 
         cli::SystemCommands::Sbom {
             package_name,
@@ -192,7 +187,7 @@ pub(super) async fn dispatch_system_command(
                 db,
             } => {
                 require_live_mutation(
-                    MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                    MutationIntent::from_apply_intent(yes),
                     Cow::Borrowed("conary system db-backup recover"),
                     LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                     dry_run,
@@ -207,28 +202,33 @@ pub(super) async fn dispatch_system_command(
             }
         },
 
-        cli::SystemCommands::State(state_cmd) => {
-            dispatch_system_state_command(state_cmd, allow_live_system_mutation).await
-        }
+        cli::SystemCommands::State(state_cmd) => dispatch_system_state_command(state_cmd).await,
 
         cli::SystemCommands::Generation(gen_cmd) => {
-            dispatch_system_generation_command(gen_cmd, allow_live_system_mutation).await
+            dispatch_system_generation_command(gen_cmd).await
         }
 
         cli::SystemCommands::Takeover {
             up_to,
             yes,
             dry_run,
+            package_manager,
             db,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system takeover"),
                 LiveMutationClass::AlwaysLive,
                 dry_run,
             )?;
-            commands::generation::takeover::cmd_system_takeover(&db.db_path, up_to, yes, dry_run)
-                .await
+            commands::generation::takeover::cmd_system_takeover(
+                &db.db_path,
+                up_to,
+                yes,
+                dry_run,
+                package_manager.map(Into::into),
+            )
+            .await
         }
 
         cli::SystemCommands::Trigger(trigger_cmd) => {

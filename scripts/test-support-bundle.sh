@@ -78,7 +78,7 @@ case "$*" in
         printf 'No pending generation publication debt\n'
         ;;
     "distro info")
-        printf 'No distro pin set. System is distro-agnostic.\n'
+        printf 'No source pin set. Resolution can mix configured feeds.\n'
         printf 'Selection mode: policy (runtime default)\n'
         ;;
     "repo list --all")
@@ -110,7 +110,7 @@ case "$*" in
         printf 'changesets\nrepositories\ntroves\n'
         ;;
     *"SELECT key || '=' || value FROM settings"*)
-        printf 'system.host-profile=arch\n'
+        printf 'source.allowed-distros=["arch"]\n'
         ;;
     *)
         printf 'unexpected sqlite3 command: %s\n' "$*" >&2
@@ -171,8 +171,8 @@ assert_contains "$bundle/README.txt" "Database-backed diagnostics used: current 
 assert_contains "$bundle/conary-version.txt" "conary 0.8.0"
 assert_contains "$bundle/db-integrity-check.txt" "ok"
 assert_contains "$bundle/db-tables.txt" "troves"
-assert_contains "$bundle/distro-info.txt" "System is distro-agnostic."
-assert_contains "$bundle/source-settings.txt" "system.host-profile=arch"
+assert_contains "$bundle/distro-info.txt" "Resolution can mix configured feeds."
+assert_contains "$bundle/source-settings.txt" 'source.allowed-distros=["arch"]'
 
 assert_not_contains "$bundle/repo-list.txt" "user:password"
 assert_not_contains "$bundle/repo-list.txt" "token123"

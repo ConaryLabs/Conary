@@ -2,6 +2,8 @@
 
 //! Database initialization, transactions, and core model tests.
 
+mod common;
+
 use conary_core::db;
 use tempfile::NamedTempFile;
 
@@ -92,6 +94,8 @@ fn test_full_workflow_with_transaction() {
     // Initialize database with schema
     db::init(&db_path).unwrap();
     let mut conn = db::open(&db_path).unwrap();
+    let nginx_binary = vec![b'n'; 512 * 1024];
+    let nginx_config = vec![b'c'; 4096];
 
     // Use transaction to install a package atomically
     let result = db::transaction(&mut conn, |tx| {
@@ -104,6 +108,7 @@ fn test_full_workflow_with_transaction() {
             "nginx".to_string(),
             "1.21.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.description = Some("HTTP and reverse proxy server".to_string());
@@ -112,24 +117,12 @@ fn test_full_workflow_with_transaction() {
         let trove_id = trove.insert(tx)?;
 
         // Add files
-        let mut file1 = FileEntry::new(
-            "/usr/bin/nginx".to_string(),
-            "a1b2c3d4e5f6".to_string(),
-            524288, // 512KB
-            0o755,
-            trove_id,
-        );
-        file1.owner = Some("root".to_string());
+        let mut file1 =
+            common::regular_file_entry("/usr/bin/nginx", &nginx_binary, 0o755, trove_id);
         file1.insert(tx)?;
 
-        let mut file2 = FileEntry::new(
-            "/etc/nginx/nginx.conf".to_string(),
-            "f6e5d4c3b2a1".to_string(),
-            4096,
-            0o644,
-            trove_id,
-        );
-        file2.owner = Some("root".to_string());
+        let mut file2 =
+            common::regular_file_entry("/etc/nginx/nginx.conf", &nginx_config, 0o644, trove_id);
         file2.insert(tx)?;
 
         // Mark changeset as applied
@@ -170,6 +163,7 @@ fn test_transaction_rollback_on_error() {
             "test-pkg".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove1.architecture = Some("x86_64".to_string());
         trove1.insert(tx)?;
@@ -179,6 +173,7 @@ fn test_transaction_rollback_on_error() {
             "test-pkg".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove2.architecture = Some("x86_64".to_string());
         trove2.insert(tx)?;
@@ -213,6 +208,7 @@ fn test_trove_with_flavors_and_provenance() {
         "nginx".to_string(),
         "1.21.0".to_string(),
         TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     trove.architecture = Some("x86_64".to_string());
     trove.description = Some("HTTP server with SSL and HTTP/3".to_string());

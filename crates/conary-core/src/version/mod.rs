@@ -27,6 +27,12 @@ impl RpmVersion {
     /// - "1.2.3-4.el8" → epoch=0, version="1.2.3", release=Some("4.el8")
     /// - "1:2.3.4-5.el8" → epoch=1, version="2.3.4", release=Some("5.el8")
     pub fn parse(s: &str) -> Result<Self> {
+        crate::repository::versioning::validate_repo_version(
+            crate::repository::versioning::VersionScheme::Rpm,
+            s,
+        )
+        .map_err(|error| Error::VersionParse(error.to_string()))?;
+
         let (epoch_str, rest) = if let Some(colon_pos) = s.find(':') {
             let (e, r) = s.split_at(colon_pos);
             (e, &r[1..]) // Skip the colon
@@ -34,13 +40,9 @@ impl RpmVersion {
             ("0", s)
         };
 
-        let epoch = if epoch_str.is_empty() {
-            0 // Empty epoch (e.g., ":1.0.0") defaults to 0
-        } else {
-            epoch_str.parse::<u64>().map_err(|e| {
-                Error::VersionParse(format!("Invalid epoch in version '{}': {}", s, e))
-            })?
-        };
+        let epoch = epoch_str.parse::<u64>().map_err(|error| {
+            Error::VersionParse(format!("Invalid epoch in version '{s}': {error}"))
+        })?;
 
         let (version, release) = if let Some(dash_pos) = rest.find('-') {
             let (v, r) = rest.split_at(dash_pos);
@@ -49,13 +51,6 @@ impl RpmVersion {
             (rest.to_string(), None)
         };
 
-        if version.is_empty() {
-            return Err(Error::VersionParse(format!(
-                "Empty version component in '{}'",
-                s
-            )));
-        }
-
         Ok(Self {
             epoch,
             version,
@@ -63,154 +58,9 @@ impl RpmVersion {
         })
     }
 
-    /// Compare version strings using RPM's `rpmvercmp` algorithm.
-    ///
-    /// The algorithm splits each string into alternating runs of digits and
-    /// non-digit characters (skipping separators like `.` and `-`). Digit
-    /// runs are compared numerically (with leading zeros stripped), alpha
-    /// runs are compared lexicographically, and digit runs always sort
-    /// after alpha runs.
-    fn compare_version_strings(a: &str, b: &str) -> Ordering {
-        let segments_a = Self::split_version_segments(a);
-        let segments_b = Self::split_version_segments(b);
-
-        for i in 0..segments_a.len().max(segments_b.len()) {
-            let seg_a = segments_a.get(i);
-            let seg_b = segments_b.get(i);
-
-            match (seg_a, seg_b) {
-                (None, None) => return Ordering::Equal,
-                (Some(_), None) => return Ordering::Greater,
-                (None, Some(_)) => return Ordering::Less,
-                (Some(sa), Some(sb)) => {
-                    let a_is_num = sa.chars().all(|c| c.is_ascii_digit());
-                    let b_is_num = sb.chars().all(|c| c.is_ascii_digit());
-
-                    match (a_is_num, b_is_num) {
-                        // Both numeric: compare as numbers
-                        (true, true) => {
-                            let a_trimmed = sa.trim_start_matches('0');
-                            let b_trimmed = sb.trim_start_matches('0');
-                            match a_trimmed.len().cmp(&b_trimmed.len()) {
-                                Ordering::Equal => match a_trimmed.cmp(b_trimmed) {
-                                    Ordering::Equal => continue,
-                                    ord => return ord,
-                                },
-                                ord => return ord,
-                            }
-                        }
-                        // Digits always beat alphas in RPM
-                        (true, false) => return Ordering::Greater,
-                        (false, true) => return Ordering::Less,
-                        // Both alpha: lexicographic
-                        (false, false) => match sa.cmp(sb) {
-                            Ordering::Equal => continue,
-                            ord => return ord,
-                        },
-                    }
-                }
-            }
-        }
-
-        Ordering::Equal
-    }
-
-    /// Split a version string into alternating runs of digits and non-digits,
-    /// skipping separator characters (`.`, `-`, `_`).
-    fn split_version_segments(s: &str) -> Vec<&str> {
-        let mut segments = Vec::new();
-        let mut i = 0;
-        let bytes = s.as_bytes();
-
-        while i < bytes.len() {
-            // Skip separators
-            if bytes[i] == b'.' || bytes[i] == b'-' || bytes[i] == b'_' {
-                i += 1;
-                continue;
-            }
-
-            let start = i;
-            if bytes[i].is_ascii_digit() {
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-            } else {
-                while i < bytes.len()
-                    && !bytes[i].is_ascii_digit()
-                    && bytes[i] != b'.'
-                    && bytes[i] != b'-'
-                    && bytes[i] != b'_'
-                {
-                    i += 1;
-                }
-            }
-            segments.push(&s[start..i]);
-        }
-
-        segments
-    }
-
-    /// Compare two RPM versions.
-    ///
-    /// Delegates to `repository::versioning::compare_repo_versions` when either
-    /// version string contains `~` or `^` (tilde/caret pre-release and snapshot
-    /// markers).  For versions without those characters, uses the faster inline
-    /// segment comparison.
+    /// Compare two already-validated RPM versions with the upstream comparator.
     pub fn compare(&self, other: &RpmVersion) -> Ordering {
-        // First compare epochs
-        match self.epoch.cmp(&other.epoch) {
-            Ordering::Equal => {}
-            ord => return ord,
-        }
-
-        // If either side contains tilde or caret, delegate to the
-        // tilde/caret-aware comparator in repository::versioning which
-        // implements full RPM semantics for ~pre-release and ^snapshot.
-        let a_has_special = self.version.contains('~')
-            || self.version.contains('^')
-            || self
-                .release
-                .as_ref()
-                .is_some_and(|r| r.contains('~') || r.contains('^'));
-        let b_has_special = other.version.contains('~')
-            || other.version.contains('^')
-            || other
-                .release
-                .as_ref()
-                .is_some_and(|r| r.contains('~') || r.contains('^'));
-
-        if a_has_special || b_has_special {
-            // Reconstruct the version-release strings (without epoch, which
-            // we already compared above).
-            let a_str = match &self.release {
-                Some(rel) => format!("{}-{}", self.version, rel),
-                None => self.version.clone(),
-            };
-            let b_str = match &other.release {
-                Some(rel) => format!("{}-{}", other.version, rel),
-                None => other.version.clone(),
-            };
-            return crate::repository::versioning::compare_repo_versions(
-                crate::repository::versioning::VersionScheme::Rpm,
-                &a_str,
-                &b_str,
-            )
-            .unwrap_or(Ordering::Equal);
-        }
-
-        // Fast path: no tilde/caret, use inline segment comparison
-        match Self::compare_version_strings(&self.version, &other.version) {
-            Ordering::Equal => {}
-            ord => return ord,
-        }
-
-        // Finally compare releases using numeric-aware comparison
-        match (&self.release, &other.release) {
-            (Some(a), Some(b)) => Self::compare_version_strings(a, b),
-            (None, None) => Ordering::Equal,
-            (None, Some(_)) => Ordering::Less,
-            (Some(_), None) => Ordering::Greater,
-        }
+        rpm_version::rpm_evr_compare(&self.to_string(), &other.to_string())
     }
 }
 
@@ -317,9 +167,9 @@ impl VersionConstraint {
     /// Check if a version satisfies this constraint.
     ///
     /// NOTE: This uses RPM-style version comparison (`RpmVersion::compare`).
-    /// It should only be called for packages whose version scheme is RPM or
-    /// legacy (no stored scheme). For Debian or Arch versions, use the
-    /// scheme-aware comparison in `repository::versioning` instead.
+    /// It should only be called for packages whose persisted version scheme is
+    /// RPM. For Debian or Arch versions, use the scheme-aware comparison in
+    /// `repository::versioning` instead.
     pub fn satisfies(&self, version: &RpmVersion) -> bool {
         match self {
             VersionConstraint::Any => true,
@@ -513,12 +363,8 @@ mod tests {
     }
 
     #[test]
-    fn test_rpm_version_parse_empty_epoch() {
-        // Some packages have versions like ":1.02.208-2.fc44" with empty epoch
-        let v = RpmVersion::parse(":1.02.208-2.fc44").unwrap();
-        assert_eq!(v.epoch, 0);
-        assert_eq!(v.version, "1.02.208");
-        assert_eq!(v.release, Some("2.fc44".to_string()));
+    fn test_rpm_version_rejects_empty_epoch() {
+        assert!(RpmVersion::parse(":1.02.208-2.fc44").is_err());
     }
 
     #[test]

@@ -158,7 +158,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev liblzma-dev pkg-config cmake
+          sudo apt-get install -y libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
       - name: Build CCS package
         run: bash packaging/ccs/build.sh
       - name: Upload CCS artifact
@@ -188,7 +188,7 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          dnf install -y rpm-build openssl-devel xz-devel pkg-config gcc cmake perl curl git \
+          dnf install -y rpm-build openssl-devel xz-devel libseccomp-devel pkg-config gcc cmake perl curl git \
           && dnf clean all
       - name: Install Rust
         run: |
@@ -249,7 +249,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
-            build-essential dpkg-dev debhelper libssl-dev liblzma-dev \
+            build-essential dpkg-dev debhelper libssl-dev liblzma-dev libseccomp-dev \
             pkg-config cmake perl curl ca-certificates git \
           && rm -rf /var/lib/apt/lists/*
       - name: Install Rust
@@ -307,7 +307,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel openssl xz pkg-config cmake perl rustup git
+          pacman -S --noconfirm base-devel openssl xz libseccomp pkg-config cmake perl rustup git
           pacman -Scc --noconfirm
       - name: Set up build user
         run: |
@@ -493,7 +493,8 @@ jobs:
 
           - Fedora 44, Ubuntu 26.04 LTS, or Arch Linux
           - x86_64
-          - the adoption-led package-manager loop in the [tester guide](https://github.com/ConaryLabs/Conary/blob/${TAG_NAME}/docs/guides/agent-assisted-tester-loop.md)
+          - the cross-distro install/query/update-preview/remove loop in the [tester guide](https://github.com/ConaryLabs/Conary/blob/${TAG_NAME}/docs/guides/agent-assisted-tester-loop.md)
+          - a source package format that differs from the host's native format
 
           Download \`SHA256SUMS\` and exactly one matching package:
 
@@ -507,12 +508,15 @@ jobs:
           sha256sum -c SHA256SUMS --ignore-missing
           \`\`\`
 
-          The native packages initialize Conary with the exact supported host
-          profile. The preview still refuses packages when dependency,
-          capability, or scriptlet policy cannot establish a safe path. SBOM
-          and provenance sidecars are not published yet.
+          The native packages initialize one source-independent Conary database
+          with the built-in RPM, Debian, and Arch source feeds. Conary preserves
+          the source package ABI and resolves it against explicit target
+          capabilities; an unimplemented source contract or missing target
+          capability is reported exactly before mutation rather than guessed or
+          routed to a manual review queue. SBOM and provenance sidecars are not
+          published yet.
 
-          Report results with the [beta feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md).
+          Report results with the [pre-alpha tester feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md).
 
           ## Changes
 

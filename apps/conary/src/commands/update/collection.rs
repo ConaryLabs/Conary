@@ -2,8 +2,8 @@
 
 //! Collection update orchestration for `conary update @collection`.
 
-use super::super::install::{DepMode, resolve_default_dep_mode_from_model};
-use super::super::{LegacyReplayOptions, SandboxMode, open_db};
+use super::super::install::OwnershipMode;
+use super::super::{SandboxMode, open_db};
 use super::adopted_authority::{
     AdoptedUpdateDecision, adopted_update_decision, native_manager_for_trove,
 };
@@ -14,7 +14,6 @@ use super::selection::{
 };
 use anyhow::Result;
 use conary_core::db::models::{CollectionMember, Trove, TroveType};
-use conary_core::packages::SystemPackageManager;
 use conary_core::repository::resolution_policy::RequestScope;
 use tracing::info;
 
@@ -55,20 +54,17 @@ pub async fn cmd_update_group(
     root: &str,
     security_only: bool,
     dry_run: bool,
-    no_scripts: bool,
     sandbox_mode: SandboxMode,
-    dep_mode: Option<DepMode>,
+    ownership: Option<OwnershipMode>,
     yes: bool,
-    legacy_replay: LegacyReplayOptions,
 ) -> Result<()> {
     info!("Updating collection: {}", name);
-    let requested_dep_mode = dep_mode;
-    let effective_dep_mode = requested_dep_mode.unwrap_or_else(resolve_default_dep_mode_from_model);
+    let requested_ownership = ownership;
+    let effective_ownership = requested_ownership.unwrap_or_default();
     let conn = open_db(db_path)?;
     let effective_source_policy =
         conary_core::repository::load_effective_policy(&conn, RequestScope::Any)?;
     let policy = effective_source_policy.resolution;
-    let primary_flavor = effective_source_policy.primary_flavor;
 
     let troves = Trove::find_by_name(&conn, name)?;
     let collection = troves
@@ -91,7 +87,6 @@ pub async fn cmd_update_group(
     let mut not_installed: Vec<String> = Vec::new();
     let mut adopted_updates_skipped = false;
     let mut security_metadata_unavailable: Vec<SecurityMetadataUnavailable> = Vec::new();
-    let detected_pkg_mgr = SystemPackageManager::detect();
 
     for member in &members {
         let installed = Trove::find_by_name(&conn, &member.member_name)?
@@ -114,32 +109,26 @@ pub async fn cmd_update_group(
 
             let adopted_decision = if trove.install_source.is_adopted() {
                 Some(adopted_update_decision(
-                    trove,
-                    effective_dep_mode,
-                    requested_dep_mode,
+                    effective_ownership,
+                    requested_ownership,
                 ))
             } else {
                 None
             };
 
             if trove.install_source.is_adopted() {
-                let native_manager = native_manager_for_trove(trove, detected_pkg_mgr);
+                let native_manager = native_manager_for_trove(trove);
                 match adopted_decision.expect("adopted trove must have an update decision") {
                     AdoptedUpdateDecision::QueueTakeover => {}
                     AdoptedUpdateDecision::SkipNativeAuthority => {
-                        println!(
-                            "  {} is adopted; native authority owns updates: use '{}'",
-                            CollectionUpdateTarget::from_trove(trove).display(),
-                            native_manager.update_command(&trove.name)
+                        let guidance = native_manager.map_or_else(
+                            || "the recorded external owner".to_string(),
+                            |manager| manager.update_command(&trove.name),
                         );
-                        adopted_updates_skipped = true;
-                        continue;
-                    }
-                    AdoptedUpdateDecision::BlockCritical => {
                         println!(
-                            "  {} is a critical adopted package; native authority remains required: use '{}'",
+                            "  {} is adopted; external authority owns updates: {}",
                             CollectionUpdateTarget::from_trove(trove).display(),
-                            native_manager.update_command(&trove.name)
+                            guidance
                         );
                         adopted_updates_skipped = true;
                         continue;
@@ -150,18 +139,9 @@ pub async fn cmd_update_group(
             let enforce_security_metadata = security_only
                 && !matches!(
                     adopted_decision,
-                    Some(
-                        AdoptedUpdateDecision::SkipNativeAuthority
-                            | AdoptedUpdateDecision::BlockCritical
-                    )
+                    Some(AdoptedUpdateDecision::SkipNativeAuthority)
                 );
-            match select_update_candidate(
-                &conn,
-                trove,
-                enforce_security_metadata,
-                &policy,
-                primary_flavor,
-            )? {
+            match select_update_candidate(&conn, trove, enforce_security_metadata, &policy)? {
                 UpdateCandidateSelection::Selected(_) => {
                     updates_to_apply.push(CollectionUpdateTarget::from_trove(trove));
                 }
@@ -228,13 +208,11 @@ pub async fn cmd_update_group(
             root,
             security_only,
             dry_run,
-            no_scripts,
             sandbox_mode,
-            requested_dep_mode,
+            requested_ownership,
             yes,
             Some(target.version.clone()),
             target.architecture.clone(),
-            legacy_replay,
         )
         .await
         {
@@ -264,8 +242,8 @@ pub async fn cmd_update_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::SandboxMode;
     use crate::commands::test_helpers::create_test_db;
-    use crate::commands::{LegacyReplayOptions, SandboxMode};
     use conary_core::db::models::{
         CollectionMember, InstallSource, Repository, RepositoryPackage, Trove, TroveType,
     };
@@ -280,15 +258,14 @@ mod tests {
             "variant-repo".to_string(),
             "https://example.test/variant".to_string(),
         );
-        repo.gpg_check = false;
-        repo.gpg_strict = false;
-        repo.default_strategy_distro = Some("fedora-44".to_string());
+        repo.source_profile = Some("fedora-44".to_string());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut collection = Trove::new(
             "base".to_string(),
             "1.0.0".to_string(),
             TroveType::Collection,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let collection_id = collection.insert(&conn).unwrap();
         CollectionMember::new(collection_id, "demo".to_string())
@@ -301,10 +278,10 @@ mod tests {
                 "1.0.0".to_string(),
                 TroveType::Package,
                 InstallSource::Repository,
+                conary_core::repository::versioning::VersionScheme::Rpm,
             );
             installed.architecture = Some(arch.to_string());
-            installed.source_distro = Some("fedora-44".to_string());
-            installed.version_scheme = Some("rpm".to_string());
+            installed.source_profile = Some("fedora-44".to_string());
             installed.installed_from_repository_id = Some(repo_id);
             installed.insert(&conn).unwrap();
 
@@ -312,13 +289,13 @@ mod tests {
                 repo_id,
                 "demo".to_string(),
                 "1.0.1".to_string(),
+                conary_core::repository::versioning::VersionScheme::Rpm,
                 format!("sha256:demo-{arch}"),
                 123,
                 format!("https://example.test/variant/demo-1.0.1-{arch}.ccs"),
             );
             candidate.architecture = Some(arch.to_string());
-            candidate.distro = Some("fedora-44".to_string());
-            candidate.version_scheme = Some("rpm".to_string());
+            candidate.source_profile = Some("fedora-44".to_string());
             candidate.insert(&conn).unwrap();
         }
         drop(conn);
@@ -329,11 +306,9 @@ mod tests {
             "/",
             false,
             true,
-            false,
-            SandboxMode::None,
+            SandboxMode::Always,
             None,
             true,
-            LegacyReplayOptions::default(),
         )
         .await;
 

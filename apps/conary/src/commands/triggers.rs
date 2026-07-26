@@ -8,16 +8,10 @@ use conary_core::db::models::{Trigger, TriggerDependency};
 use tracing::info;
 
 /// List all triggers
-pub async fn cmd_trigger_list(
-    db_path: &str,
-    show_disabled: bool,
-    show_builtin_only: bool,
-) -> Result<()> {
+pub async fn cmd_trigger_list(db_path: &str, show_disabled: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
-    let triggers = if show_builtin_only {
-        Trigger::list_builtin(&conn)?
-    } else if show_disabled {
+    let triggers = if show_disabled {
         Trigger::list_all(&conn)?
     } else {
         Trigger::list_enabled(&conn)?
@@ -29,15 +23,11 @@ pub async fn cmd_trigger_list(
     }
 
     println!("Triggers:");
-    println!(
-        "{:<25} {:<8} {:<8} {:<40}",
-        "NAME", "ENABLED", "BUILTIN", "PATTERN"
-    );
-    println!("{}", "-".repeat(85));
+    println!("{:<25} {:<8} {:<40}", "NAME", "ENABLED", "PATTERN");
+    println!("{}", "-".repeat(75));
 
     for trigger in &triggers {
         let enabled = if trigger.enabled { "yes" } else { "no" };
-        let builtin = if trigger.builtin { "yes" } else { "no" };
 
         let pattern_display = if trigger.pattern.len() > 38 {
             format!("{}...", &trigger.pattern[..35])
@@ -46,8 +36,8 @@ pub async fn cmd_trigger_list(
         };
 
         println!(
-            "{:<25} {:<8} {:<8} {:<40}",
-            trigger.name, enabled, builtin, pattern_display
+            "{:<25} {:<8} {:<40}",
+            trigger.name, enabled, pattern_display
         );
     }
 
@@ -70,7 +60,6 @@ pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
     println!("  Handler: {}", trigger.handler);
     println!("  Priority: {}", trigger.priority);
     println!("  Enabled: {}", if trigger.enabled { "yes" } else { "no" });
-    println!("  Built-in: {}", if trigger.builtin { "yes" } else { "no" });
 
     if let Some(id) = trigger.id {
         let deps = TriggerDependency::get_dependencies(&conn, id)?;
@@ -140,7 +129,7 @@ pub async fn cmd_trigger_add(
         return Err(anyhow::anyhow!("Trigger '{}' already exists", name));
     }
 
-    let mut trigger = Trigger::new(name.to_string(), pattern.to_string(), handler.to_string());
+    let mut trigger = Trigger::new(name.to_string(), pattern.to_string(), handler.to_string())?;
 
     if let Some(desc) = description {
         trigger.description = Some(desc.to_string());
@@ -162,20 +151,12 @@ pub async fn cmd_trigger_add(
     Ok(())
 }
 
-/// Remove a custom trigger (built-in triggers cannot be removed)
+/// Remove a custom trigger
 pub async fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", name))?;
-
-    if trigger.builtin {
-        return Err(anyhow::anyhow!(
-            "Cannot remove built-in trigger '{}'. Use 'conary system trigger disable {}' instead.",
-            name,
-            name
-        ));
-    }
 
     let id = trigger
         .id

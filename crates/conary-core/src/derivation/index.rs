@@ -64,8 +64,7 @@ pub struct DerivationIndex<'a> {
 impl<'a> DerivationIndex<'a> {
     /// Create a new index backed by the given connection.
     ///
-    /// The connection must already have the `derivation_index` table
-    /// (schema v54+).
+    /// The connection must already have the current `derivation_index` table.
     #[must_use]
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
@@ -217,11 +216,11 @@ impl<'a> DerivationIndex<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         conn
     }
 

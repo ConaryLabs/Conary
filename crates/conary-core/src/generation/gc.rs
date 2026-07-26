@@ -1,81 +1,309 @@
 // conary-core/src/generation/gc.rs
 
-//! Generation and CAS garbage collection.
+//! Typed CAS reachability and object collection.
 //!
-//! In the composefs-native model, CAS object liveness is determined by which
-//! generations are kept. A CAS object is live if any surviving generation's
-//! state_members reference a trove whose files include that object's hash.
+//! Reachability is assembled completely before deletion begins. Persisted
+//! authorities are parsed through their owning types or exact schema columns;
+//! malformed authority aborts collection instead of silently weakening the
+//! live set.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use crate::filesystem::CasStore;
+use crate::generation::root_manifest::{
+    CapturedSelectedRoot, GenerationRootManifest, MutableStateManifest,
+};
+use crate::payload::PayloadContentAuthority;
 use rusqlite::Connection;
 use tracing::{debug, info};
 
 const GC_RECENT_OBJECT_GRACE_PERIOD: Duration = Duration::from_secs(60 * 60);
 
+/// Exact set of CAS objects reachable from current typed authority.
+#[derive(Debug, Clone, Default)]
+pub struct CasReachability {
+    hashes: HashSet<String>,
+}
+
+impl CasReachability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn hashes(&self) -> &HashSet<String> {
+        &self.hashes
+    }
+
+    pub fn into_hashes(self) -> HashSet<String> {
+        self.hashes
+    }
+
+    /// Protect one exact raw SHA-256 CAS key.
+    pub fn protect_hash(&mut self, context: &str, hash: &str) -> crate::Result<()> {
+        PayloadContentAuthority {
+            sha256: hash.to_string(),
+            size: 0,
+        }
+        .validate()
+        .map_err(|error| {
+            crate::Error::ConfigError(format!(
+                "invalid CAS reference in {context}: {hash:?}: {error}"
+            ))
+        })?;
+        self.hashes.insert(hash.to_string());
+        Ok(())
+    }
+
+    pub fn protect_content(
+        &mut self,
+        context: &str,
+        content: &PayloadContentAuthority,
+    ) -> crate::Result<()> {
+        content.validate().map_err(|error| {
+            crate::Error::ConfigError(format!(
+                "invalid CAS content authority in {context}: {error}"
+            ))
+        })?;
+        self.hashes.insert(content.sha256.clone());
+        Ok(())
+    }
+
+    pub fn protect_generation_manifest(
+        &mut self,
+        context: &str,
+        manifest: &GenerationRootManifest,
+    ) -> crate::Result<()> {
+        manifest.validate()?;
+        for content in manifest.regular_contents() {
+            self.protect_content(context, content)?;
+        }
+        Ok(())
+    }
+
+    pub fn protect_mutable_state_manifest(
+        &mut self,
+        context: &str,
+        manifest: &MutableStateManifest,
+    ) -> crate::Result<()> {
+        manifest.validate()?;
+        for content in manifest.regular_contents() {
+            self.protect_content(context, content)?;
+        }
+        Ok(())
+    }
+
+    pub fn protect_selected_root(
+        &mut self,
+        context: &str,
+        root: &CapturedSelectedRoot,
+    ) -> crate::Result<()> {
+        self.protect_generation_manifest(context, &root.generation)?;
+        self.protect_mutable_state_manifest(context, &root.state)
+    }
+
+    /// Protect exact current-schema roots outside generation manifests.
+    ///
+    /// Each query is mandatory for the current schema. A missing table,
+    /// malformed hash, or malformed chunk list aborts before callers may
+    /// delete anything.
+    pub fn protect_current_database(&mut self, conn: &Connection) -> crate::Result<()> {
+        for (context, sql) in [
+            (
+                "installed file content",
+                "SELECT DISTINCT content_sha256 FROM files
+                 WHERE content_sha256 IS NOT NULL",
+            ),
+            (
+                "config original content",
+                "SELECT DISTINCT original_hash FROM config_files
+                 WHERE original_hash IS NOT NULL",
+            ),
+            (
+                "config backup content",
+                "SELECT DISTINCT backup_hash FROM config_backups",
+            ),
+            (
+                "derived build artifact",
+                "SELECT DISTINCT build_artifact_hash FROM derived_packages
+                 WHERE build_artifact_hash IS NOT NULL",
+            ),
+            (
+                "derived patch content",
+                "SELECT DISTINCT patch_hash FROM derived_patches",
+            ),
+            (
+                "derived override content",
+                "SELECT DISTINCT source_hash FROM derived_overrides
+                 WHERE source_hash IS NOT NULL",
+            ),
+            (
+                "derivation index manifest",
+                "SELECT DISTINCT manifest_cas_hash FROM derivation_index",
+            ),
+            (
+                "derivation index provenance",
+                "SELECT DISTINCT provenance_cas_hash FROM derivation_index
+                 WHERE provenance_cas_hash IS NOT NULL",
+            ),
+            (
+                "derivation cache manifest",
+                "SELECT DISTINCT manifest_cas_hash FROM derivation_cache",
+            ),
+            (
+                "derivation cache provenance",
+                "SELECT DISTINCT provenance_cas_hash FROM derivation_cache
+                 WHERE provenance_cas_hash IS NOT NULL",
+            ),
+            (
+                "protected chunk",
+                "SELECT DISTINCT hash FROM chunk_access WHERE protected = 1",
+            ),
+            (
+                "Remi seed image",
+                "SELECT DISTINCT image_cas_hash FROM seeds",
+            ),
+        ] {
+            self.protect_hash_query(conn, context, sql)?;
+        }
+
+        for converted in crate::db::models::ConvertedPackage::list_repository_conversions(conn)? {
+            if converted.needs_reconversion() {
+                continue;
+            }
+            converted.scriptlet_summary()?;
+            let id = converted.id.unwrap_or_default();
+            for hash in converted.parsed_chunk_hashes()? {
+                self.protect_hash(
+                    &format!("current converted package chunk list row {id}"),
+                    &hash,
+                )?;
+            }
+        }
+        self.protect_hash_array_query(
+            conn,
+            "native package publication chunk list",
+            "SELECT id, chunk_hashes_json FROM native_package_publications
+             WHERE status = 'public'",
+        )?;
+        Ok(())
+    }
+
+    /// Verify that every authoritative live key resolves in this local CAS.
+    pub fn validate_objects_exist(&self, objects_dir: &Path) -> crate::Result<()> {
+        if self.hashes.is_empty() {
+            return Ok(());
+        }
+        if !objects_dir.is_dir() {
+            return Err(crate::Error::NotFound(format!(
+                "CAS objects directory {} is missing while {} live objects are authoritative",
+                objects_dir.display(),
+                self.hashes.len()
+            )));
+        }
+        let cas = CasStore::new(objects_dir)?;
+        let mut missing = self
+            .hashes
+            .iter()
+            .filter(|hash| !cas.exists(hash))
+            .cloned()
+            .collect::<Vec<_>>();
+        missing.sort();
+        if !missing.is_empty() {
+            return Err(crate::Error::NotFound(format!(
+                "CAS reachability references {} missing object(s): {}",
+                missing.len(),
+                missing.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    /// Follow typed derived-artifact manifests to their output blobs.
+    pub fn protect_derived_artifact_contents(
+        &mut self,
+        conn: &Connection,
+        objects_dir: &Path,
+    ) -> crate::Result<()> {
+        let mut stmt = conn.prepare(
+            "SELECT id, build_artifact_hash FROM derived_packages
+             WHERE build_artifact_hash IS NOT NULL",
+        )?;
+        let artifacts = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if artifacts.is_empty() {
+            return Ok(());
+        }
+        if !objects_dir.is_dir() {
+            return Err(crate::Error::NotFound(format!(
+                "CAS objects directory {} is missing while derived artifacts are authoritative",
+                objects_dir.display()
+            )));
+        }
+        let cas = CasStore::new(objects_dir)?;
+        for (id, artifact_hash) in artifacts {
+            for content in crate::derived::load_build_artifact_contents(&cas, &artifact_hash)? {
+                self.protect_content(
+                    &format!("derived build artifact contents row {id}"),
+                    &content,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn protect_hash_query(
+        &mut self,
+        conn: &Connection,
+        context: &str,
+        sql: &str,
+    ) -> crate::Result<()> {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for hash in rows {
+            self.protect_hash(context, &hash?)?;
+        }
+        Ok(())
+    }
+
+    fn protect_hash_array_query(
+        &mut self,
+        conn: &Connection,
+        context: &str,
+        sql: &str,
+    ) -> crate::Result<()> {
+        let mut stmt = conn.prepare(sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id = row.get::<_, i64>(0)?;
+            let json = row.get::<_, String>(1)?;
+            let hashes = serde_json::from_str::<Vec<String>>(&json).map_err(|error| {
+                crate::Error::ConfigError(format!(
+                    "malformed {context} for row {id}; refusing CAS GC: {error}"
+                ))
+            })?;
+            for hash in hashes {
+                self.protect_hash(&format!("{context} row {id}"), &hash)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Statistics from a CAS garbage collection run.
 #[derive(Debug, Clone, Default)]
 pub struct GcStats {
-    /// Total CAS objects inspected.
     pub objects_checked: u64,
-    /// CAS objects removed (unreferenced).
     pub objects_removed: u64,
-    /// Bytes freed by removing unreferenced objects.
     pub bytes_freed: u64,
-    /// Hashes of all CAS objects that were deleted (audit trail).
     pub deleted_hashes: Vec<String>,
 }
 
-/// Get the set of CAS hashes referenced by surviving generations.
-///
-/// Queries `state_cas_hashes` -- an immutable snapshot table populated at
-/// state creation time -- instead of joining through the mutable
-/// `files`/`troves`/`state_members` tables. This ensures GC correctness
-/// even after package upgrades cascade-delete old trove and file rows.
-///
-/// Uses `json_each()` to bind the state ID list as a single JSON array
-/// parameter, avoiding the `SQLITE_MAX_VARIABLE_NUMBER` limit that a
-/// per-ID placeholder approach would hit with large state lists.
-pub fn live_cas_hashes(
-    conn: &Connection,
-    surviving_state_ids: &[i64],
-) -> crate::Result<HashSet<String>> {
-    if surviving_state_ids.is_empty() {
-        return Ok(HashSet::new());
-    }
-
-    let json_array = serde_json::to_string(surviving_state_ids)?;
-
-    // Query the snapshot table directly -- no join through mutable troves/files.
-    // state_cas_hashes is populated at snapshot creation time and is immutable
-    // thereafter, so it correctly reflects the CAS objects each generation needs
-    // even after package upgrades delete old trove/file rows.
-    let sql = "SELECT DISTINCT sha256_hash FROM state_cas_hashes \
-               WHERE state_id IN (SELECT value FROM json_each(?1))";
-
-    let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map([&json_array], |row| row.get::<_, String>(0))?;
-
-    let mut hashes = HashSet::new();
-    for row in rows {
-        hashes.insert(row?);
-    }
-
-    debug!(
-        "Found {} live CAS hashes across {} surviving states",
-        hashes.len(),
-        surviving_state_ids.len()
-    );
-    Ok(hashes)
-}
-
-/// Remove CAS objects not in the live set.
-///
-/// Uses `CasStore::iter_objects()` to walk the two-level objects directory
-/// and deletes any object whose hash is not in `live_hashes`.
+/// Remove CAS objects absent from a previously validated live set.
 pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crate::Result<GcStats> {
     gc_cas_objects_at(
         objects_dir,
@@ -92,60 +320,37 @@ fn gc_cas_objects_at(
     grace_period: Duration,
 ) -> crate::Result<GcStats> {
     let mut stats = GcStats::default();
-
     if !objects_dir.exists() {
         info!("CAS objects directory does not exist, nothing to collect");
         return Ok(stats);
     }
 
     let cas = CasStore::new(objects_dir)?;
-
     for result in cas.iter_objects() {
         let (hash, path) = result?;
         stats.objects_checked += 1;
-
-        if !live_hashes.contains(&hash) {
-            if should_skip_recent_object(&path, now, grace_period) {
-                debug!("Skipping recent CAS object during GC grace period: {hash}");
-                continue;
-            }
-
-            if let Ok(metadata) = path.metadata() {
-                stats.bytes_freed += metadata.len();
-            }
-
-            match std::fs::remove_file(&path) {
-                Ok(()) => {
-                    stats.objects_removed += 1;
-                    stats.deleted_hashes.push(hash.clone());
-                    debug!("Removed unreferenced CAS object: {hash}");
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to remove CAS object {hash}: {e}");
-                }
-            }
+        if live_hashes.contains(&hash) || should_skip_recent_object(&path, now, grace_period) {
+            continue;
         }
+        if let Ok(metadata) = path.metadata() {
+            stats.bytes_freed += metadata.len();
+        }
+        std::fs::remove_file(&path)?;
+        stats.objects_removed += 1;
+        stats.deleted_hashes.push(hash.clone());
+        debug!("Removed unreferenced CAS object: {hash}");
     }
 
-    // Clean up empty prefix directories
-    if let Ok(entries) = std::fs::read_dir(objects_dir) {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|ft| ft.is_dir())
-                && entry
-                    .path()
-                    .read_dir()
-                    .is_ok_and(|mut d| d.next().is_none())
-            {
-                let _ = std::fs::remove_dir(entry.path());
-            }
+    for entry in std::fs::read_dir(objects_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && entry.path().read_dir()?.next().is_none() {
+            std::fs::remove_dir(entry.path())?;
         }
     }
-
     info!(
         "CAS GC: checked {}, removed {}, freed {} bytes",
         stats.objects_checked, stats.objects_removed, stats.bytes_freed
     );
-
     Ok(stats)
 }
 
@@ -160,92 +365,18 @@ fn should_skip_recent_object(path: &Path, now: SystemTime, grace_period: Duratio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::{ConvertedPackage, FileEntry};
     use crate::db::schema;
-    use rusqlite::params;
+    use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use tempfile::TempDir;
 
-    /// Create a test database with the full schema.
-    fn create_test_db() -> (TempDir, Connection) {
-        let tmp = TempDir::new().unwrap();
-        let db_path = tmp.path().join("test.db");
-        let conn = Connection::open(&db_path).unwrap();
+    fn create_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (tmp, conn)
+        schema::ensure_current(&conn).unwrap();
+        conn
     }
 
-    /// Insert a trove and its files, returning the trove ID.
-    fn insert_trove_with_files(
-        conn: &Connection,
-        name: &str,
-        version: &str,
-        files: &[(&str, &str)], // (path, sha256_hash)
-    ) -> i64 {
-        conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, install_reason) \
-             VALUES (?1, ?2, 'package', 'x86_64', 'explicit')",
-            params![name, version],
-        )
-        .unwrap();
-        let trove_id = conn.last_insert_rowid();
-
-        for (path, hash) in files {
-            conn.execute(
-                "INSERT INTO files (path, sha256_hash, size, permissions, trove_id) \
-                 VALUES (?1, ?2, 1024, 493, ?3)",
-                params![path, hash, trove_id],
-            )
-            .unwrap();
-        }
-
-        trove_id
-    }
-
-    /// Create a system state with the given members, returning its ID.
-    ///
-    /// Also populates `state_cas_hashes` by joining through troves/files,
-    /// mirroring what `StateEngine::create_snapshot_at()` does in production.
-    fn create_state_with_members(
-        conn: &Connection,
-        state_number: i64,
-        members: &[(&str, &str)], // (trove_name, trove_version)
-    ) -> i64 {
-        conn.execute(
-            "INSERT INTO system_states (state_number, summary, package_count) \
-             VALUES (?1, 'test state', ?2)",
-            params![state_number, members.len() as i64],
-        )
-        .unwrap();
-        let state_id = conn.last_insert_rowid();
-
-        for (name, version) in members {
-            conn.execute(
-                "INSERT INTO state_members (state_id, trove_name, trove_version, install_reason) \
-                 VALUES (?1, ?2, ?3, 'explicit')",
-                params![state_id, name, version],
-            )
-            .unwrap();
-        }
-
-        // Snapshot CAS hashes for GC liveness (mirrors create_snapshot_at).
-        conn.execute(
-            "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
-             SELECT ?1, f.sha256_hash
-             FROM state_members sm
-             JOIN troves t ON t.name = sm.trove_name AND t.version = sm.trove_version
-             JOIN files f ON f.trove_id = t.id
-             WHERE sm.state_id = ?1
-               AND f.sha256_hash IS NOT NULL
-               AND f.sha256_hash != ''
-               AND NOT f.sha256_hash LIKE 'adopted-%'",
-            params![state_id],
-        )
-        .unwrap();
-
-        state_id
-    }
-
-    /// Create a CAS object file in the two-level directory layout.
     fn create_cas_object(objects_dir: &Path, hash: &str, content: &[u8]) {
         let (prefix, suffix) = hash.split_at(2);
         let dir = objects_dir.join(prefix);
@@ -254,298 +385,246 @@ mod tests {
     }
 
     #[test]
-    fn test_live_cas_hashes_basic() {
-        let (_tmp, conn) = create_test_db();
-
-        // Insert troves with files
-        insert_trove_with_files(
-            &conn,
-            "pkg-a",
-            "1.0",
-            &[
-                (
-                    "/usr/bin/a",
-                    "aaaa000000000000000000000000000000000000000000000000000000000001",
-                ),
-                (
-                    "/usr/lib/liba.so",
-                    "aaaa000000000000000000000000000000000000000000000000000000000002",
-                ),
-            ],
-        );
-        insert_trove_with_files(
-            &conn,
-            "pkg-b",
-            "2.0",
-            &[(
-                "/usr/bin/b",
-                "bbbb000000000000000000000000000000000000000000000000000000000001",
-            )],
-        );
-        insert_trove_with_files(
-            &conn,
-            "pkg-c",
-            "1.0",
-            &[(
-                "/usr/bin/c",
-                "cccc000000000000000000000000000000000000000000000000000000000001",
-            )],
-        );
-
-        // State 1 references pkg-a and pkg-b
-        let state1 = create_state_with_members(&conn, 1, &[("pkg-a", "1.0"), ("pkg-b", "2.0")]);
-
-        // State 2 references pkg-b and pkg-c
-        let state2 = create_state_with_members(&conn, 2, &[("pkg-b", "2.0"), ("pkg-c", "1.0")]);
-
-        // Query with both states surviving
-        let hashes = live_cas_hashes(&conn, &[state1, state2]).unwrap();
-        assert_eq!(hashes.len(), 4, "All 4 hashes should be live");
-        assert!(
-            hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000001")
-        );
-        assert!(
-            hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000002")
-        );
-        assert!(
-            hashes.contains("bbbb000000000000000000000000000000000000000000000000000000000001")
-        );
-        assert!(
-            hashes.contains("cccc000000000000000000000000000000000000000000000000000000000001")
-        );
-
-        // Query with only state 2 surviving
-        let hashes = live_cas_hashes(&conn, &[state2]).unwrap();
-        assert_eq!(
-            hashes.len(),
-            2,
-            "Only pkg-b and pkg-c hashes should be live"
-        );
-        assert!(
-            hashes.contains("bbbb000000000000000000000000000000000000000000000000000000000001")
-        );
-        assert!(
-            hashes.contains("cccc000000000000000000000000000000000000000000000000000000000001")
-        );
-        assert!(
-            !hashes.contains("aaaa000000000000000000000000000000000000000000000000000000000001")
-        );
-    }
-
-    #[test]
-    fn test_live_cas_hashes_empty_states() {
-        let (_tmp, conn) = create_test_db();
-
-        let hashes = live_cas_hashes(&conn, &[]).unwrap();
-        assert!(
-            hashes.is_empty(),
-            "No surviving states means no live hashes"
-        );
-    }
-
-    /// Regression test for the cascade-delete GC bug (finding 4.1).
-    ///
-    /// Scenario: trove foo-1.0 is installed (state 1), then upgraded to
-    /// foo-2.0 (state 2). The upgrade deletes the foo-1.0 trove row,
-    /// which CASCADE-deletes its file rows. Without the state_cas_hashes
-    /// snapshot table, GC would lose foo-1.0's hashes and incorrectly
-    /// collect CAS objects still needed by state 1.
-    #[test]
-    fn test_live_cas_hashes_survives_trove_cascade_delete() {
-        let (_tmp, conn) = create_test_db();
-
-        let hash_v1 = "aaaa000000000000000000000000000000000000000000000000000000000099";
-        let hash_v2 = "bbbb000000000000000000000000000000000000000000000000000000000099";
-
-        // Install foo-1.0 with hash_v1
-        insert_trove_with_files(&conn, "foo", "1.0", &[("/usr/bin/foo", hash_v1)]);
-
-        // Create state 1 snapshot (captures hash_v1 in state_cas_hashes)
-        let state1 = create_state_with_members(&conn, 1, &[("foo", "1.0")]);
-
-        // Upgrade: delete foo-1.0 first (CASCADE deletes its file rows),
-        // then install foo-2.0 at the same path. This mirrors the real
-        // upgrade sequence where the old trove is removed before the new
-        // one is installed (files.path has a UNIQUE constraint).
+    fn current_database_roots_cover_installed_config_derived_and_chunks() {
+        let conn = create_test_db();
+        let installed = "1".repeat(64);
+        let config = "2".repeat(64);
+        let patch = "3".repeat(64);
+        let chunk = "4".repeat(64);
         conn.execute(
-            "DELETE FROM troves WHERE name = 'foo' AND version = '1.0'",
+            "INSERT INTO troves
+             (name, version, type, architecture, install_source, install_reason, version_scheme)
+             VALUES ('pkg', '1', 'package', 'x86_64', 'file', 'explicit', 'conary')",
             [],
         )
         .unwrap();
-        insert_trove_with_files(&conn, "foo", "2.0", &[("/usr/bin/foo", hash_v2)]);
+        let trove = conn.last_insert_rowid();
+        FileEntry::new(
+            "/usr/bin/pkg".to_string(),
+            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
+            Some(PayloadContentAuthority {
+                sha256: installed.clone(),
+                size: 1,
+            }),
+            trove,
+        )
+        .insert(&conn)
+        .unwrap();
+        conn.execute(
+            "INSERT INTO config_files
+             (path, trove_id, package_name, package_version, original_hash, status, source)
+             VALUES ('/etc/pkg', ?1, 'pkg', '1', ?2, 'pristine', 'rpm')",
+            rusqlite::params![trove, config],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO derived_packages (name, parent_name)
+             VALUES ('pkg-local', 'pkg')",
+            [],
+        )
+        .unwrap();
+        let derived = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO derived_patches
+             (derived_id, patch_order, patch_name, patch_hash)
+             VALUES (?1, 1, 'fix.patch', ?2)",
+            rusqlite::params![derived, patch],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunk_access (hash, size_bytes, protected)
+             VALUES (?1, 1, 1)",
+            [&chunk],
+        )
+        .unwrap();
 
-        // Create state 2 snapshot (captures hash_v2 in state_cas_hashes)
-        let state2 = create_state_with_members(&conn, 2, &[("foo", "2.0")]);
-
-        // Both states survive -- GC must see BOTH hashes
-        let hashes = live_cas_hashes(&conn, &[state1, state2]).unwrap();
-        assert!(
-            hashes.contains(hash_v1),
-            "hash_v1 from deleted trove must still be live via state_cas_hashes snapshot"
-        );
-        assert!(
-            hashes.contains(hash_v2),
-            "hash_v2 from current trove must be live"
-        );
-        assert_eq!(hashes.len(), 2);
+        let mut roots = CasReachability::new();
+        roots.protect_current_database(&conn).unwrap();
+        for hash in [installed, config, patch, chunk] {
+            assert!(roots.hashes().contains(&hash));
+        }
     }
 
     #[test]
-    fn test_gc_removes_unreferenced() {
+    fn derived_artifact_root_expands_to_typed_content_authority() {
+        let conn = create_test_db();
         let tmp = TempDir::new().unwrap();
         let objects_dir = tmp.path().join("objects");
-        std::fs::create_dir_all(&objects_dir).unwrap();
+        let cas = CasStore::new(&objects_dir).unwrap();
+        let content = b"derived output";
+        let content_hash = cas.store(content).unwrap();
+        let artifact = serde_json::json!({
+            "format": "conary-derived-v2",
+            "name": "pkg-local",
+            "version": "1+local",
+            "parent_name": "pkg",
+            "parent_version": "1",
+            "total_size": content.len(),
+            "files": {
+                "/usr/bin/pkg": {
+                    "node": PayloadNode::regular(0o755),
+                    "content": {
+                        "sha256": content_hash,
+                        "size": content.len()
+                    },
+                    "modified": true
+                }
+            }
+        });
+        let artifact_hash = cas.store(&serde_json::to_vec(&artifact).unwrap()).unwrap();
+        conn.execute(
+            "INSERT INTO derived_packages
+             (name, parent_name, build_artifact_hash)
+             VALUES ('pkg-local', 'pkg', ?1)",
+            [&artifact_hash],
+        )
+        .unwrap();
 
-        let live_hash = "aabbccdd00000000000000000000000000000000000000000000000000000001";
-        let dead_hash = "ddee00ff00000000000000000000000000000000000000000000000000000002";
+        let mut roots = CasReachability::new();
+        roots.protect_current_database(&conn).unwrap();
+        roots
+            .protect_derived_artifact_contents(&conn, &objects_dir)
+            .unwrap();
 
-        create_cas_object(&objects_dir, live_hash, b"live content");
-        create_cas_object(&objects_dir, dead_hash, b"dead content");
+        assert!(roots.hashes().contains(&artifact_hash));
+        assert!(roots.hashes().contains(&content_hash));
+    }
 
-        let live_hashes: HashSet<String> = [live_hash.to_string()].into_iter().collect();
+    #[test]
+    fn malformed_explicit_chunk_authority_fails_closed() {
+        let conn = create_test_db();
+        ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            "pkg".to_string(),
+            "1".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            "checksum".to_string(),
+            &["NOT-A-HASH".to_string()],
+            1,
+            "content".to_string(),
+            "/tmp/pkg.ccs".to_string(),
+        )
+        .insert(&conn)
+        .unwrap();
+        let error = CasReachability::new()
+            .protect_current_database(&conn)
+            .expect_err("malformed chunk authority must abort");
+        assert!(error.to_string().contains("invalid CAS reference"));
+    }
+
+    #[test]
+    fn chunk_roots_use_only_current_conversions_and_public_native_rows() {
+        let conn = create_test_db();
+        let current = "5".repeat(64);
+        let stale = "6".repeat(64);
+        let public_native = "7".repeat(64);
+        let mut current_conversion = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            "current".to_string(),
+            "1".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            "current-checksum".to_string(),
+            std::slice::from_ref(&current),
+            1,
+            current.clone(),
+            "/tmp/current.ccs".to_string(),
+        );
+        current_conversion.insert(&conn).unwrap();
+        let mut stale_conversion = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            "stale".to_string(),
+            "1".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            "stale-checksum".to_string(),
+            std::slice::from_ref(&stale),
+            1,
+            stale.clone(),
+            "/tmp/stale.ccs".to_string(),
+        );
+        stale_conversion.conversion_version =
+            crate::db::models::CONVERSION_VERSION.saturating_sub(1);
+        stale_conversion.insert(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO repositories (name, url) VALUES ('fixture', 'https://example.test')",
+            [],
+        )
+        .unwrap();
+        let repository = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repository_packages
+             (repository_id, name, version, architecture, checksum, size, download_url,
+              version_scheme, package_release)
+             VALUES (?1, 'native', '1', 'x86_64', 'checksum', 1,
+                     'https://example.test/native', 'rpm', '1')",
+            [repository],
+        )
+        .unwrap();
+        let package = conn.last_insert_rowid();
+        for (name, status, chunks) in [
+            (
+                "native",
+                "public",
+                serde_json::to_string(std::slice::from_ref(&public_native)).unwrap(),
+            ),
+            ("retired", "superseded", "[\"NOT-A-CAS-HASH\"]".to_string()),
+        ] {
+            conn.execute(
+                "INSERT INTO native_package_publications
+                 (repository_id, repository_package_id, source_profile, name, version,
+                  package_release, architecture, package_kind, authority_format_version,
+                  status, content_hash, chunk_hashes_json, total_size, package_path,
+                  target_path, trust_status)
+                 VALUES (?1, ?2, 'fedora-44', ?3, '1', '1', 'x86_64', 'rpm', 1,
+                         ?4, 'content', ?5, 1, '/tmp/native.rpm',
+                         'Packages/native.rpm', 'verified')",
+                rusqlite::params![repository, package, name, status, chunks],
+            )
+            .unwrap();
+        }
+
+        let mut roots = CasReachability::new();
+        roots.protect_current_database(&conn).unwrap();
+        assert!(roots.hashes().contains(&current));
+        assert!(!roots.hashes().contains(&stale));
+        assert!(roots.hashes().contains(&public_native));
+    }
+
+    #[test]
+    fn gc_removes_only_old_unreferenced_objects() {
+        let tmp = TempDir::new().unwrap();
+        let objects_dir = tmp.path().join("objects");
+        let live = "a".repeat(64);
+        let dead = "b".repeat(64);
+        create_cas_object(&objects_dir, &live, b"live");
+        create_cas_object(&objects_dir, &dead, b"dead");
 
         let stats = gc_cas_objects_at(
             &objects_dir,
-            &live_hashes,
+            &[live.clone()].into_iter().collect(),
             SystemTime::now() + GC_RECENT_OBJECT_GRACE_PERIOD + Duration::from_secs(1),
             GC_RECENT_OBJECT_GRACE_PERIOD,
         )
         .unwrap();
 
         assert_eq!(stats.objects_checked, 2);
-        assert_eq!(stats.objects_removed, 1);
-        assert!(stats.bytes_freed > 0);
-
-        // Verify the live object still exists
-        let (prefix, suffix) = live_hash.split_at(2);
-        assert!(objects_dir.join(prefix).join(suffix).exists());
-
-        // Verify the dead object was removed
-        let (prefix, suffix) = dead_hash.split_at(2);
-        assert!(!objects_dir.join(prefix).join(suffix).exists());
+        assert_eq!(stats.deleted_hashes, vec![dead.clone()]);
+        assert!(objects_dir.join(&live[..2]).join(&live[2..]).exists());
+        assert!(!objects_dir.join(&dead[..2]).join(&dead[2..]).exists());
     }
 
     #[test]
-    fn test_gc_preserves_referenced() {
+    fn gc_preserves_recent_unreferenced_objects() {
         let tmp = TempDir::new().unwrap();
         let objects_dir = tmp.path().join("objects");
-        std::fs::create_dir_all(&objects_dir).unwrap();
+        let recent = "c".repeat(64);
+        create_cas_object(&objects_dir, &recent, b"recent");
 
-        let hash1 = "aa11000000000000000000000000000000000000000000000000000000000001";
-        let hash2 = "bb22000000000000000000000000000000000000000000000000000000000002";
-        let hash3 = "cc33000000000000000000000000000000000000000000000000000000000003";
-
-        create_cas_object(&objects_dir, hash1, b"content 1");
-        create_cas_object(&objects_dir, hash2, b"content 2");
-        create_cas_object(&objects_dir, hash3, b"content 3");
-
-        // All three are live
-        let live_hashes: HashSet<String> =
-            [hash1.to_string(), hash2.to_string(), hash3.to_string()]
-                .into_iter()
-                .collect();
-
-        let stats = gc_cas_objects_at(
-            &objects_dir,
-            &live_hashes,
-            SystemTime::now() + GC_RECENT_OBJECT_GRACE_PERIOD + Duration::from_secs(1),
-            GC_RECENT_OBJECT_GRACE_PERIOD,
-        )
-        .unwrap();
-
-        assert_eq!(stats.objects_checked, 3);
-        assert_eq!(stats.objects_removed, 0, "No objects should be removed");
-        assert_eq!(stats.bytes_freed, 0);
-
-        // Verify all objects survive
-        for hash in &[hash1, hash2, hash3] {
-            let (prefix, suffix) = hash.split_at(2);
-            assert!(
-                objects_dir.join(prefix).join(suffix).exists(),
-                "Live object {hash} should survive GC"
-            );
-        }
-    }
-
-    #[test]
-    fn test_gc_nonexistent_objects_dir() {
-        let tmp = TempDir::new().unwrap();
-        let objects_dir = tmp.path().join("does-not-exist");
-
-        let live_hashes = HashSet::new();
-        let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
-
-        assert_eq!(stats.objects_checked, 0);
-        assert_eq!(stats.objects_removed, 0);
-        assert_eq!(stats.bytes_freed, 0);
-    }
-
-    #[test]
-    fn test_gc_skips_temp_files() {
-        let tmp = TempDir::new().unwrap();
-        let objects_dir = tmp.path().join("objects");
-        let prefix_dir = objects_dir.join("ab");
-        std::fs::create_dir_all(&prefix_dir).unwrap();
-
-        // Create a temp file that should be skipped
-        std::fs::write(prefix_dir.join(".tmp_write_in_progress"), b"temp").unwrap();
-        std::fs::write(prefix_dir.join("something.tmp"), b"temp2").unwrap();
-
-        // Create a real dead object
-        let dead_hash = "ab00000000000000000000000000000000000000000000000000000000000001";
-        create_cas_object(&objects_dir, dead_hash, b"dead");
-
-        let live_hashes = HashSet::new();
-        let stats = gc_cas_objects_at(
-            &objects_dir,
-            &live_hashes,
-            SystemTime::now() + GC_RECENT_OBJECT_GRACE_PERIOD + Duration::from_secs(1),
-            GC_RECENT_OBJECT_GRACE_PERIOD,
-        )
-        .unwrap();
-
-        // Only the real object should be checked and removed
-        assert_eq!(stats.objects_checked, 1);
-        assert_eq!(stats.objects_removed, 1);
-
-        // Temp files should still exist
-        assert!(prefix_dir.join(".tmp_write_in_progress").exists());
-        assert!(prefix_dir.join("something.tmp").exists());
-    }
-
-    #[test]
-    fn test_gc_skips_recently_modified_objects_within_grace_period() {
-        let tmp = TempDir::new().unwrap();
-        let objects_dir = tmp.path().join("objects");
-        std::fs::create_dir_all(&objects_dir).unwrap();
-
-        let recent_hash = "ab44000000000000000000000000000000000000000000000000000000000044";
-        create_cas_object(&objects_dir, recent_hash, b"recent");
-
-        let live_hashes = HashSet::new();
-        let stats = gc_cas_objects(&objects_dir, &live_hashes).unwrap();
-
+        let stats = gc_cas_objects(&objects_dir, &HashSet::new()).unwrap();
         assert_eq!(stats.objects_checked, 1);
         assert_eq!(stats.objects_removed, 0);
-
-        let (prefix, suffix) = recent_hash.split_at(2);
-        assert!(
-            objects_dir.join(prefix).join(suffix).exists(),
-            "recent objects should survive the GC grace period"
-        );
-    }
-
-    #[test]
-    fn test_recent_object_helper_allows_nonrecent_objects() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("object");
-        std::fs::write(&path, b"old").unwrap();
-
-        let now = SystemTime::now();
-        assert!(!should_skip_recent_object(
-            &path,
-            now + Duration::from_secs(1),
-            Duration::ZERO
-        ));
     }
 }

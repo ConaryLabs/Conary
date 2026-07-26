@@ -17,9 +17,9 @@ pub(crate) fn encode_security_capability_xattr(
 ) -> crate::Result<Vec<u8>> {
     let capability = normalized_capability(capability)?;
     let mut permitted = [0_u32; VFS_CAP_U32_COUNT];
-    let inheritable = [0_u32; VFS_CAP_U32_COUNT];
+    let mut inheritable = [0_u32; VFS_CAP_U32_COUNT];
 
-    if capability.permitted {
+    if capability.permitted || capability.inheritable {
         for name in &capability.capabilities {
             let index = LINUX_FILE_CAPABILITY_NAMES
                 .iter()
@@ -32,7 +32,13 @@ pub(crate) fn encode_security_capability_xattr(
                 })?;
             let word_index = index / 32;
             let bit_index = index % 32;
-            permitted[word_index] |= 1_u32 << bit_index;
+            let mask = 1_u32 << bit_index;
+            if capability.permitted {
+                permitted[word_index] |= mask;
+            }
+            if capability.inheritable {
+                inheritable[word_index] |= mask;
+            }
         }
     }
 
@@ -146,14 +152,23 @@ mod tests {
     }
 
     #[test]
-    fn inheritable_capability_is_rejected() {
+    fn inheritable_capability_sets_inheritable_words() {
         let mut capability = file_capability("/usr/bin/server", &["cap_net_bind_service"]);
         capability.inheritable = true;
 
-        let error = encode_security_capability_xattr(&capability)
-            .expect_err("inheritable capabilities must be rejected");
+        let encoded =
+            encode_security_capability_xattr(&capability).expect("encode inheritable capability");
 
-        assert!(error.to_string().contains("inheritable"));
+        assert_eq!(
+            u32::from_le_bytes(encoded[4..8].try_into().unwrap()),
+            1_u32 << 10
+        );
+        assert_eq!(
+            u32::from_le_bytes(encoded[8..12].try_into().unwrap()),
+            1_u32 << 10
+        );
+        assert_eq!(u32::from_le_bytes(encoded[12..16].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(encoded[16..20].try_into().unwrap()), 0);
     }
 
     #[test]

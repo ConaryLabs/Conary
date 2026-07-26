@@ -8,11 +8,9 @@
 //! # Resolution Strategies
 //!
 //! Each package can have multiple resolution strategies tried in order:
-//! - **Binary**: Pre-built package at a URL (with optional delta support)
 //! - **Remi**: Convert from distro package on-demand
-//! - **Recipe**: Build from source using recipe instructions
 //! - **Delegate**: Federate to another label/repository
-//! - **Legacy**: Use existing repository_packages entry (backwards compat)
+//! - **RepositoryPackage**: Use the selected typed repository package row
 //!
 //! # Caching Policy
 //!
@@ -23,17 +21,17 @@
 //! # Example
 //!
 //! ```ignore
-//! // Popular package with binary + delta support
+//! // Route one package through Remi.
 //! let resolution = PackageResolution {
 //!     name: "nginx".to_string(),
 //!     strategies: vec![
-//!         ResolutionStrategy::Binary {
-//!             url: "https://repo.example.com/packages/nginx-1.24.0.ccs".to_string(),
-//!             checksum: "sha256:abc123...".to_string(),
-//!             delta_base: Some("nginx-1.23.0".to_string()),
+//!         ResolutionStrategy::Remi {
+//!             endpoint: "https://remi.example.com".to_string(),
+//!             distro: "fedora-44".to_string(),
+//!             source_name: None,
 //!         },
 //!     ],
-//!     primary_strategy: PrimaryStrategy::Binary,
+//!     primary_strategy: PrimaryStrategy::Remi,
 //!     cache_ttl: Some(2592000), // 30 days
 //!     cache_priority: 100,
 //!     ..Default::default()
@@ -51,17 +49,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResolutionStrategy {
-    /// Pre-built binary package at a URL
-    Binary {
-        /// URL to download the package from
-        url: String,
-        /// Expected checksum (SHA-256)
-        checksum: String,
-        /// Base package version for delta updates (if available)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        delta_base: Option<String>,
-    },
-
     /// Convert from distro package via Remi proxy
     Remi {
         /// Remi server endpoint
@@ -73,25 +60,14 @@ pub enum ResolutionStrategy {
         source_name: Option<String>,
     },
 
-    /// Build from source using a recipe
-    Recipe {
-        /// URL to the recipe file
-        recipe_url: String,
-        /// URLs for source archives
-        source_urls: Vec<String>,
-        /// URLs for patch files to apply
-        #[serde(default)]
-        patches: Vec<String>,
-    },
-
     /// Delegate to another label (federation)
     Delegate {
         /// Label to delegate to (e.g., "upstream@fedora:f43")
         label: String,
     },
 
-    /// Use existing repository_packages entry (backwards compatibility)
-    Legacy {
+    /// Use the selected typed repository package row.
+    RepositoryPackage {
         /// ID of the repository_package row
         repository_package_id: i64,
     },
@@ -104,33 +80,27 @@ pub enum ResolutionStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrimaryStrategy {
-    Binary,
     Remi,
-    Recipe,
     Delegate,
-    Legacy,
+    RepositoryPackage,
 }
 
 impl PrimaryStrategy {
     /// Convert to database string representation
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Binary => "binary",
             Self::Remi => "remi",
-            Self::Recipe => "recipe",
             Self::Delegate => "delegate",
-            Self::Legacy => "legacy",
+            Self::RepositoryPackage => "repository_package",
         }
     }
 
     /// Parse from database string
     pub fn parse(s: &str) -> Result<Self> {
         match s {
-            "binary" => Ok(Self::Binary),
             "remi" => Ok(Self::Remi),
-            "recipe" => Ok(Self::Recipe),
             "delegate" => Ok(Self::Delegate),
-            "legacy" => Ok(Self::Legacy),
+            "repository_package" => Ok(Self::RepositoryPackage),
             _ => Err(Error::ParseError(format!(
                 "Unknown primary strategy: {}",
                 s
@@ -142,11 +112,9 @@ impl PrimaryStrategy {
 impl From<&ResolutionStrategy> for PrimaryStrategy {
     fn from(strategy: &ResolutionStrategy) -> Self {
         match strategy {
-            ResolutionStrategy::Binary { .. } => Self::Binary,
             ResolutionStrategy::Remi { .. } => Self::Remi,
-            ResolutionStrategy::Recipe { .. } => Self::Recipe,
             ResolutionStrategy::Delegate { .. } => Self::Delegate,
-            ResolutionStrategy::Legacy { .. } => Self::Legacy,
+            ResolutionStrategy::RepositoryPackage { .. } => Self::RepositoryPackage,
         }
     }
 }
@@ -183,7 +151,7 @@ impl PackageResolution {
         let primary_strategy = strategies
             .first()
             .map(PrimaryStrategy::from)
-            .unwrap_or(PrimaryStrategy::Legacy);
+            .unwrap_or(PrimaryStrategy::RepositoryPackage);
 
         Self {
             id: None,
@@ -195,19 +163,6 @@ impl PackageResolution {
             cache_ttl: None,
             cache_priority: 0,
         }
-    }
-
-    /// Create a binary resolution entry
-    pub fn binary(repository_id: i64, name: String, url: String, checksum: String) -> Self {
-        Self::new(
-            repository_id,
-            name,
-            vec![ResolutionStrategy::Binary {
-                url,
-                checksum,
-                delta_base: None,
-            }],
-        )
     }
 
     /// Create a Remi resolution entry
@@ -223,19 +178,43 @@ impl PackageResolution {
         )
     }
 
-    /// Create a legacy resolution entry (backwards compatibility)
-    pub fn legacy(repository_id: i64, name: String, repository_package_id: i64) -> Self {
+    /// Create a resolution entry for one selected repository package.
+    pub fn repository_package(
+        repository_id: i64,
+        name: String,
+        repository_package_id: i64,
+    ) -> Self {
         Self::new(
             repository_id,
             name,
-            vec![ResolutionStrategy::Legacy {
+            vec![ResolutionStrategy::RepositoryPackage {
                 repository_package_id,
             }],
         )
     }
 
+    fn validate(&self) -> Result<()> {
+        let first = self.strategies.first().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "package resolution for '{}' must declare at least one strategy",
+                self.name
+            ))
+        })?;
+        let expected = PrimaryStrategy::from(first);
+        if self.primary_strategy != expected {
+            return Err(Error::ConfigError(format!(
+                "package resolution for '{}' projects primary strategy '{}' but its first strategy is '{}'",
+                self.name,
+                self.primary_strategy.as_str(),
+                expected.as_str()
+            )));
+        }
+        Ok(())
+    }
+
     /// Insert this resolution entry into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        self.validate()?;
         let strategies_json = serde_json::to_string(&self.strategies)
             .map_err(|e| Error::ParseError(format!("Failed to serialize strategies: {e}")))?;
 
@@ -336,6 +315,7 @@ impl PackageResolution {
 
     /// Update this resolution entry
     pub fn update(&self, conn: &Connection) -> Result<()> {
+        self.validate()?;
         let id = self.id.ok_or_else(|| {
             Error::MissingId("Cannot update resolution entry without ID".to_string())
         })?;
@@ -419,7 +399,7 @@ pub enum CacheTier {
     Popular,
     /// Common libraries (openssl, zlib) - cache 7 days
     Common,
-    /// Obscure packages - don't cache, recipe-only
+    /// Obscure packages - do not retain in cache
     Obscure,
     /// Group/collection metadata only
     Metadata,
@@ -465,15 +445,13 @@ mod tests {
 
     #[test]
     fn test_resolution_strategy_serialization() {
-        let binary = ResolutionStrategy::Binary {
-            url: "https://example.com/pkg.ccs".to_string(),
-            checksum: "sha256:abc123".to_string(),
-            delta_base: Some("1.0.0".to_string()),
+        let repository_package = ResolutionStrategy::RepositoryPackage {
+            repository_package_id: 42,
         };
 
-        let json = serde_json::to_string(&binary).unwrap();
+        let json = serde_json::to_string(&repository_package).unwrap();
         let parsed: ResolutionStrategy = serde_json::from_str(&json).unwrap();
-        assert_eq!(binary, parsed);
+        assert_eq!(repository_package, parsed);
     }
 
     #[test]
@@ -497,12 +475,8 @@ mod tests {
         let repo_id = create_test_repo(&conn);
 
         // Create
-        let mut resolution = PackageResolution::binary(
-            repo_id,
-            "nginx".to_string(),
-            "https://example.com/nginx.ccs".to_string(),
-            "sha256:abc123".to_string(),
-        );
+        let mut resolution =
+            PackageResolution::repository_package(repo_id, "nginx".to_string(), 101);
         resolution.cache_ttl = Some(86400);
         resolution.cache_priority = 100;
 
@@ -514,7 +488,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found.name, "nginx");
-        assert_eq!(found.primary_strategy, PrimaryStrategy::Binary);
+        assert_eq!(found.primary_strategy, PrimaryStrategy::RepositoryPackage);
         assert_eq!(found.cache_priority, 100);
 
         // Update
@@ -539,22 +513,13 @@ mod tests {
         let repo_id = create_test_repo(&conn);
 
         // Create version-specific entry
-        let mut specific = PackageResolution::binary(
-            repo_id,
-            "nginx".to_string(),
-            "https://example.com/nginx-1.24.0.ccs".to_string(),
-            "sha256:specific".to_string(),
-        );
+        let mut specific = PackageResolution::repository_package(repo_id, "nginx".to_string(), 101);
         specific.version = Some("1.24.0".to_string());
         specific.insert(&conn).unwrap();
 
         // Create any-version entry
-        let mut any_version = PackageResolution::binary(
-            repo_id,
-            "nginx".to_string(),
-            "https://example.com/nginx-latest.ccs".to_string(),
-            "sha256:latest".to_string(),
-        );
+        let mut any_version =
+            PackageResolution::repository_package(repo_id, "nginx".to_string(), 102);
         any_version.insert(&conn).unwrap();
 
         // Exact version match should find specific
@@ -562,7 +527,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:specific")
+            matches!(&found.strategies[0], ResolutionStrategy::RepositoryPackage { repository_package_id } if *repository_package_id == 101)
         );
 
         // Different version should fall back to any-version
@@ -570,7 +535,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:latest")
+            matches!(&found.strategies[0], ResolutionStrategy::RepositoryPackage { repository_package_id } if *repository_package_id == 102)
         );
 
         // No version should use any-version
@@ -578,7 +543,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            matches!(&found.strategies[0], ResolutionStrategy::Binary { checksum, .. } if checksum == "sha256:latest")
+            matches!(&found.strategies[0], ResolutionStrategy::RepositoryPackage { repository_package_id } if *repository_package_id == 102)
         );
     }
 
@@ -587,14 +552,10 @@ mod tests {
         let (_temp, conn) = create_test_db();
         let repo_id = create_test_repo(&conn);
 
-        // Create binary entry
-        let mut binary = PackageResolution::binary(
-            repo_id,
-            "nginx".to_string(),
-            "https://example.com/nginx.ccs".to_string(),
-            "sha256:abc".to_string(),
-        );
-        binary.insert(&conn).unwrap();
+        // Create exact repository-package entry
+        let mut repository_package =
+            PackageResolution::repository_package(repo_id, "nginx".to_string(), 101);
+        repository_package.insert(&conn).unwrap();
 
         // Create remi entry
         let mut remi = PackageResolution::remi(
@@ -605,11 +566,12 @@ mod tests {
         );
         remi.insert(&conn).unwrap();
 
-        // Find only binary entries
-        let binaries =
-            PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::Binary).unwrap();
-        assert_eq!(binaries.len(), 1);
-        assert_eq!(binaries[0].name, "nginx");
+        // Find only exact repository-package entries
+        let repository_packages =
+            PackageResolution::find_by_strategy(&conn, repo_id, PrimaryStrategy::RepositoryPackage)
+                .unwrap();
+        assert_eq!(repository_packages.len(), 1);
+        assert_eq!(repository_packages[0].name, "nginx");
 
         // Find only remi entries
         let remis =
@@ -620,13 +582,6 @@ mod tests {
 
     #[test]
     fn test_primary_strategy_from_resolution() {
-        let binary = ResolutionStrategy::Binary {
-            url: "url".to_string(),
-            checksum: "sum".to_string(),
-            delta_base: None,
-        };
-        assert_eq!(PrimaryStrategy::from(&binary), PrimaryStrategy::Binary);
-
         let remi = ResolutionStrategy::Remi {
             endpoint: "ep".to_string(),
             distro: "fedora".to_string(),
@@ -634,22 +589,43 @@ mod tests {
         };
         assert_eq!(PrimaryStrategy::from(&remi), PrimaryStrategy::Remi);
 
-        let recipe = ResolutionStrategy::Recipe {
-            recipe_url: "url".to_string(),
-            source_urls: vec![],
-            patches: vec![],
-        };
-        assert_eq!(PrimaryStrategy::from(&recipe), PrimaryStrategy::Recipe);
-
         let delegate = ResolutionStrategy::Delegate {
             label: "upstream@fedora:f43".to_string(),
         };
         assert_eq!(PrimaryStrategy::from(&delegate), PrimaryStrategy::Delegate);
 
-        let legacy = ResolutionStrategy::Legacy {
+        let repository_package = ResolutionStrategy::RepositoryPackage {
             repository_package_id: 123,
         };
-        assert_eq!(PrimaryStrategy::from(&legacy), PrimaryStrategy::Legacy);
+        assert_eq!(
+            PrimaryStrategy::from(&repository_package),
+            PrimaryStrategy::RepositoryPackage
+        );
+        assert!(PrimaryStrategy::parse("recipe").is_err());
+        assert!(PrimaryStrategy::parse("legacy").is_err());
+    }
+
+    #[test]
+    fn retired_recipe_resolution_strategy_is_rejected() {
+        let old = serde_json::json!({
+            "type": "recipe",
+            "recipe_url": "https://example.test/package.recipe.toml",
+            "source_urls": [],
+            "patches": []
+        });
+        assert!(serde_json::from_value::<ResolutionStrategy>(old).is_err());
+    }
+
+    #[test]
+    fn retired_binary_resolution_strategy_is_rejected() {
+        let old = serde_json::json!({
+            "type": "binary",
+            "url": "https://unbound.example.invalid/package.ccs",
+            "checksum": "sha256:unbound",
+            "delta_base": null
+        });
+        assert!(serde_json::from_value::<ResolutionStrategy>(old).is_err());
+        assert!(PrimaryStrategy::parse("binary").is_err());
     }
 
     #[test]
@@ -673,11 +649,9 @@ mod tests {
             repo_id,
             "complex-pkg".to_string(),
             vec![
-                // Try binary first
-                ResolutionStrategy::Binary {
-                    url: "https://cache.example.com/complex-pkg.ccs".to_string(),
-                    checksum: "sha256:cache".to_string(),
-                    delta_base: None,
+                // Try the exact authenticated repository row first.
+                ResolutionStrategy::RepositoryPackage {
+                    repository_package_id: 101,
                 },
                 // Fall back to Remi
                 ResolutionStrategy::Remi {
@@ -693,12 +667,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found.strategies.len(), 2);
-        assert_eq!(found.primary_strategy, PrimaryStrategy::Binary);
+        assert_eq!(found.primary_strategy, PrimaryStrategy::RepositoryPackage);
 
         // Verify strategies are preserved in order
         assert!(matches!(
             found.strategies[0],
-            ResolutionStrategy::Binary { .. }
+            ResolutionStrategy::RepositoryPackage { .. }
         ));
         assert!(matches!(
             found.strategies[1],

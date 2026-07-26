@@ -417,7 +417,14 @@ impl DerivationExecutor {
         }
 
         // Step 4: Capture output from DESTDIR into CAS.
-        let manifest = capture_output(&destdir, &self.cas, derivation_id.as_str(), build_duration)?;
+        let manifest = capture_output(
+            &destdir,
+            &self.cas,
+            derivation_id.as_str(),
+            &recipe.package.name,
+            &recipe.package.version,
+            build_duration,
+        )?;
 
         // Output is safely in CAS -- disarm the guard so it does not
         // double-remove on the success path.
@@ -461,9 +468,13 @@ impl DerivationExecutor {
 
         let mut content_prov =
             crate::provenance::ContentProvenance::new(&pkg_output.manifest.output_hash);
-        content_prov.total_size = pkg_output.manifest.files.iter().map(|f| f.size).sum();
-        content_prov.file_count =
-            (pkg_output.manifest.files.len() + pkg_output.manifest.symlinks.len()) as u64;
+        content_prov.total_size = pkg_output
+            .manifest
+            .regular_entries()
+            .filter_map(|entry| entry.content.as_ref())
+            .map(|content| content.size)
+            .sum();
+        content_prov.file_count = pkg_output.manifest.entries.len() as u64;
 
         let provenance =
             crate::provenance::Provenance::new(source_prov, build_prov, sig_prov, content_prov);
@@ -544,7 +555,7 @@ impl DerivationExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
     use crate::derivation::test_helpers::helpers::test_cas;
     use tempfile::TempDir;
 
@@ -583,10 +594,10 @@ install = "make install"
         toml::from_str(&toml_str).expect("test recipe must parse")
     }
 
-    /// Set up an in-memory database with migrations applied.
+    /// Set up an in-memory database with the current schema.
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         conn
     }
 

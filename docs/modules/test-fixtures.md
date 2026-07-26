@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-24
-revision: 12
-summary: Map fixture ownership, including versioned queue reconciliation and the public v4 QEMU image contract
+last_updated: 2026-07-26
+revision: 21
+summary: Map fixture ownership, including the selected-generation cross-source lifecycle matrix and public v4 QEMU image contract
 ---
 
 # Test Fixtures And Proof Maps
@@ -33,63 +33,48 @@ Each fixture family should record:
 
 | Family ID | Owner | Fast proof |
 |-----------|-------|------------|
-| `ccs-convert-golden-cases` | CCS convert | `cargo test -p conary-core golden_fixtures`; `cargo test -p conary-core support_matrix` |
+| `foreign-package-lifecycle-contracts` | Source parsers, CCS lifecycle bundle, and transaction planner | `cargo test -p conary-core native_abi`; `cargo test -p conary-core native_lifecycle`; `cargo test -p conary-core native_transaction` |
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
 | `ccs-v2-lifecycle-authoring-proof` | CCS v2 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v2` |
-| `m4d-supported-profile-cutover` | Supported distro profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
-| `legacy-scriptlet-bundle-fixtures` | Install replay adapter and Conary CLI tests | `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix` |
+| `m4d-supported-profile-cutover` | Repository feed profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
+| `native-lifecycle-query-fixtures` | Native lifecycle query surfaces | `cargo test -p conary --test query_scripts` |
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
-| `remi-scriptlet-publication-gate` | Remi server publication | `cargo test -p remi publication` |
+| `remi-converted-artifact-serving` | Remi conversion persistence and serving | `cargo test -p remi conversion` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
 | `qemu-source-image-fixtures` | Bootstrap/QEMU fixture maintenance | `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; `cargo run -p conary-test -- list` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
 
-### ccs-convert-golden-cases
+### foreign-package-lifecycle-contracts
 
-- **Owner:** CCS convert:
-  `crates/conary-core/src/ccs/convert/golden_fixtures.rs`.
-- **Purpose:** Stable expected outcomes for native-free, fully replaced,
-  legacy replay, review-required, blocked, and rejected conversion cases.
-- **Fixture sources:**
-  `crates/conary-core/src/ccs/convert/golden_fixtures.rs`;
-  `crates/conary-core/src/ccs/convert/support_matrix.rs`; adapter and
-  blocked-class registries.
-- **Consumes:** Core conversion tests and CLI conversion integration tests.
-- **Fast proof:** `cargo test -p conary-core golden_fixtures`;
-  `cargo test -p conary-core support_matrix`.
-- **Medium proof:** `cargo test -p conary --test conversion_integration golden_conversion`.
-- **Slow proof:** No slow gate for map-only changes.
-- **Regeneration:** Hand-maintained Rust tables guarded by uniqueness,
-  supported-target, and support-matrix alignment tests.
-- **Safety notes:** Public-ready fixtures must use exact supported target IDs:
-  `fedora-44`, `ubuntu-26.04`, or `arch`. The `adapter-selinux-policy`
-  fixture intentionally uses a Fedora source and Arch target to prove supported
-  SELinux intent remains portable when the target does not require SELinux. The
-  `adapter-apparmor-policy` fixture covers only payload-backed
-  `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` evidence; broader
-  AppArmor helper forms stay in blocked/private fixtures. The public sysctl
-  fixture now uses `kernel.example`; `net.ipv4.ip_forward` remains a
-  private-review fixture because target-profile policy does not yet allow it.
-- `adapter-file-capability`: allowlisted `cap_net_bind_service` replacement
-  evidence, expected public-ready fully replaced outcome.
-- `adapter-file-capability-high-risk`: known high-risk capability replacement
-  evidence, expected private-review outcome while preserving adapter evidence.
-- `adapter-sysctl`: one validated `sysctl -w kernel.example=1` write, expected
-  public-ready fully replaced outcome because the target profile allows the
-  exact key.
-- `adapter-sysctl-target-profile-private-review`: one validated
-  `sysctl -w net.ipv4.ip_forward=1` write, expected private-review outcome
-  while preserving complete native replacement evidence.
-- `blocked-class-pam`: common PAM stack helper evidence such as `authconfig`
-  or `pam-config`, expected blocked outcome until native PAM policy authority is
-  modeled.
-- `blocked-class-network`: live-fetch evidence such as `curl` or `git clone`,
-  expected blocked outcome until dependency intent or curated offline artifact
-  authority is modeled.
-- `blocked-class-package-manager-recursion`: nested package-manager evidence
-  such as `dnf`, `apt`, `pacman`, `apk`, or `microdnf`, expected blocked
-  outcome until native dependency or artifact authority is modeled.
+- **Owner:** source ABI:
+  `crates/conary-core/src/packages/native_abi.rs`; format parsers under
+  `crates/conary-core/src/packages/{rpm,deb,arch}/`; durable bundle:
+  `crates/conary-core/src/ccs/native_lifecycle.rs`; transaction planner:
+  `crates/conary-core/src/ccs/native_transaction.rs`.
+- **Purpose:** Preserve the complete RPM, Debian, and Arch lifecycle ABI and
+  prove exact event selection, order, arguments, trigger input, and payload
+  boundaries without deriving correctness from program-text heuristics.
+- **Fixture sources:** parser fixtures beside each format implementation;
+  bundle round-trip fixtures under
+  `crates/conary-core/src/ccs/native_lifecycle/tests.rs`; transaction graphs
+  under `crates/conary-core/src/ccs/native_transaction/tests.rs`.
+- **Consumes:** source parser, conversion, bundle validation, install preflight,
+  and transaction planner tests.
+- **Fast proof:** `cargo test -p conary-core native_abi`;
+  `cargo test -p conary-core native_lifecycle`;
+  `cargo test -p conary-core native_transaction`.
+- **Medium proof:** `cargo test -p conary-core ccs::convert`;
+  `cargo test -p conary --test conversion_integration`.
+- **Slow proof:** Run the appropriate native-package-manager parity suite when
+  payload visibility or live-root behavior changes.
+- **Regeneration:** Package fixtures are generated from documented
+  package-manager metadata; hand-authored planner fixtures name the exact
+  source lifecycle slot and typed transaction inputs.
+- **Safety notes:** Command evidence and risk classification may accompany a
+  fixture, but neither is expected-output authority. A fixture for an
+  missing executable semantic must assert a typed preflight failure before
+  payload or database mutation and remain required implementation work.
 
 ### ccs-v2-native-authority-fixtures
 
@@ -99,7 +84,7 @@ Each fixture family should record:
   `crates/conary-core/src/ccs/package.rs`.
 - **Purpose:** Signed native CCS v2 authority, exact-byte signature
   verification, verified install parsing, publish-gate compatibility, and
-  fail-closed rejection of legacy/default-reconstructed authority.
+  fail-closed rejection of format-v1 or default-reconstructed authority.
 - **Fixture sources:** in-test builders under
   `crates/conary-core/src/ccs/v2/test_support.rs`;
   `apps/conary/tests/packaging_m4a.rs`; targeted unit fixtures in
@@ -115,9 +100,9 @@ Each fixture family should record:
   native v2 packages directly.
 - **Safety notes:** v2 native fixtures are signed `format_version = 2`
   authority with complete file, component, dependency, provenance,
-  TOML-debug-hash, and content-identity coverage. Legacy rejection fixtures are
-  v1 `BinaryManifest` packages and CBOR-only default-reconstruction packages
-  that prove fail-closed diagnostics.
+  TOML-debug-hash, and content-identity coverage. The sole format-v1 rejection
+  fixture is a hand-authored CBOR header; the retired writer, schema,
+  projection, and general fixture factory do not remain in the tree.
 
 ### ccs-v2-local-authoring-smoke
 
@@ -129,9 +114,9 @@ Each fixture family should record:
   and static publish rejection for local-dev/host-hardened artifacts.
 - **Fixture sources:** in-test project builder in
   `apps/conary/tests/packaging_m4b.rs`.
-- **Consumes:** M4b CLI smoke, signing guardrail, lifecycle target-profile
-  refusal, unsupported dependency authoring, local-dev trust, and isolated
-  dry-run tests.
+- **Consumes:** M4b CLI smoke, signing guardrail, source-independent
+  declarative lifecycle, typed dependency authoring, local-dev trust, and
+  isolated dry-run tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4b`.
 - **Medium proof:** `cargo test -p conary-core ccs::v2`;
   `cargo test -p conary-core repository::static_repo::publish_gate`.
@@ -147,19 +132,18 @@ Each fixture family should record:
   `apps/conary/src/commands/ccs/`; v2 projection/validation:
   `crates/conary-core/src/ccs/v2/authoring.rs`;
   debug projection: `crates/conary-core/src/ccs/v2/debug_projection.rs`;
-  supported profiles:
+  repository feed catalog:
   `crates/conary-core/src/repository/supported_profiles/`.
-- **Purpose:** M4e proof that config-only native packages build without a
-  target profile, lifecycle-bearing native packages require and honor explicit
-  supported profile IDs, debug TOML remains a checked projection of signed
-  authority, and unsupported lifecycle authority fails closed.
+- **Purpose:** M4e proof that config-only and lifecycle-bearing native packages
+  author without a destination distro gate, debug TOML remains a checked
+  projection of signed authority, and declarative lifecycle remains signed
+  source-independent intent.
 - **Fixture sources:** generated `minimal-file`, `config-noreplace`, and
   `service` projects in `apps/conary/tests/packaging_m4b.rs` and
   `apps/conary/tests/packaging_m4e.rs`; debug projection unit fixtures in
   `crates/conary-core/src/ccs/v2/debug_projection.rs`.
-- **Consumes:** M4e CLI lint/build/verify/test corpus, target-profile negative
-  cases, unsupported lifecycle diagnostics, and v2 reader/debug-projection
-  consistency tests.
+- **Consumes:** M4e CLI lint/build/verify/test corpus, arbitrary declarative
+  lifecycle, and v2 reader/debug-projection consistency tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4e`;
   `cargo test -p conary-core ccs::v2::debug_projection`.
 - **Medium proof:** `cargo test -p conary-core ccs::v2`;
@@ -169,20 +153,19 @@ Each fixture family should record:
   `cargo test -p conary --test packaging_m4d`.
 - **Slow proof:** No slow gate for M4e fixture-map-only changes.
 - **Regeneration:** Temporary source projects are generated during tests.
-- **Safety notes:** CLI target profiles are exact public IDs:
-  `fedora-44`, `ubuntu-26.04`, and `arch`. Route slugs such as `fedora` are
-  Remi-only. Debug TOML is never authoritative; it must match signed CBOR
-  config and lifecycle authority exactly for supported M4e fields.
+- **Safety notes:** Repository feed IDs and route slugs are not destination
+  compatibility authority. Debug TOML is never authoritative; it must match
+  signed CBOR config and lifecycle authority exactly.
 
-### m4d-supported-profile-cutover
+### m4d-repository-feed-catalog
 
-- **Owner:** Supported target profile catalog:
+- **Owner:** Repository feed catalog:
   `crates/conary-core/src/repository/supported_profiles/`; CLI smoke:
   `apps/conary/tests/packaging_m4d.rs`; Remi route proof:
   `apps/remi/src/server/handlers/`.
-- **Purpose:** Prove exactly three public IDs (`fedora-44`, `ubuntu-26.04`,
-  and `arch`), route/profile agreement for `fedora`, `ubuntu`, and `arch`,
-  unsupported derivative refusal, and profile-backed lifecycle diagnostics.
+- **Purpose:** Prove the three currently configured upstream feed IDs
+  (`fedora-44`, `ubuntu-26.04`, and `arch`), route/feed agreement for `fedora`,
+  `ubuntu`, and `arch`, and exact parser/version-scheme selection.
 - **Fast proof:** `cargo test -p conary-core supported_profiles`;
   `cargo test -p conary --test packaging_m4d`;
   `cargo test -p remi route`.
@@ -190,7 +173,8 @@ Each fixture family should record:
   `cargo test -p remi conversion`;
   `cargo test -p conary-core remi_sync`.
 - **Safety notes:** `debian` is a valid version-scheme string for Ubuntu
-  package comparison, not a public supported target or Remi route slug.
+  package comparison, not a configured feed or Remi route slug. The catalog
+  does not enumerate destination operating systems supported by Conary.
 
 ### remi-native-ccs-publication
 
@@ -198,13 +182,13 @@ Each fixture family should record:
   `apps/remi/src/server/native_publish/`; release upload route/staging:
   `apps/remi/src/server/release_publish.rs`.
 - **Purpose:** Release-eligible CCS v2 artifacts published through local Remi
-  without conversion-shaped storage, including lifecycle-bearing native
-  authority validated by the release route's supported profile.
+  without conversion-shaped storage, including source-independent lifecycle
+  authority validated structurally rather than by a route allowlist.
 - **Fixture sources:** in-test release-eligible v2 builders in
   `apps/remi/src/server/release_publish.rs` and
   `apps/conary/tests/packaging_m4c.rs`.
-- **Consumes:** native release upload, lifecycle-supported and
-  lifecycle-unsupported release upload, local-dev publish-gate refusal,
+- **Consumes:** native release upload, arbitrary declarative lifecycle upload,
+  local-dev publish-gate refusal,
   replacement, public metadata/download, client dry-run install,
   sparse/search/index, and chunk-GC tests.
 - **Fast proof:** `cargo test -p remi release_upload_`;
@@ -222,95 +206,50 @@ Each fixture family should record:
   local-dev or otherwise publish-gate-rejected artifacts write no public state,
   failed replacement preserves the last public native row, and active native
   chunks remain protected from serving and garbage collection regressions.
-  Unsupported lifecycle authority on a supported route must fail with
-  `LIFECYCLE_UNSUPPORTED` before public state is written.
+  Repository routes must never act as destination compatibility allowlists.
 
-### legacy-scriptlet-bundle-fixtures
+### native-lifecycle-query-fixtures
 
-- **Owner:** Install replay adapter:
-  `apps/conary/src/commands/install/legacy_replay.rs`; fixture builders:
-  `apps/conary/tests/common/legacy_scriptlet_fixtures.rs`.
-- **Purpose:** Synthetic legacy scriptlet bundles for install, remove, upgrade,
-  foreign replay, and query safety behavior.
-- **Fixture sources:** `apps/conary/tests/common/legacy_scriptlet_fixtures.rs`;
-  local builders in `apps/conary/tests/bundle_replay.rs` and
+- **Owner:** lifecycle query command:
+  `apps/conary/src/commands/query/scripts.rs`; fixture builders and integration
+  assertions: `apps/conary/tests/query_scripts.rs`.
+- **Purpose:** Prove that package and installed-state queries expose the
+  current typed lifecycle bundle, entry digests, source slots, and diagnostic
+  effects without inventing execution or publication policy.
+- **Fixture sources:** local builders in
   `apps/conary/tests/query_scripts.rs`.
-- **Consumes:** `apps/conary/tests/bundle_replay.rs`;
-  `apps/conary/tests/foreign_replay.rs`; `apps/conary/tests/query_scripts.rs`.
-- **Fast proof:**
-  `cargo test -p conary --test bundle_replay synthetic_legacy_bundle_fixtures_cover_task5_matrix`.
-- **Medium proof:** `cargo test -p conary --test bundle_replay`;
-  `cargo test -p conary --test foreign_replay`;
-  `cargo test -p conary --test query_scripts`.
-- **Slow proof:** No slow gate for map-only changes; use focused
-  `conary-test` suites only when install/remove behavior changes active host
-  flows.
-- **Regeneration:** Hand-maintained Rust builders.
-- **Safety notes:** Do not weaken review, blocked, raw replay, target
-  compatibility, or private-path redaction gates. CLI replay fixtures are not
-  Remi publication fixtures; see `remi-scriptlet-publication-gate` for
-  server-side gates.
+- **Consumes:** `apps/conary/tests/query_scripts.rs`.
+- **Fast proof:** `cargo test -p conary --test query_scripts`.
+- **Medium proof:** `cargo test -p conary commands::query`.
+- **Slow proof:** No slow gate for query-only fixture changes.
+- **Regeneration:** Hand-maintained Rust builders validated against the current
+  lifecycle schema.
+- **Safety notes:** Redact private paths and environment values in diagnostic
+  output. Query fixtures do not define planner order or serving eligibility;
+  the typed transaction fixtures and Remi serving tests own those contracts.
 
-### remi-scriptlet-evidence-queue
+### remi-converted-artifact-serving
 
-- **Owner:** Remi queue normalization and reconciliation under
-  `apps/remi/src/server/scriptlet_evidence_queue/`, with persisted row helpers
-  under `crates/conary-core/src/db/models/scriptlet_evidence.rs`.
-- **Purpose:** Keep admin adapter-planning clusters focused on real unsupported
-  commands while preserving historical queue evidence across versioned
-  normalization.
-- **Fixture sources:**
-  `apps/remi/src/server/scriptlet_evidence_queue/classification.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/aggregation.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation/apparmor.rs`;
-  `apps/remi/src/server/scriptlet_evidence_queue/reconciliation/apparmor/tests.rs`;
-  `apps/remi/src/server/handlers/admin/scriptlet_evidence.rs`.
-- **Consumes:** RPM, DEB, and Arch unknown-command classification; bounded
-  unknown-command and AppArmor dry-run/apply reconciliation; AppArmor
-  identity, split, merge, missing-source, and idempotence fixtures; active
-  versus superseded cluster listings; source-to-target link readback; and
-  private-history preservation.
-- **Fast proof:** `cargo test -p remi scriptlet_evidence`.
-- **Medium proof:** `cargo test -p remi publication`;
-  `cargo test -p conary --test conversion_integration golden_conversion`.
-- **Regeneration:** Hand-maintained summaries and temporary SQLite databases.
-- **Safety notes:** Ambiguous identifiers stay visible. Reconciliation must not
-  delete unknown-command history, duplicate rematerialized AppArmor
-  observations, discard source notes or state events, or mutate
-  `converted_packages.publication_status`. New target clusters do not inherit
-  conflicting source dispositions implicitly.
-
-### remi-scriptlet-publication-gate
-
-- **Owner:** Remi server: `apps/remi/src/server/publication.rs`.
-- **Purpose:** Public-ready filtering for converted packages and chunks based
-  on scriptlet metadata.
-- **Fixture sources:** `apps/remi/src/server/publication.rs`;
-  `apps/remi/src/server/conversion.rs`;
-  `apps/remi/src/server/conversion/test_support.rs`;
-  `apps/remi/src/server/conversion/persistence.rs`;
-  `apps/remi/src/server/conversion/workflow.rs`;
-  `apps/remi/src/server/index_gen.rs`;
-  `apps/remi/src/server/prewarm.rs`; handler tests under
+- **Owner:** conversion persistence:
+  `apps/remi/src/server/conversion/persistence.rs`; artifact reachability:
+  `apps/remi/src/server/publication.rs`; public handlers under
   `apps/remi/src/server/handlers/`.
-- **Consumes:** Remi publication, conversion, generated-index,
-  sparse/detail/search/chunk serving, and prewarm tests.
-- `publication-summary-schema-and-sanitized-intents`: converted-package summary
-  shape tests require `security_policy_intents` for non-default metadata and
-  Remi publication/admin-test tests prove boot/security intent responses are
-  sanitized before serialization.
-- **Fast proof:** `cargo test -p remi publication`.
-- **Medium proof:**
-  `cargo test -p remi persisted_goal8a_golden_outcomes_respect_publication_gate`;
-  `cargo test -p remi generated_index_includes_public_scriptlets_without_private_path`.
-- **Slow proof:** No slow gate for map-only changes; run
-  `cargo test -p remi` for behavior changes that affect serving.
-- **Regeneration:** Hand-maintained test rows and helper builders.
-- **Safety notes:** Public listing and chunk serving must not expose non-public
-  scriptlet rows or private `review_artifact_path` values. Server-side
-  publication fixtures are not CLI replay fixtures; see
-  `legacy-scriptlet-bundle-fixtures` for local replay behavior.
+- **Purpose:** Prove that a successfully converted current-schema artifact and
+  its reachable chunks appear consistently in index, detail, search, sparse,
+  and download surfaces.
+- **Fixture sources:** `apps/remi/src/server/conversion/test_support.rs`;
+  conversion, index, search, prewarm, and handler test builders.
+- **Consumes:** conversion persistence, generated-index, sparse, detail,
+  search, chunk serving, and prewarm tests.
+- **Fast proof:** `cargo test -p remi conversion`.
+- **Medium proof:** `cargo test -p remi`.
+- **Slow proof:** Use a deployed Remi probe only when route or storage behavior
+  changes.
+- **Regeneration:** Reconvert authoritative package inputs into a fresh
+  current-epoch database.
+- **Safety notes:** Lifecycle summary diagnostics are not serving gates.
+  Serving still validates current schema, object identity, path safety, and CAS
+  reachability; public diagnostic responses remain privacy-normalized.
 
 ### remi-test-artifact-fixtures
 
@@ -337,27 +276,59 @@ Each fixture family should record:
   `apps/conary-test/src/suite_inventory.rs`.
 - **Purpose:** Declarative Remi and package-manager integration suites.
 - **Fixture sources:** `apps/conary/tests/integration/remi/manifests/`;
-  `apps/conary/tests/integration/remi/containers/`.
+  `apps/conary/tests/integration/remi/containers/`;
+  `apps/conary/tests/fixtures/conary-test-fixture/`;
+  `apps/conary/tests/fixtures/native/`;
+  `apps/conary/tests/fixtures/native-lifecycle-parity/`;
+  `apps/conary/tests/fixtures/phase4-runtime-fixture{,-v2}/`;
+  `apps/conary/tests/fixtures/native-selected-root-layout/`;
+  `apps/conary/tests/fixtures/adversarial/`; disposable signing authority and
+  policy under `apps/conary/tests/fixtures/ccs-test-authority/`.
 - **Consumes:** `cargo run -p conary-test -- list`, manifest parser tests,
   suite runner, local QEMU validation scripts.
 - **Fast proof:** `cargo run -p conary-test -- list`;
-  `cargo test -p conary-test suite_inventory`.
+  `cargo test -p conary-test suite_inventory`;
+  `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
+  `cargo test -p conary-test native_cross_source_`.
 - **Medium proof:**
   `cargo test -p conary-test config::tests::test_load_phase1_core_manifest`;
   `cargo test -p conary-test config::tests::test_load_phase3_group_m_manifest_installs_local_fixture_ccs`.
 - **Slow proof:** Suite-specific commands such as
   `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
-  when behavior changes require live integration proof. `fedora44` is the
+  and
+  `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4`
+  when behavior changes require live integration proof. Run the focused
+  lifecycle suite on `fedora44`, `ubuntu-26.04`, and `arch` for complete target
+  image coverage. `fedora44` is the
   existing `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`.
-- **Regeneration:** Manifests are hand-maintained TOML. Fixture packages are
-  built or published through `conary-test fixtures` commands and scripts
-  documented in `docs/INTEGRATION-TESTING.md`. Suite result JSON is generated
-  locally under the ignored `apps/conary/tests/integration/remi/results/`
-  directory.
+- **Regeneration:** Manifests are hand-maintained TOML. Rotate the test-only
+  authority with `apps/conary/tests/fixtures/ccs-test-authority/generate.sh`,
+  then rebuild both `conary-test-fixture/build-all.sh` and
+  `adversarial/build-all.sh` before running the parser/list proof. Fixture
+  packages may also be built or published through `conary-test fixtures`
+  commands documented in `docs/INTEGRATION-TESTING.md`. Suite result JSON is
+  generated locally under the ignored
+  `apps/conary/tests/integration/remi/results/` directory.
 - **Safety notes:** Treat manifest schema and semantics as persisted test
   configuration; changes need parser/list proof and an explicit migration or
-  defaulting decision.
+  defaulting decision. Every successful CCS fixture build is signed with the
+  one disposable fixture key and every install or verify names its generated
+  trust policy. Directory labels `v1` and `v2` are package versions 1 and 2,
+  not retired/current CCS format identifiers. Corrupt and malicious archive
+  cases start from signed current authority and mutate afterward. Scriptlet
+  failure tests require nonzero install status plus absent package state and
+  payload; degraded installed-state success is not a fixture contract. Native
+  cross-source lifecycle assertions read selected-generation manifests and CAS
+  objects; the container's incidental root filesystem is not package-state
+  authority. Fedora/RPM, Ubuntu/dpkg, and Arch/pacman each capture the fixture's
+  exact ordered argv/stdin/payload-boundary trace and byte-verify the matching
+  `native-lifecycle-parity/expected/` contract before that contract is used for
+  all nine source-format/target-profile Conary rows. Each manifest lane supplies
+  its native oracle format explicitly; fixture execution does not infer
+  authority from distro-name matching. The typed workflow test owns the three
+  required target lanes and the stable all-lane aggregator context; do not
+  weaken either in workflow-only edits.
 
 ### qemu-source-image-fixtures
 
@@ -406,7 +377,7 @@ Each fixture family should record:
   `git diff --check`.
 - For CCS conversion fixture edits, start with the core fast proof and add the
   Conary conversion integration filter when conversion output changes.
-- For local replay or query fixture edits, start with the focused Conary test
+- For local lifecycle or query fixture edits, start with the focused Conary test
   that consumes the fixture family and then run the full owning integration test
   file.
 - For Remi native publication edits, run `cargo test -p remi release_upload_`

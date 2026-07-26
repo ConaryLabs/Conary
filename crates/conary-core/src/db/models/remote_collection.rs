@@ -62,7 +62,7 @@ impl RemoteCollection {
         }
     }
 
-    /// Normalize label for DB storage: NULL -> '' sentinel so UNIQUE works.
+    /// Normalize an absent label to the schema's required empty sentinel.
     fn db_label(label: Option<&str>) -> &str {
         label.unwrap_or("")
     }
@@ -91,8 +91,7 @@ impl RemoteCollection {
 
     /// Insert or update a cache entry (upsert on name+label)
     ///
-    /// Uses '' sentinel for NULL labels so the UNIQUE(name, label) constraint
-    /// works correctly (SQLite treats NULL != NULL in unique constraints).
+    /// Uses the schema's required empty sentinel for absent labels.
     pub fn upsert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO remote_collections
@@ -296,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_cached_with_null_label() {
+    fn test_find_cached_with_absent_label() {
         let (_temp, conn) = create_test_db();
 
         let mut entry = RemoteCollection::new(

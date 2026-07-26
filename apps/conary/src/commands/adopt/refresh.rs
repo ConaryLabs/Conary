@@ -7,23 +7,29 @@
 
 use super::super::create_state_snapshot;
 use super::super::open_db;
-use super::cas_capture::prepare_cas_backed_package_files;
+use super::cas_capture::{CapturedAdoptionFile, capture_package_files};
 use super::checkpoint::write_db_checkpoint;
 use super::outcome::write_warning_metadata;
-use super::system::{FileInfoTuple, compute_file_hash};
+use super::system::FileInfoTuple;
 use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, ProvideEntry,
+    Trove,
 };
 use conary_core::packages::{
-    DependencyInfo, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
+use conary_core::repository::dependency_model::RepositoryRequirementGroup;
+use conary_core::repository::versioning::VersionScheme;
 use tracing::warn;
 
-/// Map of package name -> (version, arch, description).
-type InstalledPackageMap = std::collections::HashMap<String, (String, String, Option<String>)>;
+#[derive(Debug)]
+struct CurrentNativePackage {
+    identity: InstalledPackageIdentity,
+    description: Option<String>,
+}
 
 /// Outcome for a single adopted package after drift check
 #[derive(Debug)]
@@ -34,14 +40,51 @@ enum DriftOutcome {
     Updated {
         old_version: String,
         new_version: String,
+        identity: InstalledPackageIdentity,
     },
     /// Package no longer present in system package manager
     Removed,
 }
 
+fn classify_current_package(
+    trove: &Trove,
+    current: &[CurrentNativePackage],
+) -> Result<DriftOutcome> {
+    let previous = trove.native_package_identity.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "adopted package '{}' has no exact native package identity",
+            trove.name
+        )
+    })?;
+    if current.iter().any(|package| package.identity == *previous) {
+        return Ok(DriftOutcome::Unchanged);
+    }
+    let mut candidates = current
+        .iter()
+        .filter(|package| previous.same_name_and_architecture(&package.identity))
+        .collect::<Vec<_>>();
+    match candidates.len() {
+        0 => Ok(DriftOutcome::Removed),
+        1 => {
+            let package = candidates.pop().expect("one candidate");
+            Ok(DriftOutcome::Updated {
+                old_version: trove.version.clone(),
+                new_version: package.identity.version(),
+                identity: package.identity.clone(),
+            })
+        }
+        count => Err(anyhow::anyhow!(
+            "adopted package '{}' {} [{}] has {count} installed native replacement candidates; exact refresh cannot choose one",
+            trove.name,
+            trove.version,
+            previous.architecture()
+        )),
+    }
+}
+
 struct RefreshReplacement {
-    files: Vec<(FileInfoTuple, String)>,
-    deps: Vec<DependencyInfo>,
+    files: Vec<CapturedAdoptionFile>,
+    requirements: Vec<RepositoryRequirementGroup>,
     provides: Vec<String>,
 }
 
@@ -50,7 +93,7 @@ impl RefreshReplacement {
     fn test_fixture(_trove_id: i64) -> Self {
         Self {
             files: Vec::new(),
-            deps: Vec::new(),
+            requirements: Vec::new(),
             provides: Vec::new(),
         }
     }
@@ -88,8 +131,9 @@ pub async fn cmd_adopt_refresh(
     _full: bool,
     dry_run: bool,
     quiet: bool,
+    requested_manager: Option<SystemPackageManager>,
 ) -> Result<()> {
-    let pkg_mgr = SystemPackageManager::detect();
+    let pkg_mgr = SystemPackageManager::resolve(requested_manager)?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
             "No supported package manager found. Conary supports RPM, dpkg, and pacman."
@@ -121,21 +165,14 @@ pub async fn cmd_adopt_refresh(
         println!("Checking {} adopted package(s) for drift...", adopted.len());
     }
 
-    // Build current system version map: name -> (version, arch, description)
+    // Preserve every exact native package-manager record.
     let system_packages = query_all_current(pkg_mgr)?;
 
     // Classify each adopted trove
     let mut results: Vec<(&Trove, DriftOutcome)> = Vec::new();
 
     for trove in &adopted {
-        let outcome = match system_packages.get(&trove.name) {
-            None => DriftOutcome::Removed,
-            Some((sys_ver, _, _)) if *sys_ver == trove.version => DriftOutcome::Unchanged,
-            Some((sys_ver, _, _)) => DriftOutcome::Updated {
-                old_version: trove.version.clone(),
-                new_version: sys_ver.clone(),
-            },
-        };
+        let outcome = classify_current_package(trove, &system_packages)?;
         results.push((trove, outcome));
     }
 
@@ -168,6 +205,7 @@ pub async fn cmd_adopt_refresh(
                     if let DriftOutcome::Updated {
                         old_version,
                         new_version,
+                        ..
                     } = outcome
                     {
                         println!("  {} {} -> {}", trove.name, old_version, new_version);
@@ -209,6 +247,7 @@ pub async fn cmd_adopt_refresh(
     struct UpdateData<'a> {
         trove: &'a Trove,
         trove_id: i64,
+        native_identity: InstalledPackageIdentity,
         sys_ver: String,
         sys_arch: String,
         sys_desc: Option<String>,
@@ -216,104 +255,98 @@ pub async fn cmd_adopt_refresh(
     }
 
     let mut update_data: Vec<UpdateData<'_>> = Vec::new();
-    let mut skip_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut skip_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     for (trove, outcome) in &results {
-        if let DriftOutcome::Updated { .. } = outcome {
+        if let DriftOutcome::Updated { identity, .. } = outcome {
             let trove_id = match trove.id {
                 Some(id) => id,
                 None => {
                     warn!("Trove {} has no id, skipping", trove.name);
-                    skip_names.insert(trove.name.clone());
                     continue;
                 }
             };
 
-            let (sys_ver, sys_arch, sys_desc) = match system_packages.get(&trove.name) {
-                Some(entry) => entry,
-                None => {
-                    warn!(
-                        "Trove '{}' marked as updated but missing from system_packages map, skipping",
-                        trove.name
-                    );
-                    skip_names.insert(trove.name.clone());
-                    continue;
-                }
-            };
+            let current = system_packages
+                .iter()
+                .find(|package| package.identity == *identity)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "exact native refresh identity '{}' disappeared from inventory",
+                        identity.selector()
+                    )
+                })?;
 
             let use_cas = trove.install_source == InstallSource::AdoptedFull;
 
             // Query PM metadata outside the transaction.
-            let raw_files = match query_package_files(pkg_mgr, &trove.name) {
+            let raw_files = match query_package_files(pkg_mgr, identity.selector()) {
                 Ok(f) => f,
                 Err(e) => {
                     warn!(
                         "Failed to query files for '{}': {}; skipping",
-                        trove.name, e
+                        identity.selector(),
+                        e
                     );
-                    skip_names.insert(trove.name.clone());
+                    skip_ids.insert(trove_id);
                     continue;
                 }
             };
-            let deps = match query_package_deps(pkg_mgr, &trove.name) {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("Failed to query deps for '{}': {}; skipping", trove.name, e);
-                    skip_names.insert(trove.name.clone());
-                    continue;
-                }
-            };
-            let provides = match query_package_provides(pkg_mgr, &trove.name) {
+            let requirements =
+                match super::requirements::query_package_requirements(pkg_mgr, identity.selector())
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        warn!(
+                            "Failed to query deps for '{}': {}; skipping",
+                            identity.selector(),
+                            e
+                        );
+                        skip_ids.insert(trove_id);
+                        continue;
+                    }
+                };
+            let provides = match query_package_provides(pkg_mgr, identity.selector()) {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(
                         "Failed to query provides for '{}': {}; skipping",
-                        trove.name, e
+                        identity.selector(),
+                        e
                     );
-                    skip_names.insert(trove.name.clone());
+                    skip_ids.insert(trove_id);
                     continue;
                 }
             };
 
-            // Perform CAS writes outside the transaction.
-            let files_with_hashes: Vec<(FileInfoTuple, String)> = if use_cas {
-                match prepare_cas_backed_package_files(&trove.name, &raw_files, &cas) {
-                    Ok(files) => files,
-                    Err(e) => {
-                        warn!(
-                            "Failed to prepare CAS-backed refresh for '{}': {}",
-                            trove.name, e
-                        );
-                        skip_names.insert(trove.name.clone());
-                        continue;
-                    }
+            // Capture exact live nodes and bytes outside the transaction.
+            let captured_files = match capture_package_files(
+                identity.selector(),
+                &raw_files,
+                if use_cas { Some(&cas) } else { None },
+            ) {
+                Ok(files) => files,
+                Err(error) => {
+                    warn!(
+                        "Failed to capture exact refresh payload for '{}': {}",
+                        identity.selector(),
+                        error
+                    );
+                    skip_ids.insert(trove_id);
+                    continue;
                 }
-            } else {
-                raw_files
-                    .into_iter()
-                    .map(|f| {
-                        let hash = compute_file_hash(
-                            &f.0,
-                            f.2,
-                            f.3.as_deref(),
-                            f.6.as_deref(),
-                            false,
-                            None,
-                        );
-                        (f, hash)
-                    })
-                    .collect()
             };
 
             update_data.push(UpdateData {
                 trove,
                 trove_id,
-                sys_ver: sys_ver.clone(),
-                sys_arch: sys_arch.clone(),
-                sys_desc: sys_desc.clone(),
+                native_identity: identity.clone(),
+                sys_ver: identity.version(),
+                sys_arch: identity.architecture().to_string(),
+                sys_desc: current.description.clone(),
                 replacement: RefreshReplacement {
-                    files: files_with_hashes,
-                    deps,
+                    files: captured_files,
+                    requirements,
                     provides,
                 },
             });
@@ -345,9 +378,6 @@ pub async fn cmd_adopt_refresh(
                         None => continue, // already warned above
                     };
                     // Remove from tracking — the system package was uninstalled
-                    tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
-                    tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
-                    tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
                     Trove::delete(tx, trove_id)?;
                     if !quiet {
                         println!(
@@ -361,13 +391,17 @@ pub async fn cmd_adopt_refresh(
                 DriftOutcome::Updated {
                     old_version,
                     new_version,
+                    ..
                 } => {
                     // Skip packages whose pre-fetch failed.
-                    if skip_names.contains(&trove.name) {
+                    let Some(trove_id) = trove.id else {
+                        continue;
+                    };
+                    if skip_ids.contains(&trove_id) {
                         continue;
                     }
 
-                    let data = match update_data.iter().find(|d| d.trove.name == trove.name) {
+                    let data = match update_data.iter().find(|data| data.trove_id == trove_id) {
                         Some(d) => d,
                         None => continue,
                     };
@@ -380,6 +414,8 @@ pub async fn cmd_adopt_refresh(
                         data.sys_ver.as_str(),
                         data.sys_arch.as_str(),
                         data.sys_desc.as_deref(),
+                        data.trove.version_scheme,
+                        &data.native_identity,
                         &data.replacement,
                         RefreshFailureInjection::None,
                     ) {
@@ -466,19 +502,29 @@ fn replace_refresh_children_for_package(
     sys_ver: &str,
     sys_arch: &str,
     sys_desc: Option<&str>,
+    version_scheme: VersionScheme,
+    native_identity: &InstalledPackageIdentity,
     replacement: &RefreshReplacement,
     injection: RefreshFailureInjection,
 ) -> Result<()> {
     with_refresh_savepoint(tx, trove_id, |tx| {
+        native_identity.validate()?;
+        let native_identity_json = serde_json::to_string(native_identity)?;
         tx.execute(
             "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
-             installed_by_changeset_id = ?4
-             WHERE id = ?5",
-            rusqlite::params![sys_ver, sys_arch, sys_desc, changeset_id, trove_id],
+             installed_by_changeset_id = ?4, native_package_identity_json = ?5
+             WHERE id = ?6",
+            rusqlite::params![
+                sys_ver,
+                sys_arch,
+                sys_desc,
+                changeset_id,
+                native_identity_json,
+                trove_id
+            ],
         )?;
 
-        tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
-        tx.execute("DELETE FROM dependencies WHERE trove_id = ?1", [trove_id])?;
+        delete_refresh_payload_authority(tx, trove_id)?;
         tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
 
         if injection == RefreshFailureInjection::AfterDelete {
@@ -487,47 +533,33 @@ fn replace_refresh_children_for_package(
             ));
         }
 
-        for (
-            (file_path, file_size, file_mode, _digest, file_user, file_group, link_target),
-            hash,
-        ) in &replacement.files
-        {
-            let mut fe = FileEntry::new(
-                file_path.clone(),
-                hash.clone(),
-                *file_size,
-                *file_mode,
-                trove_id,
-            );
-            fe.owner = file_user.clone();
-            fe.group_name = file_group.clone();
-            fe.symlink_target = link_target.clone();
-            fe.insert_or_replace(tx).map_err(|e| {
-                anyhow::anyhow!("failed to insert refreshed file {file_path} for {trove_name}: {e}")
-            })?;
+        for captured in &replacement.files {
+            let file_path = &captured.source.0;
+            let mut fe = captured.file_entry(trove_id);
+            fe.insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to insert refreshed file {file_path} for {trove_name}: {e}"
+                    )
+                })?;
         }
 
-        for dep in &replacement.deps {
-            if dep.name.is_empty() {
-                continue;
-            }
-            let mut de = DependencyEntry::new(
-                trove_id,
-                dep.name.clone(),
-                None,
-                "runtime".to_string(),
-                dep.constraint.clone(),
-            );
-            de.insert(tx).map_err(|e| {
-                anyhow::anyhow!("failed to insert refreshed dependency for {trove_name}: {e}")
-            })?;
-        }
+        super::requirements::replace_package_requirements(
+            tx,
+            trove_id,
+            version_scheme,
+            trove_name,
+            &replacement.requirements,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("failed to replace exact requirements for {trove_name}: {error}")
+        })?;
 
         for provide in &replacement.provides {
             if provide.is_empty() {
                 continue;
             }
-            let mut pe = ProvideEntry::new(trove_id, provide.clone(), None);
+            let mut pe = ProvideEntry::new(trove_id, provide.clone(), None, version_scheme);
             pe.insert_or_ignore(tx).map_err(|e| {
                 anyhow::anyhow!("failed to insert refreshed provide for {trove_name}: {e}")
             })?;
@@ -535,6 +567,24 @@ fn replace_refresh_children_for_package(
 
         Ok(())
     })
+}
+
+fn delete_refresh_payload_authority(tx: &rusqlite::Transaction<'_>, trove_id: i64) -> Result<()> {
+    for file in conary_core::db::models::FileEntry::find_by_trove(tx, trove_id)?
+        .into_iter()
+        .filter(|file| {
+            !matches!(
+                file.node.source.kind,
+                conary_core::payload::PayloadNodeKind::Directory
+            )
+        })
+    {
+        conary_core::db::models::FileEntry::delete(tx, &file.path)?;
+    }
+    for claim in conary_core::db::models::DirectoryClaim::find_by_trove(tx, trove_id)? {
+        conary_core::db::models::DirectoryClaim::delete(tx, &claim.path, trove_id)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -549,56 +599,44 @@ fn replace_refresh_children_for_package_for_test(
         "curl",
         trove_id,
         1,
-        "8.9.0",
+        "8.9.0-1",
         "x86_64",
         Some("refreshed fixture"),
+        VersionScheme::Rpm,
+        &InstalledPackageIdentity::rpm("curl-8.9.0-1.x86_64", "curl", None, "8.9.0", "1", "x86_64")
+            .unwrap(),
         &replacement,
         RefreshFailureInjection::after_delete(fail_after_delete),
     )
 }
 
-/// Query all currently installed packages from the active package manager.
-/// Returns a map of name -> (version, arch, description).
-fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<InstalledPackageMap> {
-    let map = match pkg_mgr {
+/// Query every exact currently installed native package-manager record.
+fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<Vec<CurrentNativePackage>> {
+    let packages = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_all_packages()?
             .into_iter()
-            .map(|(name, info)| {
-                let desc = info.description.clone().or(info.summary.clone());
-                // Use full_version (epoch:version-release) to match the version
-                // stored during adopt, so drift detection compares apples to apples.
-                (name, (info.full_version(), info.arch.clone(), desc))
+            .map(|record| CurrentNativePackage {
+                identity: record.identity,
+                description: record.info.description.or(record.info.summary),
             })
             .collect(),
         SystemPackageManager::Dpkg => dpkg_query::query_all_packages()?
             .into_iter()
-            .map(|(name, info)| {
-                (
-                    name,
-                    (
-                        info.version_only(),
-                        info.arch.clone(),
-                        info.description.clone(),
-                    ),
-                )
+            .map(|record| CurrentNativePackage {
+                identity: record.identity,
+                description: record.info.description,
             })
             .collect(),
         SystemPackageManager::Pacman => pacman_query::query_all_packages()?
             .into_iter()
-            .map(|(name, info)| {
-                (
-                    name,
-                    (
-                        info.version_only(),
-                        info.arch.clone(),
-                        info.description.clone(),
-                    ),
-                )
+            .map(|record| CurrentNativePackage {
+                identity: record.identity,
+                description: record.info.description,
             })
             .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
-    Ok(map)
+    Ok(packages)
 }
 
 /// Query files for a package from the active package manager.
@@ -631,21 +669,6 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<
         .collect())
 }
 
-/// Query runtime dependencies for a package from the active package manager.
-///
-/// Returns an error on PM query failure so callers can handle it explicitly.
-fn query_package_deps(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<DependencyInfo>> {
-    Ok(match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_dependencies_full(name)
-            .map_err(|e| anyhow::anyhow!("RPM dep query failed for '{name}': {e}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_dependencies_full(name)
-            .map_err(|e| anyhow::anyhow!("DPKG dep query failed for '{name}': {e}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_dependencies_full(name)
-            .map_err(|e| anyhow::anyhow!("Pacman dep query failed for '{name}': {e}"))?,
-        _ => Vec::new(),
-    })
-}
-
 /// Query provides for a package from the active package manager.
 ///
 /// Returns an error on PM query failure so callers can handle it explicitly.
@@ -666,9 +689,10 @@ mod tests {
     use super::*;
     use conary_core::db;
     use conary_core::db::models::{
-        Changeset, ChangesetStatus, DependencyEntry, FileEntry, InstallSource, ProvideEntry, Trove,
-        TroveType,
+        Changeset, ChangesetStatus, FileEntry, InstallSource, InstalledRequirementGroup,
+        ProvideEntry, Trove, TroveType,
     };
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
 
     fn create_refresh_test_db() -> (tempfile::TempDir, String, rusqlite::Connection, i64) {
         let tmp = tempfile::tempdir().unwrap();
@@ -680,29 +704,53 @@ mod tests {
             let changeset_id = changeset.insert(tx)?;
             let mut trove = Trove::new_with_source(
                 "curl".to_string(),
-                "8.8.0".to_string(),
+                "8.8.0-1".to_string(),
                 TroveType::Package,
                 InstallSource::AdoptedFull,
+                VersionScheme::Rpm,
             );
+            trove.architecture = Some("x86_64".to_string());
             trove.installed_by_changeset_id = Some(changeset_id);
+            trove.native_package_identity = Some(
+                InstalledPackageIdentity::rpm(
+                    "curl-8.8.0-1.x86_64",
+                    "curl",
+                    None,
+                    "8.8.0",
+                    "1",
+                    "x86_64",
+                )
+                .unwrap(),
+            );
             let trove_id = trove.insert(tx)?;
             let mut file = FileEntry::new(
                 "/usr/bin/curl".to_string(),
-                "old-hash".to_string(),
-                4,
-                0o100755,
+                ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap(),
+                Some(PayloadContentAuthority {
+                    sha256: conary_core::hash::sha256(b"curl"),
+                    size: 4,
+                }),
                 trove_id,
             );
             file.insert(tx)?;
-            let mut dep = DependencyEntry::new(
+            let requirement = conary_core::repository::requirement::parse_native_requirement(
+                conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+                conary_core::repository::versioning::VersionScheme::Rpm,
+                "openssl",
+            )
+            .unwrap();
+            InstalledRequirementGroup::insert_groups(
+                tx,
                 trove_id,
-                "openssl".to_string(),
+                conary_core::repository::versioning::VersionScheme::Rpm,
+                &[requirement],
+            )?;
+            let mut provide = ProvideEntry::new(
+                trove_id,
+                "curl".to_string(),
                 None,
-                "runtime".to_string(),
-                None,
+                conary_core::repository::versioning::VersionScheme::Rpm,
             );
-            dep.insert(tx)?;
-            let mut provide = ProvideEntry::new(trove_id, "curl".to_string(), None);
             provide.insert(tx)?;
             changeset.update_status(tx, ChangesetStatus::Applied)?;
             Ok(trove_id)
@@ -740,7 +788,7 @@ mod tests {
             .unwrap();
         let dep_count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM dependencies WHERE trove_id = ?1",
+                "SELECT COUNT(*) FROM package_requirement_groups WHERE trove_id = ?1",
                 [trove_id],
                 |row| row.get(0),
             )
@@ -764,5 +812,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(description, "outer transaction committed");
+    }
+
+    fn adopted_dpkg_trove(selector: &str, architecture: &str, version: &str) -> Trove {
+        let mut trove = Trove::new_with_source(
+            "libc6".to_string(),
+            version.to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedFull,
+            VersionScheme::Debian,
+        );
+        trove.architecture = Some(architecture.to_string());
+        trove.native_package_identity =
+            Some(InstalledPackageIdentity::dpkg(selector, "libc6", version, architecture).unwrap());
+        trove
+    }
+
+    #[test]
+    fn multiarch_refresh_matches_the_intended_native_variant() {
+        let amd64 = CurrentNativePackage {
+            identity: InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64")
+                .unwrap(),
+            description: None,
+        };
+        let i386 = CurrentNativePackage {
+            identity: InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.41-1", "i386")
+                .unwrap(),
+            description: None,
+        };
+        let current = vec![amd64, i386];
+
+        let old_amd64 = adopted_dpkg_trove("libc6:amd64", "amd64", "2.41-1");
+        let unchanged_i386 = adopted_dpkg_trove("libc6:i386", "i386", "2.41-1");
+
+        match classify_current_package(&old_amd64, &current).unwrap() {
+            DriftOutcome::Updated {
+                new_version,
+                identity,
+                ..
+            } => {
+                assert_eq!(new_version, "2.42-1");
+                assert_eq!(identity.selector(), "libc6:amd64");
+            }
+            other => panic!("expected exact amd64 update, got {other:?}"),
+        }
+        assert!(matches!(
+            classify_current_package(&unchanged_i386, &current).unwrap(),
+            DriftOutcome::Unchanged
+        ));
     }
 }

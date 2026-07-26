@@ -1,18 +1,14 @@
 // conary-core/src/repository/supported_profiles/mod.rs
 
-mod lifecycle;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
+use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::distro::ReplayTargetOwned;
-use crate::repository::versioning::VersionScheme;
-
-pub use types::{LifecyclePolicyMode, ProfilePackageFormat, SupportedProfile, SupportedRoute};
+pub use types::{ProfilePackageFormat, SupportedProfile, SupportedRoute};
 
 use types::{CatalogDocument, SupportedProfile as Profile};
 
@@ -46,9 +42,22 @@ fn validate_catalog(profiles: Vec<types::ProfileDocument>) -> Vec<SupportedProfi
             "profile route slug must not be empty"
         );
         assert!(
-            !profile.repository_name_patterns().is_empty(),
-            "profile must include repository hints"
+            !profile.repology_repo().trim().is_empty(),
+            "profile Repology repository id must not be empty"
         );
+        match (profile.package_format(), profile.scriptlet_shell()) {
+            (ProfilePackageFormat::Arch, Some(shell)) => assert!(
+                Path::new(shell).is_absolute(),
+                "Arch profile scriptlet shell must be absolute"
+            ),
+            (ProfilePackageFormat::Arch, None) => {
+                panic!("Arch profile must declare its build-time scriptlet shell")
+            }
+            (_, Some(_)) => {
+                panic!("only ALPM source profiles may declare a scriptlet shell")
+            }
+            (_, None) => {}
+        }
     }
 
     supported
@@ -65,30 +74,10 @@ pub fn profile_by_public_id(id: &str) -> Option<&'static SupportedProfile> {
     public_profiles().iter().find(|profile| profile.id() == id)
 }
 
-#[must_use]
-pub fn profile_by_family_slug(slug: &str) -> Option<&'static SupportedProfile> {
-    let slug = slug.trim();
-    public_profiles()
-        .iter()
-        .find(|profile| profile.family_slug() == slug)
-}
-
 /// Resolve a configured Remi target to one exact public profile.
-///
-/// New configuration stores public profile IDs. Family/route slugs remain
-/// accepted here only for compatibility with repository rows written by older
-/// Conary releases, and only while the slug maps to exactly one public profile.
 #[must_use]
 pub fn profile_for_remi_target(target: &str) -> Option<&'static SupportedProfile> {
-    if let Some(profile) = profile_by_public_id(target) {
-        return Some(profile);
-    }
-
-    let route = route_by_slug(target)?;
-    let [profile_id] = route.public_profile_ids() else {
-        return None;
-    };
-    profile_by_public_id(profile_id)
+    profile_by_public_id(target)
 }
 
 #[must_use]
@@ -106,24 +95,20 @@ pub fn route_by_slug(slug: &str) -> Option<SupportedRoute> {
     }
 }
 
+/// Resolve a public Remi route only when it has one unambiguous profile.
 #[must_use]
-pub fn dependency_flavor_for_name(name: &str) -> Option<RepositoryDependencyFlavor> {
-    profile_by_public_id(name)
-        .or_else(|| profile_by_family_slug(name))
-        .map(SupportedProfile::dependency_flavor)
-}
-
-#[must_use]
-pub fn version_scheme_for_name(name: &str) -> Option<VersionScheme> {
-    profile_by_public_id(name)
-        .or_else(|| profile_by_family_slug(name))
-        .map(SupportedProfile::version_scheme)
-}
-
-#[must_use]
-pub fn replay_target_for_public_id(id: &str, arch: &str) -> Option<ReplayTargetOwned> {
-    if arch.trim().is_empty() {
+pub fn profile_for_remi_route(slug: &str) -> Option<&'static SupportedProfile> {
+    let route = route_by_slug(slug)?;
+    let [profile_id] = route.public_profile_ids() else {
         return None;
-    }
-    profile_by_public_id(id).map(|profile| profile.replay_target_for_arch(arch))
+    };
+    profile_by_public_id(profile_id)
+}
+
+/// Resolve an exact public ALPM source profile whose build-time scriptlet
+/// shell owns a package's `.INSTALL` interpreter ABI.
+#[must_use]
+pub fn alpm_source_profile(source_profile_id: &str) -> Option<&'static SupportedProfile> {
+    profile_by_public_id(source_profile_id)
+        .filter(|profile| profile.package_format() == ProfilePackageFormat::Arch)
 }

@@ -20,11 +20,11 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/path-traversal/output/path-traversal-malicious.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/path-traversal/output/path-traversal-malicious.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "hash"
+stderr_contains = "authority"
 
 [[test.step]]
 file_not_exists = "/etc/shadow.bak"
@@ -41,11 +41,11 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/symlink-attack/output/symlink-attack-malicious.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/symlink-attack/output/symlink-attack-malicious.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "hash"
+stderr_contains = "authority"
 
 [[test.step]]
 file_not_exists = "/etc/passwd.bak"
@@ -62,7 +62,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/setuid/output/adversarial-setuid-1.0.0.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/setuid/output/adversarial-setuid-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 stdout_contains_any_if_success = ["stripped", "Warning"]
@@ -85,18 +85,21 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/proc-environ/output/proc-environ.ccs --allow-unsigned --sandbox always --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/proc-environ/output/proc-environ.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
-exit_code = 0
-stderr_contains = "Post-install script failed"
+exit_code_not = 0
+stderr_contains = "post-install hooks failed"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'proc-environ'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "post_hooks_failed"
+stdout_contains = "state-absent"
+
+[[test.step]]
+file_not_exists = "/usr/bin/proc-environ"
 
 # --------------------------------------------------------------------------
 # T101: Network access blocked
@@ -113,18 +116,21 @@ group = "I"
 network_isolated = true
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/hostile-scriptlet/output/adversarial-hostile-scriptlet-1.0.0.ccs --allow-unsigned --sandbox always --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/hostile-scriptlet/output/adversarial-hostile-scriptlet-1.0.0-1.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
-exit_code = 0
-stderr_contains = "Post-install script failed"
+exit_code_not = 0
+stderr_contains = "post-install hooks failed"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'adversarial-hostile-scriptlet'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "post_hooks_failed"
+stdout_contains = "state-absent"
+
+[[test.step]]
+file_not_exists = "/usr/bin/hostile-scriptlet"
 
 [[test.step]]
 file_not_exists = "/etc/conary-hostile-scriptlet"
@@ -141,18 +147,21 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/outside-root-write/output/outside-root-write.ccs --allow-unsigned --sandbox always --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/outside-root-write/output/outside-root-write.ccs --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
-exit_code = 0
-stderr_contains = "Post-install script failed"
+exit_code_not = 0
+stderr_contains = "post-install hooks failed"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT status FROM changesets ORDER BY id DESC LIMIT 1\""
+run = "sqlite3 ${DB_PATH} \"SELECT CASE WHEN COUNT(*) = 0 THEN 'state-absent' ELSE 'state-present' END FROM troves WHERE name = 'outside-root-write'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "post_hooks_failed"
+stdout_contains = "state-absent"
+
+[[test.step]]
+file_not_exists = "/usr/bin/outside-root-write"
 
 [[test.step]]
 file_not_exists = "/tmp/conary-escape-marker"
@@ -164,16 +173,16 @@ file_not_exists = "/tmp/conary-escape-marker"
 [[test]]
 id = "T103"
 name = "expired_signature_rejected"
-description = "Packages with expired GPG signatures should be rejected with a meaningful error"
+description = "Packages with expired Ed25519 signatures should be rejected with a meaningful error"
 timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs --policy /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/trust-policy.toml --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/expired-signature/output/expired-signature.ccs --policy ${FIXTURE_CCS_EXPIRED_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "expired"
+stderr_contains = "maximum"
 
 # --------------------------------------------------------------------------
 # T104: Package capabilities without privilege
@@ -187,7 +196,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
@@ -205,7 +214,7 @@ timeout = 30
 group = "I"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/capability-overflow/output/capability-overflow.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/capability-overflow/output/capability-overflow.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
@@ -227,8 +236,8 @@ memory_limit_mb = 512
 network_isolated = false
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/decompression-bomb/output/decompression-bomb.ccs --allow-unsigned --yes"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/decompression-bomb/output/decompression-bomb.ccs --policy ${FIXTURE_CCS_POLICY} --yes"
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "limit"
+stderr_contains = "maximum size"

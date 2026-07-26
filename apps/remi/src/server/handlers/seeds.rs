@@ -22,6 +22,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use conary_core::payload::PayloadContentAuthority;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -161,8 +162,18 @@ pub async fn put_seed(
         return (StatusCode::BAD_REQUEST, "target_triple must not be empty").into_response();
     }
 
-    if meta.image_cas_hash.is_empty() {
-        return (StatusCode::BAD_REQUEST, "image_cas_hash must not be empty").into_response();
+    if (PayloadContentAuthority {
+        sha256: meta.image_cas_hash.clone(),
+        size: 0,
+    })
+    .validate()
+    .is_err()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "image_cas_hash must be a lowercase raw 64-hex SHA-256 digest",
+        )
+            .into_response();
     }
 
     let packages_json = serde_json::to_string(&meta.packages.unwrap_or_default())
@@ -281,8 +292,20 @@ pub async fn get_seed(
     let (id, target_triple, builder, source, packages_json, verified_by_json, image_cas_hash) = row;
 
     // Reconstruct a TOML representation from stored fields.
-    let packages: Vec<String> = serde_json::from_str(&packages_json).unwrap_or_default();
-    let verified_by: Vec<String> = serde_json::from_str(&verified_by_json).unwrap_or_default();
+    let packages: Vec<String> = match serde_json::from_str(&packages_json) {
+        Ok(packages) => packages,
+        Err(error) => {
+            tracing::error!("Seed {seed_id} has corrupt packages_json: {error}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Corrupt seed metadata").into_response();
+        }
+    };
+    let verified_by: Vec<String> = match serde_json::from_str(&verified_by_json) {
+        Ok(verified_by) => verified_by,
+        Err(error) => {
+            tracing::error!("Seed {seed_id} has corrupt verified_by_json: {error}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Corrupt seed metadata").into_response();
+        }
+    };
 
     // Build a TOML-serializable value using toml::Table.
     let mut table = toml::Table::new();
@@ -563,11 +586,17 @@ fn query_seeds(
     while let Some(row) = rows.next()? {
         let packages_json: String = row.get(4)?;
         let verified_by_json: String = row.get(5)?;
-        let packages: Vec<String> = serde_json::from_str(&packages_json).unwrap_or_default();
-        let verified_by: Vec<String> = serde_json::from_str(&verified_by_json).unwrap_or_default();
+        let seed_id: String = row.get(0)?;
+        let packages: Vec<String> = serde_json::from_str(&packages_json).map_err(|error| {
+            anyhow::anyhow!("seed {seed_id} has corrupt packages_json: {error}")
+        })?;
+        let verified_by: Vec<String> =
+            serde_json::from_str(&verified_by_json).map_err(|error| {
+                anyhow::anyhow!("seed {seed_id} has corrupt verified_by_json: {error}")
+            })?;
 
         items.push(SeedListItem {
-            seed_id: row.get(0)?,
+            seed_id,
             target_triple: row.get(1)?,
             source: row.get(2)?,
             builder: row.get(3)?,
@@ -594,7 +623,7 @@ mod tests {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
-        conary_core::db::schema::migrate(&conn).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
         (conn, tmp)
     }
 
@@ -623,16 +652,16 @@ mod tests {
         conn.execute(
             "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
              VALUES ('seed-x86', 'x86_64-conary-linux-gnu', 'community', 'conary 0.9.0',
-                     '[\"gcc\",\"glibc\"]', '[\"sig:abc\"]', 'deadbeef01')",
-            [],
+                     '[\"gcc\",\"glibc\"]', '[\"sig:abc\"]', ?1)",
+            ["1".repeat(64)],
         )
         .unwrap();
 
         conn.execute(
             "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
              VALUES ('seed-arm', 'aarch64-conary-linux-gnu', 'selfbuilt', NULL,
-                     '[\"gcc\"]', '[]', 'deadbeef02')",
-            [],
+                     '[\"gcc\"]', '[]', ?1)",
+            ["2".repeat(64)],
         )
         .unwrap();
 
@@ -657,6 +686,22 @@ mod tests {
         // Query with limit 1 — should return exactly 1 row.
         let limited = query_seeds(&conn, None, Some(1)).unwrap();
         assert_eq!(limited.len(), 1, "expected 1 seed with limit=1");
+    }
+
+    #[test]
+    fn list_seeds_rejects_corrupt_persisted_metadata() {
+        let (conn, _tmp) = make_test_db();
+        conn.execute(
+            "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
+             VALUES ('seed-corrupt', 'x86_64-conary-linux-gnu', 'community', NULL,
+                     'not-json', '[]', ?1)",
+            ["3".repeat(64)],
+        )
+        .unwrap();
+
+        let error = query_seeds(&conn, None, None)
+            .expect_err("corrupt persisted seed metadata must not become an empty package list");
+        assert!(error.to_string().contains("corrupt packages_json"));
     }
 
     #[test]

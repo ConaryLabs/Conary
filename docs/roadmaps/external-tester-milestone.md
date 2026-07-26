@@ -1,32 +1,36 @@
 ---
-last_updated: 2026-07-23
+last_updated: 2026-07-25
+revision: 3
 status: active
-current_result: 1/10
-summary: Outcome tracker for Conary's first external tester milestone
+current_result: 0/10
+summary: Outcome tracker for Conary's first cross-distro external tester milestone
 ---
 
 # First External Tester Milestone
 
 The milestone closes when ten unique people outside the existing project
-circle complete the full supported flow and report friction, or when a
-maintainer records an evidence-backed pivot for a reproducible systemic
-blocker. Interest, downloads, partial attempts, and repeated runs by the same
-person do not count as separate completions.
+circle install and remove a package whose source format differs from the
+supported host's native format and report friction, or when a maintainer
+records an evidence-backed pivot for a reproducible systemic blocker. Interest,
+downloads, partial attempts, and repeated runs by the same person do not count
+as separate completions.
 
-**Current result: 1/10 qualifying completions.** Two supported-host reports from
-the same person count as one unique external tester.
+**Current result: 0/10 qualifying cross-distro completions.** The previous two
+supported-host reports from one person remain valid adoption/onboarding
+evidence, but neither crossed a source-package/host-package format boundary.
 
 ## Qualifying Flow
 
 Each qualifying report covers this sequence on one supported host:
 
 ```text
-install -> adopt -> list/search -> update --dry-run -> unadopt
+foreign artifact install -> list/query -> update --dry-run -> remove
 ```
 
 The report must confirm that the tester used the pinned release, stayed within
-the supported host scope, and completed every stage. A failed attempt remains
-useful evidence but does not count as a completion.
+the supported host scope, named both the source package format and host native
+format, and completed every stage. A failed attempt remains useful evidence but
+does not count as a completion.
 
 ## Launch Record
 
@@ -80,9 +84,12 @@ useful evidence but does not count as a completion.
   source commit `c001f8d69b9e8ef34fba39139576a9809800a9a6` have the same tree. The
   deployed binary SHA-256 is
   `c955a24ff6b90f98ba5f20b37e6a67b79bdde199ec0dcbfac0ce78b001d0f485`.
-- Prewarmed package set: `curl`, `htop`, `nano`, and `zstd` for Fedora, Ubuntu,
-  and Arch. Eleven conversion-version-6 rows are public; Ubuntu `nano` remains
-  correctly fail-closed as `private-review`.
+- Pinned `v0.12.0` prewarm set: `curl`, `htop`, `nano`, and `zstd` for Fedora,
+  Ubuntu, and Arch. Eleven conversion-version-6 rows were public; Ubuntu
+  `nano` was held in the now-retired `private-review` workflow. That is
+  historical release evidence, not the current source contract. The
+  current-only typed lifecycle path needs fresh deployment proof before broad
+  outreach resumes.
 - Deployment evidence: exact-tag run `30047027525` deployed the Conary bundle.
   Full Remi health passed 10/10, all six checked public routes returned HTTP
   200, and the checked Conary pages carried `v0.12.0`. The self-update API CCS
@@ -106,13 +113,14 @@ useful evidence but does not count as a completion.
 - Prelaunch remediation evidence:
   [issue #41](https://github.com/ConaryLabs/Conary/issues/41) reports that
   the preceding preview rejects the legitimate Arch-style `/usr/lib64 -> lib`
-  ancestor while validating a Fedora-form CCS payload on Artix. Artix and that
-  cross-distro route are outside the supported-host claim, but the in-root
-  symlink false-positive is a valid fail-closed-path defect. Immutable
+  ancestor while validating a Fedora-form CCS payload on Artix. Artix remains
+  outside the supported-host claim, but cross-distro package installation is
+  now the product contract and the in-root symlink false-positive is a valid
+  path-safety defect. Immutable
   `v0.12.0` carries the repair, and the shipped-binary safe/escape probes above
   close its supported Arch-path gate. Support-bundle self-tests passed, and an
   isolated schema-77 bundle recorded integrity, table, repository, and
-  host-profile summaries without including the database. This proof host had
+  source-selection summaries without including the database. This proof host had
   no installed `/var/lib/conary/conary.db`, so the successful root-owned
   cached-sudo path remains regression-tested; affected reporters must run
   `sudo -v` before collecting a fresh reviewed bundle.
@@ -135,7 +143,7 @@ useful evidence but does not count as a completion.
   per-venue eligibility checks pass. Record each post immediately after
   submission. The three-week stall clock starts from the first actual launch
   timestamp.
-- Privacy-safe feedback path: the beta-feedback issue template and a reviewed
+- Privacy-safe feedback path: the pre-alpha tester-feedback issue template and a reviewed
   support bundle; never request secrets, credential files, private keys, broad
   environment dumps, or a live database by default.
 

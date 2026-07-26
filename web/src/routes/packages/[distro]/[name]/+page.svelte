@@ -137,7 +137,7 @@
 												{#if v.converted}
 													<span class="badge badge-converted">CCS</span>
 												{:else}
-													<span class="badge badge-legacy">Legacy</span>
+													<span class="badge badge-native">Native source</span>
 												{/if}
 											</td>
 										</tr>
@@ -214,7 +214,7 @@
 						<dd class="mono-value">{formatNumber(pkg.download_count_30d)}</dd>
 
 						<dt>Format</dt>
-						<dd>{pkg.converted ? 'CCS (converted)' : 'Legacy'}</dd>
+						<dd>{pkg.converted ? 'CCS (converted)' : 'Native source package'}</dd>
 					</dl>
 				</div>
 
@@ -459,7 +459,7 @@
 		color: var(--color-success);
 	}
 
-	.badge-legacy {
+	.badge-native {
 		background: var(--color-surface);
 		color: var(--color-text-muted);
 		border: 1px solid var(--color-border);

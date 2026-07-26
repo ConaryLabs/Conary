@@ -1,6 +1,13 @@
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "dep-circular-b", capability_kind = "PackageName", version_constraint = ">=1.0.0", native_text = "dep-circular-b >=1.0.0" } }, alternatives = [{ name = "dep-circular-b", capability_kind = "PackageName", version_constraint = ">=1.0.0", native_text = "dep-circular-b >=1.0.0" }], native_text = "dep-circular-b >=1.0.0" },
+]
+
 [package]
 name = "dep-circular-a"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Circular dependency fixture A"
 license = "MIT"
 
@@ -12,12 +19,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-circular-a"]
 binaries = ["/usr/bin/dep-circular-a-v1"]
-
-[requires]
-capabilities = []
-packages = [
-    { name = "dep-circular-b", version = ">=1.0" },
-]
 
 [components]
 default = ["runtime"]

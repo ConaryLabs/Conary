@@ -9,8 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use rusqlite::OptionalExtension;
-
 use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ServiceError};
 use crate::server::auth::{Scope, TokenScopes, json_error};
@@ -234,17 +232,15 @@ pub async fn get_federation_config(
 
     let config = match run_blocking("federation config", move || {
         let conn = conary_core::db::open_fast(&db_path)?;
-        let json_str: Option<String> = conn
-            .query_row(
-                "SELECT value FROM metadata WHERE key = 'federation_config'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None); // Table may not exist -- treat as missing
+        let json_str = conary_core::db::models::get_metadata(
+            &conn,
+            conary_core::db::models::MetadataTable::Server,
+            "federation_config",
+        )?;
 
         let config: crate::federation::FederationConfig = match json_str {
-            Some(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|error| anyhow::anyhow!("invalid persisted federation config: {error}"))?,
             None => crate::federation::FederationConfig::default(),
         };
         Ok(config)
@@ -283,7 +279,17 @@ pub async fn update_federation_config(
         }
     };
 
-    let json_str = serde_json::to_string(&config).unwrap_or_default();
+    let json_str = match serde_json::to_string(&config) {
+        Ok(json) => json,
+        Err(error) => {
+            tracing::error!("Failed to serialize federation config: {error}");
+            return json_error(
+                500,
+                "Failed to serialize federation config",
+                "INTERNAL_ERROR",
+            );
+        }
+    };
 
     let db_path = {
         let guard = state.read().await;
@@ -292,9 +298,11 @@ pub async fn update_federation_config(
 
     if let Err(e) = run_blocking("update federation config", move || {
         let conn = conary_core::db::open_fast(&db_path)?;
-        conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('federation_config', ?1)",
-            rusqlite::params![json_str],
+        conary_core::db::models::set_metadata(
+            &conn,
+            conary_core::db::models::MetadataTable::Server,
+            "federation_config",
+            &json_str,
         )?;
         Ok(())
     })
@@ -458,5 +466,70 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn federation_config_defaults_only_when_current_row_is_absent() {
+        let (app, _) = test_app().await;
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/admin/federation/config")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn federation_config_rejects_corrupt_persisted_json() {
+        let (app, db_path) = test_app().await;
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conary_core::db::models::set_metadata(
+            &conn,
+            conary_core::db::models::MetadataTable::Server,
+            "federation_config",
+            "{not-json",
+        )
+        .unwrap();
+        drop(conn);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/admin/federation/config")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn federation_config_propagates_current_schema_corruption() {
+        let (app, db_path) = test_app().await;
+        let conn = conary_core::db::open(&db_path).unwrap();
+        conn.execute("DROP TABLE server_metadata", []).unwrap();
+        drop(conn);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/admin/federation/config")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

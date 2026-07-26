@@ -8,7 +8,7 @@ phase = 4
 timeout = 1200
 
 [[suite.setup]]
-conary = "system init --profile ${REMI_DISTRO}"
+conary = "system init"
 
 [suite.setup.assert]
 exit_code = 0
@@ -18,7 +18,7 @@ native_target = "rpm"
 native_glob = "*.rpm"
 native_arch = "x86_64"
 native_scheme = "rpm"
-native_distro = "fedora"
+native_profile = "fedora-44"
 native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 
@@ -27,7 +27,7 @@ native_target = "deb"
 native_glob = "*.deb"
 native_arch = "amd64"
 native_scheme = "debian"
-native_distro = "ubuntu"
+native_profile = "ubuntu-26.04"
 native_fixture_version = "1.0.0"
 native_update_version = "1.0.1"
 
@@ -36,7 +36,7 @@ native_target = "arch"
 native_glob = "*.pkg.tar.zst"
 native_arch = "x86_64"
 native_scheme = "arch"
-native_distro = "arch"
+native_profile = "arch"
 native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 
@@ -74,7 +74,7 @@ depends_on = ["TSEC01"]
 group = "security-advisory-pipeline"
 
 [[test.step]]
-run = ". /tmp/security-advisory-v1/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox never"
+run = ". /tmp/security-advisory-v1/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -146,12 +146,12 @@ group = "security-advisory-pipeline"
 [[test.step]]
 run = """
 ${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
-${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --db-path ${DB_PATH} --no-gpg-check --security-advisories unknown
+${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories unknown
 ${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
 REPO_ID=$(sqlite3 ${DB_PATH} "SELECT id FROM repositories WHERE name = 'security-advisory-json'")
-sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_distro = '${native_distro}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
+sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_profile = '${native_profile}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
 set +e
-OUTPUT=$(${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox never --yes 2>&1)
+OUTPUT=$(${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox always --yes 2>&1)
 STATUS=$?
 set -e
 printf '%s\n' "$OUTPUT"
@@ -176,7 +176,7 @@ group = "security-advisory-pipeline"
 [[test.step]]
 run = """
 ${CONARY_BIN} repo remove security-advisory-json --db-path ${DB_PATH} >/dev/null 2>&1 || true
-${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --db-path ${DB_PATH} --no-gpg-check --security-advisories supported
+${CONARY_BIN} repo add security-advisory-json http://127.0.0.1:18088 --package-format json --source-profile ${native_profile} --db-path ${DB_PATH} --security-advisories supported
 ${CONARY_BIN} repo sync security-advisory-json --db-path ${DB_PATH} --force
 sqlite3 ${DB_PATH} "SELECT is_security_update || '|' || COALESCE(severity, '') || '|' || COALESCE(cve_ids, '') || '|' || COALESCE(advisory_id, '') || '|' || COALESCE(metadata, '') FROM repository_packages WHERE name = 'phase4-runtime-fixture' AND version = '${native_update_version}'"
 """
@@ -197,8 +197,8 @@ group = "security-advisory-pipeline"
 [[test.step]]
 run = """
 REPO_ID=$(sqlite3 ${DB_PATH} "SELECT id FROM repositories WHERE name = 'security-advisory-json'")
-sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_distro = '${native_distro}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
-${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox never --yes
+sqlite3 ${DB_PATH} "UPDATE troves SET installed_from_repository_id = $REPO_ID, source_profile = '${native_profile}', version_scheme = '${native_scheme}' WHERE name = 'phase4-runtime-fixture'"
+${CONARY_BIN} update phase4-runtime-fixture --security --db-path ${DB_PATH} --sandbox always --yes
 """
 
 [test.step.assert]

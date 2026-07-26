@@ -4,6 +4,7 @@ use anyhow::Result;
 use conary_core::ccs::CcsManifest;
 use conary_core::ccs::manifest::{Service, ServiceAction};
 use conary_core::ccs::v2::PackageKindTagV2;
+use conary_core::packages::traits::ConfigFileInfo;
 
 use super::CcsInitTemplate;
 
@@ -22,16 +23,20 @@ pub fn build_manifest(
 
 fn minimal_file_manifest(name: &str, version: &str) -> Result<CcsManifest> {
     let mut manifest = CcsManifest::new_minimal(name, version);
-    manifest.package.release = Some("1".to_string());
-    manifest.package.kind = Some(PackageKindTagV2::Package);
+    manifest.package.release = "1".to_string();
+    manifest.package.kind = PackageKindTagV2::Package;
     manifest.package.description = format!("{name} package");
     Ok(manifest)
 }
 
 fn config_noreplace_manifest(name: &str, version: &str) -> Result<CcsManifest> {
     let mut manifest = minimal_file_manifest(name, version)?;
-    manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
-    manifest.config.noreplace = true;
+    manifest.config.files = vec![ConfigFileInfo {
+        path: "/etc/conary-example/config.toml".to_string(),
+        noreplace: true,
+        ghost: false,
+        remove_on_upgrade: false,
+    }];
     Ok(manifest)
 }
 
@@ -56,8 +61,8 @@ mod tests {
 
         assert_eq!(manifest.package.name, "hello");
         assert_eq!(manifest.package.version, "0.1.0");
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
     }
 
     #[test]
@@ -65,13 +70,17 @@ mod tests {
         let manifest = build_manifest(Some(CcsInitTemplate::ConfigNoreplace), "demo", "0.1.0")
             .expect("template manifest");
 
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
         assert_eq!(
             manifest.config.files,
-            vec!["/etc/conary-example/config.toml".to_string()]
+            vec![ConfigFileInfo {
+                path: "/etc/conary-example/config.toml".to_string(),
+                noreplace: true,
+                ghost: false,
+                remove_on_upgrade: false,
+            }]
         );
-        assert!(manifest.config.noreplace);
         assert!(manifest.hooks.services.is_empty());
         assert!(manifest.hooks.systemd.is_empty());
     }
@@ -81,8 +90,8 @@ mod tests {
         let manifest = build_manifest(Some(CcsInitTemplate::Service), "demo", "0.1.0")
             .expect("template manifest");
 
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(manifest.package.kind, Some(PackageKindTagV2::Package));
+        assert_eq!(manifest.package.release.as_str(), "1");
+        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
         assert_eq!(manifest.hooks.services.len(), 1);
         assert_eq!(manifest.hooks.services[0].name, "conary-example.service");
         assert!(matches!(

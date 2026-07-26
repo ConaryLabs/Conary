@@ -1,35 +1,24 @@
 // apps/conary/src/commands/remove/command.rs
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use conary_core::db::models::Changeset;
-use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use tracing::info;
 
-use super::execution_path::{RemoveExecutionPath, remove_execution_path};
-use super::scriptlets::run_post_remove_scriptlet;
-use super::transaction::{commit_remove_db, prepare_remove, remove_inner};
-use super::types::{RemoveInnerResult, RemoveScriptletOptions};
-use crate::commands::progress::{RemovePhase, RemoveProgress};
-use crate::commands::{
-    InstalledPackageSelector, LegacyReplayOptions, SandboxMode, open_db, resolve_installed_package,
-};
+use super::types::{RemoveInnerResult, RemoveLifecycleOptions};
+use crate::commands::progress::RemoveProgress;
+use crate::commands::{InstalledPackageSelector, SandboxMode, open_db, resolve_installed_package};
 
 /// Remove an installed package
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_remove(
     package_name: &str,
     db_path: &str,
-    root: &str,
     version: Option<String>,
     architecture: Option<String>,
-    no_scripts: bool,
     sandbox_mode: SandboxMode,
-    purge_files: bool,
-    legacy_replay: LegacyReplayOptions,
+    purge: bool,
 ) -> Result<()> {
     info!("Removing package: {}", package_name);
     println!("Removing package: {}", package_name);
@@ -50,7 +39,6 @@ pub async fn cmd_remove(
     let resolved = resolve_installed_package(&conn, &selector)
         .with_context(|| format!("Failed to select package '{}'", package_name))?;
     let trove = resolved.trove;
-
     // Check if package is pinned
     if trove.pinned {
         return Err(anyhow::anyhow!(
@@ -60,21 +48,13 @@ pub async fn cmd_remove(
         ));
     }
 
-    if crate::commands::install::is_package_blocked(&trove.name) {
+    if trove.install_source.is_adopted() && !purge {
         anyhow::bail!(
-            "Refusing to remove critical package '{}'. Use the native package manager for this system package.",
-            trove.name
-        );
-    }
-
-    if trove.install_source.is_adopted() && !purge_files {
-        let pkg_mgr = conary_core::packages::SystemPackageManager::detect();
-        anyhow::bail!(
-            "Refusing to remove adopted package '{}': native package manager authority is preserved. \
-             Use '{}' to uninstall it, 'conary system unadopt {}' to remove Conary tracking only, \
-             or rerun with --purge-files only if deleting native-owned files is intentional.",
+            "Refusing to remove adopted package '{}': its files are not Conary-owned and \
+             remain under native package manager authority. Use 'conary system unadopt {}' \
+             to remove Conary tracking only, \
+             or rerun with --purge only if deleting externally owned files is intentional.",
             package_name,
-            pkg_mgr.remove_command(package_name),
             package_name
         );
     }
@@ -102,189 +82,29 @@ pub async fn cmd_remove(
         ));
     }
 
-    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
-        PathBuf::from(root),
-        db_path.into(),
-    ))?;
-    engine.begin()?;
-    let scriptlet_options = RemoveScriptletOptions::new(no_scripts, sandbox_mode, legacy_replay);
-
-    if trove.install_source.is_adopted() && purge_files {
+    let lifecycle_options =
+        RemoveLifecycleOptions::new(sandbox_mode).with_purge_config_files(purge);
+    if trove.install_source.is_adopted() && purge {
         println!(
-            "WARNING: --purge-files specified for adopted package '{}'. \
+            "WARNING: --purge specified for adopted package '{}'. \
              Files will be deleted from disk.",
             package_name
         );
     }
 
-    let runtime_root =
-        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
-    if remove_execution_path(db_path)? == RemoveExecutionPath::MutableLiveRoot {
-        let result = (|| -> Result<(RemoveInnerResult, crate::commands::LiveRootStats)> {
-            crate::commands::live_root::recover_pending_journals_with_changesets(
-                runtime_root.root(),
-                Path::new(root),
-                &conn,
-            )?;
-
-            let tx_uuid = uuid::Uuid::new_v4().to_string();
-            let tx_description = format!("Remove {}-{}", trove.name, trove.version);
-            let prepared = prepare_remove(&conn, &trove, root, scriptlet_options, &progress)?;
-            let remove_paths = prepared
-                .snapshot
-                .files
-                .iter()
-                .map(|file| file.path.clone())
-                .collect::<Vec<_>>();
-            let mut live_tx = crate::commands::LiveRootTransaction::begin(
-                runtime_root.root(),
-                Path::new(root),
-                tx_uuid.clone(),
-                format!("Remove {}", package_name),
-            )?;
-            progress.set_phase(RemovePhase::RemovingFiles);
-            let stats = live_tx.apply_remove_paths(&remove_paths)?;
-
-            progress.set_phase(RemovePhase::UpdatingDb);
-            let tx = conn.unchecked_transaction()?;
-            let mut changeset = Changeset::with_tx_uuid(tx_description, tx_uuid.clone());
-            let remove_changeset_id = changeset.insert(&tx)?;
-            let remove_result = match commit_remove_db(&tx, remove_changeset_id, prepared) {
-                Ok(result) => result,
-                Err(error) => {
-                    live_tx.rollback()?;
-                    return Err(error);
-                }
-            };
-            let snapshot_json = crate::commands::metadata_with_removed_troves(vec![
-                remove_result.snapshot.clone(),
-            ])?;
-            tx.execute(
-                "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-                rusqlite::params![snapshot_json, remove_changeset_id],
-            )?;
-            changeset.update_status(&tx, conary_core::db::models::ChangesetStatus::Applied)?;
-            if let Err(error) = tx.commit() {
-                if let Err(rollback_error) = live_tx.rollback() {
-                    return Err(error)
-                        .context(format!("Failed to rollback live root: {rollback_error}"));
-                }
-                return Err(error.into());
-            }
-            live_tx.commit()?;
-            Ok((remove_result, stats))
-        })();
-        engine.release_lock();
-        let (remove_result, stats) = result?;
-
-        run_post_remove_scriptlet(
-            &conn,
-            &remove_result,
-            root,
-            no_scripts,
-            sandbox_mode,
-            &progress,
-        )?;
-        progress.finish(&format!(
-            "Removed {} {}",
-            remove_result.trove.name, remove_result.trove.version
-        ));
-        print_remove_summary(&remove_result, &stats);
-        return Ok(());
-    }
-
-    // DB-first approach: commit the DB transaction before removing files from disk.
-    // If a crash occurs after the DB commit but before file removal completes, the
-    // package is already correctly marked as removed. Leftover files on disk are
-    // harmless orphans rather than a broken state where files are gone but the
-    // package is still recorded as installed.
-    // Capture /etc snapshot BEFORE the DB transaction so the three-way merge
-    // can distinguish pre- from post-removal state.
-    let prev_etc = crate::commands::composefs_ops::collect_etc_files(&conn)?;
-
-    progress.set_phase(RemovePhase::UpdatingDb);
-    let mut changeset = Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
-    let tx = conn.unchecked_transaction()?;
-    let remove_changeset_id = changeset.insert(&tx)?;
-
-    let remove_result = match remove_inner(
-        &tx,
-        remove_changeset_id,
-        &trove,
-        root,
-        scriptlet_options,
-        &progress,
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            engine.release_lock();
-            return Err(e);
-        }
-    };
-    let snapshot_json =
-        crate::commands::metadata_with_removed_troves(vec![remove_result.snapshot.clone()])?;
-    tx.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        rusqlite::params![snapshot_json, remove_changeset_id],
-    )?;
-    changeset.update_status(&tx, conary_core::db::models::ChangesetStatus::Applied)?;
-    tx.commit()?;
-
-    // Composefs-native: rebuild EROFS image and remount to reflect removal
-    progress.set_phase(RemovePhase::RemovingFiles);
-    let post_commit_result = (|| -> Result<()> {
-        let summary = format!("Remove {}", package_name);
-        let outcome = crate::commands::generation::publication::publish_current_db_state(
-            &conn,
-            crate::commands::generation::publication::PublicationRequest {
-                db_path,
-                summary: &summary,
-                trigger_changeset_id: Some(remove_changeset_id),
-                tx_uuid: changeset.tx_uuid.as_deref(),
-                prev_etc_snapshot: Some(prev_etc),
-            },
-        )?;
-        if outcome.needs_publication {
-            crate::commands::append_deferred_follow_up_metadata(
-                &conn,
-                remove_changeset_id,
-                crate::commands::publication_deferred_follow_up(
-                    "generation publication is pending".to_string(),
-                ),
-            )?;
-            crate::commands::generation::publication::warn_if_publication_pending(
-                remove_changeset_id,
-                &outcome,
-            );
-        }
-        Ok(())
-    })();
-    engine.release_lock();
-    post_commit_result?;
-
-    run_post_remove_scriptlet(
+    let graph_result = super::native_graph::execute_installed_trove_remove_graph(
         &conn,
-        &remove_result,
-        root,
-        no_scripts,
-        sandbox_mode,
+        &trove,
+        db_path,
+        package_name,
+        lifecycle_options,
         &progress,
     )?;
-
     progress.finish(&format!(
         "Removed {} {}",
-        remove_result.trove.name, remove_result.trove.version
+        graph_result.removal.trove.name, graph_result.removal.trove.version
     ));
-
-    let stats = crate::commands::LiveRootStats {
-        files_removed: remove_result.removed_count,
-        dirs_removed: remove_result.dirs_removed,
-        ..Default::default()
-    };
-    print_remove_summary(&remove_result, &stats);
-    // Note: composefs-native removal rebuilds the entire EROFS image,
-    // so individual file failure tracking is not applicable.
-
+    print_remove_summary(&graph_result.removal, &graph_result.stats);
     Ok(())
 }
 
@@ -310,15 +130,40 @@ fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::comman
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use tempfile::TempDir;
 
+    fn regular_file_entry(
+        db_path: &std::path::Path,
+        path: &str,
+        content: &[u8],
+        trove_id: i64,
+    ) -> conary_core::db::models::FileEntry {
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
+        let hash = conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+            .unwrap()
+            .store(content)
+            .unwrap();
+        conary_core::db::models::FileEntry::new(
+            path.to_string(),
+            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap(),
+            Some(PayloadContentAuthority {
+                sha256: hash,
+                size: content.len() as u64,
+            }),
+            trove_id,
+        )
+    }
+
     #[tokio::test]
-    async fn no_generation_remove_deletes_files_and_db_rows() {
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
+    async fn no_current_generation_remove_publishes_without_mutating_ambient_root() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let payload = root.join("usr/bin/fixture");
         std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
@@ -330,38 +175,44 @@ mod tests {
             "1.0.0".to_string(),
             conary_core::db::models::TroveType::Package,
             conary_core::db::models::InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = conary_core::db::models::FileEntry::new(
-            "/usr/bin/fixture".to_string(),
-            "0".repeat(64),
-            "fixture".len() as i64,
-            0o100755,
+        crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/fixture",
+            b"fixture",
+            0o755,
             trove_id,
+            None,
         );
-        file.insert(&conn).unwrap();
         drop(conn);
 
         cmd_remove(
             "fixture",
             db_path.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
             None,
             None,
-            true,
-            SandboxMode::None,
+            SandboxMode::Always,
             false,
-            LegacyReplayOptions::default(),
         )
         .await
         .unwrap();
 
-        assert!(!payload.exists());
+        assert_eq!(std::fs::read_to_string(&payload).unwrap(), "fixture");
         let conn = conary_core::db::open(&db_path).unwrap();
         assert!(
             conary_core::db::models::Trove::find_by_name(&conn, "fixture")
                 .unwrap()
                 .is_empty()
+        );
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+        assert!(
+            conary_core::generation::mount::current_generation(runtime_root.root())
+                .unwrap()
+                .is_some()
         );
     }
 
@@ -371,6 +222,7 @@ mod tests {
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
         std::os::unix::fs::symlink("generations/7", root.join("current")).unwrap();
 
         let payload = root.join("usr/bin/fixture");
@@ -383,28 +235,27 @@ mod tests {
             "1.0.0".to_string(),
             conary_core::db::models::TroveType::Package,
             conary_core::db::models::InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = conary_core::db::models::FileEntry::new(
-            "/usr/bin/fixture".to_string(),
-            "0".repeat(64),
-            "fixture".len() as i64,
-            0o100755,
+        crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/fixture",
+            b"fixture",
+            0o755,
             trove_id,
+            None,
         );
-        file.insert(&conn).unwrap();
         drop(conn);
 
         let err = cmd_remove(
             "fixture",
             db_path.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
             None,
             None,
-            true,
-            SandboxMode::None,
+            SandboxMode::Always,
             false,
-            LegacyReplayOptions::default(),
         )
         .await
         .unwrap_err()
@@ -422,12 +273,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_generation_remove_live_root_failure_leaves_no_pending_changeset() {
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
+    async fn selected_root_materialization_failure_leaves_no_pending_changeset() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = conary_core::db::models::Trove::new_with_source(
@@ -435,34 +287,26 @@ mod tests {
             "1.0.0".to_string(),
             conary_core::db::models::TroveType::Package,
             conary_core::db::models::InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = conary_core::db::models::FileEntry::new(
-            "../escape".to_string(),
-            "0".repeat(64),
-            7,
-            0o100755,
-            trove_id,
-        );
+        let mut file = regular_file_entry(&db_path, "../escape", b"fixture", trove_id);
         file.insert(&conn).unwrap();
         drop(conn);
 
         let err = cmd_remove(
             "fixture",
             db_path.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
             None,
             None,
-            true,
-            SandboxMode::None,
+            SandboxMode::Always,
             false,
-            LegacyReplayOptions::default(),
         )
         .await
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
+        let error_chain = format!("{err:#}");
 
-        assert!(err.contains("escapes the target root"), "{err}");
+        assert!(error_chain.contains("escape"), "{error_chain}");
         let conn = conary_core::db::open(&db_path).unwrap();
         let changesets: i64 = conn
             .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
@@ -477,11 +321,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_refuses_critical_package_before_file_mutation() {
+    async fn remove_has_no_package_name_blocklist() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let payload = root.join("usr/bin/bash");
         std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
@@ -490,37 +336,40 @@ mod tests {
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = conary_core::db::models::Trove::new_with_source(
             "bash".to_string(),
-            "5.2".to_string(),
+            "5.2.0".to_string(),
             conary_core::db::models::TroveType::Package,
             conary_core::db::models::InstallSource::Repository,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = conary_core::db::models::FileEntry::new(
-            "/usr/bin/bash".to_string(),
-            "0".repeat(64),
-            "bash".len() as i64,
-            0o100755,
+        crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/bash",
+            b"bash",
+            0o755,
             trove_id,
+            None,
         );
-        file.insert(&conn).unwrap();
         drop(conn);
 
-        let err = cmd_remove(
+        cmd_remove(
             "bash",
             db_path.to_string_lossy().as_ref(),
-            root.to_string_lossy().as_ref(),
             None,
             None,
-            true,
-            SandboxMode::None,
+            SandboxMode::Always,
             false,
-            LegacyReplayOptions::default(),
         )
         .await
-        .unwrap_err()
-        .to_string();
+        .unwrap();
 
-        assert!(err.contains("critical package"));
         assert_eq!(std::fs::read_to_string(&payload).unwrap(), "bash");
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            conary_core::db::models::Trove::find_by_name(&conn, "bash")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

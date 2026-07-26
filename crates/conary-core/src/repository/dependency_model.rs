@@ -18,15 +18,17 @@ use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Source distro flavor
+// Exact source profile
 // ---------------------------------------------------------------------------
 
 /// Which native ecosystem a dependency originates from.
 ///
 /// This is intentionally parallel to [`VersionScheme`] but is used to tag
 /// dependency entries rather than version strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RepositoryDependencyFlavor {
+    /// Conary-native package metadata and version ordering.
+    Conary,
     /// RPM-based (Fedora, RHEL, openSUSE, etc.)
     Rpm,
     /// Debian-based (Debian, Ubuntu, etc.)
@@ -40,6 +42,7 @@ impl RepositoryDependencyFlavor {
     #[must_use]
     pub fn version_scheme(self) -> VersionScheme {
         match self {
+            Self::Conary => VersionScheme::Conary,
             Self::Rpm => VersionScheme::Rpm,
             Self::Deb => VersionScheme::Debian,
             Self::Arch => VersionScheme::Arch,
@@ -62,6 +65,12 @@ pub enum RepositoryCapabilityKind {
     Soname,
     /// A filesystem path (e.g. `/usr/bin/python3`).
     File,
+    /// A distinct path capability.
+    Path,
+    /// An executable name capability.
+    Binary,
+    /// A pkg-config module capability.
+    PkgConfig,
     /// Anything that does not fit the above categories.
     Generic,
 }
@@ -85,30 +94,152 @@ pub enum RepositoryRequirementKind {
     Conflict,
     /// Partial breakage declaration (Debian Breaks).
     Breaks,
+    /// Ownership replacement (Debian/Arch Replaces).
+    Replace,
+    /// Package obsolescence with replacement (RPM Obsoletes).
+    Obsolete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageRelationRemovalMode {
+    /// Remove a package solely to satisfy a co-installation constraint.
+    Constraint,
+    /// Transfer payload ownership from a replaced/obsolete package.
+    OwnershipTransfer,
+}
+
+impl RepositoryRequirementKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Depends => "depends",
+            Self::PreDepends => "pre_depends",
+            Self::Optional => "optional",
+            Self::Build => "build",
+            Self::Conflict => "conflict",
+            Self::Breaks => "breaks",
+            Self::Replace => "replace",
+            Self::Obsolete => "obsolete",
+        }
+    }
+
+    #[must_use]
+    pub fn from_str_exact(value: &str) -> Option<Self> {
+        match value {
+            "depends" => Some(Self::Depends),
+            "pre_depends" => Some(Self::PreDepends),
+            "optional" => Some(Self::Optional),
+            "build" => Some(Self::Build),
+            "conflict" => Some(Self::Conflict),
+            "breaks" => Some(Self::Breaks),
+            "replace" => Some(Self::Replace),
+            "obsolete" => Some(Self::Obsolete),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_negative_relation(self) -> bool {
+        matches!(
+            self,
+            Self::Conflict | Self::Breaks | Self::Replace | Self::Obsolete
+        )
+    }
+
+    #[must_use]
+    pub const fn removes_matching_packages(self) -> bool {
+        matches!(self, Self::Replace | Self::Obsolete)
+    }
+
+    #[must_use]
+    pub const fn removal_mode(self) -> Option<PackageRelationRemovalMode> {
+        match self {
+            Self::Conflict => Some(PackageRelationRemovalMode::Constraint),
+            Self::Replace | Self::Obsolete => Some(PackageRelationRemovalMode::OwnershipTransfer),
+            Self::Depends | Self::PreDepends | Self::Optional | Self::Build | Self::Breaks => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Conditional / rich dependency behavior
 // ---------------------------------------------------------------------------
 
-/// How a conditional or rich dependency expression was classified.
+/// Diagnostic shape of a parsed dependency expression.
 ///
-/// The resolver must know whether a dependency was treated as a hard
-/// requirement, a conditional marker, or was left uninterpreted because the
-/// expression could not be reliably decomposed.
+/// Resolution uses [`RepositoryRequirementExpression`] directly. This label is
+/// never an execution or admission decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConditionalRequirementBehavior {
     /// Unconditional hard requirement (the common case).
     Hard,
     /// Conditional on a boolean predicate (RPM rich deps `(foo if bar)`).
     Conditional,
-    /// The expression was too complex to decompose; kept as opaque text.
-    UnsupportedRich,
 }
 
 // ---------------------------------------------------------------------------
 // Provides
 // ---------------------------------------------------------------------------
+
+/// Architecture carried by one source-native provided capability.
+///
+/// Debian `Provides` atoms may omit a qualifier, advertise the wildcard
+/// `:any`, or name one exact architecture. This is distinct from a dependency
+/// qualifier: a literal `:native` in `Provides` is an exact architecture token,
+/// not the dependency-side native-architecture selector.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "architecture", rename_all = "snake_case")]
+pub enum ProvideArchitectureQualifier {
+    /// Inherit the providing package's architecture.
+    #[default]
+    Implicit,
+    /// Debian's explicit wildcard `:any` provide.
+    Any,
+    /// One exact source architecture token.
+    Exact(String),
+}
+
+/// Source-native relation attached to a versioned provided capability.
+///
+/// RPM permits all five ordered relations on `Provides`; Debian and Arch
+/// currently emit only [`Self::Equal`]. An unversioned existence provide is
+/// represented by no relation and no version, never by an `Any` range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvideVersionRelation {
+    LessThan,
+    LessOrEqual,
+    Equal,
+    GreaterOrEqual,
+    GreaterThan,
+}
+
+impl ProvideVersionRelation {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LessThan => "lt",
+            Self::LessOrEqual => "le",
+            Self::Equal => "eq",
+            Self::GreaterOrEqual => "ge",
+            Self::GreaterThan => "gt",
+        }
+    }
+
+    pub fn parse_exact(value: &str) -> Result<Self, String> {
+        match value {
+            "lt" => Ok(Self::LessThan),
+            "le" => Ok(Self::LessOrEqual),
+            "eq" => Ok(Self::Equal),
+            "ge" => Ok(Self::GreaterOrEqual),
+            "gt" => Ok(Self::GreaterThan),
+            _ => Err(format!(
+                "unsupported persisted provider version relation '{value}'"
+            )),
+        }
+    }
+}
 
 /// A single capability that a repository package advertises.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -125,6 +256,15 @@ pub struct RepositoryProvide {
     /// may provide `libfoo.so.1` with provide-version `1.3`.
     pub version: Option<String>,
 
+    /// Ordered relation associated with `version`.
+    ///
+    /// This is paired with `version`: both are absent for an existence provide,
+    /// and both are present for a versioned range.
+    pub version_relation: Option<ProvideVersionRelation>,
+
+    /// Exact source-native architecture of this provided capability.
+    pub architecture_qualifier: ProvideArchitectureQualifier,
+
     /// The original native text for diagnostics (e.g. `"kernel-core-uname-r = 6.19.6-200.fc44.x86_64"`).
     pub native_text: Option<String>,
 }
@@ -133,10 +273,13 @@ impl RepositoryProvide {
     /// Create a provide for the package name itself (always present).
     #[must_use]
     pub fn package_name(name: String, version: Option<String>) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             name,
             kind: RepositoryCapabilityKind::PackageName,
             version,
+            version_relation,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -144,10 +287,13 @@ impl RepositoryProvide {
     /// Create a virtual provide.
     #[must_use]
     pub fn virtual_cap(name: String, version: Option<String>) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             name,
             kind: RepositoryCapabilityKind::Virtual,
             version,
+            version_relation,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -155,10 +301,13 @@ impl RepositoryProvide {
     /// Create a soname provide.
     #[must_use]
     pub fn soname(name: String, version: Option<String>) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             name,
             kind: RepositoryCapabilityKind::Soname,
             version,
+            version_relation,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -170,6 +319,8 @@ impl RepositoryProvide {
             name: path,
             kind: RepositoryCapabilityKind::File,
             version: None,
+            version_relation: None,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -178,6 +329,67 @@ impl RepositoryProvide {
 // ---------------------------------------------------------------------------
 // Requirement clauses and groups
 // ---------------------------------------------------------------------------
+
+/// Architecture qualifier attached to one source-native dependency atom.
+///
+/// Debian dependency names may be unqualified, use the special `:any` or
+/// `:native` qualifiers, or name one exact Debian architecture. The parsed
+/// qualifier remains separate from the package name so later layers never
+/// have to recover mutation authority from string suffixes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "architecture", rename_all = "snake_case")]
+pub enum RequirementArchitectureQualifier {
+    /// No source-native architecture qualifier was written.
+    #[default]
+    Unqualified,
+    /// Debian `:any`.
+    Any,
+    /// Debian `:native`.
+    Native,
+    /// One exact Debian architecture qualifier such as `:amd64`.
+    Exact(String),
+}
+
+/// Debian package `Multi-Arch` behavior.
+///
+/// Absence of the control field is exactly [`Self::No`] under Debian Policy.
+/// This type is package metadata and must not be inferred from dependency
+/// spellings, repository names, or target distro names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebianMultiArch {
+    /// The field is absent or explicitly `no`.
+    #[default]
+    No,
+    /// Same-name packages of multiple architectures may be co-installed.
+    Same,
+    /// Cross-architecture use requires an explicit `:any` dependency.
+    Allowed,
+    /// Unqualified dependencies may be satisfied across architectures.
+    Foreign,
+}
+
+impl DebianMultiArch {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Same => "same",
+            Self::Allowed => "allowed",
+            Self::Foreign => "foreign",
+        }
+    }
+
+    pub fn parse_exact(value: &str) -> Result<Self, String> {
+        match value {
+            "no" => Ok(Self::No),
+            "same" => Ok(Self::Same),
+            "allowed" => Ok(Self::Allowed),
+            "foreign" => Ok(Self::Foreign),
+            _ => Err(format!("invalid Debian Multi-Arch value: {value:?}")),
+        }
+    }
+}
 
 /// A single alternative inside a requirement group.
 ///
@@ -202,8 +414,95 @@ pub struct RepositoryRequirementClause {
     /// [`VersionScheme`].
     pub version_constraint: Option<String>,
 
+    /// Exact source-native architecture qualifier.
+    #[serde(default)]
+    pub architecture_qualifier: RequirementArchitectureQualifier,
+
     /// The original native text for this single clause.
     pub native_text: Option<String>,
+}
+
+/// Exact boolean dependency expression from a native package manager.
+///
+/// RPM rich dependencies use all six binary operators below. Keeping the
+/// parsed expression makes the source grammar authoritative through sync and
+/// resolution; no later layer needs to rediscover semantics from text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "operator", content = "operands", rename_all = "snake_case")]
+pub enum RepositoryRequirementExpression {
+    Atom(RepositoryRequirementClause),
+    And(Vec<RepositoryRequirementExpression>),
+    Or(Vec<RepositoryRequirementExpression>),
+    If {
+        requirement: Box<RepositoryRequirementExpression>,
+        condition: Box<RepositoryRequirementExpression>,
+        otherwise: Option<Box<RepositoryRequirementExpression>>,
+    },
+    Unless {
+        requirement: Box<RepositoryRequirementExpression>,
+        condition: Box<RepositoryRequirementExpression>,
+        otherwise: Option<Box<RepositoryRequirementExpression>>,
+    },
+    With {
+        left: Box<RepositoryRequirementExpression>,
+        right: Box<RepositoryRequirementExpression>,
+    },
+    Without {
+        left: Box<RepositoryRequirementExpression>,
+        right: Box<RepositoryRequirementExpression>,
+    },
+}
+
+impl RepositoryRequirementExpression {
+    /// Collect the atomic clauses for candidate preloading and diagnostics.
+    pub fn atoms(&self) -> Vec<&RepositoryRequirementClause> {
+        let mut atoms = Vec::new();
+        self.collect_atoms(&mut atoms);
+        atoms
+    }
+
+    fn collect_atoms<'a>(&'a self, atoms: &mut Vec<&'a RepositoryRequirementClause>) {
+        match self {
+            Self::Atom(clause) => atoms.push(clause),
+            Self::And(operands) | Self::Or(operands) => {
+                for operand in operands {
+                    operand.collect_atoms(atoms);
+                }
+            }
+            Self::If {
+                requirement,
+                condition,
+                otherwise,
+            }
+            | Self::Unless {
+                requirement,
+                condition,
+                otherwise,
+            } => {
+                requirement.collect_atoms(atoms);
+                condition.collect_atoms(atoms);
+                if let Some(otherwise) = otherwise {
+                    otherwise.collect_atoms(atoms);
+                }
+            }
+            Self::With { left, right } | Self::Without { left, right } => {
+                left.collect_atoms(atoms);
+                right.collect_atoms(atoms);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_conditional(&self) -> bool {
+        match self {
+            Self::If { .. } | Self::Unless { .. } => true,
+            Self::And(operands) | Self::Or(operands) => operands.iter().any(Self::is_conditional),
+            Self::With { left, right } | Self::Without { left, right } => {
+                left.is_conditional() || right.is_conditional()
+            }
+            Self::Atom(_) => false,
+        }
+    }
 }
 
 impl RepositoryRequirementClause {
@@ -214,6 +513,7 @@ impl RepositoryRequirementClause {
             name,
             capability_kind: None,
             version_constraint: None,
+            architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
             native_text: None,
         }
     }
@@ -225,6 +525,7 @@ impl RepositoryRequirementClause {
             name,
             capability_kind: None,
             version_constraint: Some(constraint),
+            architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
             native_text: None,
         }
     }
@@ -250,6 +551,10 @@ pub struct RepositoryRequirementGroup {
     /// How this requirement was classified (hard, conditional, unsupported).
     pub behavior: ConditionalRequirementBehavior,
 
+    /// Parsed native boolean expression. Simple dependencies are represented
+    /// as a single [`RepositoryRequirementExpression::Atom`].
+    pub expression: RepositoryRequirementExpression,
+
     /// One or more alternative clauses (OR semantics).
     ///
     /// Invariant: never empty.
@@ -269,6 +574,7 @@ impl RepositoryRequirementGroup {
         Self {
             kind,
             behavior: ConditionalRequirementBehavior::Hard,
+            expression: RepositoryRequirementExpression::Atom(clause.clone()),
             alternatives: vec![clause],
             description: None,
             native_text: None,
@@ -284,6 +590,13 @@ impl RepositoryRequirementGroup {
         Self {
             kind,
             behavior: ConditionalRequirementBehavior::Hard,
+            expression: RepositoryRequirementExpression::Or(
+                clauses
+                    .iter()
+                    .cloned()
+                    .map(RepositoryRequirementExpression::Atom)
+                    .collect(),
+            ),
             alternatives: clauses,
             description: None,
             native_text: None,
@@ -296,6 +609,7 @@ impl RepositoryRequirementGroup {
         Self {
             kind: RepositoryRequirementKind::Optional,
             behavior: ConditionalRequirementBehavior::Hard,
+            expression: RepositoryRequirementExpression::Atom(clause.clone()),
             alternatives: vec![clause],
             description,
             native_text: None,
@@ -306,6 +620,14 @@ impl RepositoryRequirementGroup {
     #[must_use]
     pub fn with_behavior(mut self, behavior: ConditionalRequirementBehavior) -> Self {
         self.behavior = behavior;
+        self
+    }
+
+    /// Replace the default simple/alternative expression with source-native
+    /// parsed semantics.
+    #[must_use]
+    pub fn with_expression(mut self, expression: RepositoryRequirementExpression) -> Self {
+        self.expression = expression;
         self
     }
 

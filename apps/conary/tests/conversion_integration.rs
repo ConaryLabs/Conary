@@ -1,60 +1,166 @@
 // tests/conversion_integration.rs
-//! Integration tests for legacy package to CCS conversion
+//! Integration tests for native package to CCS conversion
 //!
 //! These tests validate the end-to-end conversion process from RPM/DEB/Arch
 //! packages to CCS format, including:
 //! - File extraction and chunking
 //! - Scriptlet analysis and hook detection
-//! - Capability inference during conversion
 //! - Provenance extraction
-//! - Fidelity tracking
+//! - Typed lifecycle evidence
 
-use conary_core::capability::inference::{Confidence, InferenceOptions};
 use conary_core::ccs::CcsPackage;
-use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
-use conary_core::ccs::legacy_replay::{
-    HostForeignReplayPolicy, LegacyReplayLifecycle, LegacyReplayPolicyInput, LegacyReplayPreflight,
-    LegacyReplayRefusalKind, plan_legacy_replay,
-};
-use conary_core::ccs::legacy_scriptlets::{
-    PublicationStatus, ScriptletDecision, ScriptletFidelity, TargetCompatibility,
-};
-use conary_core::ccs::target_compatibility::{
-    CompatibilityPreflightEnvironment, TargetCompatibilityMatrix,
-};
-use conary_core::packages::PackageFormat;
+use conary_core::ccs::convert::{ConversionOptions, NativePackageConverter};
+use conary_core::ccs::native_lifecycle::ScriptletFidelity;
 use conary_core::packages::common::PackageMetadata;
-use conary_core::packages::traits::{
-    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, PackageFile, Scriptlet,
-    ScriptletPhase,
+use conary_core::packages::native_abi::*;
+use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile};
+use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+use conary_core::repository::dependency_model::{
+    RepositoryRequirementGroup, RepositoryRequirementKind,
 };
-use conary_core::repository::distro::ReplayTarget;
-use conary_core::scriptlet::SandboxMode;
+use conary_core::repository::requirement::parse_native_requirement;
+use conary_core::repository::versioning::VersionScheme;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+#[path = "conversion_integration/authority.rs"]
+mod authority;
 
 // =============================================================================
 // TEST HELPERS
 // =============================================================================
 
+fn requirement(
+    kind: RepositoryRequirementKind,
+    scheme: VersionScheme,
+    native_text: &str,
+) -> RepositoryRequirementGroup {
+    parse_native_requirement(kind, scheme, native_text).expect("valid exact test requirement")
+}
+
+fn content_authority(content: &[u8]) -> PayloadContentAuthority {
+    PayloadContentAuthority {
+        sha256: conary_core::hash::sha256(content),
+        size: content.len() as u64,
+    }
+}
+
+fn source_checksum(label: &str) -> String {
+    format!("sha256:{}", conary_core::hash::sha256(label.as_bytes()))
+}
+
+fn package_regular(path: impl Into<String>, content: &[u8], mode: u32) -> PackageFile {
+    PackageFile {
+        path: path.into(),
+        node: PayloadNode::regular(mode),
+        content: Some(content_authority(content)),
+    }
+}
+
+fn extracted_regular(path: impl Into<String>, content: &[u8], mode: u32) -> ExtractedFile {
+    ExtractedFile {
+        path: path.into(),
+        node: PayloadNode::regular(mode),
+        content: content.to_vec(),
+        content_authority: Some(content_authority(content)),
+    }
+}
+
+fn signed_test_converter(options: ConversionOptions) -> NativePackageConverter {
+    NativePackageConverter::new(options).with_signing_key(std::sync::Arc::new(
+        conary_core::ccs::SigningKeyPair::generate().with_key_id("conversion-integration"),
+    ))
+}
+
+trait InMemoryConversionForTest {
+    fn convert_in_memory_for_test(
+        &self,
+        metadata: &PackageMetadata,
+        files: &[ExtractedFile],
+        format: &str,
+        checksum: &str,
+    ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult>;
+}
+
+impl InMemoryConversionForTest for NativePackageConverter {
+    fn convert_in_memory_for_test(
+        &self,
+        metadata: &PackageMetadata,
+        files: &[ExtractedFile],
+        format: &str,
+        checksum: &str,
+    ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult> {
+        let payload =
+            conary_core::packages::PackagePayload::from_extracted_in_memory(files.to_vec())?;
+        self.convert_payload(metadata, payload.files(), format, checksum)
+            .map_err(Into::into)
+    }
+}
+
+fn rpm_lifecycle_entry(
+    slot_name: &str,
+    slot: RpmScriptletSlot,
+    lifecycle: NativeLifecyclePath,
+    position: NativeTransactionPosition,
+    body: &str,
+) -> NativeScriptletEntry {
+    NativeScriptletEntry {
+        id: format!("rpm:{slot_name}"),
+        format: NativeScriptletFormat::Rpm,
+        kind: NativeScriptletKind::Executable,
+        native_slot: slot_name.to_string(),
+        primary_lifecycle: lifecycle,
+        lifecycle_paths: vec![lifecycle],
+        interpreter: Some("/bin/sh".to_string()),
+        interpreter_args: Vec::new(),
+        body: NativeScriptletBody::from_bytes(body.as_bytes().to_vec()),
+        invocation: NativeInvocationContract::none(),
+        order: NativeTransactionOrder::new(position),
+        support: NativeScriptletSupport::Parsed,
+        metadata: NativeScriptletMetadata::Rpm(RpmNativeScriptletMetadata {
+            slot,
+            runtime: RpmScriptletRuntimeMetadata {
+                program: RpmScriptletProgram::External,
+                flags: RpmScriptletFlagsMetadata {
+                    names: Vec::new(),
+                    raw_bits: 0,
+                    unknown_bits: 0,
+                    expand: false,
+                    query_format: false,
+                    critical: false,
+                    criticality: RpmScriptletCriticality::WarningOnly,
+                },
+                install_prefixes: Vec::new(),
+                macro_context: Default::default(),
+                header_context: Default::default(),
+                package_rpm_version: None,
+            },
+            trigger: None,
+            sysusers: None,
+        }),
+    }
+}
+
 /// Create a minimal test package metadata
 fn create_test_metadata(name: &str) -> PackageMetadata {
+    let content = format!("#!/bin/sh\necho {name}");
     PackageMetadata {
         package_path: PathBuf::from(format!("/tmp/{}-1.0.0.rpm", name)),
         name: name.to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: Some(format!("Test package: {}", name)),
-        files: vec![PackageFile {
-            path: format!("/usr/bin/{}", name),
-            size: 100,
-            mode: 0o755,
-            sha256: Some("abc123".to_string()),
-            symlink_target: None,
-        }],
-        dependencies: vec![],
+        files: vec![package_regular(
+            format!("/usr/bin/{name}"),
+            content.as_bytes(),
+            0o755,
+        )],
+        requirements: vec![],
         provides: vec![],
-        scriptlets: vec![],
+        relations: vec![],
+        diagnostic_scriptlet_evidence: vec![],
         native_scriptlet_abi: vec![],
         config_files: vec![],
     }
@@ -62,165 +168,76 @@ fn create_test_metadata(name: &str) -> PackageMetadata {
 
 /// Create test files matching the metadata
 fn create_test_files(name: &str) -> Vec<ExtractedFile> {
-    vec![ExtractedFile {
-        path: format!("/usr/bin/{}", name),
-        content: format!("#!/bin/sh\necho {}", name).into_bytes(),
-        size: 20,
-        mode: 0o755,
-        sha256: Some("abc123".to_string()),
-        symlink_target: None,
-    }]
+    let content = format!("#!/bin/sh\necho {name}");
+    vec![extracted_regular(
+        format!("/usr/bin/{name}"),
+        content.as_bytes(),
+        0o755,
+    )]
 }
 
-fn passive_converter(output_dir: &std::path::Path) -> LegacyConverter {
-    LegacyConverter::new(ConversionOptions {
+fn passive_converter(output_dir: &std::path::Path) -> NativePackageConverter {
+    signed_test_converter(ConversionOptions {
         output_dir: output_dir.to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     })
-    .with_source_distro("fedora")
+    .with_source_profile("fedora-44")
     .with_source_release("44")
 }
 
 fn parse_converted_package(result: &conary_core::ccs::convert::ConversionResult) -> CcsPackage {
-    CcsPackage::parse(
-        result
-            .package_path
-            .as_ref()
-            .expect("conversion should write CCS package")
-            .to_str()
-            .expect("package path is utf-8"),
+    let package_path = result
+        .package_path
+        .as_ref()
+        .expect("conversion should write CCS package");
+    let verified = conary_core::ccs::verify::verify_package(
+        package_path,
+        &conary_core::ccs::TrustPolicy::strict(vec![result.signing_public_key.clone()]),
     )
-    .expect("converted CCS package should parse")
+    .expect("converted CCS authority should verify");
+    CcsPackage::from_verified_archive(
+        package_path.to_str().expect("package path is utf-8"),
+        &verified,
+    )
+    .expect("verified converted CCS package should open")
 }
 
 fn golden_payload_files(name: &str) -> Vec<ExtractedFile> {
     let mut files = create_test_files(name);
     files.extend([
-        ExtractedFile {
-            path: "/usr/lib/systemd/system/demo.service".to_string(),
-            content: b"[Service]\nExecStart=/usr/bin/demo\n".to_vec(),
-            size: 32,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/usr/lib/tmpfiles.d/demo.conf".to_string(),
-            content: b"d /run/demo 0755 root root -\n".to_vec(),
-            size: 28,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/usr/lib/sysusers.d/demo.conf".to_string(),
-            content: b"u demo - \"Demo User\" /run/demo -\n".to_vec(),
-            size: 32,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/usr/share/mime/packages/demo.xml".to_string(),
-            content: b"<mime-info/>".to_vec(),
-            size: 12,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/usr/share/selinux/packages/demo.pp".to_string(),
-            content: b"selinux policy module placeholder".to_vec(),
-            size: 33,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/etc/apparmor.d/usr.bin.demo".to_string(),
-            content: b"profile usr.bin.demo /usr/bin/demo { }\n".to_vec(),
-            size: 38,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
-        },
+        extracted_regular(
+            "/usr/lib/systemd/system/demo.service",
+            b"[Service]\nExecStart=/usr/bin/demo\n",
+            0o644,
+        ),
+        extracted_regular(
+            "/usr/lib/tmpfiles.d/demo.conf",
+            b"d /run/demo 0755 root root -\n",
+            0o644,
+        ),
+        extracted_regular(
+            "/usr/lib/sysusers.d/demo.conf",
+            b"u demo - \"Demo User\" /run/demo -\n",
+            0o644,
+        ),
+        extracted_regular("/usr/share/mime/packages/demo.xml", b"<mime-info/>", 0o644),
+        extracted_regular(
+            "/usr/share/selinux/packages/demo.pp",
+            b"selinux policy module placeholder",
+            0o644,
+        ),
+        extracted_regular(
+            "/etc/apparmor.d/usr.bin.demo",
+            b"profile usr.bin.demo /usr/bin/demo { }\n",
+            0o644,
+        ),
     ]);
     files
 }
 
 /// Create a network server package (nginx-like)
 fn create_server_package() -> (PackageMetadata, Vec<ExtractedFile>) {
-    let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/myserver-1.0.0.rpm"),
-        name: "myserver".to_string(),
-        version: "1.0.0".to_string(),
-        architecture: Some("x86_64".to_string()),
-        description: Some("A test server application".to_string()),
-        files: vec![
-            PackageFile {
-                path: "/usr/sbin/myserver".to_string(),
-                size: 1024,
-                mode: 0o755,
-                sha256: Some("server_binary_hash".to_string()),
-                symlink_target: None,
-            },
-            PackageFile {
-                path: "/etc/myserver/myserver.conf".to_string(),
-                size: 512,
-                mode: 0o644,
-                sha256: Some("config_hash".to_string()),
-                symlink_target: None,
-            },
-            PackageFile {
-                path: "/usr/lib/systemd/system/myserver.service".to_string(),
-                size: 256,
-                mode: 0o644,
-                sha256: Some("service_hash".to_string()),
-                symlink_target: None,
-            },
-        ],
-        dependencies: vec![
-            Dependency {
-                name: "libssl3".to_string(),
-                version: Some(">= 3.0".to_string()),
-                dep_type: DependencyType::Runtime,
-                description: None,
-            },
-            Dependency {
-                name: "libc6".to_string(),
-                version: None,
-                dep_type: DependencyType::Runtime,
-                description: None,
-            },
-        ],
-        provides: vec![],
-        scriptlets: vec![
-            Scriptlet {
-                phase: ScriptletPhase::PreInstall,
-                interpreter: "/bin/sh".to_string(),
-                content: "getent passwd myserver || useradd -r -s /sbin/nologin myserver"
-                    .to_string(),
-                flags: None,
-            },
-            Scriptlet {
-                phase: ScriptletPhase::PostInstall,
-                interpreter: "/bin/sh".to_string(),
-                content: "systemctl daemon-reload\nsystemctl enable myserver".to_string(),
-                flags: None,
-            },
-        ],
-        native_scriptlet_abi: vec![],
-        config_files: vec![ConfigFileInfo {
-            path: "/etc/myserver/myserver.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-        }],
-    };
-
+    let binary_content = b"\x7fELF binary placeholder";
+    let config_content = b"# Configuration file\nport = 8080\n";
     let systemd_service = br#"[Unit]
 Description=My Server Application
 After=network-online.target
@@ -235,108 +252,71 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 "#;
-
-    let files = vec![
-        ExtractedFile {
-            path: "/usr/sbin/myserver".to_string(),
-            content: b"\x7fELF binary placeholder".to_vec(),
-            size: 1024,
-            mode: 0o755,
-            sha256: Some("server_binary_hash".to_string()),
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/etc/myserver/myserver.conf".to_string(),
-            content: b"# Configuration file\nport = 8080\n".to_vec(),
-            size: 512,
-            mode: 0o644,
-            sha256: Some("config_hash".to_string()),
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/usr/lib/systemd/system/myserver.service".to_string(),
-            content: systemd_service.to_vec(),
-            size: 256,
-            mode: 0o644,
-            sha256: Some("service_hash".to_string()),
-            symlink_target: None,
-        },
-    ];
-
-    (metadata, files)
-}
-
-/// Create a package with complex scriptlets
-fn create_complex_scriptlet_package() -> (PackageMetadata, Vec<ExtractedFile>) {
     let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/complex-pkg-1.0.0.rpm"),
-        name: "complex-pkg".to_string(),
+        package_path: PathBuf::from("/tmp/myserver-1.0.0.rpm"),
+        name: "myserver".to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
-        description: Some("Package with complex scriptlets".to_string()),
-        files: vec![PackageFile {
-            path: "/usr/bin/complex".to_string(),
-            size: 100,
-            mode: 0o755,
-            sha256: Some("hash".to_string()),
-            symlink_target: None,
-        }],
-        dependencies: vec![],
-        provides: vec![],
-        scriptlets: vec![
-            Scriptlet {
-                phase: ScriptletPhase::PreInstall,
-                interpreter: "/bin/sh".to_string(),
-                content: r#"
-# Create user and group
-getent group complexgrp || groupadd -r complexgrp
-getent passwd complexusr || useradd -r -g complexgrp -s /sbin/nologin complexusr
-
-# Create directories
-mkdir -p /var/lib/complex /var/log/complex
-chown complexusr:complexgrp /var/lib/complex /var/log/complex
-"#
-                .to_string(),
-                flags: None,
-            },
-            Scriptlet {
-                phase: ScriptletPhase::PostInstall,
-                interpreter: "/bin/sh".to_string(),
-                content: r#"
-# Reload systemd
-systemctl daemon-reload
-
-# Enable and start
-systemctl enable complex.service
-systemctl start complex.service || true
-"#
-                .to_string(),
-                flags: None,
-            },
-            Scriptlet {
-                phase: ScriptletPhase::PreRemove,
-                interpreter: "/bin/sh".to_string(),
-                content: r#"
-# Stop service before removal
-systemctl stop complex.service || true
-systemctl disable complex.service || true
-"#
-                .to_string(),
-                flags: None,
-            },
+        debian_multi_arch: None,
+        description: Some("A test server application".to_string()),
+        files: vec![
+            package_regular("/usr/sbin/myserver", binary_content, 0o755),
+            package_regular("/etc/myserver/myserver.conf", config_content, 0o644),
+            package_regular(
+                "/usr/lib/systemd/system/myserver.service",
+                systemd_service,
+                0o644,
+            ),
         ],
-        native_scriptlet_abi: vec![],
-        config_files: vec![],
+        requirements: vec![
+            requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Rpm,
+                "openssl-libs >= 3.0",
+            ),
+            requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Rpm,
+                "glibc",
+            ),
+        ],
+        provides: vec![],
+        relations: vec![],
+        diagnostic_scriptlet_evidence: Vec::new(),
+        native_scriptlet_abi: vec![
+            rpm_lifecycle_entry(
+                "%pre",
+                RpmScriptletSlot::Pre,
+                NativeLifecyclePath::PreInstall,
+                NativeTransactionPosition::BeforePayload,
+                "getent passwd myserver || useradd -r -s /sbin/nologin myserver",
+            ),
+            rpm_lifecycle_entry(
+                "%post",
+                RpmScriptletSlot::Post,
+                NativeLifecyclePath::PostInstall,
+                NativeTransactionPosition::AfterPayload,
+                "systemctl daemon-reload\nsystemctl enable myserver",
+            ),
+        ],
+        config_files: vec![ConfigFileInfo {
+            path: "/etc/myserver/myserver.conf".to_string(),
+            noreplace: true,
+            ghost: false,
+            remove_on_upgrade: false,
+        }],
     };
 
-    let files = vec![ExtractedFile {
-        path: "/usr/bin/complex".to_string(),
-        content: b"binary".to_vec(),
-        size: 100,
-        mode: 0o755,
-        sha256: Some("hash".to_string()),
-        symlink_target: None,
-    }];
+    let files = vec![
+        extracted_regular("/usr/sbin/myserver", binary_content, 0o755),
+        extracted_regular("/etc/myserver/myserver.conf", config_content, 0o644),
+        extracted_regular(
+            "/usr/lib/systemd/system/myserver.service",
+            systemd_service,
+            0o644,
+        ),
+    ];
 
     (metadata, files)
 }
@@ -350,24 +330,20 @@ fn test_minimal_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false, // Faster for tests
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
     let metadata = create_test_metadata("minimal");
     let files = create_test_files("minimal");
+    let checksum = source_checksum("minimal native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "checksum123");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(result.is_ok(), "Basic conversion should succeed");
 
     let result = result.unwrap();
     assert!(result.package_path.is_some(), "Should produce output file");
     assert_eq!(result.original_format, "rpm");
-    assert_eq!(result.original_checksum, "checksum123");
+    assert_eq!(result.original_checksum, checksum);
 
     // Verify output file exists
     let package_path = result.package_path.unwrap();
@@ -383,28 +359,26 @@ fn test_conversion_preserves_metadata() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("metadata-test");
     metadata.description = Some("A detailed description".to_string());
-    metadata.dependencies = vec![Dependency {
-        name: "libfoo".to_string(),
-        version: Some(">= 1.0".to_string()),
-        dep_type: DependencyType::Runtime,
-        description: None,
-    }];
+    metadata.version_scheme = VersionScheme::Debian;
+    metadata.debian_multi_arch =
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
+    metadata.requirements = vec![requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Debian,
+        "libfoo (>= 1.0)",
+    )];
 
     let files = create_test_files("metadata-test");
+    let checksum = source_checksum("metadata native package");
 
     let result = converter
-        .convert(&metadata, &files, "deb", "deb_checksum")
+        .convert_in_memory_for_test(&metadata, &files, "deb", &checksum)
         .unwrap();
 
     // Check manifest preserves metadata
@@ -419,11 +393,7 @@ fn test_conversion_preserves_metadata() {
         "Description should be preserved"
     );
 
-    // Check dependencies converted
-    assert!(
-        !manifest.requires.capabilities.is_empty() || !manifest.requires.packages.is_empty(),
-        "Dependencies should be converted"
-    );
+    assert_eq!(manifest.requirements, metadata.requirements);
 }
 
 #[test]
@@ -431,34 +401,15 @@ fn test_server_package_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false, // Skip capture for this test
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Partial,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
     let (metadata, files) = create_server_package();
+    let checksum = source_checksum("server native package");
 
     let result = converter
-        .convert(&metadata, &files, "rpm", "server_checksum")
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
         .unwrap();
-
-    // Should detect user from scriptlet
-    assert!(
-        !result.detected_hooks.users.is_empty(),
-        "Should detect user creation from scriptlet"
-    );
-    let user = &result.detected_hooks.users[0];
-    assert_eq!(user.name, "myserver");
-    assert!(user.system, "Should be a system user");
-
-    // Should detect systemd from scriptlet (analyzer puts these in hooks.systemd)
-    assert!(
-        !result.detected_hooks.systemd.is_empty(),
-        "Should detect systemd enable from scriptlet"
-    );
 
     // Check config files preserved
     let manifest = &result.build_result.manifest;
@@ -470,550 +421,12 @@ fn test_server_package_conversion() {
         manifest
             .config
             .files
-            .contains(&"/etc/myserver/myserver.conf".to_string()),
+            .iter()
+            .any(|config| config.path == "/etc/myserver/myserver.conf"
+                && config.noreplace
+                && !config.ghost
+                && !config.remove_on_upgrade),
         "Should include myserver.conf"
-    );
-}
-
-#[test]
-fn test_complex_scriptlet_analysis() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low, // Complex scripts may lower fidelity
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-    let (metadata, files) = create_complex_scriptlet_package();
-
-    let result = converter
-        .convert(&metadata, &files, "rpm", "complex_checksum")
-        .unwrap();
-
-    // Should detect group
-    assert!(
-        !result.detected_hooks.groups.is_empty(),
-        "Should detect group creation"
-    );
-    assert!(
-        result
-            .detected_hooks
-            .groups
-            .iter()
-            .any(|g| g.name == "complexgrp"),
-        "Should detect complexgrp"
-    );
-
-    // Should detect user
-    assert!(
-        !result.detected_hooks.users.is_empty(),
-        "Should detect user creation"
-    );
-    assert!(
-        result
-            .detected_hooks
-            .users
-            .iter()
-            .any(|u| u.name == "complexusr"),
-        "Should detect complexusr"
-    );
-
-    // Should detect systemd operations (analyzer puts these in hooks.systemd)
-    assert!(
-        !result.detected_hooks.systemd.is_empty(),
-        "Should detect systemd operations"
-    );
-}
-
-#[test]
-fn golden_conversion_native_free_is_public_ready_without_entries() {
-    let temp_dir = TempDir::new().unwrap();
-    let converter = passive_converter(temp_dir.path());
-    let metadata = create_test_metadata("adapter-registry-native-free");
-    let files = create_test_files("adapter-registry-native-free");
-
-    let result = converter
-        .convert(
-            &metadata,
-            &files,
-            "rpm",
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
-        .expect("native-free conversion succeeds");
-    let parsed = parse_converted_package(&result);
-    let bundle = parsed
-        .manifest()
-        .legacy_scriptlets
-        .as_ref()
-        .expect("converted package should carry scriptlet bundle");
-
-    assert!(bundle.entries.is_empty());
-    assert_eq!(bundle.decision_counts.total(), 0);
-    assert_eq!(bundle.scriptlet_fidelity, ScriptletFidelity::NativeFree);
-    assert_eq!(
-        bundle.target_compatibility,
-        TargetCompatibility::ConaryPortable
-    );
-    assert_eq!(bundle.publication_status, PublicationStatus::Public);
-    assert_eq!(result.scriptlet_metadata.scriptlet_fidelity, "native-free");
-    assert_eq!(result.scriptlet_metadata.publication_status, "public");
-}
-
-#[test]
-fn golden_conversion_adapter_backed_cases_are_fully_replaced() {
-    let temp_dir = TempDir::new().unwrap();
-    let converter = passive_converter(temp_dir.path());
-    let mut metadata = create_test_metadata("adapter-registry-fully-replaced");
-    metadata.scriptlets = vec![Scriptlet {
-        phase: ScriptletPhase::PostInstall,
-        interpreter: "/bin/sh".to_string(),
-        content: "\
-/sbin/ldconfig
-systemctl daemon-reload
-systemctl enable demo.service
-systemd-tmpfiles --create /usr/lib/tmpfiles.d/demo.conf
-systemd-sysusers /usr/lib/sysusers.d/demo.conf
-update-mime-database /usr/share/mime
-restorecon -R /usr/bin/adapter-registry-fully-replaced
-semanage fcontext -a -t demo_exec_t /usr/bin/adapter-registry-fully-replaced
-semodule -i /usr/share/selinux/packages/demo.pp
-setsebool -P demo_can_network on
-apparmor_parser -r /etc/apparmor.d/usr.bin.demo
-update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
-"
-        .to_string(),
-        flags: None,
-    }];
-    let files = golden_payload_files("adapter-registry-fully-replaced");
-
-    let result = converter
-        .convert(
-            &metadata,
-            &files,
-            "rpm",
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
-        .expect("adapter-backed conversion succeeds");
-    let parsed = parse_converted_package(&result);
-    let bundle = parsed
-        .manifest()
-        .legacy_scriptlets
-        .as_ref()
-        .expect("converted package should carry scriptlet bundle");
-
-    assert_eq!(bundle.scriptlet_fidelity, ScriptletFidelity::FullyReplaced);
-    assert_eq!(
-        bundle.target_compatibility,
-        TargetCompatibility::ConaryPortable
-    );
-    assert_eq!(bundle.publication_status, PublicationStatus::Public);
-    assert_eq!(bundle.decision_counts.replaced, 1);
-    assert_eq!(bundle.decision_counts.legacy, 0);
-    assert!(bundle.entries.iter().any(|entry| {
-        entry.effects.iter().any(|effect| {
-            effect.adapter_id.is_some()
-                && effect.replacement
-                    == conary_core::ccs::legacy_scriptlets::EffectReplacement::Complete
-        })
-    }));
-    assert!(bundle.entries.iter().any(|entry| {
-        entry.effects.iter().any(|effect| {
-            effect.adapter_id.as_deref() == Some("selinux-policy/v1")
-                && effect
-                    .extra
-                    .get("target_security_policy")
-                    .and_then(toml::Value::as_str)
-                    == Some("selinux-optional")
-        })
-    }));
-    assert!(bundle.entries.iter().any(|entry| {
-        entry.effects.iter().any(|effect| {
-            effect.adapter_id.as_deref() == Some("apparmor-policy/v1")
-                && effect
-                    .extra
-                    .get("target_security_policy")
-                    .and_then(toml::Value::as_str)
-                    == Some("apparmor-optional")
-        })
-    }));
-    assert!(
-        !bundle
-            .entries
-            .iter()
-            .any(|entry| entry.decision == ScriptletDecision::Legacy)
-    );
-    assert_eq!(
-        result.scriptlet_metadata.scriptlet_fidelity,
-        "fully-replaced"
-    );
-    assert_eq!(result.scriptlet_metadata.publication_status, "public");
-}
-
-#[test]
-fn golden_conversion_unknown_same_target_requires_non_public_legacy_replay() {
-    let temp_dir = TempDir::new().unwrap();
-    let converter = passive_converter(temp_dir.path());
-    let mut metadata = create_test_metadata("legacy-replay-unknown-shell");
-    metadata.scriptlets = vec![Scriptlet {
-        phase: ScriptletPhase::PostInstall,
-        interpreter: "/bin/sh".to_string(),
-        content: "custom-helper --do-thing\n".to_string(),
-        flags: None,
-    }];
-    let files = create_test_files("legacy-replay-unknown-shell");
-
-    let result = converter
-        .convert(
-            &metadata,
-            &files,
-            "rpm",
-            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        )
-        .expect("unknown shell conversion succeeds");
-    let parsed = parse_converted_package(&result);
-    let bundle = parsed
-        .manifest()
-        .legacy_scriptlets
-        .as_ref()
-        .expect("converted package should carry scriptlet bundle");
-
-    assert_eq!(bundle.scriptlet_fidelity, ScriptletFidelity::LegacyReplay);
-    assert_eq!(
-        bundle.target_compatibility,
-        TargetCompatibility::SourceNative
-    );
-    assert_ne!(bundle.publication_status, PublicationStatus::Public);
-    assert_eq!(bundle.decision_counts.legacy, 1);
-    assert!(bundle.entries.iter().any(|entry| {
-        entry.decision == ScriptletDecision::Legacy
-            && entry
-                .unknown_commands
-                .iter()
-                .any(|cmd| cmd == "custom-helper")
-    }));
-    assert_eq!(
-        result.scriptlet_metadata.scriptlet_fidelity,
-        "legacy-replay"
-    );
-    assert_eq!(result.scriptlet_metadata.publication_status, "local-only");
-}
-
-#[test]
-fn golden_conversion_foreign_replay_is_refused_before_mutation() {
-    let temp_dir = TempDir::new().unwrap();
-    let converter = passive_converter(temp_dir.path());
-    let mut metadata = create_test_metadata("legacy-replay-foreign-replay-rejected");
-    metadata.scriptlets = vec![Scriptlet {
-        phase: ScriptletPhase::PostInstall,
-        interpreter: "/bin/sh".to_string(),
-        content: "custom-helper --do-thing\n".to_string(),
-        flags: None,
-    }];
-    let files = create_test_files("legacy-replay-foreign-replay-rejected");
-    let result = converter
-        .convert(
-            &metadata,
-            &files,
-            "rpm",
-            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        )
-        .expect("unknown shell conversion succeeds");
-    let bundle = result
-        .legacy_scriptlets
-        .as_ref()
-        .expect("conversion should embed passive scriptlet bundle");
-
-    let input = LegacyReplayPolicyInput {
-        replay_enabled: true,
-        foreign_replay_override: true,
-        no_scripts: false,
-        requested_sandbox_mode: SandboxMode::Always,
-        host_policy: HostForeignReplayPolicy::Permissive,
-        target: ReplayTarget {
-            format: "deb",
-            distro: "ubuntu",
-            release: "26.04",
-            arch: "x86_64",
-        },
-        compatibility_matrix: TargetCompatibilityMatrix::production_default(),
-        compatibility_environment: CompatibilityPreflightEnvironment::default(),
-    };
-
-    let preflight = plan_legacy_replay(
-        Some(bundle),
-        LegacyReplayLifecycle::FreshInstallPost,
-        &input,
-    )
-    .expect("plan legacy replay");
-
-    let LegacyReplayPreflight::Refused(refusal) = preflight else {
-        panic!("foreign replay request should be refused before mutation");
-    };
-    assert_eq!(refusal.kind, LegacyReplayRefusalKind::TargetMismatch);
-    assert_eq!(refusal.kind.reason_code(), "target-mismatch");
-}
-
-// =============================================================================
-// CAPABILITY INFERENCE INTEGRATION TESTS
-// =============================================================================
-
-#[test]
-fn test_conversion_with_inference_enabled() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: true, // Enable inference
-        inference_options: InferenceOptions::fast(),
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-    let (metadata, files) = create_server_package();
-
-    let result = converter
-        .convert(&metadata, &files, "rpm", "server_checksum")
-        .unwrap();
-
-    // Should have inferred capabilities
-    assert!(
-        result.inferred_capabilities.is_some(),
-        "Should infer capabilities when enabled"
-    );
-
-    let caps = result.inferred_capabilities.unwrap();
-
-    // Server package should have network requirements inferred
-    assert!(
-        !caps.network.no_network,
-        "Server should need network (from heuristics)"
-    );
-
-    // Should detect config directory from file paths
-    assert!(
-        caps.filesystem
-            .read_paths
-            .contains(&"/etc/myserver".to_string()),
-        "Should detect config directory"
-    );
-}
-
-#[test]
-fn test_conversion_with_inference_disabled() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false, // Disable inference
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-    let metadata = create_test_metadata("no-inference");
-    let files = create_test_files("no-inference");
-
-    let result = converter
-        .convert(&metadata, &files, "rpm", "checksum")
-        .unwrap();
-
-    // Should NOT have inferred capabilities
-    assert!(
-        result.inferred_capabilities.is_none(),
-        "Should not infer capabilities when disabled"
-    );
-}
-
-#[test]
-fn test_nginx_wellknown_inference_during_conversion() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: true,
-        inference_options: InferenceOptions::fast(),
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-
-    // Create nginx-like package
-    let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/nginx-1.24.0.rpm"),
-        name: "nginx".to_string(), // Well-known name
-        version: "1.24.0".to_string(),
-        architecture: Some("x86_64".to_string()),
-        description: Some("High performance web server".to_string()),
-        files: vec![
-            PackageFile {
-                path: "/usr/sbin/nginx".to_string(),
-                size: 1024,
-                mode: 0o755,
-                sha256: Some("nginx_hash".to_string()),
-                symlink_target: None,
-            },
-            PackageFile {
-                path: "/etc/nginx/nginx.conf".to_string(),
-                size: 512,
-                mode: 0o644,
-                sha256: Some("conf_hash".to_string()),
-                symlink_target: None,
-            },
-        ],
-        dependencies: vec![],
-        provides: vec![],
-        scriptlets: vec![],
-        native_scriptlet_abi: vec![],
-        config_files: vec![],
-    };
-
-    let files = vec![
-        ExtractedFile {
-            path: "/usr/sbin/nginx".to_string(),
-            content: b"nginx binary".to_vec(),
-            size: 1024,
-            mode: 0o755,
-            sha256: Some("nginx_hash".to_string()),
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/etc/nginx/nginx.conf".to_string(),
-            content: b"# nginx config".to_vec(),
-            size: 512,
-            mode: 0o644,
-            sha256: Some("conf_hash".to_string()),
-            symlink_target: None,
-        },
-    ];
-
-    let result = converter
-        .convert(&metadata, &files, "rpm", "nginx_checksum")
-        .unwrap();
-
-    let caps = result
-        .inferred_capabilities
-        .expect("Should have inferred capabilities for nginx");
-
-    // nginx well-known profile should provide port 80 and 443
-    assert!(
-        caps.network.listen_ports.contains(&"80".to_string()),
-        "nginx should listen on port 80"
-    );
-    assert!(
-        caps.network.listen_ports.contains(&"443".to_string()),
-        "nginx should listen on port 443"
-    );
-
-    // Should be high confidence (from well-known profile)
-    assert!(
-        caps.confidence.primary >= Confidence::High,
-        "nginx should have high confidence from well-known profile"
-    );
-
-    // Should use tier 1 (well-known)
-    assert_eq!(
-        caps.tier_used, 1,
-        "Should use tier 1 for well-known package"
-    );
-}
-
-// =============================================================================
-// FIDELITY TRACKING TESTS
-// =============================================================================
-
-#[test]
-fn test_high_fidelity_for_simple_package() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-    let metadata = create_test_metadata("simple");
-    let files = create_test_files("simple");
-
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
-
-    // Simple package with no scriptlets should have full fidelity
-    assert_eq!(
-        result.fidelity.level,
-        FidelityLevel::Full,
-        "Simple package should have full fidelity"
-    );
-}
-
-#[test]
-fn test_fidelity_with_declarative_scriptlets() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-    let (metadata, files) = create_server_package();
-
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
-
-    // Package with common declarative patterns should maintain high fidelity
-    assert!(
-        result.fidelity.level >= FidelityLevel::High,
-        "Package with declarative scriptlets should have high fidelity, got: {}",
-        result.fidelity.level
-    );
-}
-
-#[test]
-fn test_fidelity_report_details() {
-    let temp_dir = TempDir::new().unwrap();
-    let options = ConversionOptions {
-        output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
-    };
-
-    let converter = LegacyConverter::new(options);
-    let (metadata, files) = create_complex_scriptlet_package();
-
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
-
-    // Check fidelity report has details
-    let report = &result.fidelity;
-
-    // Should have some operations detected or scriptlets preserved
-    let has_activity = report.hooks_extracted > 0
-        || report.scriptlets_preserved > 0
-        || !report.detected_operations.is_empty();
-    assert!(has_activity, "Should have detected some operations");
-
-    // The fidelity report should have meaningful information
-    println!(
-        "Fidelity report: level={}, hooks_extracted={}, scriptlets_preserved={}, detected_ops={}",
-        report.level,
-        report.hooks_extracted,
-        report.scriptlets_preserved,
-        report.detected_operations.len()
     );
 }
 
@@ -1026,79 +439,44 @@ fn test_file_permissions_preserved() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
+    let executable_content = b"#!/bin/sh";
+    let config_content = b"config";
+    let secret_content = b"secret";
 
     let metadata = PackageMetadata {
         package_path: PathBuf::from("/tmp/perms-1.0.0.rpm"),
         name: "perms-test".to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: None,
         files: vec![
-            PackageFile {
-                path: "/usr/bin/executable".to_string(),
-                size: 100,
-                mode: 0o755,
-                sha256: Some("exec_hash".to_string()),
-                symlink_target: None,
-            },
-            PackageFile {
-                path: "/etc/config".to_string(),
-                size: 50,
-                mode: 0o644,
-                sha256: Some("conf_hash".to_string()),
-                symlink_target: None,
-            },
-            PackageFile {
-                path: "/etc/secret".to_string(),
-                size: 30,
-                mode: 0o600,
-                sha256: Some("secret_hash".to_string()),
-                symlink_target: None,
-            },
+            package_regular("/usr/bin/executable", executable_content, 0o755),
+            package_regular("/etc/config", config_content, 0o644),
+            package_regular("/etc/secret", secret_content, 0o600),
         ],
-        dependencies: vec![],
+        requirements: vec![],
         provides: vec![],
-        scriptlets: vec![],
+        relations: vec![],
+        diagnostic_scriptlet_evidence: vec![],
         native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
     let files = vec![
-        ExtractedFile {
-            path: "/usr/bin/executable".to_string(),
-            content: b"#!/bin/sh".to_vec(),
-            size: 100,
-            mode: 0o755,
-            sha256: Some("exec_hash".to_string()),
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/etc/config".to_string(),
-            content: b"config".to_vec(),
-            size: 50,
-            mode: 0o644,
-            sha256: Some("conf_hash".to_string()),
-            symlink_target: None,
-        },
-        ExtractedFile {
-            path: "/etc/secret".to_string(),
-            content: b"secret".to_vec(),
-            size: 30,
-            mode: 0o600,
-            sha256: Some("secret_hash".to_string()),
-            symlink_target: None,
-        },
+        extracted_regular("/usr/bin/executable", executable_content, 0o755),
+        extracted_regular("/etc/config", config_content, 0o644),
+        extracted_regular("/etc/secret", secret_content, 0o600),
     ];
+    let checksum = source_checksum("permissions native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
+    let result = converter
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
+        .unwrap();
 
     // Verify conversion completed
     assert!(result.package_path.is_some());
@@ -1113,33 +491,32 @@ fn test_empty_package_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let metadata = PackageMetadata {
         package_path: PathBuf::from("/tmp/empty-1.0.0.rpm"),
         name: "empty-pkg".to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Rpm,
         architecture: None, // No architecture
-        description: None,  // No description
-        files: vec![],      // No files
-        dependencies: vec![],
+        debian_multi_arch: None,
+        description: None, // No description
+        files: vec![],     // No files
+        requirements: vec![],
         provides: vec![],
-        scriptlets: vec![],
+        relations: vec![],
+        diagnostic_scriptlet_evidence: vec![],
         native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
     let files: Vec<ExtractedFile> = vec![];
+    let checksum = source_checksum("empty native package");
 
     // Empty package should still convert (meta-packages exist)
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(
         result.is_ok(),
         "Empty package should convert: {:?}",
@@ -1151,18 +528,13 @@ fn test_empty_package_conversion() {
 }
 
 #[test]
-fn test_large_file_handling() {
+fn test_large_payload_emits_verified_ccs_archive() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: true, // Test with chunking
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
 
     // Create a larger file (1MB of data)
     let large_content: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
@@ -1171,32 +543,31 @@ fn test_large_file_handling() {
         package_path: PathBuf::from("/tmp/large-1.0.0.rpm"),
         name: "large-file-pkg".to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: None,
-        files: vec![PackageFile {
-            path: "/usr/share/large/data.bin".to_string(),
-            size: large_content.len() as i64,
-            mode: 0o644,
-            sha256: Some("large_hash".to_string()),
-            symlink_target: None,
-        }],
-        dependencies: vec![],
+        files: vec![package_regular(
+            "/usr/share/large/data.bin",
+            &large_content,
+            0o644,
+        )],
+        requirements: vec![],
         provides: vec![],
-        scriptlets: vec![],
+        relations: vec![],
+        diagnostic_scriptlet_evidence: vec![],
         native_scriptlet_abi: vec![],
         config_files: vec![],
     };
 
-    let files = vec![ExtractedFile {
-        path: "/usr/share/large/data.bin".to_string(),
-        content: large_content.clone(),
-        size: large_content.len() as i64,
-        mode: 0o644,
-        sha256: Some("large_hash".to_string()),
-        symlink_target: None,
-    }];
+    let files = vec![extracted_regular(
+        "/usr/share/large/data.bin",
+        &large_content,
+        0o644,
+    )];
+    let checksum = source_checksum("large native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(
         result.is_ok(),
         "Large file should convert: {:?}",
@@ -1205,11 +576,15 @@ fn test_large_file_handling() {
 
     let result = result.unwrap();
     assert!(result.package_path.is_some());
-
-    // With chunking enabled, should have chunked data in the build result
-    assert!(
-        result.build_result.chunked,
-        "Chunking should be used for large files"
+    let parsed = parse_converted_package(&result);
+    assert_eq!(parsed.file_entries().len(), 1);
+    assert_eq!(
+        parsed.file_entries()[0]
+            .content
+            .as_ref()
+            .expect("regular file content authority")
+            .size,
+        large_content.len() as u64
     );
 }
 
@@ -1222,23 +597,19 @@ fn test_rpm_format_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
     let metadata = create_test_metadata("rpm-pkg");
     let files = create_test_files("rpm-pkg");
+    let checksum = source_checksum("rpm native package");
 
     let result = converter
-        .convert(&metadata, &files, "rpm", "rpm_checksum_abc")
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
         .unwrap();
 
     assert_eq!(result.original_format, "rpm");
-    assert_eq!(result.original_checksum, "rpm_checksum_abc");
+    assert_eq!(result.original_checksum, checksum);
 }
 
 #[test]
@@ -1246,23 +617,22 @@ fn test_deb_format_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
-    let metadata = create_test_metadata("deb-pkg");
+    let converter = signed_test_converter(options);
+    let mut metadata = create_test_metadata("deb-pkg");
+    metadata.version_scheme = VersionScheme::Debian;
+    metadata.debian_multi_arch =
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
     let files = create_test_files("deb-pkg");
+    let checksum = source_checksum("deb native package");
 
     let result = converter
-        .convert(&metadata, &files, "deb", "deb_checksum_xyz")
+        .convert_in_memory_for_test(&metadata, &files, "deb", &checksum)
         .unwrap();
 
     assert_eq!(result.original_format, "deb");
-    assert_eq!(result.original_checksum, "deb_checksum_xyz");
+    assert_eq!(result.original_checksum, checksum);
 }
 
 #[test]
@@ -1270,23 +640,20 @@ fn test_arch_format_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
-    let metadata = create_test_metadata("arch-pkg");
+    let converter = signed_test_converter(options);
+    let mut metadata = create_test_metadata("arch-pkg");
+    metadata.version_scheme = VersionScheme::Arch;
     let files = create_test_files("arch-pkg");
+    let checksum = source_checksum("arch native package");
 
     let result = converter
-        .convert(&metadata, &files, "arch", "arch_checksum_123")
+        .convert_in_memory_for_test(&metadata, &files, "arch", &checksum)
         .unwrap();
 
     assert_eq!(result.original_format, "arch");
-    assert_eq!(result.original_checksum, "arch_checksum_123");
+    assert_eq!(result.original_checksum, checksum);
 }
 
 // =============================================================================
@@ -1298,78 +665,50 @@ fn test_dependency_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("deps-pkg");
-    metadata.dependencies = vec![
-        Dependency {
-            name: "libfoo".to_string(),
-            version: Some(">= 1.0".to_string()),
-            dep_type: DependencyType::Runtime,
-            description: None,
-        },
-        Dependency {
-            name: "libbar".to_string(),
-            version: None,
-            dep_type: DependencyType::Runtime,
-            description: None,
-        },
-        Dependency {
-            name: "build-tools".to_string(),
-            version: Some(">= 2.0".to_string()),
-            dep_type: DependencyType::Build, // Build dep should be ignored
-            description: None,
-        },
+    metadata.version_scheme = VersionScheme::Rpm;
+    metadata.requirements = vec![
+        requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "libfoo >= 1.0",
+        ),
+        requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "libbar",
+        ),
+        requirement(
+            RepositoryRequirementKind::Build,
+            VersionScheme::Rpm,
+            "build-tools >= 2.0",
+        ),
     ];
 
     let files = create_test_files("deps-pkg");
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
+    let checksum = source_checksum("dependency native package");
+    let result = converter
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
+        .unwrap();
 
     let manifest = &result.build_result.manifest;
 
-    // Runtime deps with version go to capabilities
-    assert!(
+    assert_eq!(manifest.requirements, metadata.requirements);
+    assert_eq!(
         manifest
-            .requires
-            .capabilities
+            .requirements
             .iter()
-            .any(|c| matches!(c, conary_core::ccs::manifest::Capability::Versioned { name, .. } if name == "libfoo")),
-        "Versioned runtime dep should become capability"
-    );
-
-    // Runtime deps without version go to packages
-    assert!(
-        manifest
-            .requires
-            .packages
-            .iter()
-            .any(|p| p.name == "libbar"),
-        "Unversioned runtime dep should become package dep"
-    );
-
-    // Build deps should NOT be included
-    assert!(
-        !manifest
-            .requires
-            .capabilities
-            .iter()
-            .any(|c| matches!(c, conary_core::ccs::manifest::Capability::Versioned { name, .. } if name == "build-tools")),
-        "Build deps should not be in runtime requirements"
-    );
-    assert!(
-        !manifest
-            .requires
-            .packages
-            .iter()
-            .any(|p| p.name == "build-tools"),
-        "Build deps should not be in runtime requirements"
+            .map(|group| group.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            RepositoryRequirementKind::Depends,
+            RepositoryRequirementKind::Depends,
+            RepositoryRequirementKind::Build,
+        ]
     );
 }
 
@@ -1382,20 +721,16 @@ fn test_invalid_output_dir_handling() {
     // Test with an invalid output directory
     let options = ConversionOptions {
         output_dir: PathBuf::from("/nonexistent/deeply/nested/path/that/should/not/exist"),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
     let metadata = create_test_metadata("error-test");
     let files = create_test_files("error-test");
+    let checksum = source_checksum("invalid output native package");
 
     // The conversion might fail when trying to create output directory
     // depending on permissions, or it might succeed if it can create the dirs
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
 
     // Either succeeds (created dirs) or fails with I/O error
     if let Err(e) = result {
@@ -1414,21 +749,17 @@ fn test_special_characters_in_package_name() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
-        ..Default::default()
     };
 
-    let converter = LegacyConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("pkg-with-special_chars.v2");
     metadata.name = "pkg-with-special_chars.v2".to_string();
 
     let files = create_test_files("pkg-with-special_chars.v2");
+    let checksum = source_checksum("special character native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(
         result.is_ok(),
         "Package with special chars should convert: {:?}",

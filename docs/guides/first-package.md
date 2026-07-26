@@ -1,19 +1,20 @@
 ---
-last_updated: 2026-06-12
-summary: First package workflow through M1b inference, cook, and try
+last_updated: 2026-07-25
+revision: 3
+summary: First package workflow through explicit recipe authoring, signed cook, and try
 ---
 
 # First Package
 
-This guide uses the M1b package-authoring path: infer a recipe from a small
-Cargo source tree, inspect the materialized recipe, build a CCS artifact, and
-try it with an explicit keep or rollback decision. The command flow is covered
-by `apps/conary/tests/packaging_m1b.rs`.
+Conary builds source projects from an explicit `recipe.toml`. It never guesses
+a build system, package identity, source URL, or command sequence from marker
+files. This guide scaffolds a named recipe, fills in the exact Cargo contract,
+builds a signed CCS artifact, and tries it with an explicit keep or rollback
+decision.
 
-## Create A Tiny Cargo Project
+## Create The Project And Recipe
 
-Create a small Cargo binary project and run the remaining commands from that
-project directory. The tested fixture uses this shape:
+Start with a small Cargo binary project:
 
 ```text
 hello-m1b/
@@ -21,49 +22,75 @@ hello-m1b/
   src/main.rs
 ```
 
+From the directory above `hello-m1b/`, scaffold the recipe into the project:
+
+```bash
+conary new hello-m1b --output ./hello-m1b
+```
+
+Edit `hello-m1b/recipe.toml` so the source and build contract are explicit:
+
 ```toml
 [package]
 name = "hello-m1b"
 version = "0.1.0"
-edition = "2021"
+release = "1"
+summary = "hello-m1b"
+license = "MIT"
+
+[source]
+path = "."
+
+[build]
+make = "cargo build --release"
+install = "mkdir -p %(destdir)s/usr/bin && install -m 0755 target/release/hello-m1b %(destdir)s/usr/bin/hello-m1b"
 ```
 
-```rust
-fn main() {
-    println!("hello m1b");
-}
-```
+`conary new` requires the package name. It does not accept `--from` or
+`--explain`, and it does not inspect the source tree to author commands for
+you.
 
-`Cargo.toml` and `src/main.rs` are enough for the Cargo detector in
-`crates/conary-core/src/recipe/inference/`.
+## Build A Signed Package
 
-## Materialize The Inferred Recipe
+Create a development package key, then cook the explicit recipe:
 
 ```bash
-conary new --from . --explain
+conary ccs keygen --output ./hello-m1b/package-key
+conary cook ./hello-m1b/recipe.toml \
+  --output ./hello-m1b/dist \
+  --source-cache ./hello-m1b/cache \
+  --key ./hello-m1b/package-key.private
 ```
 
-This writes `recipe.toml` in the source tree and prints the inference decisions
-that led to it. Open `recipe.toml` before building and check the package name,
-version, source, and Cargo build/install steps.
+Put the base64 public key printed by `ccs keygen` into the trust policy used
+for local verification:
 
-## Build The Package
-
-```bash
-conary cook . --output ./dist --source-cache ./cache
+```toml
+trusted_keys = ["<base64-public-key>"]
 ```
 
-The output directory receives a `.ccs` package artifact. Use the actual artifact
-filename from `./dist` in the next command.
+Save that file as `hello-m1b/package-policy.toml`.
+
+Passing the project directory instead of the file is also exact:
+`conary cook ./hello-m1b` succeeds only because that directory contains
+`recipe.toml`. A bare source tree, archive, or URL is not a cook target.
+Foreign binary package files remain a separate typed conversion input.
 
 ## Try The Artifact
 
+Use the actual artifact filename from `hello-m1b/dist`:
+
 ```bash
-conary try ./dist/<artifact>.ccs -- /usr/bin/hello-m1b
+conary try ./hello-m1b/dist/<artifact>.ccs \
+  --policy ./hello-m1b/package-policy.toml \
+  -- /usr/bin/hello-m1b
 ```
 
-`conary try` records an active try session in the selected database/runtime and
-runs the command inside that try context. End the session by choosing one of:
+Direct package tries accept only current signed CCS artifacts verified by the
+explicit policy. Watch mode instead derives its one-key trust policy from the
+required `--key` used for every cook.
+
+End the active session with one explicit decision:
 
 ```bash
 conary try rollback
@@ -75,19 +102,15 @@ or:
 conary try keep
 ```
 
-`rollback` discards the active try session for that selected database/runtime;
-`keep` promotes the try generation there. Do not start another mutating Conary
-operation against the same runtime until one of those decisions succeeds.
+`rollback` discards the try generation in the selected runtime; `keep`
+promotes it. Do not start another mutating Conary operation against that
+runtime until one of those decisions succeeds.
 
-## Test Coverage
+## Proof
 
-The M1b integration tests in `apps/conary/tests/packaging_m1b.rs` back this
-guide's Conary commands:
-
-- `new_from_local_tree_then_cook_recipe_builds_same_package` covers
-  `conary new --from .`, materialized `recipe.toml`, and cooking that recipe.
-- `cook_local_cargo_tree_from_inference_builds_ccs` covers inferred
-  `conary cook . --output ./dist --source-cache ./cache`.
-- `try_package_creates_session`, `try_rollback_clears_session`, and
-  `try_keep_promotes_generation` cover `conary try`, `conary try rollback`,
-  and `conary try keep` against the selected runtime state.
+- `crates/conary-core/src/recipe/scaffold.rs` proves deterministic named
+  scaffolding and materialization.
+- `apps/conary/src/commands/cook/tests.rs` proves only recipe files and
+  directories containing `recipe.toml` are accepted.
+- `apps/conary/tests/packaging_m1b.rs` proves the removed inference flags and
+  bare-source targets fail, and covers try start, rollback, and keep.

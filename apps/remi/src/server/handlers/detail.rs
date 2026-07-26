@@ -6,6 +6,7 @@
 //! All database queries run via `spawn_blocking` for async compatibility.
 
 use crate::server::ServerState;
+use anyhow::Context;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,7 +14,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{ConvertedPackage, DownloadCount};
-use rusqlite::Connection;
+use conary_core::repository::remi_metadata::RemiRequirementGroup;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -29,7 +31,7 @@ pub struct PackageDetail {
     pub latest_version: String,
     pub description: Option<String>,
     pub versions: Vec<VersionSummary>,
-    pub dependencies: Vec<String>,
+    pub requirement_groups: Vec<RemiRequirementGroup>,
     pub download_count: i64,
     pub download_count_30d: i64,
     pub size_bytes: i64,
@@ -238,14 +240,21 @@ pub async fn get_overview(
 
 // --- Database query functions (run on blocking threads) ---
 
+fn source_profile_for_route(route_slug: &str) -> anyhow::Result<&'static str> {
+    conary_core::repository::supported_profiles::profile_for_remi_route(route_slug)
+        .map(conary_core::repository::supported_profiles::SupportedProfile::id)
+        .ok_or_else(|| anyhow::anyhow!("unsupported public route '{route_slug}'"))
+}
+
 fn query_package_detail(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Option<PackageDetail>> {
     let conn = open_handler_db(db_path)?;
+    let source_profile = source_profile_for_route(distro)?;
 
-    let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+    let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
     if repo_ids.is_empty() {
         return Ok(None);
     }
@@ -253,7 +262,7 @@ fn query_package_detail(
     // Get the latest version and basic info across all repos for this distro
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let sql = format!(
-        "SELECT rp.name, rp.version, rp.description, rp.size, rp.dependencies,
+        "SELECT rp.id, rp.name, rp.version, rp.description, rp.size,
                 rp.architecture
          FROM repository_packages rp
          WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{}
@@ -267,38 +276,39 @@ fn query_package_detail(
 
     let latest = conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
         Ok((
-            row.get::<_, String>(0)?,
+            row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, i64>(4)?,
             row.get::<_, Option<String>>(5)?,
         ))
     });
 
-    let (pkg_name, latest_version, description, size, deps_str, _arch) = match latest {
+    let (package_id, pkg_name, latest_version, description, size, _arch) = match latest {
         Ok(row) => row,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
 
-    // Parse dependencies (stored as JSON array in DB)
-    let dependencies = parse_dependencies(deps_str.as_deref())?;
+    let requirement_groups =
+        crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?
+            .requirement_groups;
 
     // Get all versions
-    let versions = query_versions_internal(&conn, distro, name)?;
+    let versions = query_versions_internal(&conn, source_profile, name)?;
 
     let converted = versions.iter().any(|version| version.converted);
 
     // Get download counts
     let (download_count, download_count_30d) =
-        match DownloadCount::find_by_package(&conn, distro, name)? {
+        match DownloadCount::find_by_package(&conn, source_profile, name)? {
             Some(dc) => (dc.total_count, dc.count_30d),
             None => (0, 0),
         };
 
     // Extract license and homepage from metadata JSON if available
-    let (license, homepage) = extract_metadata(&conn, distro, name)?;
+    let (license, homepage) = extract_metadata(&conn, source_profile, name)?;
 
     Ok(Some(PackageDetail {
         name: pkg_name,
@@ -306,7 +316,7 @@ fn query_package_detail(
         latest_version,
         description,
         versions,
-        dependencies,
+        requirement_groups,
         download_count,
         download_count_30d,
         size_bytes: size,
@@ -322,7 +332,7 @@ fn query_versions(
     name: &str,
 ) -> anyhow::Result<Vec<VersionSummary>> {
     let conn = open_handler_db(db_path)?;
-    query_versions_internal(&conn, distro, name)
+    query_versions_internal(&conn, source_profile_for_route(distro)?, name)
 }
 
 fn query_versions_internal(
@@ -337,7 +347,7 @@ fn query_versions_internal(
 
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let name_idx = repo_ids.len() + 1;
-    let converted_keys = public_ready_converted_keys(conn, distro, name)?;
+    let converted_keys = current_converted_keys(conn, distro, name)?;
     let sql = format!(
         "SELECT rp.version, rp.architecture, rp.size
          FROM repository_packages rp
@@ -362,17 +372,18 @@ fn query_versions_internal(
         })
     })?;
 
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn query_dependencies(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<Vec<RemiRequirementGroup>> {
     let conn = open_handler_db(db_path)?;
+    let source_profile = source_profile_for_route(distro)?;
 
-    let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+    let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
     if repo_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -380,7 +391,7 @@ fn query_dependencies(
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let name_idx = repo_ids.len() + 1;
     let sql = format!(
-        "SELECT rp.dependencies
+        "SELECT rp.id
          FROM repository_packages rp
          WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
          ORDER BY rp.synced_at DESC
@@ -391,11 +402,17 @@ fn query_dependencies(
         repo_ids.iter().map(|id| Box::new(*id) as _).collect();
     params.push(Box::new(name.to_string()));
 
-    let deps_str: Option<String> = conn
-        .query_row(&sql, rusqlite::params_from_iter(&params), |row| row.get(0))
-        .ok();
-
-    parse_dependencies(deps_str.as_deref())
+    let package_id = match conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
+        row.get::<_, i64>(0)
+    }) {
+        Ok(package_id) => package_id,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(
+        crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?
+            .requirement_groups,
+    )
 }
 
 fn query_reverse_dependencies(
@@ -404,8 +421,9 @@ fn query_reverse_dependencies(
     name: &str,
 ) -> anyhow::Result<Vec<String>> {
     let conn = open_handler_db(db_path)?;
+    let source_profile = source_profile_for_route(distro)?;
 
-    let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+    let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
     if repo_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -433,7 +451,7 @@ fn query_reverse_dependencies(
         row.get::<_, String>(0)
     })?;
 
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn query_popular(
@@ -444,12 +462,13 @@ fn query_popular(
     let conn = open_handler_db(db_path)?;
 
     if let Some(distro) = distro {
-        let counts = DownloadCount::popular(&conn, distro, limit)?;
+        let source_profile = source_profile_for_route(distro)?;
+        let counts = DownloadCount::popular(&conn, source_profile, limit)?;
         let mut results = Vec::with_capacity(counts.len());
         for count in counts {
             let summary = enrich_package_summary(
                 &conn,
-                &count.distro,
+                &count.source_profile,
                 &count.package_name,
                 count.total_count,
             )?;
@@ -461,7 +480,7 @@ fn query_popular(
     } else {
         // All distros - query download_counts directly
         let mut stmt = conn.prepare(
-            "SELECT distro, package_name, total_count
+            "SELECT source_profile, package_name, total_count
              FROM download_counts
              ORDER BY total_count DESC
              LIMIT ?1",
@@ -476,8 +495,8 @@ fn query_popular(
         })?;
 
         let mut results = Vec::new();
-        for row in rows.flatten() {
-            let (distro, name, count) = row;
+        for row in rows {
+            let (distro, name, count) = row?;
             if let Some(s) = enrich_package_summary(&conn, &distro, &name, count)? {
                 results.push(s);
             }
@@ -494,7 +513,8 @@ fn query_recent(
     let conn = open_handler_db(db_path)?;
 
     if let Some(distro) = distro {
-        let repo_ids = resolve_all_repo_ids(&conn, distro)?;
+        let source_profile = source_profile_for_route(distro)?;
+        let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
         if repo_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -511,7 +531,7 @@ fn query_recent(
             "SELECT rp.name, rp.version, rp.description, rp.size,
                     COALESCE(dc.total_count, 0) as downloads
              FROM repository_packages rp
-             LEFT JOIN download_counts dc ON dc.distro = ?{distro_idx} AND dc.package_name = rp.name
+             LEFT JOIN download_counts dc ON dc.source_profile = ?{distro_idx} AND dc.package_name = rp.name
              WHERE rp.repository_id IN ({ph})
                AND rp.id = (
                    SELECT rp2.id FROM repository_packages rp2
@@ -531,7 +551,7 @@ fn query_recent(
         for id in &repo_ids {
             params_vec.push(Box::new(*id));
         }
-        params_vec.push(Box::new(distro.to_string()));
+        params_vec.push(Box::new(source_profile.to_string()));
         params_vec.push(Box::new(limit as i64));
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();
@@ -547,31 +567,44 @@ fn query_recent(
             })
         })?;
 
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     } else {
         let mut stmt = conn.prepare(
-            "SELECT rp.name, r.name, rp.version, rp.description, rp.size,
+            "SELECT rp.name, r.source_profile, rp.version, rp.description, rp.size,
                     COALESCE(dc.total_count, 0) as downloads
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
-             LEFT JOIN download_counts dc ON dc.distro = r.name AND dc.package_name = rp.name
-             WHERE r.enabled = 1
+             LEFT JOIN download_counts dc
+               ON dc.source_profile = r.source_profile AND dc.package_name = rp.name
+             WHERE r.enabled = 1 AND r.source_profile IS NOT NULL
              ORDER BY rp.synced_at DESC
              LIMIT ?1",
         )?;
 
         let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
-            Ok(PackageSummary {
-                name: row.get(0)?,
-                distro: row.get(1)?,
-                version: row.get(2)?,
-                description: row.get(3)?,
-                download_count: row.get(5)?,
-                size: row.get(4)?,
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
         })?;
 
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (name, source_profile, version, description, size, download_count) = row?;
+            summaries.push(PackageSummary {
+                name,
+                distro: route_for_source_profile(&source_profile)?.to_string(),
+                version,
+                description,
+                download_count,
+                size,
+            });
+        }
+        Ok(summaries)
     }
 }
 
@@ -588,31 +621,22 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
         |row| row.get(0),
     )?;
 
-    // Total public-ready converted packages.
-    let total_converted = ConvertedPackage::list_all(&conn)?
-        .into_iter()
-        .filter(|converted| {
-            converted.distro.is_some()
-                && !converted.needs_reconversion()
-                && converted.is_scriptlet_public_ready()
-        })
-        .count() as i64;
+    // Total current converted packages.
+    let mut total_converted = 0_i64;
+    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
+        if !converted.needs_reconversion() {
+            converted.repository_artifact()?;
+            converted.scriptlet_summary()?;
+            total_converted += 1;
+        }
+    }
 
-    // Count distinct distro families from enabled repositories.
-    // Multiple repos can serve the same distro (e.g., arch-core, arch-extra,
-    // arch-multilib are all "Arch Linux"). Normalize by grouping related
-    // repos into families. The remi repo is Conary's native CCS format,
-    // not a distro — exclude it from the distro count.
+    // Count exact declared source profiles. Repository names never establish
+    // distro family authority.
     let total_distros: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT
-            CASE
-                WHEN name = 'remi' THEN NULL
-                WHEN name LIKE 'arch-%' THEN 'arch'
-                WHEN name LIKE 'fedora-%' THEN 'fedora'
-                WHEN name LIKE 'ubuntu-%' THEN 'ubuntu'
-                ELSE name
-            END
-         ) FROM repositories WHERE enabled = 1 AND name != 'remi'",
+        "SELECT COUNT(DISTINCT source_profile)
+         FROM repositories
+         WHERE enabled = 1 AND source_profile IS NOT NULL",
         [],
         |row| row.get(0),
     )?;
@@ -632,14 +656,15 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
 /// Enrich a download count entry with package metadata
 fn enrich_package_summary(
     conn: &Connection,
-    distro: &str,
+    source_profile: &str,
     name: &str,
     download_count: i64,
 ) -> anyhow::Result<Option<PackageSummary>> {
-    let repo_ids = resolve_all_repo_ids(conn, distro)?;
+    let repo_ids = resolve_all_repo_ids(conn, source_profile)?;
     if repo_ids.is_empty() {
         return Ok(None);
     }
+    let route = route_for_source_profile(source_profile)?.to_string();
 
     let placeholders = repo_ids_placeholders(repo_ids.len());
     let sql = format!(
@@ -661,7 +686,7 @@ fn enrich_package_summary(
     let result = conn.query_row(&sql, param_refs.as_slice(), |row| {
         Ok(PackageSummary {
             name: name.to_string(),
-            distro: distro.to_string(),
+            distro: route.clone(),
             version: row.get(0)?,
             description: row.get(1)?,
             download_count,
@@ -674,6 +699,12 @@ fn enrich_package_summary(
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+fn route_for_source_profile(source_profile: &str) -> anyhow::Result<&'static str> {
+    conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+        .map(conary_core::repository::supported_profiles::SupportedProfile::remi_route_slug)
+        .with_context(|| format!("unsupported persisted source profile '{source_profile}'"))
 }
 
 /// Extract license and homepage from the JSON metadata column
@@ -702,12 +733,16 @@ fn extract_metadata(
     params.push(Box::new(name.to_string()));
 
     let metadata_json: Option<String> = conn
-        .query_row(&sql, rusqlite::params_from_iter(&params), |row| row.get(0))
-        .ok();
+        .query_row(&sql, rusqlite::params_from_iter(&params), |row| {
+            row.get::<_, Option<String>>(0)
+        })
+        .optional()?
+        .flatten();
 
-    if let Some(json_str) = metadata_json
-        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(&json_str)
-    {
+    if let Some(json_str) = metadata_json {
+        let meta = serde_json::from_str::<serde_json::Value>(&json_str).with_context(|| {
+            format!("package '{name}' in '{distro}' has malformed persisted metadata JSON")
+        })?;
         let license = meta
             .get("license")
             .and_then(|v| v.as_str())
@@ -723,35 +758,13 @@ fn extract_metadata(
     Ok((None, None))
 }
 
-/// Parse dependencies from the DB storage format (JSON array string).
-///
-/// Falls back to comma-separated parsing for legacy data.
-fn parse_dependencies(deps_str: Option<&str>) -> anyhow::Result<Vec<String>> {
-    let Some(s) = deps_str else {
-        return Ok(Vec::new());
-    };
-
-    if s.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Try JSON array first (current format)
-    if let Ok(deps) = serde_json::from_str::<Vec<String>>(s) {
-        return Ok(deps);
-    }
-
-    // Fallback: comma-separated (legacy)
-    Ok(s.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect())
-}
-
 /// Resolve all repository IDs for a distro (e.g. arch-core + arch-extra).
 fn resolve_all_repo_ids(conn: &Connection, distro: &str) -> anyhow::Result<Vec<i64>> {
-    let repos = super::find_repositories_for_distro(conn, distro)?;
-    Ok(repos.into_iter().filter_map(|r| r.id).collect())
+    let repos = super::find_repositories_for_profile(conn, distro)?;
+    repos
+        .iter()
+        .map(super::require_persisted_repository_id)
+        .collect()
 }
 
 /// Build a comma-separated `?1, ?2, ...` placeholder string for N parameters.
@@ -764,19 +777,19 @@ fn repo_ids_placeholders(count: usize) -> String {
 
 type ConvertedVersionKey = (String, Option<String>);
 
-fn public_ready_converted_keys(
+fn current_converted_keys(
     conn: &Connection,
     distro: &str,
     name: &str,
 ) -> anyhow::Result<HashSet<ConvertedVersionKey>> {
     let mut keys = HashSet::new();
-    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
-        if !converted.is_scriptlet_public_ready() {
-            continue;
-        }
-        if let Some(version) = converted.package_version {
-            keys.insert((version, converted.package_architecture));
-        }
+    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(name))? {
+        converted.scriptlet_summary()?;
+        let artifact = converted.repository_artifact()?;
+        keys.insert((
+            artifact.package_version.to_string(),
+            Some(artifact.package_architecture.to_string()),
+        ));
     }
     Ok(keys)
 }
@@ -784,7 +797,6 @@ fn public_ready_converted_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
@@ -793,7 +805,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
@@ -804,10 +816,17 @@ mod tests {
         version: &str,
         architecture: Option<&str>,
     ) {
+        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
         conn.execute(
-            "INSERT OR IGNORE INTO repositories (name, url, enabled)
-             VALUES (?1, ?2, 1)",
-            rusqlite::params![distro, format!("https://example.invalid/{distro}")],
+            "INSERT OR IGNORE INTO repositories
+             (name, url, enabled, source_profile)
+             VALUES (?1, ?2, 1, ?3)",
+            rusqlite::params![
+                distro,
+                format!("https://example.invalid/{distro}"),
+                profile.id()
+            ],
         )
         .unwrap();
         let repository_id: i64 = conn
@@ -819,8 +838,8 @@ mod tests {
             .unwrap();
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies)
-             VALUES (?1, ?2, ?3, ?4, 'test package', 'sha256:repo', 3, 'https://example.invalid/pkg.rpm', '[]')",
+             (repository_id, name, version, architecture, description, checksum, size, download_url, version_scheme)
+             VALUES (?1, ?2, ?3, ?4, 'test package', 'sha256:repo', 3, 'https://example.invalid/pkg.rpm', 'rpm')",
             rusqlite::params![repository_id, name, version, architecture],
         )
         .unwrap();
@@ -831,55 +850,47 @@ mod tests {
         distro: &str,
         name: &str,
         version: &str,
-        architecture: Option<&str>,
+        architecture: &str,
         conversion_version: i32,
     ) {
-        let mut converted = ConvertedPackage::new_server(
-            distro.to_string(),
+        let source_profile = source_profile_for_route(distro).expect("supported test route");
+        let mut converted = ConvertedPackage::new_repository(
+            source_profile.to_string(),
             name.to_string(),
             version.to_string(),
+            architecture.to_string(),
             "rpm".to_string(),
             format!("sha256:source-{name}-{version}"),
-            "high".to_string(),
             &[],
             3,
             format!("sha256:content-{name}-{version}"),
             format!("/tmp/{name}-{version}.ccs"),
         );
-        converted.package_architecture = architecture.map(str::to_string);
         converted.conversion_version = conversion_version;
         converted.insert(conn).unwrap();
     }
 
-    fn insert_private_review_conversion(
+    fn insert_stale_conversion(
         conn: &Connection,
         distro: &str,
         name: &str,
         version: &str,
-        architecture: Option<&str>,
+        architecture: &str,
     ) {
-        let mut converted = ConvertedPackage::new_server(
-            distro.to_string(),
+        let source_profile = source_profile_for_route(distro).expect("supported test route");
+        let mut converted = ConvertedPackage::new_repository(
+            source_profile.to_string(),
             name.to_string(),
             version.to_string(),
+            architecture.to_string(),
             "rpm".to_string(),
             format!("sha256:source-{name}-{version}"),
-            "high".to_string(),
             &[],
             3,
             format!("sha256:content-{name}-{version}"),
             format!("/tmp/{name}-{version}.ccs"),
         );
-        converted.package_architecture = architecture.map(str::to_string);
-        converted
-            .set_scriptlet_metadata(&ScriptletBundleSummary {
-                publication_status: "private-review".to_string(),
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
+        converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }
 
@@ -892,7 +903,7 @@ mod tests {
             "fedora",
             "pkg",
             "1.0",
-            Some("x86_64"),
+            "x86_64",
             CONVERSION_VERSION - 1,
         );
 
@@ -908,14 +919,7 @@ mod tests {
     fn package_versions_require_matching_architecture_for_converted_status() {
         let (temp_file, conn) = create_test_db();
         seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("aarch64"));
-        insert_converted(
-            &conn,
-            "fedora",
-            "pkg",
-            "1.0",
-            Some("x86_64"),
-            CONVERSION_VERSION,
-        );
+        insert_converted(&conn, "fedora", "pkg", "1.0", "x86_64", CONVERSION_VERSION);
 
         let versions = query_versions(temp_file.path(), "fedora", "pkg").unwrap();
 
@@ -932,7 +936,7 @@ mod tests {
             "fedora",
             "stale",
             "1.0",
-            Some("x86_64"),
+            "x86_64",
             CONVERSION_VERSION - 1,
         );
         insert_converted(
@@ -940,7 +944,7 @@ mod tests {
             "fedora",
             "current",
             "1.0",
-            Some("x86_64"),
+            "x86_64",
             CONVERSION_VERSION,
         );
 
@@ -950,20 +954,13 @@ mod tests {
     }
 
     #[test]
-    fn package_detail_counts_only_public_ready_conversions() {
+    fn package_detail_counts_only_current_conversions() {
         let (temp_file, conn) = create_test_db();
         seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("x86_64"));
         seed_repository_package(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
 
-        insert_converted(
-            &conn,
-            "fedora",
-            "pkg",
-            "1.0",
-            Some("x86_64"),
-            CONVERSION_VERSION,
-        );
-        insert_private_review_conversion(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
+        insert_converted(&conn, "fedora", "pkg", "1.0", "x86_64", CONVERSION_VERSION);
+        insert_stale_conversion(&conn, "fedora", "pkg", "2.0", "x86_64");
 
         let detail = query_package_detail(temp_file.path(), "fedora", "pkg")
             .unwrap()

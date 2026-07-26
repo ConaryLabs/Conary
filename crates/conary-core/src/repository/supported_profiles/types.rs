@@ -2,8 +2,6 @@
 
 use serde::Deserialize;
 
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::distro::ReplayTargetOwned;
 use crate::repository::versioning::VersionScheme;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -21,56 +19,17 @@ pub(super) struct ProfileDocument {
     #[serde(default)]
     pub eol: Option<String>,
     pub identity: ProfileIdentityDocument,
-    pub replay_target: ReplayTargetDocument,
-    pub repository: RepositoryHintsDocument,
-    pub lifecycle: LifecycleDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub(super) struct ProfileIdentityDocument {
     pub family_slug: String,
     pub remi_route_slug: String,
+    pub repology_repo: String,
     pub package_format: ProfilePackageFormat,
-    pub dependency_flavor: DependencyFlavorValue,
     pub version_scheme: VersionSchemeValue,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(super) struct ReplayTargetDocument {
-    pub format: ReplayFormat,
-    pub distro: String,
-    pub release: String,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub(super) struct RepositoryHintsDocument {
-    pub name_patterns: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub(super) struct LifecycleDocument {
-    pub service_manager: String,
-    pub default_shell: String,
     #[serde(default)]
-    pub path_dirs: Vec<String>,
-    pub services: LifecyclePolicyDocument,
-    pub tmpfiles: LifecyclePolicyDocument,
-    pub sysctl: LifecyclePolicyDocument,
-    pub users: LifecyclePolicyDocument,
-    pub groups: LifecyclePolicyDocument,
-    pub directories: LifecyclePolicyDocument,
-    pub alternatives: LifecyclePolicyDocument,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(super) struct LifecyclePolicyDocument {
-    pub mode: LifecyclePolicyMode,
-    #[serde(default)]
-    pub entries: Vec<String>,
-    #[serde(default)]
-    pub keys: Vec<String>,
+    pub scriptlet_shell: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -81,20 +40,13 @@ pub enum ProfilePackageFormat {
     Arch,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum DependencyFlavorValue {
-    Rpm,
-    Deb,
-    Arch,
-}
-
-impl From<DependencyFlavorValue> for RepositoryDependencyFlavor {
-    fn from(value: DependencyFlavorValue) -> Self {
-        match value {
-            DependencyFlavorValue::Rpm => RepositoryDependencyFlavor::Rpm,
-            DependencyFlavorValue::Deb => RepositoryDependencyFlavor::Deb,
-            DependencyFlavorValue::Arch => RepositoryDependencyFlavor::Arch,
+impl ProfilePackageFormat {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rpm => "rpm",
+            Self::Deb => "deb",
+            Self::Arch => "arch",
         }
     }
 }
@@ -115,31 +67,6 @@ impl From<VersionSchemeValue> for VersionScheme {
             VersionSchemeValue::Arch => VersionScheme::Arch,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum ReplayFormat {
-    Rpm,
-    Deb,
-    Arch,
-}
-
-impl ReplayFormat {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            ReplayFormat::Rpm => "rpm",
-            ReplayFormat::Deb => "deb",
-            ReplayFormat::Arch => "arch",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum LifecyclePolicyMode {
-    AllowList,
-    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,13 +100,13 @@ impl SupportedProfile {
     }
 
     #[must_use]
-    pub fn package_format(&self) -> ProfilePackageFormat {
-        self.document.identity.package_format
+    pub fn repology_repo(&self) -> &str {
+        &self.document.identity.repology_repo
     }
 
     #[must_use]
-    pub fn dependency_flavor(&self) -> RepositoryDependencyFlavor {
-        self.document.identity.dependency_flavor.into()
+    pub fn package_format(&self) -> ProfilePackageFormat {
+        self.document.identity.package_format
     }
 
     #[must_use]
@@ -187,39 +114,13 @@ impl SupportedProfile {
         self.document.identity.version_scheme.into()
     }
 
-    #[must_use]
-    pub fn repository_name_patterns(&self) -> &[String] {
-        &self.document.repository.name_patterns
-    }
-
-    /// Return whether a repository name belongs to this public profile.
+    /// Distribution-build-time shell for ALPM `.INSTALL` function libraries.
     ///
-    /// Profile repository hints use the same narrow SQL-LIKE shape consumed by
-    /// Remi lookup: either an exact name or one trailing `%` wildcard. Keeping
-    /// this matching here prevents callers from re-encoding distro families.
+    /// ALPM packages do not carry this in package metadata, so it belongs to
+    /// the exact source profile rather than the package parser or target host.
     #[must_use]
-    pub fn matches_repository_name(&self, name: &str) -> bool {
-        self.repository_name_patterns()
-            .iter()
-            .any(|pattern| match pattern.strip_suffix('%') {
-                Some(prefix) => name.starts_with(prefix),
-                None => name == pattern,
-            })
-    }
-
-    #[must_use]
-    pub fn replay_target_for_arch(&self, arch: &str) -> ReplayTargetOwned {
-        ReplayTargetOwned {
-            format: self.document.replay_target.format.as_str().to_string(),
-            distro: self.document.replay_target.distro.clone(),
-            release: self.document.replay_target.release.clone(),
-            arch: arch.trim().to_string(),
-        }
-    }
-
-    #[must_use]
-    pub(super) fn lifecycle(&self) -> &LifecycleDocument {
-        &self.document.lifecycle
+    pub fn scriptlet_shell(&self) -> Option<&str> {
+        self.document.identity.scriptlet_shell.as_deref()
     }
 }
 

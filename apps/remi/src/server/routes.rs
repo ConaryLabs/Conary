@@ -542,19 +542,18 @@ mod tests {
         std::fs::write(&ccs_path, &ccs_bytes).unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        let mut converted = conary_core::db::models::ConvertedPackage::new_server(
-            "fedora".to_string(),
+        let mut converted = conary_core::db::models::ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
             "qemu-img".to_string(),
             "2:10.1.0-7.fc44".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:native".to_string(),
-            "high".to_string(),
             &[],
             ccs_bytes.len() as i64,
             "sha256:ccs".to_string(),
             ccs_path.to_string_lossy().to_string(),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.insert(&conn).unwrap();
         drop(conn);
 

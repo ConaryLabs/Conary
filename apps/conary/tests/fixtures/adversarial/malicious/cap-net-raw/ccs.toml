@@ -1,6 +1,9 @@
 [package]
 name = "cap-net-raw"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Fixture that declares raw network capability requirements"
 license = "MIT"
 
@@ -13,10 +16,6 @@ libc = "gnu"
 capabilities = ["cap-net-raw"]
 binaries = ["/usr/bin/cap-net-raw"]
 
-[requires]
-capabilities = []
-packages = []
-
 [components]
 default = ["runtime"]
 
@@ -27,8 +26,8 @@ version = 1
 rationale = "Needs raw packet access"
 
 [capabilities.network]
-outbound = ["any"]
-listen = ["80"]
+connect_tcp = [443]
+bind_tcp = [80]
 
-[capabilities.syscalls]
-profile = "scriptlet"
+[capabilities.linux]
+required = ["cap-net-raw"]

@@ -2,8 +2,9 @@
 # tests/fixtures/adversarial/build-all.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-CONARY_BIN="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
+CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+CONARY_BIN="${CONARY_BIN:-$CARGO_TARGET_ROOT/debug/conary}"
 
 echo "=== Building adversarial test fixtures ==="
 

@@ -10,7 +10,7 @@
 # success in unprivileged containers.
 #
 # The self-update mock tests seed HTTP channels directly into the test DB so
-# they can exercise lower-level download failure paths. The user-facing
+# they can exercise strict metadata and trust failures. The user-facing
 # `system update-channel set` command rejects plain HTTP; Phase 2 covers that
 # CLI guard explicitly.
 
@@ -22,13 +22,13 @@ phase = 3
 run = "mkdir -p /tmp/conary-lifecycle-bootstrap /tmp/conary-lifecycle-recipes /tmp/conary-self-update"
 
 # --------------------------------------------------------------------------
-# T128: Self-update bad checksum download
+# T128: Unsigned self-update metadata
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T128"
-name = "self_update_bad_checksum_rejected"
-description = "Self-update should reject a download whose checksum does not match metadata"
+name = "self_update_unsigned_release_rejected"
+description = "Self-update should reject unsigned release metadata before downloading an artifact"
 timeout = 60
 group = "L"
 
@@ -42,14 +42,14 @@ SERVER_PID=$! && \
 sleep 1 && \
 ${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
 sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19877') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
-OUTPUT=$(${CONARY_BIN} self-update --no-verify --db-path ${DB_PATH} 2>&1 || true) && \
+OUTPUT=$(${CONARY_BIN} self-update --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
 echo "$OUTPUT"
 """
 
 [test.step.assert]
-stdout_contains_any = ["Checksum", "checksum", "sha256", "failed"]
+stdout_contains_any = ["no signature", "trusted update keys", "unsigned release"]
 stdout_not_contains = "Updated successfully"
 
 # --------------------------------------------------------------------------
@@ -86,13 +86,13 @@ stdout_contains_any = ["Current version:", "up to date", "No update available"]
 stdout_not_contains = "Update available"
 
 # --------------------------------------------------------------------------
-# T130: Truncated self-update download
+# T130: Invalid self-update artifact size
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T130"
-name = "self_update_truncated_download_failure"
-description = "A truncated self-update download should fail cleanly and leave the current binary untouched"
+name = "self_update_zero_size_metadata_rejected"
+description = "Self-update should reject metadata that describes an empty update artifact"
 timeout = 60
 group = "L"
 
@@ -101,20 +101,20 @@ run = """MOCK_DIR=/tmp/conary-self-update/t130 && \
 mkdir -p "$MOCK_DIR" && \
 head -c 8 ${CONARY_BIN} > "$MOCK_DIR/conary-99.0.1.ccs" && \
 CCS_SHA=$(sha256sum "$MOCK_DIR/conary-99.0.1.ccs" | cut -d' ' -f1) && \
-printf '{"version":"99.0.1","download_url":"http://127.0.0.1:19879/conary-99.0.1.ccs","sha256":"%s","size":999999}' "$CCS_SHA" > "$MOCK_DIR/latest" && \
+printf '{"version":"99.0.1","download_url":"http://127.0.0.1:19879/conary-99.0.1.ccs","sha256":"%s","size":0}' "$CCS_SHA" > "$MOCK_DIR/latest" && \
 python3 -m http.server 19879 --directory "$MOCK_DIR" >/tmp/t130-server.log 2>&1 & \
 SERVER_PID=$! && \
 sleep 1 && \
 ${CONARY_BIN} system update-channel get --db-path ${DB_PATH} >/dev/null && \
 sqlite3 ${DB_PATH} "INSERT INTO settings (key, value) VALUES ('update-channel', 'http://127.0.0.1:19879') ON CONFLICT(key) DO UPDATE SET value = excluded.value" && \
-OUTPUT=$(${CONARY_BIN} self-update --no-verify --db-path ${DB_PATH} 2>&1 || true) && \
+OUTPUT=$(${CONARY_BIN} self-update --check --db-path ${DB_PATH} 2>&1 || true) && \
 kill $SERVER_PID 2>/dev/null || true && \
 ${CONARY_BIN} system update-channel reset --db-path ${DB_PATH} >/dev/null 2>&1 || true && \
 echo "$OUTPUT"
 """
 
 [test.step.assert]
-stdout_contains_any = ["trunc", "size", "failed", "end of file"]
+stdout_contains_any = ["artifact must not be empty", "metadata size"]
 stdout_not_contains = "Updated successfully"
 
 # --------------------------------------------------------------------------

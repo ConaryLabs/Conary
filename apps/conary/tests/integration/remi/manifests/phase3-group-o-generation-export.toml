@@ -30,7 +30,7 @@ timeout_seconds = 900
 ssh_port = 2240
 stage_conary = true
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "mkdir -p /var/tmp/conary-generation-export",
     "conary system generation build --yes > /var/tmp/conary-generation-export/build.log 2>&1; code=$?; cat /var/tmp/conary-generation-export/build.log; test \"$code\" -ne 0",
     "grep -q 'not self-contained' /var/tmp/conary-generation-export/build.log",
@@ -60,11 +60,11 @@ timeout_seconds = 1500
 ssh_port = 2244
 stage_conary = true
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "conary system adopt --system --full",
-    "DB=/var/lib/conary/conary.db; HASH=$(sqlite3 \"$DB\" \"select f.sha256_hash from files f join troves t on t.id = f.trove_id where t.install_source in ('adopted-full','taken','repository','file') and f.symlink_target is null and length(f.sha256_hash) = 64 and f.sha256_hash not glob '*[^0-9a-f]*' and ((f.permissions & 61440) = 0 or (f.permissions & 61440) = 32768) and f.path not like '/var/%' and f.path not like '/tmp/%' and f.path not like '/run/%' and f.path not like '/home/%' and f.path not like '/root/%' and f.path not like '/srv/%' and f.path not like '/opt/%' and f.path not like '/proc/%' and f.path not like '/sys/%' and f.path not like '/dev/%' and f.path not like '/mnt/%' and f.path not like '/media/%' limit 1\"); test -n \"$HASH\"; PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2); SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-); OBJ_BASE=$(readlink -f /conary/objects); test -d \"$OBJ_BASE\"; OBJ=$OBJ_BASE/$PREFIX/$SUFFIX; test -f \"$OBJ\"; rm -f \"$OBJ\"; echo \"$HASH\" > /var/tmp/missing-cas.hash",
+    "DB=/var/lib/conary/conary.db; HASH=$(sqlite3 \"$DB\" \"select f.content_sha256 from files f join troves t on t.id = f.trove_id where t.install_source in ('adopted-full','taken','repository','file') and f.content_sha256 is not null and length(f.content_sha256) = 64 and f.content_sha256 not glob '*[^0-9a-f]*' and f.path not like '/var/%' and f.path not like '/tmp/%' and f.path not like '/run/%' and f.path not like '/home/%' and f.path not like '/root/%' and f.path not like '/srv/%' and f.path not like '/opt/%' and f.path not like '/proc/%' and f.path not like '/sys/%' and f.path not like '/dev/%' and f.path not like '/mnt/%' and f.path not like '/media/%' limit 1\"); test -n \"$HASH\"; PREFIX=$(printf '%s' \"$HASH\" | cut -c1-2); SUFFIX=$(printf '%s' \"$HASH\" | cut -c3-); OBJ_BASE=$(readlink -f /conary/objects); test -d \"$OBJ_BASE\"; OBJ=$OBJ_BASE/$PREFIX/$SUFFIX; test -f \"$OBJ\"; rm -f \"$OBJ\"; echo \"$HASH\" > /var/tmp/missing-cas.hash",
     "conary system generation build --yes > /var/tmp/missing-cas.log 2>&1; code=$?; cat /var/tmp/missing-cas.log; test \"$code\" -ne 0",
     "grep -Eq 'missing CAS object|Checksum mismatch|size mismatch' /var/tmp/missing-cas.log",
     "test -z \"$(find /conary/generations -mindepth 2 -maxdepth 2 -name .conary-artifact.json -print -quit 2>/dev/null)\"",
@@ -93,7 +93,7 @@ ssh_port = 2245
 stage_conary = true
 scratch_disk_mb = 65536
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "mkdir -p /etc/ssh/authorized_keys /etc/ssh/sshd_config.d; test -s /root/.ssh/authorized_keys; cp /root/.ssh/authorized_keys /etc/ssh/authorized_keys/root; chmod 0644 /etc/ssh/authorized_keys/root; printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u' > /etc/ssh/sshd_config.d/90-conary-test-authorized-keys.conf; sshd_config=/etc/ssh/sshd_config; sshd_config_tmp=/etc/ssh/sshd_config.conary-test; if ! grep -q '/etc/ssh/authorized_keys/%u' \"$sshd_config\"; then { printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u'; cat \"$sshd_config\"; } > \"$sshd_config_tmp\"; mv \"$sshd_config_tmp\" \"$sshd_config\"; fi",
@@ -159,7 +159,7 @@ ssh_port = 2247
 stage_conary = true
 scratch_disk_mb = 65536
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "mkdir -p /etc/ssh/authorized_keys /etc/ssh/sshd_config.d; test -s /root/.ssh/authorized_keys; cp /root/.ssh/authorized_keys /etc/ssh/authorized_keys/root; chmod 0644 /etc/ssh/authorized_keys/root; printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u' > /etc/ssh/sshd_config.d/90-conary-test-authorized-keys.conf; sshd_config=/etc/ssh/sshd_config; sshd_config_tmp=/etc/ssh/sshd_config.conary-test; if ! grep -q '/etc/ssh/authorized_keys/%u' \"$sshd_config\"; then { printf '%s\\n' 'AuthorizedKeysFile .ssh/authorized_keys /etc/ssh/authorized_keys/%u'; cat \"$sshd_config\"; } > \"$sshd_config_tmp\"; mv \"$sshd_config_tmp\" \"$sshd_config\"; fi",
@@ -170,13 +170,16 @@ commands = [
     "mount -o noatime /dev/disk/by-id/virtio-conary-scratch /mnt/conary-scratch",
     "mkdir -p /mnt/conary-scratch/export",
     "conary system generation build --yes > /var/tmp/generation-capability-seed.log 2>&1; cat /var/tmp/generation-capability-seed.log; SEED_GEN=$(awk '/^Generation [0-9][0-9]* built[.]$/ {print $2}' /var/tmp/generation-capability-seed.log | tail -1); test -n \"$SEED_GEN\"; conary system generation switch \"$SEED_GEN\" --yes; test -L /conary/current",
-    "rm -rf /tmp/group-o-cap-base /tmp/group-o-cap-base-output && mkdir -p /tmp/group-o-cap-base/stage/usr/bin /tmp/group-o-cap-base-output && printf '#!/bin/sh\\necho baseline authority\\n' > /tmp/group-o-cap-base/stage/usr/bin/group-o-cap-demo && chmod 0755 /tmp/group-o-cap-base/stage/usr/bin/group-o-cap-demo && conary ccs init /tmp/group-o-cap-base --name group-o-cap-demo --version 1.0.0 && conary ccs build /tmp/group-o-cap-base --output /tmp/group-o-cap-base-output --source /tmp/group-o-cap-base/stage",
-    "set -e; BASE_CCS=$(ls /tmp/group-o-cap-base-output/*.ccs | head -1); test -n \"$BASE_CCS\"; conary ccs install --yes \"$BASE_CCS\" --allow-unsigned --sandbox never > /var/tmp/group-o-cap-base-install.log 2>&1; cat /var/tmp/group-o-cap-base-install.log; BASELINE_GEN=$(readlink -f /conary/current | sed 's#.*/##'); test -n \"$BASELINE_GEN\"; printf '%s\\n' \"$BASELINE_GEN\" > /mnt/conary-scratch/export/group-o-cap-baseline-generation.txt; conary system generation info \"$BASELINE_GEN\" > /var/tmp/group-o-cap-baseline-info.txt; cat /var/tmp/group-o-cap-baseline-info.txt; ! grep -q 'Cap xattrs:' /var/tmp/group-o-cap-baseline-info.txt; conary system generation export --path /conary/generations/$BASELINE_GEN --format qcow2 --output /mnt/conary-scratch/export/group-o-cap-baseline-generation.qcow2",
-    "rm -rf /tmp/group-o-cap-upgrade /tmp/group-o-cap-upgrade-output && mkdir -p /tmp/group-o-cap-upgrade/stage/usr/bin /tmp/group-o-cap-upgrade-output && printf '#!/bin/sh\\necho capability authority\\n' > /tmp/group-o-cap-upgrade/stage/usr/bin/group-o-cap-demo && chmod 0755 /tmp/group-o-cap-upgrade/stage/usr/bin/group-o-cap-demo && conary ccs init /tmp/group-o-cap-upgrade --name group-o-cap-demo --version 2.0.0 && printf '\\n[[file_capabilities]]\\npath = \"/usr/bin/group-o-cap-demo\"\\ncapabilities = [\"cap_net_bind_service\"]\\npermitted = true\\neffective = true\\ninheritable = false\\n' >> /tmp/group-o-cap-upgrade/ccs.toml && conary ccs build /tmp/group-o-cap-upgrade --output /tmp/group-o-cap-upgrade-output --source /tmp/group-o-cap-upgrade/stage",
-    "set -e; CAP_CCS=$(ls /tmp/group-o-cap-upgrade-output/*.ccs | head -1); test -n \"$CAP_CCS\"; conary ccs install --yes \"$CAP_CCS\" --allow-unsigned --sandbox never > /var/tmp/group-o-cap-upgrade-install.log 2>&1; cat /var/tmp/group-o-cap-upgrade-install.log; CAP_GEN=$(readlink -f /conary/current | sed 's#.*/##'); test -n \"$CAP_GEN\"; test \"$CAP_GEN\" != \"$(cat /mnt/conary-scratch/export/group-o-cap-baseline-generation.txt)\"; printf '%s\\n' \"$CAP_GEN\" > /mnt/conary-scratch/export/group-o-cap-enabled-generation.txt; conary system generation info \"$CAP_GEN\" > /var/tmp/group-o-cap-enabled-info.txt; cat /var/tmp/group-o-cap-enabled-info.txt; grep -q 'Cap xattrs: 1' /var/tmp/group-o-cap-enabled-info.txt; composefs-info dump /conary/generations/$CAP_GEN/root.erofs | grep -q '^/usr/bin/group-o-cap-demo .*security.capability='; conary system generation export --path /conary/generations/$CAP_GEN --format qcow2 --output /mnt/conary-scratch/export/group-o-cap-enabled-generation.qcow2",
+    "rm -rf /tmp/group-o-cap-base /tmp/group-o-cap-base-output && mkdir -p /tmp/group-o-cap-base/stage/usr/bin /tmp/group-o-cap-base-output && printf '#!/bin/sh\\necho baseline authority\\n' > /tmp/group-o-cap-base/stage/usr/bin/group-o-cap-demo && chmod 0755 /tmp/group-o-cap-base/stage/usr/bin/group-o-cap-demo && conary ccs init /tmp/group-o-cap-base --name group-o-cap-demo --version 1.0.0 && conary ccs build /tmp/group-o-cap-base --output /tmp/group-o-cap-base-output --source /tmp/group-o-cap-base/stage --key ${FIXTURE_CCS_KEY}",
+    "set -e; BASE_CCS=$(ls /tmp/group-o-cap-base-output/*.ccs | head -1); test -n \"$BASE_CCS\"; conary ccs install --yes \"$BASE_CCS\" --policy ${FIXTURE_CCS_POLICY} --sandbox always > /var/tmp/group-o-cap-base-install.log 2>&1; cat /var/tmp/group-o-cap-base-install.log; BASELINE_GEN=$(readlink -f /conary/current | sed 's#.*/##'); test -n \"$BASELINE_GEN\"; printf '%s\\n' \"$BASELINE_GEN\" > /mnt/conary-scratch/export/group-o-cap-baseline-generation.txt; conary system generation info \"$BASELINE_GEN\" > /var/tmp/group-o-cap-baseline-info.txt; cat /var/tmp/group-o-cap-baseline-info.txt; ! grep -q 'Cap xattrs:' /var/tmp/group-o-cap-baseline-info.txt; conary system generation export --path /conary/generations/$BASELINE_GEN --format qcow2 --output /mnt/conary-scratch/export/group-o-cap-baseline-generation.qcow2",
+    "rm -rf /tmp/group-o-cap-upgrade /tmp/group-o-cap-upgrade-output && mkdir -p /tmp/group-o-cap-upgrade/stage/usr/bin /tmp/group-o-cap-upgrade-output && printf '#!/bin/sh\\necho capability authority\\n' > /tmp/group-o-cap-upgrade/stage/usr/bin/group-o-cap-demo && chmod 0755 /tmp/group-o-cap-upgrade/stage/usr/bin/group-o-cap-demo && conary ccs init /tmp/group-o-cap-upgrade --name group-o-cap-demo --version 2.0.0 && printf '\\n[[file_capabilities]]\\npath = \"/usr/bin/group-o-cap-demo\"\\ncapabilities = [\"cap_net_bind_service\"]\\npermitted = true\\neffective = true\\ninheritable = false\\n' >> /tmp/group-o-cap-upgrade/ccs.toml && conary ccs build /tmp/group-o-cap-upgrade --output /tmp/group-o-cap-upgrade-output --source /tmp/group-o-cap-upgrade/stage --key ${FIXTURE_CCS_KEY}",
+    "set -e; CAP_CCS=$(ls /tmp/group-o-cap-upgrade-output/*.ccs | head -1); test -n \"$CAP_CCS\"; conary ccs install --yes \"$CAP_CCS\" --policy ${FIXTURE_CCS_POLICY} --sandbox always > /var/tmp/group-o-cap-upgrade-install.log 2>&1; cat /var/tmp/group-o-cap-upgrade-install.log; CAP_GEN=$(readlink -f /conary/current | sed 's#.*/##'); test -n \"$CAP_GEN\"; test \"$CAP_GEN\" != \"$(cat /mnt/conary-scratch/export/group-o-cap-baseline-generation.txt)\"; printf '%s\\n' \"$CAP_GEN\" > /mnt/conary-scratch/export/group-o-cap-enabled-generation.txt; conary system generation info \"$CAP_GEN\" > /var/tmp/group-o-cap-enabled-info.txt; cat /var/tmp/group-o-cap-enabled-info.txt; grep -q 'Cap xattrs: 1' /var/tmp/group-o-cap-enabled-info.txt; composefs-info dump /conary/generations/$CAP_GEN/root.erofs | grep -q '^/usr/bin/group-o-cap-demo .*security.capability='; conary system generation export --path /conary/generations/$CAP_GEN --format qcow2 --output /mnt/conary-scratch/export/group-o-cap-enabled-generation.qcow2",
     "test -s /mnt/conary-scratch/export/group-o-cap-baseline-generation.qcow2",
     "test -s /mnt/conary-scratch/export/group-o-cap-enabled-generation.qcow2",
     "echo installed-runtime-generation-file-capability-export-ok",
+]
+copy_to_guest = [
+    { source = "apps/conary/tests/fixtures/ccs-test-authority", dest = "/opt/remi-tests/fixtures/ccs-test-authority" },
 ]
 copy_from_guest = [
     { source = "/mnt/conary-scratch/export/group-o-cap-baseline-generation.qcow2", dest = "/tmp/conary-generation-export/group-o-cap-baseline-generation.qcow2" },
@@ -259,7 +262,7 @@ copy_to_guest = [
     { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
 ]
 commands = [
-    "conary system init --profile fedora-44",
+    "conary system init",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
     "test -d /var/lib/conary/bootstrap-inputs",

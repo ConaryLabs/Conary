@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-06-14
-revision: 24
-summary: Route M2a hermetic cook and publish evidence
+last_updated: 2026-07-26
+revision: 36
+summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, typed generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -93,13 +93,15 @@ crates/conary-core/      Core library crate
     +-- lib.rs           Internal workspace crate surface, not a stable external API
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
-    |   +-- schema.rs    Schema v79, migration dispatcher
-    |   +-- migrations/  Migration functions grouped into v1_v20.rs, v21_v40.rs, v41_current.rs, v79_current.rs
+    |   +-- schema.rs    Current pre-alpha schema epoch initializer and rebuild gate
+    |   +-- current_schema/ One schema split into package-manager, repository, and Remi ownership files
     |   +-- models/      ORM-style model structs
     |   |   +-- try_session.rs M1b package try session state
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/select)
-    |   +-- planner.rs   VFS preflight conflict detection
+    |   +-- package_relations.rs Typed source-ABI relation planning and validation
+    |   +-- recovery.rs  Exact committed-generation recovery
+    +-- config_transaction.rs Exact RPM, Debian, Arch, and Conary config decisions plus durable generation snapshot types
     +-- generation/      EROFS generation building and composefs mounting
     |   +-- builder.rs   Public generation-builder hub
     |   +-- builder/create.rs Generation creation orchestration
@@ -110,16 +112,29 @@ crates/conary-core/      Core library crate
     |   +-- builder/root_validation.rs Self-contained runtime root validation
     |   +-- builder/sysroot.rs CAS-backed runtime sysroot materialization
     |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification, validation, and security.capability xattr attachment for persisted file capabilities
-    |   +-- builder/erofs.rs Low-level EROFS image construction
+    |   +-- root_manifest.rs Exact immutable-root and mutable-state manifest contract
+    |   +-- root_manifest/scan.rs Selected-root capture and CAS ingestion
+    |   +-- root_manifest/materialize.rs Exact typed-root reconstruction
+    |   +-- root_manifest/composefs.rs Typed manifest to EROFS serialization
     |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
+    |   +-- artifact/tests.rs Artifact contract and tamper-regression coverage
     |   +-- export.rs    Raw/qcow2 generation artifact disk export
+    |   +-- export/tests.rs Export carrier and provenance regression coverage
     |   +-- mount.rs     composefs mount/unmount, current symlink
     |   +-- metadata.rs  Generation metadata (JSON)
     |   +-- composefs.rs composefs detection and feature probing
-    |   +-- gc.rs        Old generation garbage collection
-    |   +-- etc_merge.rs Three-way /etc merge across generations
+    |   +-- gc.rs        Typed local CAS reachability and object collection
     |   +-- delta.rs     EROFS image delta computation
     |   +-- composefs_rs_eval.rs composefs-rs evaluation (feature-gated)
+    +-- activation/      Exact runtime work projected onto immutable generations
+    |   +-- systemd.rs   Typed systemctl invocation and canonical boot argv
+    |   +-- systemd/grammar.rs Shared parser/proxy systemctl token grammar
+    |   +-- security_policy.rs SELinux/AppArmor provider union and live-edge split
+    |   +-- security_policy/ Current upstream helper grammars and executable identity
+    +-- scriptlet/       Exact selected-root lifecycle execution
+    |   +-- process.rs   Chroot, mount namespace, and provider bind-mount boundary
+    |   +-- activation_capture.rs Actual activation-provider argv capture
+    |   +-- native_lifecycle.rs Source-ABI lifecycle entry execution
     +-- resolver/        Dependency resolution
     |   +-- sat.rs       SAT-backed solver and transaction plan construction
     |   +-- plan.rs      Resolution plan output types and helpers
@@ -131,19 +146,22 @@ crates/conary-core/      Core library crate
     |   +-- identity.rs  Dependency identity normalization
     +-- repository/      Remote package sources
     |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
-    |   +-- metadata.rs  Index parsing (RPM repodata, DEB Packages, Arch DB)
-    |   +-- remi.rs      Remi client (CCS chunk fetcher)
+    |   +-- trust.rs     Tagged Debian, RPM, and Arch repository authority contracts
+    |   +-- trust/openpgp.rs Pinned certificate preparation and Arch master certification
+    |   +-- parsers/     Authenticated RPM repodata, Debian Packages, and Arch DB grammars
+    |   +-- sync.rs      Trust preparation and atomic repository metadata persistence
+    |   +-- download.rs  Metadata checksum plus ecosystem package-signature termination
+    |   +-- remi.rs      Remi client hub (sync client)
+    |   +-- remi/        Remi protocol DTOs, refusal formatting, async client, and tests
     |   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
     |   +-- mirror_health.rs Mirror health scoring
     |   +-- mirror_selector.rs Ranked mirror selection
-    |   +-- metalink.rs  Metalink XML parser
     |   +-- substituter.rs Content substituter chain
     |   +-- resolution.rs Per-package routing strategies
     |   +-- dependency_model.rs Cross-distro dependency model (provides/requires/groups)
     |   +-- versioning.rs Cross-distro version scheme awareness
-    |   +-- resolution_policy.rs Candidate eligibility and ranking policy types
+    |   +-- resolution_policy.rs Exact source scope, mixing, and eligibility policy
     |   +-- effective_policy.rs Shared runtime source-policy loading from pins + settings
-    |   +-- latest_signal.rs Repology-backed latest-signal scoring for ranking
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
@@ -156,14 +174,14 @@ crates/conary-core/      Core library crate
     |   +-- common.rs    Unified PackageMetadata
     +-- ccs/             Native package format
     |   +-- builder.rs   CCS package builder
-    |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation
+    |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation hub
+    |   +-- manifest/    Declarative hook schemas and manifest tests
     |   +-- manifest_provenance.rs Provenance DTOs embedded by the root manifest
     |   +-- signing.rs   Ed25519 signing
-    |   +-- lockfile.rs  ccs.lock dependency pinning
-    |   +-- convert/     Legacy-to-CCS conversion
-    |   +-- enhancement/ Retroactive CCS hook application
+    |   +-- convert/     RPM/DEB/Arch-to-CCS conversion
+    |   +-- enhancement/ Exact post-conversion provenance recording
     |   +-- export/      OCI image export
-    |   +-- hooks/       systemd, tmpfiles, sysctl, user/group, alternatives
+    |   +-- hooks/       typed host capability inventory plus systemd, service, tmpfiles, sysctl, user/group, alternatives adapters
     |   +-- policy.rs    Build policy engine
     +-- model/           Declarative system state
     |   +-- parser.rs    TOML model file parser
@@ -175,12 +193,11 @@ crates/conary-core/      Core library crate
     +-- recipe/          Source-based package building
     |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser
-    |   +-- inference/   Source-tree, archive, and git target recipe inference
+    |   +-- scaffold.rs  Exact named recipe scaffolding and deterministic materialization
     |   +-- hermetic/    M2a unsigned hermetic evidence, policy, source identity, and diagnostics
     |   +-- kitchen/     Build environment (cook, fetch, offline build, provenance)
     |   +-- build graph  Multi-recipe build ordering
     |   +-- cache.rs     Build artifact cache
-    |   +-- pkgbuild.rs  Arch PKGBUILD converter
     +-- trust/           TUF supply chain trust
     |   +-- client.rs    TUF metadata fetch and verification
     |   +-- metadata.rs  TUF metadata types (root, timestamp, snapshot, targets)
@@ -189,7 +206,6 @@ crates/conary-core/      Core library crate
     +-- capability/      Package capability system
     |   +-- declaration.rs Capability declarations (network, fs, syscalls)
     |   +-- enforcement/ Landlock (filesystem) + seccomp-BPF (syscalls)
-    |   +-- inference/   Heuristic capability detection
     |   +-- resolver.rs  Capability-aware dependency resolution
     +-- provenance/      Package DNA tracking
     |   +-- source.rs    Source provenance (URL, VCS, checksums)
@@ -200,10 +216,10 @@ crates/conary-core/      Core library crate
     +-- bootstrap/       System bootstrap from scratch
     +-- automation/      Automated maintenance (security, orphans)
     +-- container/       Namespace isolation for scriptlets
-    +-- dependencies/    Language/package dependency analysis helpers
+    +-- dependencies/    Exact typed dependency-class grammar
     +-- derived/         Derived package metadata and build support
     +-- trigger/         Post-install trigger system
-    +-- components/      File-to-component classification
+    +-- components/      Exact standard component-name types
     +-- compression/     Unified decompression (gzip, xz, zstd)
     +-- delta/           Binary delta generation and application
     +-- self_update.rs   Self-update support
@@ -234,7 +250,7 @@ apps/remi/               Remi server + federation
     +-- server/          Remi server
     |   +-- routes.rs    Public + admin Axum routers
     |   +-- handlers/    HTTP handlers (chunks, packages, OCI, TUF, etc.)
-    |   +-- conversion.rs On-demand legacy-to-CCS conversion
+    |   +-- conversion.rs On-demand foreign-package-to-CCS conversion
     |   +-- r2.rs        Cloudflare R2 storage backend
     |   +-- lite.rs      Remi Lite LAN proxy
     |   +-- analytics.rs Download event recording
@@ -284,21 +300,29 @@ This is the primary operation. The flow from
 ```
 1. RESOLVE
    +-- Parse package specifier (name, version constraint, repo)
-   +-- Check per-package routing strategy (binary, remi, recipe, delegate)
+   +-- Check per-package routing strategy (Remi, delegate, or one exact
+       authenticated repository-package row)
    +-- Query repositories or Remi server for package metadata
+   |   +-- Static indexes carry typed provides and requirement expressions
+   |   +-- String dependency lists are not resolution authority
    +-- Resolve transitive dependencies via dependency graph
    +-- Check for conflicts, pinned packages, redirects
 
 2. PREPARE
    +-- Download package(s) - parallel via rayon if multiple
    |   +-- For Remi: fetch CCS chunks, assemble package
-   |   +-- For legacy: download RPM/DEB/Arch package file
+   |   +-- For foreign formats: download RPM/DEB/Arch package file
    +-- Parse package metadata into unified PackageMetadata
    +-- Detect package format (magic bytes or extension)
-   +-- Optional: convert legacy format to CCS on-the-fly
-   +-- Preflight CCS legacy scriptlet bundles before dry-run or mutation
-   |   +-- Review/blocked entries refuse
-   |   +-- Raw replay requires explicit operator flags and compatible target policy
+   +-- Convert RPM/DEB/Arch input to source-independent CCS on-the-fly
+   +-- Resolve source requirements against the typed host capability inventory
+   |   +-- arch/ABI/libc/loader, init, LSM, filesystem, boot/kernel, helpers
+   |   +-- Source format and host capabilities are orthogonal typed axes
+   |   +-- No pairwise distro converters or distro-name/string gates
+   +-- Preflight typed lifecycle plans before dry-run or mutation
+   |   +-- Exact source-ABI stage, argv, trigger, and payload boundaries
+   |   +-- No source package-manager process or database dependency
+   |   +-- Missing semantics fail as required implementation defects
 
 3. TRANSACTION (composefs-native)
    +-- Create TransactionEngine, acquire lock
@@ -350,8 +374,10 @@ M2a makes `conary cook --isolated` the hermetic recipe build path. The command
 loads the local hermetic builder config, refuses recipes with build dependencies
 until dependency content locks exist, prefetches sources, and then runs Kitchen
 with network disabled, pristine/no-host-mount execution, reproducibility
-controls, source identity, command-risk reports, ecosystem policy, builder
-environment identity, and local host-vs-hermetic divergence diagnostics.
+controls, exact source and dependency identities, diagnostic command-risk
+reports, builder environment identity, and local host-vs-hermetic divergence
+diagnostics. Marker-file and command-text ecosystem inference is not an
+authority boundary; the signed input identity and actual offline execution are.
 
 Project-form `conary publish <target>` uses the same hermetic Kitchen path
 before adding the resulting CCS package to a static repository. M2a records
@@ -369,23 +395,28 @@ the limited preview.
 ### Architecture
 
 ```
-Current System State
+Generation-aware package mutation
        |
-  conary system generation build --yes
+  materialize latest authoritative selected root
        |
-  +----+----+
-  | Snapshot |-- Capture all installed troves from SQLite
-  +----+----+
+  +-----------+
+  | Isolated  |-- Apply payload, native lifecycle, CCS hooks, triggers,
+  | Root      |-- and config decisions without mutating the live root
+  +-----------+
        |
-  +----+----+
-  |  EROFS   |-- composefs-rs builds read-only filesystem image
-  | Builder  |-- chunk-based external CAS references
-  +----+----+
+  +-----------+
+  | Capture   |-- Exact typed generation-root + mutable-state manifests
+  +-----------+-- Candidate is durable before the SQLite transaction commits
        |
-  +----+----+
-  | composefs|-- Linux 6.2+ overlay with fs-verity content verification
-  | Mount    |-- CAS objects referenced by content hash
-  +----+----+
+  +-----------+
+  |  EROFS    |-- composefs-rs serializes the generation-root manifest
+  | Builder   |-- Regular content uses verified external CAS references
+  +-----------+
+       |
+  +-----------+
+  | composefs |-- Linux 6.2+ overlay with fs-verity content verification
+  | Mount     |-- Exact mutable-state/config projection is generation-local
+  +-----------+
        |
  Generation N (immutable, verified)
        |
@@ -396,28 +427,41 @@ Current System State
 
 ### Generation Lifecycle
 
-1. **Build**: Snapshot current troves, validate runtime inputs, construct EROFS image from CAS
-2. **Store**: Save generation metadata (number, timestamp, summary, trove list)
-3. **Switch**: Validate artifact, update `/conary/current`, and write boot entries
-4. **Rollback**: Select the previous valid generation for next boot
-5. **GC**: Remove old generations, keeping N most recent
+1. **Select**: Materialize the latest cumulative selected-root candidate, or the current generation when no publication debt is pending
+2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
+3. **Record**: Capture exact immutable and mutable-state manifests, persist the selected-root candidate, and record recoverable publication debt before committing package state
+4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
+5. **Materialize state**: Seed the generation-local mutable-state tree from its exact manifest, then apply the ordered typed config transactions
+6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
+7. **Recover**: Under the runtime mutation lock, resume at the persisted phase and replay each remaining idempotent effect. A matching `/conary/current` link proves only link publication; it never implies configuration projection or database backup completion
+8. **Compensate**: Rollback records a new exact compensating selected root and removes terminal candidates
+9. **GC**: Remove old generations only after retaining every recoverable publication candidate and its typed CAS roots
 
 ### Generation Module (`crates/conary-core/src/generation/`)
 
 The primary builder for composefs generations. Uses the composefs-rs crate
-(v0.3.0) to produce EROFS images from DB state or validated installed-runtime
-inputs. Submodules: builder.rs (public generation-builder hub),
+(v0.3.0) to serialize validated exact `GenerationRootManifest` input to EROFS.
+Explicit generation builds project installed state into the same typed root
+contract. Package mutation publication accepts only its persisted cumulative
+selected-root candidate; there is no database-snapshot publication fallback.
+Submodules: builder.rs (public
+generation-builder hub),
 builder/create.rs and builder/rebuild.rs (generation creation and recovery
 rebuild orchestration), builder/boot_assets.rs, builder/initramfs.rs,
 builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
 materialization support), builder/root_validation.rs and
-builder/runtime_inputs.rs (self-contained runtime input validation),
-builder/erofs.rs (low-level EROFS construction), artifact.rs (exportable
-generation contract and boot assets), export.rs (raw/qcow2 disk export from
-validated artifacts), mount.rs (composefs mount/unmount), metadata.rs (JSON
-metadata), gc.rs (old generation cleanup), etc_merge.rs (three-way /etc
-merge), delta.rs (EROFS image deltas), composefs.rs (runtime feature
-detection).
+builder/runtime_inputs.rs (self-contained runtime input validation), and
+root_manifest/composefs.rs (exact typed-root EROFS serialization). artifact.rs
+owns the exportable generation contract and boot assets; export.rs owns
+raw/qcow2 disk export from validated artifacts; mount.rs owns composefs
+mount/unmount; metadata.rs owns JSON
+metadata), gc.rs (typed CAS reachability and object collection), delta.rs
+(EROFS image deltas), and
+composefs.rs (runtime feature detection). Exact config policy and persisted
+snapshot types live in `crates/conary-core/src/config_transaction.rs`;
+`apps/conary/src/commands/generation/config_transaction.rs` captures live
+identities and atomically materializes generation-local `/etc` uppers. There is
+no generic hash-conflict/manual-merge path.
 
 ### composefs Integration
 
@@ -461,7 +505,7 @@ Do not treat this section as the authoritative version inventory. Use
 `recipes/versions.toml`, individual recipe headers, and the active bootstrap
 specs/plans when exact package versions or intentional divergences matter.
 Tier 2 recipes and self-host-specific staged inputs enforce SHA-256 checksums;
-earlier bootstrap phases still carry legacy MD5 recipe entries in the current
+earlier bootstrap phases still carry MD5-only recipe entries in the current
 tree. Recipe execution uses the bootstrap container configuration where the
 phase supports it; the self-hosting VM wrapper deliberately runs chroot-owning
 phases through a rootful handoff so the Rust bootstrap code owns `/dev`,
@@ -469,17 +513,25 @@ phases through a rootful handoff so the Rust bootstrap code owns `/dev`,
 
 Bootstrap trust has a TOFU boundary: the first trusted TUF root metadata and
 bootstrap source manifests must arrive through an authenticated out-of-band
-channel or another operator-controlled path. `--skip-verify` is only an
-explicit bootstrap escape hatch and does not establish repository trust by
-itself.
+channel or another operator-controlled path. Bootstrap source identities are
+mandatory; placeholder checksums and verification-bypass modes are rejected.
 
 Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
-## Database Schema (v79)
+## Database Schema
 
-All runtime state lives in SQLite, and migrations are dispatched from
-`crates/conary-core/src/db/schema.rs`.
+All runtime state lives in SQLite. The pre-alpha database contract has one
+current schema epoch initialized by `crates/conary-core/src/db/schema.rs`.
+The schema itself is split by ownership under
+`crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
+repository/service state, and Remi conversion/administration state.
+
+Databases from retired schema revisions are rejected with an explicit rebuild
+requirement. Conary does not carry a schema compatibility chain or attempt to
+preserve derived queue and workflow history while there are no external users.
+Rebuilds must come from authoritative package, repository, and conversion
+inputs.
 
 The stable table families are:
 
@@ -489,10 +541,9 @@ The stable table families are:
 - Try state: active/kept/rolled-back package try sessions and selected generation metadata
 - Security and provenance: TUF metadata, provenance records, admin tokens, and audit data
 - Service and federation state: conversion/cache/download analytics, federation peers, and test-run persistence
-- Remi review workflow state: admin-only scriptlet evidence clusters, samples, state events, notes, backfill runs, and versioned normalization/supersession metadata
 
 When exact table names or counts matter, inspect `crates/conary-core/src/db/models/`
-and the active migration functions instead of relying on this overview.
+and the current ownership SQL instead of relying on this overview.
 
 ## Package Graph
 
@@ -519,20 +570,24 @@ adoption/unadoption mutations and writes a generation-bound SQLite backup under
 `/conary/generations/<n>/state/` when a generation publication reaches the
 selected-generation boundary.
 
-**Composefs-native transactions**: The transaction engine follows a linear
-pipeline: resolve -> fetch -> DB commit -> EROFS build -> select. The DB commit
-is the point of no return. Recovery is simple: if `/conary/current` points at a
-selected generation whose artifact is missing or invalid, rebuild that artifact
-from DB/CAS state and leave the boot selection intact. If the live SQLite DB is
-missing or corrupt, operators can verify a checkpoint backup or the
-generation-bound backup for a valid generation, dry-run the recovery copy, and
-then explicitly restore it with live-host acknowledgement. Explicit
-boot-selection recovery is the path that scans, promotes, and remounts. There
-is no transaction journal or staging directory; DB backups are recovery
-artifacts, not a second mutable source of truth.
-Runtime mutation is DB/CAS first and then follows either a guarded live-root
-journal or generation publication, depending on the command and mode. Direct,
-unjournaled live-root mutation is not a supported release path.
+**Composefs-native transactions**: Every package mutation follows one linear
+pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed
+lifecycle, payload, config, and trigger work inside that root and one SQLite
+transaction -> persist the exact selected-root candidate -> commit SQLite ->
+publish the recorded generation. The selected root starts from the latest
+retryable candidate, the current generation artifact, or authoritative DB/CAS
+state when no generation exists. There is no mutable-host package execution
+path.
+
+Before the SQLite commit, any lifecycle, payload, config, trigger, or validation
+failure rolls back the database transaction and discards the selected root.
+After commit, a publication failure leaves typed debt plus the exact candidate
+for deterministic retry. `LiveRootTransaction` remains an internal journal for
+the disposable selected-root session; it is not authority to mutate the host
+root. DB backups remain recovery artifacts, not a second mutable source of
+truth. If `/conary/current` names a missing or invalid artifact, recovery
+rebuilds from DB/CAS state while explicit boot-selection recovery owns scanning,
+promotion, and remounting.
 Generation-aware CCS installs follow the same model for file capabilities by
 persisting file-capability authority in SQLite first, attaching
 `security.capability` during runtime-input collection, requiring immediate
@@ -553,13 +608,26 @@ state references have been preserved.
 via FastCDC. Clients only download chunks they don't already have, giving
 implicit delta compression without pre-computing version-to-version diffs.
 
+**Signed remote system models**: Remote model collections have one exact wire
+contract. `conary model publish` requires an Ed25519 signing key and an
+authenticated Remi admin request (`REMI_ADMIN_TOKEN` or
+`CONARY_REMI_ADMIN_TOKEN`). Remi verifies the signature and canonical content
+hash before atomically replacing persisted collection state, then serves the
+same signed data and signer identity. Every online or cached remote include is
+reverified against the model's explicit `[include].trusted_keys`; unsigned
+collections, missing trust roots, signer-ID mismatches, and stale cache
+metadata fail closed.
+
 **Unified format pipeline**: All package formats (RPM, DEB, Arch) are parsed
 into a common `PackageMetadata` struct. Conversion to the native CCS format
 happens transparently, either on the client or via the Remi server.
 
 **Namespace isolation**: Scriptlets run in Linux containers (mount, PID, IPC,
-UTS namespaces) with resource limits. Capability enforcement uses Landlock
-for filesystem access control and seccomp-BPF for syscall filtering.
+UTS namespaces) with resource limits. Capability enforcement uses mandatory
+Landlock rules for exact absolute path roots and seccomp-BPF for exact
+target-ABI syscall names. Filesystem wildcards, syscall wildcards, named
+syscall profiles, cross-ABI aliases, and Linux process-capability inference are
+not authority; packages declare exact `capabilities.linux.required` values.
 
 ## Security Architecture
 
@@ -585,6 +653,5 @@ Trust Chain:
 
 ## Related Documentation
 
-- [docs/conaryopedia-v2.md](/docs/conaryopedia-v2.md) - Comprehensive technical guide
 - [ROADMAP.md](/ROADMAP.md) - Forward-looking development roadmap
 - [docs/SCRIPTLET_SECURITY.md](/docs/SCRIPTLET_SECURITY.md) - Scriptlet isolation details

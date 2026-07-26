@@ -1,59 +1,15 @@
 // conary-core/src/ccs/v2/validation.rs
 
+mod config;
+mod identity;
+
 use super::diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 use super::schema::*;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProfileConstraintStatus {
-    Accepted,
-    Unsupported,
-}
-
-pub trait TargetProfileQuery {
-    fn service_status(&self, service: &str) -> ProfileConstraintStatus;
-    fn tmpfiles_status(&self, entry: &str) -> ProfileConstraintStatus;
-    fn sysctl_status(&self, key: &str) -> ProfileConstraintStatus;
-    fn user_status(&self, user: &str) -> ProfileConstraintStatus;
-    fn group_status(&self, group: &str) -> ProfileConstraintStatus;
-    fn directory_status(&self, directory: &str) -> ProfileConstraintStatus;
-    fn alternative_status(&self, alternative: &str) -> ProfileConstraintStatus;
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct M4aNoProfileFacts;
-
-impl TargetProfileQuery for M4aNoProfileFacts {
-    fn service_status(&self, _service: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-
-    fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-
-    fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-
-    fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-
-    fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-
-    fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-
-    fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
-        ProfileConstraintStatus::Unsupported
-    }
-}
+use config::{validate_config_authority, validate_package_policy};
+use identity::{validate_identity, validate_provides};
 
 pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
-    validate_authority_with_profile(authority, &M4aNoProfileFacts)
+    validate_authority_common(authority)
 }
 
 pub fn validate_authority_structure(
@@ -62,101 +18,12 @@ pub fn validate_authority_structure(
     validate_authority_common(authority)
 }
 
-pub fn validate_authority_with_profile(
-    authority: &AuthorityDocumentV2,
-    profile: &(impl TargetProfileQuery + ?Sized),
-) -> Result<(), V2ValidationError> {
-    let mut diagnostics = validate_authority_common(authority)
-        .err()
-        .map(|error| error.diagnostics)
-        .unwrap_or_default();
-
-    for service in &authority.lifecycle.services {
-        if profile.service_status(service) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "service",
-                format!("service {service} is not supported by the target profile"),
-                "lifecycle.services",
-            ));
-        }
-    }
-    for entry in &authority.lifecycle.tmpfiles {
-        if profile.tmpfiles_status(entry) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "tmpfiles",
-                format!("tmpfiles entry {entry} is not supported by the target profile"),
-                "lifecycle.tmpfiles",
-            ));
-        }
-    }
-    for key in &authority.lifecycle.sysctl {
-        if profile.sysctl_status(key) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "sysctl",
-                format!("sysctl key {key} is not supported by the target profile"),
-                "lifecycle.sysctl",
-            ));
-        }
-    }
-    for user in &authority.lifecycle.users {
-        if profile.user_status(user) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "user",
-                format!("user {user} is not supported by the target profile"),
-                "lifecycle.users",
-            ));
-        }
-    }
-    for group in &authority.lifecycle.groups {
-        if profile.group_status(group) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "group",
-                format!("group {group} is not supported by the target profile"),
-                "lifecycle.groups",
-            ));
-        }
-    }
-    for directory in &authority.lifecycle.directories {
-        if profile.directory_status(directory) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "directory",
-                format!("directory {directory} is not supported by the target profile"),
-                "lifecycle.directories",
-            ));
-        }
-    }
-    for alternative in &authority.lifecycle.alternatives {
-        if profile.alternative_status(alternative) == ProfileConstraintStatus::Unsupported {
-            diagnostics.push(lifecycle_unsupported_diagnostic(
-                "alternative",
-                format!("alternative {alternative} is not supported by the target profile"),
-                "lifecycle.alternatives",
-            ));
-        }
-    }
-
-    if diagnostics.is_empty() {
-        Ok(())
-    } else {
-        Err(V2ValidationError { diagnostics })
-    }
-}
-
-fn lifecycle_unsupported_diagnostic(kind: &str, message: String, field: &str) -> V2Diagnostic {
-    V2Diagnostic::error(
-        V2DiagnosticCode::LifecycleUnsupported,
-        message,
-        Some(field.to_string()),
-        format!("remove the {kind} declaration or choose a target profile that supports it"),
-    )
-}
-
 fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
     let mut diagnostics = Vec::new();
 
     if authority.format_version != FORMAT_VERSION_V2 {
         diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::LegacyV1Package,
+            V2DiagnosticCode::UnsupportedFormatVersion,
             format!(
                 "unsupported CCS authority format {}",
                 authority.format_version
@@ -165,50 +32,70 @@ fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2Va
             "rebuild or regenerate the package as CCS v2",
         ));
     }
-    if authority.identity.name.trim().is_empty() {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::MissingAuthority,
-            "v2 package identity name is required",
-            Some("identity.name".to_string()),
-            "set identity.name in signed v2 authority",
-        ));
-    }
-    if authority.identity.version.trim().is_empty() {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::MissingAuthority,
-            "v2 package identity version is required",
-            Some("identity.version".to_string()),
-            "set identity.version in signed v2 authority",
-        ));
-    }
-    if authority.identity.release.trim().is_empty() {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::MissingAuthority,
-            "v2 package identity release is required",
-            Some("identity.release".to_string()),
-            "set identity.release in signed v2 authority",
-        ));
-    }
+    validate_identity(authority, &mut diagnostics);
     validate_provenance(&authority.provenance, &mut diagnostics);
-    validate_dependencies("requires", &authority.requires, &mut diagnostics);
-    validate_dependencies("provides", &authority.provides, &mut diagnostics);
+    for (index, requirement) in authority.requirements.iter().enumerate() {
+        if requirement.kind.is_negative_relation() {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                "negative relation stored in positive v2 requirements",
+                Some(format!("requirements[{index}]")),
+                "store conflicts, breaks, replacements, and obsoletes in relations",
+            ));
+            continue;
+        }
+        if let Err(error) = crate::repository::requirement::validate_requirement_group(
+            requirement,
+            authority.identity.version_scheme,
+        ) {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!("invalid package requirement authority: {error}"),
+                Some(format!("requirements[{index}]")),
+                "encode an exact typed requirement using the package identity version scheme",
+            ));
+        }
+    }
+    validate_provides(authority, &mut diagnostics);
+    for (index, relation) in authority.relations.iter().enumerate() {
+        if let Err(error) = crate::repository::package_relation::validate_native_relation(
+            relation,
+            authority.identity.version_scheme,
+        ) {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!("invalid package relation authority: {error}"),
+                Some(format!("relations[{index}]")),
+                "encode a typed relation using the package identity version scheme",
+            ));
+        }
+    }
+    if let Some(capabilities) = &authority.capabilities
+        && let Err(error) = capabilities.validate_for_target_arch(
+            authority.identity.version_scheme,
+            authority.identity.architecture.as_deref(),
+        )
+    {
+        diagnostics.push(V2Diagnostic::error(
+            V2DiagnosticCode::KindContractViolation,
+            format!("invalid package capability authority: {error}"),
+            Some("capabilities".to_string()),
+            "encode a complete capability declaration for the package target architecture",
+        ));
+    }
 
     match (&authority.identity.kind, &authority.kind) {
         (PackageKindTagV2::Package, PackageKindV2::Package(data)) => {
             validate_component_defaults(authority, &mut diagnostics);
-            if data.files.is_empty() {
-                diagnostics.push(V2Diagnostic::error(
-                    V2DiagnosticCode::MissingAuthority,
-                    "v2 package kind requires at least one file authority entry",
-                    Some("kind.package.files".to_string()),
-                    "write file path/hash/component authority into v2 MANIFEST",
-                ));
-            }
+            validate_package_policy(&data.policy, "kind.package.policy", &mut diagnostics);
             validate_files(data, authority, &mut diagnostics);
+            validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
+            validate_lifecycle(&authority.lifecycle, &mut diagnostics);
         }
         (PackageKindTagV2::Group, PackageKindV2::Group(data)) => {
             reject_group_redirect_payload_authority(authority, &mut diagnostics);
+            validate_package_policy(&data.policy, "kind.group.policy", &mut diagnostics);
             if data.members.is_empty() {
                 diagnostics.push(V2Diagnostic::error(
                     V2DiagnosticCode::KindContractViolation,
@@ -293,74 +180,38 @@ fn validate_component_defaults(
     }
 }
 
-fn validate_dependencies(
-    prefix: &str,
-    entries: &[DependencyEntryV2],
-    diagnostics: &mut Vec<V2Diagnostic>,
-) {
-    for entry in entries {
-        if entry.name.trim().is_empty() {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::MissingAuthority,
-                format!("{prefix} entry requires a name"),
-                Some(format!("{prefix}.name")),
-                "write typed dependency/provide name into signed v2 authority",
-            ));
-        }
-    }
-}
-
 fn validate_files(
     data: &PackageDataV2,
     authority: &AuthorityDocumentV2,
     diagnostics: &mut Vec<V2Diagnostic>,
 ) {
     for file in &data.files {
-        if file.path.trim().is_empty()
-            || file.sha256.trim().is_empty()
-            || file.component.trim().is_empty()
-        {
+        if file.path.trim().is_empty() || file.component.trim().is_empty() {
             diagnostics.push(V2Diagnostic::error(
                 V2DiagnosticCode::MissingAuthority,
-                "v2 file authority requires path, sha256, size, and component",
+                "v2 file authority requires path, payload node, and component",
                 Some("kind.package.files".to_string()),
                 "write complete file authority into signed v2 authority",
             ));
         }
-        match file.file_type {
-            FileTypeV2::Regular => {
-                if file.symlink_target.is_some() {
-                    diagnostics.push(V2Diagnostic::error(
-                        V2DiagnosticCode::KindContractViolation,
-                        format!("regular file {} must not carry symlink target", file.path),
-                        Some("kind.package.files.symlink_target".to_string()),
-                        "clear symlink_target for regular files",
-                    ));
-                }
-            }
-            FileTypeV2::Directory => {
-                if file.size != 0 || file.symlink_target.is_some() {
-                    diagnostics.push(V2Diagnostic::error(
-                        V2DiagnosticCode::KindContractViolation,
-                        format!(
-                            "directory {} must have size 0 and no symlink target",
-                            file.path
-                        ),
-                        Some("kind.package.files".to_string()),
-                        "encode directory authority without blob size or symlink target",
-                    ));
-                }
-            }
-            FileTypeV2::Symlink => {
-                if file.symlink_target.as_deref().is_none_or(str::is_empty) {
-                    diagnostics.push(V2Diagnostic::error(
-                        V2DiagnosticCode::MissingAuthority,
-                        format!("symlink {} requires signed target authority", file.path),
-                        Some("kind.package.files.symlink_target".to_string()),
-                        "write symlink target into signed v2 authority",
-                    ));
-                }
-            }
+        if let Err(error) = file.node.validate() {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!("payload node {} is invalid: {error}", file.path),
+                Some("kind.package.files.node".to_string()),
+                "write a complete exact POSIX payload node",
+            ));
+        }
+        if let Err(error) = file.node.validate_content(file.content.as_ref()) {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!(
+                    "payload content authority {} is invalid: {error}",
+                    file.path
+                ),
+                Some("kind.package.files.content".to_string()),
+                "attach digest and size only to regular payload nodes",
+            ));
         }
         if !authority.components.contains_key(&file.component) {
             diagnostics.push(V2Diagnostic::error(
@@ -371,6 +222,17 @@ fn validate_files(
                 ),
                 Some("kind.package.files.component".to_string()),
                 "add matching component authority for every file component",
+            ));
+        }
+        if file.conflict != ConflictPolicyV2::Error {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!(
+                    "file {} requests conflict replacement that the installer does not implement",
+                    file.path
+                ),
+                Some("kind.package.files.conflict".to_string()),
+                "use error conflict policy until typed replacement is implemented end to end",
             ));
         }
     }
@@ -387,7 +249,10 @@ fn validate_component_totals(
             .iter()
             .filter(|file| file.component == *name)
             .collect::<Vec<_>>();
-        let total_size: u64 = files.iter().map(|file| file.size).sum();
+        let total_size: u64 = files
+            .iter()
+            .filter_map(|file| file.content.as_ref().map(|content| content.size))
+            .sum();
         if component.file_count as usize != files.len() || component.total_size != total_size {
             diagnostics.push(V2Diagnostic::error(
                 V2DiagnosticCode::ComponentAuthorityMismatch,
@@ -397,6 +262,248 @@ fn validate_component_totals(
             ));
         }
     }
+}
+
+fn validate_lifecycle(lifecycle: &LifecycleAuthorityV2, diagnostics: &mut Vec<V2Diagnostic>) {
+    use crate::ccs::hooks::{
+        is_denied_sysctl_key, is_safe_declarative_unit_name, validate_shell, validate_sysctl_key,
+        validate_sysctl_value, validate_tmpfiles_fields, validate_username,
+    };
+
+    let mut invalid = |field: &str, message: String| {
+        diagnostics.push(V2Diagnostic::error(
+            V2DiagnosticCode::KindContractViolation,
+            message,
+            Some(format!("lifecycle.{field}")),
+            "write a complete lifecycle value that satisfies the signed v2 grammar",
+        ));
+    };
+
+    if let Some(native_lifecycle) = &lifecycle.native_lifecycle
+        && let Err(error) = native_lifecycle.validate()
+    {
+        invalid(
+            "native_lifecycle",
+            format!("invalid native lifecycle authority: {error}"),
+        );
+    }
+
+    for user in &lifecycle.users {
+        if let Err(error) = validate_username(&user.name) {
+            invalid("users.name", format!("invalid lifecycle user: {error}"));
+        }
+        if !user.system {
+            invalid(
+                "users.system",
+                format!("lifecycle user {} must be a system user", user.name),
+            );
+        }
+        if let Some(group) = &user.group
+            && let Err(error) = validate_username(group)
+        {
+            invalid(
+                "users.group",
+                format!("invalid lifecycle user group: {error}"),
+            );
+        }
+        if let Some(shell) = &user.shell
+            && let Err(error) = validate_shell(shell)
+        {
+            invalid(
+                "users.shell",
+                format!("invalid lifecycle user shell: {error}"),
+            );
+        }
+        if let Some(home) = &user.home
+            && let Err(error) = validate_absolute_path(home)
+        {
+            invalid("users.home", error);
+        }
+    }
+    for group in &lifecycle.groups {
+        if let Err(error) = validate_username(&group.name) {
+            invalid("groups.name", format!("invalid lifecycle group: {error}"));
+        }
+        if !group.system {
+            invalid(
+                "groups.system",
+                format!("lifecycle group {} must be a system group", group.name),
+            );
+        }
+    }
+    for directory in &lifecycle.directories {
+        if let Err(error) = validate_absolute_path(&directory.path) {
+            invalid("directories.path", error);
+        }
+        if let Err(error) = validate_mode(&directory.mode) {
+            invalid("directories.mode", error);
+        }
+        if directory.owner.trim().is_empty() || directory.group.trim().is_empty() {
+            invalid(
+                "directories",
+                format!(
+                    "lifecycle directory {} requires owner and group",
+                    directory.path
+                ),
+            );
+        }
+    }
+    for service in &lifecycle.services {
+        if !is_safe_declarative_unit_name(&service.name) {
+            invalid(
+                "services.name",
+                format!(
+                    "lifecycle service name must be pathless, nonempty, and contain no NUL: {}",
+                    service.name
+                ),
+            );
+        }
+    }
+    for unit in &lifecycle.systemd {
+        if !is_safe_declarative_unit_name(&unit.unit) {
+            invalid(
+                "systemd.unit",
+                format!(
+                    "lifecycle systemd unit must be pathless, nonempty, and contain no NUL: {}",
+                    unit.unit
+                ),
+            );
+        }
+    }
+    for tmpfiles in &lifecycle.tmpfiles {
+        if let Err(error) = validate_tmpfiles_fields(
+            &tmpfiles.entry_type,
+            &tmpfiles.path,
+            &tmpfiles.mode,
+            &tmpfiles.user,
+            &tmpfiles.group,
+            &tmpfiles.age,
+            &tmpfiles.argument,
+        ) {
+            invalid(
+                "tmpfiles",
+                format!(
+                    "invalid lifecycle tmpfiles entry {}: {error}",
+                    tmpfiles.path
+                ),
+            );
+        }
+    }
+    for sysctl in &lifecycle.sysctl {
+        if let Err(error) = validate_sysctl_key(&sysctl.key) {
+            invalid(
+                "sysctl.key",
+                format!("invalid lifecycle sysctl key: {error}"),
+            );
+        } else if is_denied_sysctl_key(&sysctl.key) {
+            invalid(
+                "sysctl.key",
+                format!("lifecycle sysctl key {} is denied", sysctl.key),
+            );
+        }
+        if let Err(error) = validate_sysctl_value(&sysctl.value) {
+            invalid(
+                "sysctl.value",
+                format!("invalid lifecycle sysctl value: {error}"),
+            );
+        }
+    }
+    for alternative in &lifecycle.alternatives {
+        if alternative.name.trim().is_empty()
+            || alternative.name.contains('/')
+            || alternative.name.contains('\\')
+        {
+            invalid(
+                "alternatives.name",
+                format!("invalid lifecycle alternative name {}", alternative.name),
+            );
+        }
+        if let Err(error) = validate_absolute_path(&alternative.path) {
+            invalid("alternatives.path", error);
+        }
+    }
+    validate_script_capabilities(
+        "script_capabilities",
+        &lifecycle.script_capabilities,
+        &mut invalid,
+    );
+    for (field, script) in [
+        ("post_install", lifecycle.post_install.as_ref()),
+        ("pre_remove", lifecycle.pre_remove.as_ref()),
+    ] {
+        let Some(script) = script else {
+            continue;
+        };
+        if script.interpreter != "/bin/sh" {
+            invalid(
+                &format!("{field}.interpreter"),
+                format!(
+                    "lifecycle script interpreter {} is not implemented by the CCS hook executor",
+                    script.interpreter
+                ),
+            );
+        }
+        if script.body.trim().is_empty() {
+            invalid(
+                &format!("{field}.body"),
+                "lifecycle script body must not be empty".to_string(),
+            );
+        }
+        validate_script_capabilities(
+            &format!("{field}.capabilities"),
+            &script.capabilities,
+            &mut invalid,
+        );
+        if script.capabilities != lifecycle.script_capabilities {
+            invalid(
+                &format!("{field}.capabilities"),
+                format!(
+                    "{field} lifecycle capabilities differ from the exact package-scoped hook capability set"
+                ),
+            );
+        }
+    }
+}
+
+fn validate_script_capabilities(
+    field: &str,
+    capabilities: &[LifecycleScriptCapabilityV2],
+    invalid: &mut impl FnMut(&str, String),
+) {
+    for capability in capabilities {
+        if capability.name.trim().is_empty() {
+            invalid(
+                &format!("{field}.name"),
+                "lifecycle script capability name must not be empty".to_string(),
+            );
+        }
+        for path in &capability.paths {
+            if let Err(error) = validate_absolute_path(path) {
+                invalid(&format!("{field}.paths"), error);
+            }
+        }
+    }
+}
+
+fn validate_absolute_path(path: &str) -> Result<(), String> {
+    if !path.starts_with('/') {
+        return Err(format!("lifecycle path must be absolute: {path}"));
+    }
+    crate::filesystem::path::sanitize_path(path)
+        .map(|_| ())
+        .map_err(|error| format!("invalid lifecycle path {path}: {error}"))
+}
+
+fn validate_mode(mode: &str) -> Result<(), String> {
+    if mode.len() != 4
+        || !mode.starts_with('0')
+        || !mode.bytes().all(|byte| matches!(byte, b'0'..=b'7'))
+    {
+        return Err(format!(
+            "lifecycle mode must use four-digit octal notation: {mode}"
+        ));
+    }
+    Ok(())
 }
 
 fn reject_group_redirect_payload_authority(
@@ -418,20 +525,49 @@ mod tests {
     use super::*;
     use crate::ccs::v2::diagnostics::V2DiagnosticCode;
     use crate::ccs::v2::schema::{
-        AuthorityDocumentV2, DependencyEntryV2, GroupDataV2, PackageKindTagV2, PackageKindV2,
-        RedirectDataV2,
+        AuthorityDocumentV2, GroupDataV2, PackageKindTagV2, PackageKindV2, RedirectDataV2,
     };
 
     #[test]
-    fn rejects_missing_package_files_as_missing_authority() {
+    fn accepts_payloadless_package_with_explicit_empty_component_authority() {
+        let mut authority = AuthorityDocumentV2::empty_package_for_tests("empty-package");
+        authority.components.insert(
+            "runtime".to_string(),
+            crate::ccs::v2::schema::ComponentAuthorityV2 {
+                name: "runtime".to_string(),
+                default: true,
+                file_count: 0,
+                total_size: 0,
+            },
+        );
+        validate_authority(&authority).unwrap();
+    }
+
+    #[test]
+    fn rejects_payloadless_package_without_default_component_authority() {
         let authority = AuthorityDocumentV2::empty_package_for_tests("empty-package");
         let error = validate_authority(&authority).unwrap_err();
         assert!(
-            error
-                .diagnostics
-                .iter()
-                .any(|d| d.code == V2DiagnosticCode::MissingAuthority)
+            error.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == V2DiagnosticCode::ComponentAuthorityMismatch
+            })
         );
+    }
+
+    #[test]
+    fn rejects_invalid_package_capability_authority() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("invalid-capabilities");
+        authority.capabilities = Some(crate::capability::CapabilityDeclaration {
+            version: crate::capability::CAPABILITY_SCHEMA_VERSION + 1,
+            ..Default::default()
+        });
+
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == V2DiagnosticCode::KindContractViolation
+                && diagnostic.field.as_deref() == Some("capabilities")
+        }));
     }
 
     #[test]
@@ -479,15 +615,22 @@ mod tests {
     }
 
     #[test]
-    fn dependency_entries_need_name() {
+    fn requirement_groups_need_valid_atoms() {
         let mut authority = AuthorityDocumentV2::package_for_tests("bad-dep");
-        authority.requires.push(DependencyEntryV2::package(""));
+        authority.requirements.push(
+            crate::repository::dependency_model::RepositoryRequirementGroup::simple(
+                crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+                crate::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    String::new(),
+                ),
+            ),
+        );
         let error = validate_authority(&authority).unwrap_err();
         assert!(
             error
                 .diagnostics
                 .iter()
-                .any(|d| d.field.as_deref() == Some("requires.name"))
+                .any(|d| d.field.as_deref() == Some("requirements[0]"))
         );
     }
 
@@ -520,127 +663,196 @@ mod tests {
     }
 
     #[test]
-    fn rejects_symlink_without_signed_target() {
+    fn rejects_symlink_with_invalid_signed_target() {
         let mut authority = AuthorityDocumentV2::package_for_tests("bad-link");
         let PackageKindV2::Package(data) = &mut authority.kind else {
             panic!("fixture should be package");
         };
-        data.files[0].file_type = FileTypeV2::Symlink;
-        data.files[0].symlink_target = None;
+        data.files[0].node.kind = crate::payload::PayloadNodeKind::Symlink {
+            target: String::new(),
+        };
+        data.files[0].node.mode = libc::S_IFLNK | 0o777;
+        data.files[0].content = None;
         let error = validate_authority(&authority).unwrap_err();
         assert!(
             error
                 .diagnostics
                 .iter()
-                .any(|d| d.field.as_deref() == Some("kind.package.files.symlink_target"))
+                .any(|d| d.field.as_deref() == Some("kind.package.files.node"))
         );
     }
 
     #[test]
-    fn profile_hook_can_reject_lifecycle_without_target_facts() {
-        struct RejectServices;
-        impl TargetProfileQuery for RejectServices {
-            fn service_status(&self, _service: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
+    fn rejects_unimplemented_signed_file_conflict_replacement() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("replace-conflict");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        data.files[0].conflict = ConflictPolicyV2::Replace;
 
-            fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
+        let error = validate_authority(&authority).unwrap_err();
 
-            fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("kind.package.files.conflict")
+        }));
+    }
 
-            fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
+    #[test]
+    fn rejects_unimplemented_signed_host_mutation_policy() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("host-mutation");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        data.policy.allow_host_mutation = true;
 
-            fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
+        let error = validate_authority(&authority).unwrap_err();
 
-            fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("kind.package.policy.allow_host_mutation")
+        }));
+    }
 
-            fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
-                ProfileConstraintStatus::Unsupported
-            }
-        }
+    #[test]
+    fn config_package_and_file_authority_must_match_exactly() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("config-mirror");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        let semantics = ConfigSemanticsV2 {
+            noreplace: true,
+            ghost: false,
+            remove_on_upgrade: false,
+        };
+        data.files[0].config = Some(semantics);
+        data.config.push(ConfigAuthorityV2 {
+            path: data.files[0].path.clone(),
+            semantics,
+        });
+        validate_authority(&authority).unwrap();
 
-        let mut authority = AuthorityDocumentV2::package_for_tests("svc");
-        authority.lifecycle.services.push("svc.service".to_string());
-        let error = validate_authority_with_profile(&authority, &RejectServices).unwrap_err();
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            unreachable!();
+        };
+        data.files[0].config.as_mut().unwrap().noreplace = false;
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("kind.package.files.config")
+        }));
+    }
+
+    #[test]
+    fn rejects_noncanonical_signed_config_path() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("config-path");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        let semantics = ConfigSemanticsV2 {
+            noreplace: true,
+            ghost: false,
+            remove_on_upgrade: false,
+        };
+        data.files[0].path = "/usr//bin/hello".to_string();
+        data.files[0].config = Some(semantics);
+        data.config.push(ConfigAuthorityV2 {
+            path: data.files[0].path.clone(),
+            semantics,
+        });
+
+        let error = validate_authority(&authority).unwrap_err();
+
         assert!(
-            error
-                .diagnostics
-                .iter()
-                .any(|d| d.code == V2DiagnosticCode::LifecycleUnsupported)
+            error.diagnostics.iter().any(|diagnostic| {
+                diagnostic.field.as_deref() == Some("kind.package.config.path")
+            })
         );
     }
 
-    #[derive(Debug, Clone, Copy)]
-    struct AcceptOnlyNamedService;
+    #[test]
+    fn lifecycle_authority_is_source_independent_structural_data() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("lifecycle");
+        authority.lifecycle.services = vec![LifecycleServiceV2 {
+            name: "example".to_string(),
+            action: LifecycleServiceActionV2::Restart,
+            reversible: Some(false),
+        }];
+        authority.lifecycle.systemd = vec![LifecycleSystemdV2 {
+            unit: "example.service".to_string(),
+            enable: true,
+            reversible: Some(true),
+        }];
+        authority.lifecycle.tmpfiles = vec![LifecycleTmpfilesV2 {
+            entry_type: "C+!$".to_string(),
+            path: "/var/lib/example".to_string(),
+            mode: "-".to_string(),
+            user: "-".to_string(),
+            group: "example-group".to_string(),
+            age: "~30d".to_string(),
+            argument: "/usr/share/example seed".to_string(),
+            reversible: Some(true),
+        }];
+        authority.lifecycle.sysctl = vec![LifecycleSysctlV2 {
+            key: "net.ipv4.ip_forward".to_string(),
+            value: "1".to_string(),
+            reversible: Some(false),
+        }];
+        authority.lifecycle.users = vec![LifecycleUserV2 {
+            name: "example-user".to_string(),
+            system: true,
+            home: Some("/var/lib/example".to_string()),
+            shell: Some("/usr/sbin/nologin".to_string()),
+            group: Some("example-group".to_string()),
+            reversible: Some(true),
+        }];
+        authority.lifecycle.groups = vec![LifecycleGroupV2 {
+            name: "example-group".to_string(),
+            system: true,
+            reversible: Some(true),
+        }];
+        authority.lifecycle.directories = vec![LifecycleDirectoryV2 {
+            path: "/var/lib/example".to_string(),
+            mode: "0750".to_string(),
+            owner: "example-user".to_string(),
+            group: "example-group".to_string(),
+            cleanup: Some("30d".to_string()),
+            reversible: Some(true),
+        }];
+        authority.lifecycle.alternatives = vec![LifecycleAlternativeV2 {
+            link: "/usr/bin/example".to_string(),
+            name: "example".to_string(),
+            path: "/usr/bin/example-v2".to_string(),
+            priority: 70,
+            reversible: Some(true),
+        }];
+        authority.lifecycle.script_capabilities = vec![LifecycleScriptCapabilityV2 {
+            name: "systemd-service-registration".to_string(),
+            paths: vec!["/etc/systemd/system".to_string()],
+        }];
+        authority.lifecycle.post_install = Some(LifecycleScriptV2 {
+            interpreter: "/bin/sh".to_string(),
+            body: "printf installed".to_string(),
+            capabilities: authority.lifecycle.script_capabilities.clone(),
+            reversible: Some(false),
+            execution: LifecycleScriptExecutionV2::SandboxedTargetRoot,
+        });
 
-    impl TargetProfileQuery for AcceptOnlyNamedService {
-        fn service_status(&self, service: &str) -> ProfileConstraintStatus {
-            if service == "allowed.service" {
-                ProfileConstraintStatus::Accepted
-            } else {
-                ProfileConstraintStatus::Unsupported
-            }
-        }
-
-        fn tmpfiles_status(&self, _entry: &str) -> ProfileConstraintStatus {
-            ProfileConstraintStatus::Unsupported
-        }
-
-        fn sysctl_status(&self, _key: &str) -> ProfileConstraintStatus {
-            ProfileConstraintStatus::Unsupported
-        }
-
-        fn user_status(&self, _user: &str) -> ProfileConstraintStatus {
-            ProfileConstraintStatus::Unsupported
-        }
-
-        fn group_status(&self, _group: &str) -> ProfileConstraintStatus {
-            ProfileConstraintStatus::Unsupported
-        }
-
-        fn directory_status(&self, _directory: &str) -> ProfileConstraintStatus {
-            ProfileConstraintStatus::Unsupported
-        }
-
-        fn alternative_status(&self, _alternative: &str) -> ProfileConstraintStatus {
-            ProfileConstraintStatus::Unsupported
-        }
+        validate_authority(&authority).unwrap();
     }
 
     #[test]
-    fn target_profile_rejects_all_signed_lifecycle_vectors() {
-        let mut authority = AuthorityDocumentV2::package_for_tests("lifecycle-target");
-        authority.lifecycle.services = vec!["blocked.service".to_string()];
-        authority.lifecycle.tmpfiles = vec!["blocked.conf".to_string()];
-        authority.lifecycle.sysctl = vec!["kernel.blocked".to_string()];
-        authority.lifecycle.users = vec!["blocked-user".to_string()];
-        authority.lifecycle.groups = vec!["blocked-group".to_string()];
-        authority.lifecycle.directories = vec!["/var/lib/blocked".to_string()];
-        authority.lifecycle.alternatives = vec!["blocked-alternative".to_string()];
+    fn rejects_script_contract_the_hook_executor_cannot_honor() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("lifecycle");
+        authority.lifecycle.post_install = Some(LifecycleScriptV2 {
+            interpreter: "/usr/bin/python3".to_string(),
+            body: "print('installed')".to_string(),
+            capabilities: Vec::new(),
+            reversible: None,
+            execution: LifecycleScriptExecutionV2::SandboxedTargetRoot,
+        });
 
-        let err = validate_authority_with_profile(&authority, &AcceptOnlyNamedService).unwrap_err();
-        let fields = err
-            .diagnostics
-            .iter()
-            .filter_map(|diagnostic| diagnostic.field.as_deref())
-            .collect::<Vec<_>>();
-
-        assert!(fields.contains(&"lifecycle.services"));
-        assert!(fields.contains(&"lifecycle.tmpfiles"));
-        assert!(fields.contains(&"lifecycle.sysctl"));
-        assert!(fields.contains(&"lifecycle.users"));
-        assert!(fields.contains(&"lifecycle.groups"));
-        assert!(fields.contains(&"lifecycle.directories"));
-        assert!(fields.contains(&"lifecycle.alternatives"));
+        let error = validate_authority(&authority).unwrap_err();
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("lifecycle.post_install.interpreter")
+        }));
     }
 }

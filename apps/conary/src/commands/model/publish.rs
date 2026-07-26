@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use conary_core::db;
-use conary_core::db::models::{CollectionMember, RemoteCollection, Repository, Trove, TroveType};
+use conary_core::db::models::{CollectionMember, Repository, Trove, TroveType};
 use conary_core::model::parser::SystemModel;
 use rusqlite::Connection;
 use tracing::info;
@@ -93,7 +93,7 @@ fn validate_publish_inputs(
 
 /// Publish a collection to a remote (HTTP/HTTPS) repository.
 ///
-/// The signing key path is loaded here (if provided) to avoid naming
+/// The signing key path is loaded here to avoid naming
 /// the `ed25519_dalek::SigningKey` type in shared structs.
 async fn publish_remote(
     inputs: &PublishInputs,
@@ -106,38 +106,33 @@ async fn publish_remote(
         &inputs.model,
         &inputs.group_name,
         version,
+    )?;
+    let key_path =
+        sign_key_path.ok_or_else(|| anyhow!("remote model publish requires --sign-key"))?;
+    let key = conary_core::model::signing::load_signing_key(Path::new(key_path))
+        .map_err(|e| anyhow!("Failed to load signing key: {e}"))?;
+    let key_id = conary_core::model::signing::key_id(&key.verifying_key());
+    println!("  Signing with key: {}", key_id);
+
+    let signature =
+        conary_core::model::signing::sign_collection(&data, &key).map_err(|e| anyhow!("{e}"))?;
+    println!(
+        "  Signed collection ({} bytes, key {})",
+        signature.len(),
+        key_id
     );
+    let bearer_token = crate::commands::remi_publish::resolve_remi_publish_bearer_token()?;
 
-    if let Some(key_path) = sign_key_path {
-        let key = conary_core::model::signing::load_signing_key(Path::new(key_path))
-            .map_err(|e| anyhow!("Failed to load signing key: {e}"))?;
-        let key_id = conary_core::model::signing::key_id(&key.verifying_key());
-        println!("  Signing with key: {}", key_id);
-
-        let signature = conary_core::model::signing::sign_collection(&data, &key)
-            .map_err(|e| anyhow!("{e}"))?;
-        println!(
-            "  Signed collection ({} bytes, key {})",
-            signature.len(),
-            key_id
-        );
-
-        let mut sig_cache = RemoteCollection::new(
-            inputs.group_name.clone(),
-            Some(repo_name.to_string()),
-            String::new(),
-            serde_json::to_string(&data).unwrap_or_default(),
-            "2099-12-31T23:59:59".to_string(),
-        );
-        sig_cache.version = Some(version.to_string());
-        sig_cache.signature = Some(signature);
-        sig_cache.signer_key_id = Some(key_id);
-        let _ = sig_cache.upsert(&inputs.conn);
-    }
-
-    conary_core::model::remote::publish_remote_collection(&inputs.repo_url, &data, force)
-        .await
-        .map_err(|e| anyhow!("{e}"))?;
+    conary_core::model::remote::publish_remote_collection(
+        &inputs.repo_url,
+        &data,
+        &signature,
+        &key.verifying_key().to_bytes(),
+        &bearer_token,
+        force,
+    )
+    .await
+    .map_err(|e| anyhow!("{e}"))?;
 
     let member_count = data.members.len();
     println!();
@@ -218,6 +213,7 @@ fn publish_local(
             group_name.clone(),
             version.to_string(),
             TroveType::Collection,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         trove.description = description.map(|s| s.to_string());
         trove.selection_reason = Some(format!("Published from {}", model_path_display));

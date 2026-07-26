@@ -49,16 +49,8 @@ pub(super) async fn dispatch_bootstrap_command(
             lfs_root,
             jobs,
             verbose,
-            skip_verify,
         } => {
-            commands::cmd_bootstrap_cross_tools(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            )
-            .await
+            commands::cmd_bootstrap_cross_tools(&work_dir, jobs, verbose, lfs_root.as_deref()).await
         }
 
         cli::BootstrapCommands::TempTools {
@@ -66,16 +58,8 @@ pub(super) async fn dispatch_bootstrap_command(
             lfs_root,
             jobs,
             verbose,
-            skip_verify,
         } => {
-            commands::cmd_bootstrap_temp_tools(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            )
-            .await
+            commands::cmd_bootstrap_temp_tools(&work_dir, jobs, verbose, lfs_root.as_deref()).await
         }
 
         cli::BootstrapCommands::System {
@@ -83,17 +67,7 @@ pub(super) async fn dispatch_bootstrap_command(
             lfs_root,
             jobs,
             verbose,
-            skip_verify,
-        } => {
-            commands::cmd_bootstrap_system(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            )
-            .await
-        }
+        } => commands::cmd_bootstrap_system(&work_dir, jobs, verbose, lfs_root.as_deref()).await,
 
         cli::BootstrapCommands::Config {
             work_dir,
@@ -106,17 +80,7 @@ pub(super) async fn dispatch_bootstrap_command(
             lfs_root,
             jobs,
             verbose,
-            skip_verify,
-        } => {
-            commands::cmd_bootstrap_tier2(
-                &work_dir,
-                jobs,
-                verbose,
-                skip_verify,
-                lfs_root.as_deref(),
-            )
-            .await
-        }
+        } => commands::cmd_bootstrap_tier2(&work_dir, jobs, verbose, lfs_root.as_deref()).await,
 
         cli::BootstrapCommands::GuestProfile {
             work_dir,

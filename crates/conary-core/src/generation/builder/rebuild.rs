@@ -4,12 +4,11 @@ use std::path::Path;
 
 use tracing::info;
 
+use super::BuildResult;
 use super::boot_assets::{
     resolve_generation_boot_asset_sources, stage_runtime_boot_assets_from_sources,
 };
-use super::cas::{cas_objects_from_file_refs, verify_runtime_generation_cas_object_presence};
-use super::erofs::{BuildResult, build_erofs_image};
-use super::file_capabilities::SECURITY_CAPABILITY_XATTR;
+use super::cas::{cas_objects_from_manifests, verify_runtime_generation_cas_object_presence};
 use super::root_validation::validate_runtime_generation_root_is_self_contained;
 use super::runtime_inputs;
 use super::sysroot::runtime_generation_architecture;
@@ -21,6 +20,7 @@ use crate::generation::artifact::{
 use crate::generation::metadata::{
     GENERATION_FORMAT, GenerationMetadata, clear_generation_pending,
 };
+use crate::generation::root_manifest::build_erofs_image_from_root_manifest;
 
 /// Rebuild the EROFS image for an existing generation without allocating a
 /// new state number. Used by recovery to restore a generation that was already
@@ -61,33 +61,25 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 
     let troves = Trove::list_all(conn)?;
     let all_files = FileEntry::find_all_ordered(conn)?;
-    let runtime_inputs =
-        runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files)?;
-    let security_capability_xattr_count = runtime_inputs
-        .file_refs
-        .iter()
-        .filter(|file| file.xattrs.contains_key(SECURITY_CAPABILITY_XATTR))
-        .count();
-
-    validate_runtime_generation_root_is_self_contained(
-        &runtime_inputs.file_refs,
-        &runtime_inputs.symlink_refs,
-    )?;
-    let cas_objects =
-        deduplicate_sort_cas_objects(cas_objects_from_file_refs(&runtime_inputs.file_refs))?;
-    verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
-    let result = build_erofs_image(
-        &runtime_inputs.file_refs,
-        &runtime_inputs.symlink_refs,
-        &gen_dir,
-    )?;
-    let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources = resolve_generation_boot_asset_sources(
+    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(
+        conn,
         &troves,
-        &runtime_inputs,
-        generations_root,
-        boot_root,
+        all_files,
+        Path::new("/"),
     )?;
+    let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
+
+    validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
+    let cas_objects = deduplicate_sort_cas_objects(cas_objects_from_manifests(
+        &runtime_inputs.generation,
+        &runtime_inputs.state,
+    ))?;
+    verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
+    let result = build_erofs_image_from_root_manifest(&runtime_inputs.generation, &gen_dir)?;
+    runtime_inputs.state.write_to(&gen_dir)?;
+    let architecture = runtime_generation_architecture()?;
+    let boot_asset_sources =
+        resolve_generation_boot_asset_sources(&runtime_inputs, generations_root, boot_root)?;
     let kernel_version = boot_asset_sources.kernel_version.clone();
     let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,
@@ -101,7 +93,6 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_objects,
         cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
     })?;
@@ -146,34 +137,36 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 #[cfg(all(test, feature = "composefs-rs"))]
 mod tests {
     use super::super::test_support::{
-        assert_invalid_runtime_input_error, assert_missing_cas_object_error,
-        runtime_generation_db_with_invalid_regular_file,
+        assert_cas_size_mismatch_error, assert_missing_cas_object_error,
+        insert_regular_file_with_parents,
         runtime_generation_db_with_missing_regular_file_cas_object,
+        runtime_generation_db_with_wrong_sized_regular_file_cas_object,
     };
     use super::*;
     use crate::ccs::manifest::FileCapability;
-    use crate::db::models::{FileEntry, InstalledFileCapability, Trove, TroveType};
-    use crate::db::schema::migrate;
+    use crate::db::models::{InstalledFileCapability, Trove, TroveType};
+    use crate::db::schema::ensure_current;
     use crate::filesystem::CasStore;
+    use crate::generation::builder::file_capabilities::SECURITY_CAPABILITY_XATTR;
     use crate::generation::metadata::{is_generation_pending, mark_generation_pending};
 
     #[cfg(feature = "composefs-rs")]
     #[test]
-    fn rebuild_generation_image_rejects_invalid_runtime_input() {
-        let (_tmp, conn, generations_root, boot_root) =
-            runtime_generation_db_with_invalid_regular_file();
+    fn rebuild_generation_image_rejects_wrong_sized_regular_file_cas_object() {
+        let (_tmp, conn, generations_root, boot_root, bad_hash) =
+            runtime_generation_db_with_wrong_sized_regular_file_cas_object();
 
         let error = rebuild_generation_image_with_boot_root(
             &conn,
             &generations_root,
             7,
-            "invalid runtime input",
+            "wrong-sized runtime CAS object",
             &boot_root,
         )
         .unwrap_err()
         .to_string();
 
-        assert_invalid_runtime_input_error(&error);
+        assert_cas_size_mismatch_error(&error, &bad_hash);
         assert!(!generations_root.join("7/.conary-artifact.json").exists());
     }
     #[cfg(feature = "composefs-rs")]
@@ -216,30 +209,31 @@ mod tests {
         let hello_hash = cas.store(b"hello").unwrap();
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         let mut trove = Trove::new(
             "kernel-core".to_string(),
             "6.19.8-conary".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = FileEntry::new(
-            "/usr/bin/hello".to_string(),
+        insert_regular_file_with_parents(
+            &conn,
+            "/usr/bin/hello",
             hello_hash,
-            b"hello".len() as i64,
+            b"hello".len(),
             0o100755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
             init_hash,
-            b"init".len() as i64,
+            b"init".len(),
             0o100755,
             trove_id,
         );
-        init.insert(&conn).unwrap();
 
         rebuild_generation_image_with_boot_root(
             &conn,
@@ -274,30 +268,31 @@ mod tests {
         let hello_hash = cas.store(b"hello").unwrap();
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = FileEntry::new(
-            "/usr/bin/hello".to_string(),
+        insert_regular_file_with_parents(
+            &conn,
+            "/usr/bin/hello",
             hello_hash,
-            b"hello".len() as i64,
+            b"hello".len(),
             0o755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
             init_hash,
-            b"init".len() as i64,
+            b"init".len(),
             0o755,
             trove_id,
         );
-        init.insert(&conn).unwrap();
 
         InstalledFileCapability::replace_for_trove(
             &conn,

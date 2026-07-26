@@ -40,6 +40,7 @@
 
 pub mod auth;
 pub mod client;
+mod config;
 pub mod enhance;
 pub mod jobs;
 pub mod lock;
@@ -57,8 +58,7 @@ use tokio::sync::broadcast;
 
 pub use auth::{Action, AuditEntry, AuditLogger, AuthChecker, PeerCredentials, Permission};
 pub use client::{DaemonClient, should_forward_to_daemon, try_connect};
-/// Shared operation kind, re-exported for daemon job terminology.
-pub use conary_core::OperationKind as JobKind;
+pub use config::DaemonConfig;
 pub use enhance::{
     EnhanceJobResult, EnhanceJobSpec, EnhancedPackageResult, enhancement_background_worker,
     execute_enhance_job,
@@ -70,97 +70,24 @@ pub use systemd::{
     notify_ready, notify_status, notify_stopping, notify_watchdog,
 };
 
-/// Daemon configuration
-#[derive(Debug, Clone)]
-pub struct DaemonConfig {
-    /// Path to Unix socket (default: /run/conary/conaryd.sock)
-    pub socket_path: PathBuf,
-    /// Socket file mode (default: 0o660)
-    pub socket_mode: u32,
-    /// Socket group (default: wheel/sudo)
-    pub socket_group: Option<String>,
-    /// Enable TCP listener (default: false)
-    pub enable_tcp: bool,
-    /// TCP bind address (default: 127.0.0.1:7890)
-    pub tcp_bind: Option<String>,
-    /// Database path
-    pub db_path: PathBuf,
-    /// Root filesystem path (usually "/")
-    pub root: PathBuf,
-    /// Path to daemon lock file
-    pub lock_path: PathBuf,
-    /// Maximum concurrent read operations (writes are always serialized)
-    pub max_concurrent_reads: usize,
-    /// Enable automation scheduler
-    pub enable_automation: bool,
-    /// Keep non-root write authorization fail-closed behind the PolicyKit stub
-    pub require_polkit: bool,
-    /// Exit after idle timeout (for socket activation)
-    pub idle_timeout_secs: Option<u64>,
+/// Closed set of job kinds that conaryd can execute in the current API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    Install,
+    Remove,
+    Update,
+    Enhance,
 }
 
-impl DaemonConfig {
-    pub const DEFAULT_SOCKET_PATH: &'static str = "/run/conary/conaryd.sock";
-    pub const DEFAULT_SOCKET_MODE: u32 = 0o660;
-    pub const DEFAULT_TCP_BIND: &'static str = "127.0.0.1:7890";
-    pub const DEFAULT_DB_PATH: &'static str = "/var/lib/conary/conary.db";
-
-    pub fn default_socket_path() -> PathBuf {
-        PathBuf::from(Self::DEFAULT_SOCKET_PATH)
-    }
-
-    pub fn default_db_path() -> PathBuf {
-        PathBuf::from(Self::DEFAULT_DB_PATH)
-    }
-
-    pub fn default_tcp_bind() -> String {
-        Self::DEFAULT_TCP_BIND.to_string()
-    }
-}
-
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            socket_path: Self::default_socket_path(),
-            socket_mode: Self::DEFAULT_SOCKET_MODE,
-            socket_group: None, // Will try wheel, then sudo
-            enable_tcp: false,
-            tcp_bind: Some(Self::default_tcp_bind()),
-            db_path: Self::default_db_path(),
-            root: PathBuf::from("/"),
-            lock_path: PathBuf::from(SystemLock::DEFAULT_PATH),
-            max_concurrent_reads: 8,
-            enable_automation: true,
-            require_polkit: true,
-            idle_timeout_secs: None,
+impl JobKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Remove => "remove",
+            Self::Update => "update",
+            Self::Enhance => "enhance",
         }
-    }
-}
-
-impl DaemonConfig {
-    /// Create a new configuration with a custom database path
-    pub fn with_db_path<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.db_path = path.into();
-        self
-    }
-
-    /// Set the socket path
-    pub fn with_socket_path<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.socket_path = path.into();
-        self
-    }
-
-    /// Enable or disable TCP listener
-    pub fn with_tcp(mut self, enable: bool, bind: Option<String>) -> Self {
-        self.enable_tcp = enable;
-        self.tcp_bind = bind;
-        self
-    }
-
-    /// Set idle timeout for socket activation
-    pub fn with_idle_timeout(mut self, secs: u64) -> Self {
-        self.idle_timeout_secs = Some(secs);
-        self
     }
 }
 
@@ -400,8 +327,6 @@ pub enum DaemonEvent {
         trove_id: i64,
         /// Human-readable package name.
         package_name: String,
-        /// Whether capability metadata was inferred during enhancement.
-        capabilities_inferred: bool,
     },
     /// Enhancement failed for a package.
     EnhancementFailed {
@@ -466,7 +391,7 @@ pub struct DaemonState {
     db_path: PathBuf,
     /// When the daemon started (for uptime tracking)
     start_time: std::time::Instant,
-    /// Pre-built auth checker (respects config.require_polkit)
+    /// Pre-built authorization checker for the configured socket group
     pub auth_checker: auth::AuthChecker,
 }
 
@@ -503,20 +428,20 @@ impl DaemonState {
     /// # Arguments
     /// * `config` - Daemon configuration
     /// * `system_lock` - Pre-acquired system lock
-    pub fn new(config: DaemonConfig, system_lock: SystemLock) -> Self {
+    pub fn new(config: DaemonConfig, system_lock: SystemLock) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(1024);
         let db_path = config.db_path.clone();
 
-        // Create AuthChecker once, respecting the config's require_polkit setting.
-        // This avoids per-request getgrnam syscalls and ensures disable_polkit is
-        // actually wired through.
-        let auth_checker = if config.require_polkit {
-            auth::AuthChecker::new()
+        // Resolve the exact group once at startup. The same configured name is
+        // used to own the socket and authorize its primary/supplementary group
+        // members, so a missing or renamed group fails startup.
+        let auth_checker = if let Some(group) = config.socket_group.as_deref() {
+            auth::AuthChecker::new().add_trusted_gid(socket::lookup_group_gid(group)?)
         } else {
-            auth::AuthChecker::new().disable_polkit()
+            auth::AuthChecker::new()
         };
 
-        Self {
+        Ok(Self {
             config,
             system_lock,
             queue: OperationQueue::new(),
@@ -525,7 +450,7 @@ impl DaemonState {
             db_path,
             start_time: std::time::Instant::now(),
             auth_checker,
-        }
+        })
     }
 
     /// Get daemon uptime in seconds
@@ -624,11 +549,17 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
         // Execute the job based on its kind
         let result: std::result::Result<Option<serde_json::Value>, String> = match job_kind {
             JobKind::Enhance => {
-                let spec: enhance::EnhanceJobSpec =
-                    serde_json::from_value(job.spec.clone()).unwrap_or_default();
-                match enhance::execute_enhance_job(state.clone(), spec, cancel_token).await {
-                    Ok(r) => Ok(serde_json::to_value(r).ok()),
-                    Err(e) => Err(e.to_string()),
+                match serde_json::from_value::<enhance::EnhanceJobSpec>(job.spec.clone()) {
+                    Ok(spec) => {
+                        match enhance::execute_enhance_job(state.clone(), spec, cancel_token).await
+                        {
+                            Ok(result) => serde_json::to_value(result)
+                                .map(Some)
+                                .map_err(|error| format!("serialize enhance job result: {error}")),
+                            Err(error) => Err(error.to_string()),
+                        }
+                    }
+                    Err(error) => Err(format!("invalid enhance job specification: {error}")),
                 }
             }
             JobKind::Install | JobKind::Remove | JobKind::Update => {
@@ -641,17 +572,12 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                 )
                 .await
                 {
-                    Ok(r) => Ok(serde_json::to_value(r).ok()),
-                    Err(e) => Err(e.to_string()),
+                    Ok(result) => serde_json::to_value(result)
+                        .map(Some)
+                        .map_err(|error| format!("serialize package job result: {error}")),
+                    Err(error) => Err(error.to_string()),
                 }
             }
-            // TODO: Implement Rollback, Verify, GarbageCollect, and DryRun job
-            // execution. These remain rejected at their API boundaries; this
-            // fallback provides defense-in-depth for manually seeded jobs.
-            _ => Err(format!(
-                "Job kind '{}' execution not yet implemented",
-                job_kind.as_str()
-            )),
         };
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -920,7 +846,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     log::info!("Daemon PID: {}", std::process::id());
 
     // Create daemon state
-    let state = Arc::new(DaemonState::new(config.clone(), system_lock));
+    let state = Arc::new(DaemonState::new(config.clone(), system_lock)?);
 
     // Re-enqueue any jobs that were left in 'queued' state from a previous
     // daemon run (e.g. after a crash or SIGKILL).  Jobs that were 'running'
@@ -984,58 +910,4 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config_uses_canonical_daemon_defaults() {
-        let config = DaemonConfig::default();
-
-        assert_eq!(config.db_path, PathBuf::from(DaemonConfig::DEFAULT_DB_PATH));
-        assert_eq!(
-            config.socket_path,
-            PathBuf::from(DaemonConfig::DEFAULT_SOCKET_PATH)
-        );
-        assert_eq!(config.lock_path, PathBuf::from(SystemLock::DEFAULT_PATH));
-        assert_eq!(config.socket_mode, DaemonConfig::DEFAULT_SOCKET_MODE);
-        assert_eq!(
-            config.tcp_bind.as_deref(),
-            Some(DaemonConfig::DEFAULT_TCP_BIND)
-        );
-        assert!(!config.enable_tcp);
-    }
-
-    #[test]
-    fn test_daemon_error_serialization() {
-        let error = DaemonError::not_found("package nginx");
-        let json = serde_json::to_string(&error).unwrap();
-
-        assert!(json.contains("not_found"));
-        assert!(json.contains("nginx"));
-    }
-
-    #[test]
-    fn test_daemon_event_serialization() {
-        let event = DaemonEvent::JobProgress {
-            job_id: "test-123".to_string(),
-            current: 50,
-            total: 100,
-            message: "Installing nginx".to_string(),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-
-        assert!(json.contains("job_progress"));
-        assert!(json.contains("test-123"));
-        assert!(json.contains("Installing nginx"));
-    }
-
-    #[test]
-    fn test_job_status() {
-        let status = JobStatus::Running;
-        let json = serde_json::to_string(&status).unwrap();
-        assert_eq!(json, "\"running\"");
-
-        let parsed: JobStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, JobStatus::Running);
-    }
-}
+mod tests;

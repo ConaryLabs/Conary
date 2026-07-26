@@ -2,11 +2,12 @@
 
 use crate::db::models::{
     Repository, RepositoryPackage, RepositoryPackageKey, RepositoryPackageKeyStatus,
-    RepositoryProvide, RepositoryRequirement,
+    RepositoryProvide,
 };
 use crate::error::{Error, Result};
 use crate::hash::sha256;
 use crate::repository::sync::types::{RepositorySyncSnapshot, SyncedPackageRow};
+use crate::repository::sync::{capability_kind_to_db, convert_requirement_groups};
 use crate::trust::metadata::{TargetDescription, VerifiedTufState};
 
 use super::{PackageKeyStatus, PackageKeysFile, RepoLocation, StaticIndex, StaticPackageEntry};
@@ -154,6 +155,7 @@ fn static_package_row(
         repo_id,
         entry.name.clone(),
         entry.version.clone(),
+        entry.version_scheme,
         entry.sha256.clone(),
         i64::try_from(entry.size).map_err(|_| {
             Error::ParseError(format!("package.size {} exceeds i64::MAX", entry.size))
@@ -162,13 +164,9 @@ fn static_package_row(
             .join_display(&entry.path)
             .map_err(|error| Error::ParseError(format!("Invalid static package path: {error}")))?,
     );
+    package.package_release = entry.release.clone();
     package.architecture = Some(entry.arch.clone());
     package.description = entry.description.clone();
-    package.dependencies = if entry.dependencies.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_string(&entry.dependencies)?)
-    };
     package.metadata = Some(
         serde_json::json!({
             "release": entry.release,
@@ -177,25 +175,32 @@ fn static_package_row(
         .to_string(),
     );
 
-    let provides = vec![RepositoryProvide::new(
-        0,
-        entry.name.clone(),
-        Some(entry.version.clone()),
-        "package".to_string(),
-        Some(entry.name.clone()),
-    )];
-    let requirements = entry
-        .dependencies
+    let provides = entry
+        .provides
         .iter()
-        .filter_map(|dependency| static_requirement(dependency))
+        .map(|provide| {
+            RepositoryProvide::new(
+                0,
+                provide.name.clone(),
+                provide.version.clone(),
+                capability_kind_to_db(provide.kind),
+                provide.native_text.clone(),
+                entry.version_scheme,
+            )
+            .with_version_relation(provide.version_relation)
+            .with_architecture_qualifier(provide.architecture_qualifier.clone())
+        })
         .collect();
+    let mut all_groups = entry.requirements.clone();
+    all_groups.extend(entry.relations.clone());
+    let (requirement_groups, requirement_group_clauses) =
+        convert_requirement_groups(0, &all_groups);
 
     Ok(SyncedPackageRow {
         package,
         provides,
-        requirements,
-        requirement_groups: Vec::new(),
-        requirement_group_clauses: Vec::new(),
+        requirement_groups,
+        requirement_group_clauses,
     })
 }
 
@@ -225,46 +230,16 @@ fn verify_package_target(entry: &StaticPackageEntry, verified: &VerifiedTufState
     Ok(())
 }
 
-fn static_requirement(raw: &str) -> Option<RepositoryRequirement> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    let (capability, version_constraint) = split_dependency(raw);
-    Some(RepositoryRequirement::new(
-        0,
-        capability,
-        version_constraint,
-        "package".to_string(),
-        "runtime".to_string(),
-        Some(raw.to_string()),
-    ))
-}
-
-fn split_dependency(raw: &str) -> (String, Option<String>) {
-    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
-
-    for op in OPS {
-        if let Some((name, version)) = raw.split_once(op) {
-            let name = name.trim();
-            let version = version.trim();
-            if name.is_empty() || version.is_empty() {
-                continue;
-            }
-            return (name.to_string(), Some(format!("{op} {version}")));
-        }
-    }
-
-    (raw.to_string(), None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::fetch_static_sync_snapshot;
     use crate::ccs::signing::SigningKeyPair;
     use crate::db::models::{Repository, RepositoryPackageKeyStatus};
     use crate::hash::sha256;
+    use crate::repository::dependency_model::{
+        RepositoryCapabilityKind, RepositoryProvide, RepositoryRequirementClause,
+        RepositoryRequirementGroup, RepositoryRequirementKind,
+    };
     use crate::repository::sync::types::RepositorySyncSnapshot;
     use crate::trust::metadata::{TargetDescription, VerifiedTufState};
     use std::collections::BTreeMap;
@@ -320,6 +295,8 @@ mod tests {
 
         fn write_valid_index(&mut self, index_version: u64) {
             let package_sha = sha256(&self.package_bytes);
+            let provides = Self::typed_provides();
+            let requirements = Self::typed_requirements();
             let index = serde_json::json!({
                 "schema": 1,
                 "name": "acme-tools",
@@ -328,13 +305,16 @@ mod tests {
                 "packages": [{
                     "name": "acme-widget",
                     "version": "1.4.2",
+                    "version_scheme": "conary",
                     "release": "1",
                     "arch": "x86_64",
                     "path": PACKAGE_PATH,
                     "sha256": package_sha,
                     "size": self.package_bytes.len() as u64,
                     "description": "Widget frobnicator",
-                    "dependencies": ["libfoo >= 2.0", "libbar"]
+                    "provides": provides,
+                    "requirements": requirements,
+                    "relations": []
                 }]
             });
             self.write_bytes(
@@ -345,6 +325,8 @@ mod tests {
 
         fn write_index_with_path(&mut self, path: &str) {
             let package_sha = sha256(&self.package_bytes);
+            let provides = Self::typed_provides();
+            let requirements = Self::typed_requirements();
             let index = serde_json::json!({
                 "schema": 1,
                 "name": "acme-tools",
@@ -353,17 +335,59 @@ mod tests {
                 "packages": [{
                     "name": "acme-widget",
                     "version": "1.4.2",
+                    "version_scheme": "conary",
                     "release": "1",
                     "arch": "x86_64",
                     "path": path,
                     "sha256": package_sha,
-                    "size": self.package_bytes.len() as u64
+                    "size": self.package_bytes.len() as u64,
+                    "provides": provides,
+                    "requirements": requirements,
+                    "relations": []
                 }]
             });
             self.write_bytes(
                 "index.json",
                 serde_json::to_string(&index).unwrap().as_bytes(),
             );
+        }
+
+        fn typed_provides() -> Vec<RepositoryProvide> {
+            vec![
+                RepositoryProvide::package_name(
+                    "acme-widget".to_string(),
+                    Some("1.4.2".to_string()),
+                ),
+                RepositoryProvide {
+                    name: "widget-api".to_string(),
+                    kind: RepositoryCapabilityKind::Generic,
+                    version: Some("3".to_string()),
+                    version_relation: Some(
+                        crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                    ),
+                    architecture_qualifier:
+                        crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+                    native_text: Some("widget-api = 3".to_string()),
+                },
+            ]
+        }
+
+        fn typed_requirements() -> Vec<RepositoryRequirementGroup> {
+            vec![
+                RepositoryRequirementGroup::simple(
+                    RepositoryRequirementKind::Depends,
+                    RepositoryRequirementClause::versioned(
+                        "libfoo".to_string(),
+                        ">= 2.0.0".to_string(),
+                    ),
+                )
+                .with_native_text("libfoo >= 2.0.0".to_string()),
+                RepositoryRequirementGroup::simple(
+                    RepositoryRequirementKind::Depends,
+                    RepositoryRequirementClause::name_only("libbar".to_string()),
+                )
+                .with_native_text("libbar".to_string()),
+            ]
         }
 
         fn write_valid_package_keys(&mut self) {
@@ -472,7 +496,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verified_static_index_maps_packages_keys_dependencies_and_self_provides() {
+    async fn verified_static_index_maps_typed_requirements_and_provides() {
         let fixture = StaticSyncFixture::new();
 
         let snapshot = fetch_static_sync_snapshot(&fixture.repo, &fixture.verified())
@@ -504,27 +528,34 @@ mod tests {
         assert_eq!(row.package.version, "1.4.2");
         assert_eq!(row.package.architecture.as_deref(), Some("x86_64"));
         assert_eq!(
-            row.package.dependencies.as_deref(),
-            Some(r#"["libfoo >= 2.0","libbar"]"#)
-        );
-        assert_eq!(
             row.package.download_url,
             fixture.root().join(PACKAGE_PATH).display().to_string()
         );
         assert!(row.provides.iter().any(|provide| {
             provide.capability == "acme-widget"
                 && provide.version.as_deref() == Some("1.4.2")
-                && provide.raw.as_deref() == Some("acme-widget")
+                && provide.raw.is_none()
         }));
-        assert!(row.requirements.iter().any(|requirement| {
+        assert!(row.provides.iter().any(|provide| {
+            provide.capability == "widget-api"
+                && provide.version.as_deref() == Some("3")
+                && provide.kind == "generic"
+        }));
+        assert_eq!(row.requirement_groups.len(), 2);
+        let clauses = row
+            .requirement_group_clauses
+            .iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert!(clauses.iter().any(|requirement| {
             requirement.capability == "libfoo"
-                && requirement.version_constraint.as_deref() == Some(">= 2.0")
-                && requirement.raw.as_deref() == Some("libfoo >= 2.0")
+                && requirement.version_constraint.as_deref() == Some(">= 2.0.0")
+                && requirement.raw.is_none()
         }));
-        assert!(row.requirements.iter().any(|requirement| {
+        assert!(clauses.iter().any(|requirement| {
             requirement.capability == "libbar"
                 && requirement.version_constraint.is_none()
-                && requirement.raw.as_deref() == Some("libbar")
+                && requirement.raw.is_none()
         }));
     }
 

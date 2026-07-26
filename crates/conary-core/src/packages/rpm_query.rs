@@ -6,10 +6,19 @@
 //! using the `rpm` command-line tool.
 
 use crate::error::{Error, Result};
-use crate::packages::query_common::{DependencyInfo, InstalledFileInfo, run_query_command};
-use std::collections::HashMap;
+use crate::packages::InstalledPackageIdentity;
+use crate::packages::install_reason::{InstallReasonAuthorityError, query_package_names};
+use crate::packages::query_common::{InstalledFileInfo, InstalledPackageRecord, run_query_command};
+use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::requirement::parse_native_requirement;
+use crate::repository::versioning::VersionScheme;
+use std::collections::HashSet;
 use std::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
+
+const RPM_PACKAGE_RECORD_FORMAT: &str = "%{NEVRA}\x1e%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f";
+const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1f]";
+const RPM_OWNER_RECORD_FORMAT: &str = "%{NAME}\x1f";
 
 /// Information about an installed RPM package
 #[derive(Debug, Clone)]
@@ -59,33 +68,14 @@ impl InstalledRpmInfo {
     }
 }
 
-/// List all installed package names
-pub fn list_installed_packages() -> Result<Vec<String>> {
-    debug!("Querying installed RPM packages");
-
-    let stdout = run_query_command("rpm", &["-qa", "--queryformat", "%{NAME}\n"])?;
-    let packages: Vec<String> = stdout
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    debug!("Found {} installed packages", packages.len());
-    Ok(packages)
-}
-
 /// Query detailed information about an installed package
-pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
+pub fn query_package(name: &str) -> Result<InstalledPackageRecord<InstalledRpmInfo>> {
     debug!("Querying package info: {}", name);
 
     // ASCII record/unit separators keep multiline descriptions unambiguous.
     let output = Command::new("rpm")
-        .args([
-            "-q",
-            name,
-            "--queryformat",
-            "%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f",
-        ])
+        .args(["-q", name, "--queryformat", RPM_PACKAGE_RECORD_FORMAT])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
 
@@ -96,62 +86,88 @@ pub fn query_package(name: &str) -> Result<InstalledRpmInfo> {
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let records = split_package_query_records(&stdout);
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("rpm output is not UTF-8: {error}")))?;
+    let mut records = parse_package_query_records(&stdout)?;
     if records.len() > 1 {
         let variants = records
             .iter()
-            .filter(|parts| parts.len() >= 5)
-            .map(|parts| format!("{} [{}]", parts[0], parts[4]))
+            .map(|record| record.identity.selector().to_string())
             .collect::<Vec<_>>()
             .join(", ");
         return Err(Error::ConflictError(format!(
-            "Package '{name}' matches multiple installed RPM variants: {variants}. Use an architecture-qualified native package name."
+            "Package '{name}' matches multiple installed RPM variants: {variants}. Use one exact installed NEVRA selector."
         )));
     }
-    let parts = records.first().cloned().unwrap_or_default();
-
-    if parts.len() < 8 {
-        return Err(Error::InitError(format!(
-            "Unexpected rpm output format for package '{name}'"
-        )));
-    }
-
-    let epoch = parts.get(3).and_then(|s| {
-        if *s == "(none)" || s.is_empty() {
-            None
-        } else {
-            s.parse().ok()
-        }
-    });
-
-    Ok(InstalledRpmInfo {
-        name: parts[0].to_string(),
-        version: parts[1].to_string(),
-        release: parts[2].to_string(),
-        epoch,
-        arch: parts
-            .get(4)
-            .and_then(rpm_none_to_option)
-            .unwrap_or_else(|| "noarch".to_string()),
-        description: parts.get(5).and_then(rpm_none_to_option),
-        summary: parts.get(6).and_then(rpm_none_to_option),
-        license: parts.get(7).and_then(rpm_none_to_option),
-        url: parts.get(8).and_then(rpm_none_to_option),
-        vendor: parts.get(9).and_then(rpm_none_to_option),
-        source_rpm: parts.get(10).and_then(rpm_none_to_option),
-        build_host: parts.get(11).and_then(rpm_none_to_option),
-        install_time: parts.get(12).and_then(rpm_none_to_option),
-    })
+    records
+        .pop()
+        .ok_or_else(|| Error::NotFound(format!("Package '{name}' returned no RPM database record")))
 }
 
-fn split_package_query_records(output: &str) -> Vec<Vec<&str>> {
+fn parse_package_query_records(
+    output: &str,
+) -> Result<Vec<InstalledPackageRecord<InstalledRpmInfo>>> {
+    let mut selectors = HashSet::new();
     output
         .split('\x1f')
-        .map(|record| record.trim_matches(['\r', '\n']))
         .filter(|record| !record.is_empty())
-        .map(|record| record.split('\x1e').collect())
+        .enumerate()
+        .map(|(index, record)| {
+            let parts = record.split('\x1e').collect::<Vec<_>>();
+            if parts.len() != 14 {
+                return Err(Error::ParseError(format!(
+                    "RPM inventory record {} has {} fields; expected exactly 14",
+                    index + 1,
+                    parts.len()
+                )));
+            }
+            let epoch = match parts[4] {
+                "" | "(none)" => None,
+                value => Some(value.parse::<u64>().map_err(|error| {
+                    Error::ParseError(format!(
+                        "RPM inventory record {} has invalid epoch {value:?}: {error}",
+                        index + 1
+                    ))
+                })?),
+            };
+            let identity = InstalledPackageIdentity::rpm(
+                parts[0], parts[1], epoch, parts[2], parts[3], parts[5],
+            )?;
+            if !selectors.insert(identity.selector().to_string()) {
+                return Err(Error::ConflictError(format!(
+                    "RPM inventory repeated exact NEVRA selector '{}'",
+                    identity.selector()
+                )));
+            }
+            Ok(InstalledPackageRecord {
+                info: InstalledRpmInfo {
+                    name: parts[1].to_string(),
+                    version: parts[2].to_string(),
+                    release: parts[3].to_string(),
+                    epoch,
+                    arch: required_rpm_field(parts[5], index + 1, "ARCH")?,
+                    description: rpm_none_to_option(&parts[6]),
+                    summary: rpm_none_to_option(&parts[7]),
+                    license: rpm_none_to_option(&parts[8]),
+                    url: rpm_none_to_option(&parts[9]),
+                    vendor: rpm_none_to_option(&parts[10]),
+                    source_rpm: rpm_none_to_option(&parts[11]),
+                    build_host: rpm_none_to_option(&parts[12]),
+                    install_time: rpm_none_to_option(&parts[13]),
+                },
+                identity,
+            })
+        })
         .collect()
+}
+
+fn required_rpm_field(value: &str, record: usize, field: &str) -> Result<String> {
+    if value.is_empty() || value == "(none)" {
+        return Err(Error::ParseError(format!(
+            "RPM inventory record {record} has no required {field} field"
+        )));
+    }
+    Ok(value.to_string())
 }
 
 /// Query files belonging to an installed package
@@ -160,7 +176,8 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
     // Use --dump format: path size mtime digest mode owner group ...
     let output = Command::new("rpm")
-        .args(["-ql", "--dump", name])
+        .args(["-q", name, "--queryformat", RPM_FILE_RECORD_FORMAT])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
 
@@ -171,12 +188,9 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         )));
     }
 
-    let mut files = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some(info) = parse_rpm_dump_line(line) {
-            files.push(info);
-        }
-    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("rpm file output is not UTF-8: {error}")))?;
+    let files = parse_rpm_file_records(&stdout)?;
 
     debug!("Found {} files for package {}", files.len(), name);
     Ok(files)
@@ -191,207 +205,105 @@ fn rpm_none_to_option(s: &&str) -> Option<String> {
     }
 }
 
-/// Parse a single line from `rpm --dump` output
-///
-/// Format: path size mtime digest mode owner group isconfig isdoc rdev symlink_target
-///
-/// The challenge is that `path` and `symlink_target` can contain spaces.
-/// We find the digest (64 hex chars) as an anchor point and parse around it.
-fn parse_rpm_dump_line(line: &str) -> Option<InstalledFileInfo> {
-    // Find the digest field - it's always 64 hex characters
-    // We scan for " " + 64 hex chars + " "
-    let (digest_start, digest_end) = find_digest_position(line)?;
-
-    // Everything before the digest pattern has: path + size + mtime
-    let before_digest = &line[..digest_start];
-
-    // Parse backwards from before_digest to find size and mtime
-    let before_parts: Vec<&str> = before_digest.rsplitn(3, ' ').collect();
-    if before_parts.len() < 3 {
-        return None;
-    }
-
-    // rsplitn reverses: [mtime, size, path_with_possible_spaces]
-    let mtime_str = before_parts[0];
-    let size_str = before_parts[1];
-    let path = before_parts[2].to_string();
-
-    let size: i64 = size_str.parse().ok()?;
-    let mtime: Option<i64> = mtime_str.parse().ok();
-
-    // Get the digest
-    let digest_str = &line[digest_start + 1..digest_end]; // +1 to skip leading space
-    let digest = if digest_str == "0000000000000000000000000000000000000000000000000000000000000000"
-    {
-        None
-    } else {
-        Some(digest_str.to_string())
-    };
-
-    // Everything after the digest: mode owner group isconfig isdoc rdev symlink_target
-    let after_digest = &line[digest_end + 1..]; // +1 for the space after digest
-    let after_parts: Vec<&str> = after_digest.splitn(7, ' ').collect();
-
-    if after_parts.len() < 6 {
-        return None;
-    }
-
-    let mode = i32::from_str_radix(after_parts[0], 8).unwrap_or(0o644);
-    let user = Some(after_parts[1].to_string());
-    let group = Some(after_parts[2].to_string());
-    // isconfig = after_parts[3], isdoc = after_parts[4], rdev = after_parts[5]
-
-    // Symlink target is everything after rdev (field 6 onwards, joined back)
-    let link_target = if after_parts.len() > 6 {
-        let target = after_parts[6..].join(" ");
-        if target == "X" || target.is_empty() {
-            None
-        } else {
-            Some(target)
-        }
-    } else {
-        None
-    };
-
-    Some(InstalledFileInfo {
-        path,
-        size,
-        mode,
-        mtime,
-        digest,
-        user,
-        group,
-        link_target,
-    })
-}
-
-/// Find the position of the 64-character hex digest in an RPM dump line
-///
-/// Returns (start, end) positions where start is the space before the digest
-/// and end is the last character of the digest (before the trailing space).
-fn find_digest_position(line: &str) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-
-    // We need at least " " + 64 chars + " " = 66 characters
-    if len < 66 {
-        return None;
-    }
-
-    // Scan for a 64-character hex string surrounded by spaces
-    // Start from a reasonable position (after at least a path character)
-    for i in 1..len.saturating_sub(65) {
-        // Check if we have space + 64 hex chars + space
-        if bytes[i] == b' ' && i + 65 < len && bytes[i + 65] == b' ' {
-            // Verify all 64 characters are hex digits
-            let potential_digest = &line[i + 1..i + 65];
-            if potential_digest.len() == 64
-                && potential_digest.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                return Some((i, i + 65));
+fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
+    output
+        .split('\x1f')
+        .filter(|record| !record.is_empty())
+        .enumerate()
+        .map(|(index, record)| {
+            let parts = record.split('\x1e').collect::<Vec<_>>();
+            if parts.len() != 8 {
+                return Err(Error::ParseError(format!(
+                    "RPM file record {} has {} fields; expected exactly 8",
+                    index + 1,
+                    parts.len()
+                )));
             }
-        }
-    }
-
-    None
+            if parts[0].is_empty() {
+                return Err(Error::ParseError(format!(
+                    "RPM file record {} has an empty path",
+                    index + 1
+                )));
+            }
+            let size = parts[1].parse::<i64>().map_err(|error| {
+                Error::ParseError(format!(
+                    "RPM file record {} has invalid size {:?}: {error}",
+                    index + 1,
+                    parts[1]
+                ))
+            })?;
+            let mtime = parts[2].parse::<i64>().map_err(|error| {
+                Error::ParseError(format!(
+                    "RPM file record {} has invalid mtime {:?}: {error}",
+                    index + 1,
+                    parts[2]
+                ))
+            })?;
+            let digest = match parts[3] {
+                "" | "(none)" => None,
+                value
+                    if value.len() % 2 == 0
+                        && value.chars().all(|character| character.is_ascii_hexdigit()) =>
+                {
+                    Some(value.to_string())
+                }
+                value => {
+                    return Err(Error::ParseError(format!(
+                        "RPM file record {} has invalid digest {value:?}",
+                        index + 1
+                    )));
+                }
+            };
+            let mode = i32::from_str_radix(parts[4], 8).map_err(|error| {
+                Error::ParseError(format!(
+                    "RPM file record {} has invalid octal mode {:?}: {error}",
+                    index + 1,
+                    parts[4]
+                ))
+            })?;
+            let user = required_rpm_field(parts[5], index + 1, "FILEUSERNAME")?;
+            let group = required_rpm_field(parts[6], index + 1, "FILEGROUPNAME")?;
+            Ok(InstalledFileInfo {
+                path: parts[0].to_string(),
+                size,
+                mode,
+                digest,
+                user: Some(user),
+                group: Some(group),
+                link_target: rpm_none_to_option(&parts[7]),
+                mtime: Some(mtime),
+            })
+        })
+        .collect()
 }
 
-/// Query dependencies of an installed package (names only, for backwards compatibility)
-pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
-    debug!("Querying dependencies for package: {}", name);
-
+/// Query RPM's complete installed `Requires` entries as exact typed groups.
+pub fn query_package_requirement_groups(name: &str) -> Result<Vec<RepositoryRequirementGroup>> {
     let output = Command::new("rpm")
         .args(["-qR", name])
+        .env("LC_ALL", "C")
         .output()
-        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
-
+        .map_err(|error| Error::InitError(format!("Failed to run rpm: {error}")))?;
     if !output.status.success() {
         return Err(Error::NotFound(format!(
-            "Package '{}' not found in RPM database",
-            name
+            "Package '{name}' not found in RPM database"
         )));
     }
 
-    let deps: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("rpm -qR output is not UTF-8: {error}")))?
         .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| {
-            // Skip rpmlib deps and file paths
-            !s.is_empty() && !s.starts_with("rpmlib(") && !s.starts_with('/')
+        .map(str::trim)
+        .filter(|requirement| !requirement.is_empty())
+        .map(|requirement| {
+            parse_native_requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Rpm,
+                requirement,
+            )
+            .map_err(Error::ParseError)
         })
-        .map(|s| {
-            // Extract just the name, stripping any version constraint
-            s.split_whitespace().next().unwrap_or(&s).to_string()
-        })
-        .collect();
-
-    debug!("Found {} dependencies for package {}", deps.len(), name);
-    Ok(deps)
-}
-
-/// Query dependencies of an installed package with full version constraints
-pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
-    debug!(
-        "Querying dependencies with constraints for package: {}",
-        name
-    );
-
-    let output = Command::new("rpm")
-        .args(["-qR", name])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::NotFound(format!(
-            "Package '{}' not found in RPM database",
-            name
-        )));
-    }
-
-    let deps: Vec<DependencyInfo> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|s| s.trim())
-        .filter(|s| {
-            // Skip rpmlib deps and file paths
-            !s.is_empty() && !s.starts_with("rpmlib(") && !s.starts_with('/')
-        })
-        .map(parse_rpm_dependency)
-        .collect();
-
-    debug!(
-        "Found {} dependencies with constraints for package {}",
-        deps.len(),
-        name
-    );
-    Ok(deps)
-}
-
-/// Parse an RPM dependency string like "filesystem >= 3.6-1" into DependencyInfo
-fn parse_rpm_dependency(dep: &str) -> DependencyInfo {
-    // RPM dependency format: "name [op version]"
-    // Examples: "filesystem >= 3.6-1", "perl(Cwd)", "bash"
-    let parts: Vec<&str> = dep.splitn(2, ['>', '<', '=']).collect();
-
-    if parts.len() == 1 {
-        // No constraint, just a name
-        DependencyInfo {
-            name: dep.trim().to_string(),
-            constraint: None,
-        }
-    } else {
-        let name = parts[0].trim().to_string();
-        // Find where the operator starts
-        let name_len = name.len();
-        let constraint = dep[name_len..].trim().to_string();
-        DependencyInfo {
-            name,
-            constraint: if constraint.is_empty() {
-                None
-            } else {
-                Some(constraint)
-            },
-        }
-    }
+        .collect()
 }
 
 /// Query what a package provides (capabilities it offers)
@@ -415,98 +327,55 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     Ok(provides)
 }
 
-/// Query all installed packages with their basic info
-/// Returns a map of package name -> InstalledRpmInfo
-pub fn query_all_packages() -> Result<HashMap<String, InstalledRpmInfo>> {
+/// Query every installed RPM database record without collapsing variants.
+pub fn query_all_packages() -> Result<Vec<InstalledPackageRecord<InstalledRpmInfo>>> {
     debug!("Querying all installed RPM packages with info");
 
-    // Query format: NAME|VERSION|RELEASE|EPOCH|ARCH
-    let stdout = run_query_command(
-        "rpm",
-        &[
-            "-qa",
-            "--queryformat",
-            "%{NAME}|%{VERSION}|%{RELEASE}|%{EPOCH}|%{ARCH}\n",
-        ],
-    )?;
-
-    let mut packages = HashMap::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() < 5 {
-            warn!("Skipping malformed rpm output line: {}", line);
-            continue;
-        }
-
-        let name = parts[0].to_string();
-        let epoch = if parts[3] == "(none)" || parts[3].is_empty() {
-            None
-        } else {
-            parts[3].parse().ok()
-        };
-
-        let info = InstalledRpmInfo {
-            name: name.clone(),
-            version: parts[1].to_string(),
-            release: parts[2].to_string(),
-            epoch,
-            arch: rpm_none_to_option(&parts[4]).unwrap_or_else(|| "noarch".to_string()),
-            description: None,
-            summary: None,
-            license: None,
-            url: None,
-            vendor: None,
-            source_rpm: None,
-            build_host: None,
-            install_time: None,
-        };
-
-        packages.insert(name, info);
-    }
+    let stdout = run_query_command("rpm", &["-qa", "--queryformat", RPM_PACKAGE_RECORD_FORMAT])?;
+    let packages = parse_package_query_records(&stdout)?;
 
     debug!("Queried {} installed packages", packages.len());
     Ok(packages)
 }
 
-/// Query the set of package names explicitly installed by the user (not auto-deps).
+/// Query DNF's exact user-installed package set.
 ///
-/// Uses `rpm -qa --queryformat "%{NAME}|%{REASON}\n"`. On DNF/RPM systems the
-/// REASON tag is "user" for explicit installs and "dep" for auto-installed deps.
-/// Falls back to treating all packages as user-installed if the tag is unavailable
-/// (older RPM versions that lack the REASON tag return "(none)").
-pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
-    debug!("Querying user-installed RPM packages via REASON tag");
+/// DNF4 and DNF5 both document `repoquery --installed --userinstalled` as the
+/// package-manager authority for this set. Their distinct documented options
+/// disable configured excludes so the result cannot silently omit installed
+/// packages. A host with RPM but no DNF authority returns a typed error.
+pub fn query_user_installed()
+-> std::result::Result<std::collections::HashSet<String>, InstallReasonAuthorityError> {
+    debug!("Querying user-installed RPM packages via DNF authority");
 
-    let stdout = run_query_command("rpm", &["-qa", "--queryformat", "%{NAME}|%{REASON}\n"])?;
-
-    // If every reason field is "(none)" the tag is unsupported — treat all as explicit.
-    let has_reason_support = stdout
-        .lines()
-        .any(|line| line.split('|').nth(1).is_some_and(|r| r != "(none)"));
-
-    let user_installed = stdout
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(2, '|');
-            let name = parts.next()?.trim();
-            let reason = parts.next()?.trim();
-            if name.is_empty() {
-                return None;
-            }
-            if !has_reason_support || reason == "user" {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    debug!(
-        "Determined user-installed RPM packages (has_reason_support={})",
-        has_reason_support
+    let dnf5 = query_package_names(
+        "DNF5",
+        "dnf5",
+        &[
+            "--setopt=disable_excludes=*",
+            "repoquery",
+            "--installed",
+            "--userinstalled",
+            "--queryformat",
+            "%{name}.%{arch}\n",
+        ],
     );
-    Ok(user_installed)
+    match dnf5 {
+        Ok(packages) => Ok(packages),
+        Err(error) if error.is_command_unavailable() => query_package_names(
+            "DNF4",
+            "dnf",
+            &[
+                "--disableexcludes=all",
+                "repoquery",
+                "--installed",
+                "--userinstalled",
+                "--queryformat",
+                "%{name}.%{arch}\n",
+            ],
+        ),
+        Err(error) => Err(error),
+    }
 }
 
 /// Remove a package from the RPM database only (no files deleted).
@@ -546,22 +415,40 @@ pub fn is_rpm_available() -> bool {
 /// Query which package(s) own a file
 pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
     let output = Command::new("rpm")
-        .args(["-qf", "--queryformat", "%{NAME}\n", path])
+        .args(["-qf", "--queryformat", RPM_OWNER_RECORD_FORMAT, path])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run rpm: {}", e)))?;
 
     if !output.status.success() {
-        // File not owned by any package
-        return Ok(Vec::new());
+        return Err(Error::NotFound(format!(
+            "rpm could not resolve an owner for {path:?} (status {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
 
-    let owners: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && !s.contains("not owned"))
-        .collect();
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("rpm owner output is not UTF-8: {error}")))?;
+    parse_owner_records(&stdout)
+}
 
-    Ok(owners)
+fn parse_owner_records(output: &str) -> Result<Vec<String>> {
+    output
+        .split('\x1f')
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            if record
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control())
+            {
+                return Err(Error::ParseError(format!(
+                    "rpm owner query returned an invalid package-name record {record:?}"
+                )));
+            }
+            Ok(record.to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -572,6 +459,15 @@ mod tests {
     fn test_is_rpm_available() {
         // This test just ensures the function runs without panic
         let _ = is_rpm_available();
+    }
+
+    #[test]
+    fn owner_records_are_queryformat_data_not_human_message_matches() {
+        assert_eq!(
+            parse_owner_records("filesystem\x1fbash\x1f").unwrap(),
+            vec!["filesystem", "bash"]
+        );
+        assert!(parse_owner_records("file is not owned by any package").is_err());
     }
 
     #[test]
@@ -619,41 +515,65 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_rpm_dependency_with_constraint() {
-        let dep = parse_rpm_dependency("filesystem >= 3.6-1");
-        assert_eq!(dep.name, "filesystem");
-        assert_eq!(dep.constraint, Some(">= 3.6-1".to_string()));
-    }
-
-    #[test]
-    fn test_parse_rpm_dependency_without_constraint() {
-        let dep = parse_rpm_dependency("perl(Cwd)");
-        assert_eq!(dep.name, "perl(Cwd)");
-        assert_eq!(dep.constraint, None);
-    }
-
-    #[test]
-    fn test_parse_rpm_dependency_less_than() {
-        let dep = parse_rpm_dependency("bash < 5.0");
-        assert_eq!(dep.name, "bash");
-        assert_eq!(dep.constraint, Some("< 5.0".to_string()));
-    }
-
-    #[test]
-    fn test_parse_rpm_dependency_exact() {
-        let dep = parse_rpm_dependency("glibc = 2.38");
-        assert_eq!(dep.name, "glibc");
-        assert_eq!(dep.constraint, Some("= 2.38".to_string()));
-    }
-
-    #[test]
     fn package_query_records_preserve_multiline_descriptions_and_variants() {
-        let output = "fixture\x1e1.2.3\x1e4.fc44\x1e(none)\x1ex86_64\x1efirst line\nsecond line\x1esummary\x1eMIT\x1f\
-                      fixture\x1e1.2.3\x1e4.fc44\x1e(none)\x1eaarch64\x1edescription\x1esummary\x1eMIT\x1f";
-        let records = split_package_query_records(output);
+        let output = "fixture-1.2.3-4.fc44.x86_64\x1efixture\x1e1.2.3\x1e4.fc44\x1e(none)\x1ex86_64\x1efirst line\nsecond line\x1esummary\x1eMIT\x1ehttps://example.invalid\x1evendor\x1esource.src.rpm\x1ebuilder\x1e1\x1f\
+                      fixture-1.2.3-4.fc44.aarch64\x1efixture\x1e1.2.3\x1e4.fc44\x1e(none)\x1eaarch64\x1edescription\x1esummary\x1eMIT\x1ehttps://example.invalid\x1evendor\x1esource.src.rpm\x1ebuilder\x1e1\x1f";
+        let records = parse_package_query_records(output).unwrap();
 
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0][5], "first line\nsecond line");
-        assert_eq!(records[1][4], "aarch64");
+        assert_eq!(
+            records[0].info.description.as_deref(),
+            Some("first line\nsecond line")
+        );
+        assert_eq!(records[1].info.arch, "aarch64");
+        assert_eq!(
+            records[0].identity.selector(),
+            "fixture-1.2.3-4.fc44.x86_64"
+        );
+        assert_eq!(
+            records[1].identity.selector(),
+            "fixture-1.2.3-4.fc44.aarch64"
+        );
+    }
+
+    #[test]
+    fn package_inventory_rejects_malformed_or_duplicate_records() {
+        assert!(parse_package_query_records("missing-fields\x1f").is_err());
+
+        let record = "fixture-1-1.x86_64\x1efixture\x1e1\x1e1\x1e(none)\x1ex86_64\x1edescription\x1esummary\x1eMIT\x1ehttps://example.invalid\x1evendor\x1esource.src.rpm\x1ebuilder\x1e1\x1f";
+        assert!(parse_package_query_records(&format!("{record}{record}")).is_err());
+    }
+
+    #[test]
+    fn file_query_uses_exact_parallel_array_records() {
+        let records = parse_rpm_file_records(
+            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1f\
+             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1f",
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].path, "/usr/lib/libfixture.so");
+        assert_eq!(records[0].link_target.as_deref(), Some("libfixture.so.1"));
+        assert_eq!(records[1].path, "/usr/share/fixture data");
+        assert!(records[1].digest.is_none());
+        assert_eq!(records[1].mode, 0o40755);
+
+        let zero_digest = parse_rpm_file_records(
+            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1f",
+        )
+        .unwrap();
+        assert_eq!(zero_digest[0].digest.as_deref(), Some("00000000"));
+    }
+
+    #[test]
+    fn file_query_rejects_malformed_parallel_array_records() {
+        assert!(parse_rpm_file_records("/usr/bin/fixture\x1e42\x1f").is_err());
+        assert!(
+            parse_rpm_file_records(
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1f"
+            )
+            .is_err()
+        );
     }
 }

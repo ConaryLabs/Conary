@@ -33,12 +33,7 @@ use crate::command_risk;
 use anyhow::Result;
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
-    let allow_live_system_mutation = cli.allow_live_system_mutation;
     root::run_try_session_preflight(&cli)?;
-    command_risk::enforce_cli_policy(allow_live_system_mutation, &cli)?;
-    Box::pin(root::dispatch_command(
-        cli.command,
-        allow_live_system_mutation,
-    ))
-    .await
+    command_risk::enforce_cli_policy(&cli)?;
+    Box::pin(root::dispatch_command(cli.command)).await
 }

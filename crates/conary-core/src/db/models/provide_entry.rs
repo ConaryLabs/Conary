@@ -7,7 +7,13 @@
 //! resolution without querying the host package manager.
 
 use crate::error::Result;
+use crate::repository::dependency_model::{
+    ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+};
+use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+
+use super::repository::version_scheme_from_row;
 
 /// A capability that a package provides
 #[derive(Debug, Clone)]
@@ -18,47 +24,109 @@ pub struct ProvideEntry {
     pub capability: String,
     /// Optional version of this capability
     pub version: Option<String>,
-    /// The kind of capability (package, python, soname, pkgconfig, etc.)
-    pub kind: String,
+    pub version_relation: Option<ProvideVersionRelation>,
+    pub kind: RepositoryCapabilityKind,
+    pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledProvideContract {
+    pub package_name: String,
+    pub package_version: String,
+    pub capability_version: Option<String>,
+    pub version_relation: Option<ProvideVersionRelation>,
+    pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
 }
 
 impl ProvideEntry {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, trove_id, capability, version, kind";
+    const COLUMNS: &'static str = "id, trove_id, capability, version, version_relation, kind, version_scheme, architecture_qualifier_kind, architecture_qualifier";
 
     /// Create a new ProvideEntry
-    pub fn new(trove_id: i64, capability: String, version: Option<String>) -> Self {
+    pub fn new(
+        trove_id: i64,
+        capability: String,
+        version: Option<String>,
+        version_scheme: VersionScheme,
+    ) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             id: None,
             trove_id,
             capability,
             version,
-            kind: "package".to_string(),
+            version_relation,
+            kind: RepositoryCapabilityKind::PackageName,
+            version_scheme,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
         }
     }
 
     /// Create a new typed ProvideEntry
     pub fn new_typed(
         trove_id: i64,
-        kind: &str,
+        kind: RepositoryCapabilityKind,
         capability: String,
         version: Option<String>,
+        version_scheme: VersionScheme,
+        architecture_qualifier: ProvideArchitectureQualifier,
     ) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             id: None,
             trove_id,
             capability,
             version,
-            kind: kind.to_string(),
+            version_relation,
+            kind,
+            version_scheme,
+            architecture_qualifier,
         }
+    }
+
+    pub fn from_declared(
+        trove_id: i64,
+        provide: &crate::packages::traits::ProvidedCapability,
+    ) -> Self {
+        Self::new_typed(
+            trove_id,
+            provide.kind,
+            provide.name.clone(),
+            provide.version.clone(),
+            provide.version_scheme,
+            provide.architecture_qualifier.clone(),
+        )
+        .with_version_relation(provide.version_relation)
+    }
+
+    #[must_use]
+    pub fn with_version_relation(
+        mut self,
+        version_relation: Option<ProvideVersionRelation>,
+    ) -> Self {
+        self.version_relation = version_relation;
+        self
     }
 
     /// Insert this provide into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO provides (trove_id, capability, version, kind)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![&self.trove_id, &self.capability, &self.version, &self.kind],
+            "INSERT INTO provides (
+                trove_id, capability, version, version_relation, kind, version_scheme,
+                architecture_qualifier_kind, architecture_qualifier
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                &self.trove_id,
+                &self.capability,
+                &self.version,
+                self.version_relation.map(ProvideVersionRelation::as_str),
+                capability_kind_to_db(self.kind),
+                self.version_scheme.as_str(),
+                architecture_qualifier_to_db(&self.architecture_qualifier).0,
+                architecture_qualifier_to_db(&self.architecture_qualifier).1,
+            ],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -69,15 +137,39 @@ impl ProvideEntry {
     /// Insert or ignore if already exists (for idempotent imports)
     pub fn insert_or_ignore(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT OR IGNORE INTO provides (trove_id, capability, version, kind)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![&self.trove_id, &self.capability, &self.version, &self.kind],
+            "INSERT OR IGNORE INTO provides (
+                trove_id, capability, version, version_relation, kind, version_scheme,
+                architecture_qualifier_kind, architecture_qualifier
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                &self.trove_id,
+                &self.capability,
+                &self.version,
+                self.version_relation.map(ProvideVersionRelation::as_str),
+                capability_kind_to_db(self.kind),
+                self.version_scheme.as_str(),
+                architecture_qualifier_to_db(&self.architecture_qualifier).0,
+                architecture_qualifier_to_db(&self.architecture_qualifier).1,
+            ],
         )?;
 
         // Get the ID (either new or existing)
         let id = conn.query_row(
-            "SELECT id FROM provides WHERE trove_id = ?1 AND capability = ?2",
-            params![&self.trove_id, &self.capability],
+            "SELECT id FROM provides
+             WHERE trove_id = ?1 AND capability = ?2 AND kind = ?3
+               AND version IS ?4 AND version_relation IS ?5 AND version_scheme = ?6
+               AND architecture_qualifier_kind = ?7
+               AND architecture_qualifier IS ?8",
+            params![
+                &self.trove_id,
+                &self.capability,
+                capability_kind_to_db(self.kind),
+                &self.version,
+                self.version_relation.map(ProvideVersionRelation::as_str),
+                self.version_scheme.as_str(),
+                architecture_qualifier_to_db(&self.architecture_qualifier).0,
+                architecture_qualifier_to_db(&self.architecture_qualifier).1,
+            ],
             |row| row.get(0),
         )?;
 
@@ -103,14 +195,18 @@ impl ProvideEntry {
     ///
     /// Returns the first match, ordered deterministically by trove_id.
     /// Prefer `find_all_typed()` when multiple providers need consideration.
-    pub fn find_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Option<Self>> {
+    pub fn find_typed(
+        conn: &Connection,
+        kind: RepositoryCapabilityKind,
+        capability: &str,
+    ) -> Result<Option<Self>> {
         let sql = format!(
             "SELECT {} FROM provides WHERE kind = ?1 AND capability = ?2 ORDER BY trove_id ASC LIMIT 1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let provide = stmt
-            .query_row([kind, capability], Self::from_row)
+            .query_row([capability_kind_to_db(kind), capability], Self::from_row)
             .optional()?;
         Ok(provide)
     }
@@ -145,14 +241,18 @@ impl ProvideEntry {
     }
 
     /// Find all typed provides (by kind and capability)
-    pub fn find_all_typed(conn: &Connection, kind: &str, capability: &str) -> Result<Vec<Self>> {
+    pub fn find_all_typed(
+        conn: &Connection,
+        kind: RepositoryCapabilityKind,
+        capability: &str,
+    ) -> Result<Vec<Self>> {
         let sql = format!(
             "SELECT {} FROM provides WHERE kind = ?1 AND capability = ?2",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
-            .query_map([kind, capability], Self::from_row)?
+            .query_map([capability_kind_to_db(kind), capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(provides)
     }
@@ -171,7 +271,7 @@ impl ProvideEntry {
     pub fn find_by_trove_and_kind(
         conn: &Connection,
         trove_id: i64,
-        kind: &str,
+        kind: RepositoryCapabilityKind,
     ) -> Result<Vec<Self>> {
         let sql = format!(
             "SELECT {} FROM provides WHERE trove_id = ?1 AND kind = ?2",
@@ -179,7 +279,10 @@ impl ProvideEntry {
         );
         let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
-            .query_map(params![trove_id, kind], Self::from_row)?
+            .query_map(
+                params![trove_id, capability_kind_to_db(kind)],
+                Self::from_row,
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(provides)
     }
@@ -213,40 +316,65 @@ impl ProvideEntry {
         conn: &Connection,
         capability: &str,
     ) -> Result<Option<(String, String)>> {
-        let exact = conn
-            .query_row(
-                "SELECT t.name, t.version
-                 FROM provides p
-                 JOIN troves t ON p.trove_id = t.id
-                 WHERE p.capability = ?1
-                 ORDER BY t.id ASC
-                 LIMIT 1",
-                [capability],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
+        Ok(Self::find_declared_provider_contracts(conn, capability)?
+            .into_iter()
+            .next()
+            .map(|provider| (provider.package_name, provider.package_version)))
+    }
 
-        if exact.is_some() {
+    /// Find every installed provider with its declared capability version and
+    /// package comparison scheme.
+    pub fn find_declared_provider_contracts(
+        conn: &Connection,
+        capability: &str,
+    ) -> Result<Vec<InstalledProvideContract>> {
+        let mut exact_stmt = conn.prepare(
+            "SELECT t.name, t.version, p.version, p.version_relation, p.version_scheme,
+                    p.architecture_qualifier_kind, p.architecture_qualifier
+             FROM provides p
+             JOIN troves t ON p.trove_id = t.id
+             WHERE p.capability = ?1
+             ORDER BY t.id ASC, p.id ASC",
+        )?;
+        let exact = exact_stmt
+            .query_map([capability], |row| {
+                Ok(InstalledProvideContract {
+                    package_name: row.get(0)?,
+                    package_version: row.get(1)?,
+                    capability_version: row.get(2)?,
+                    version_relation: version_relation_from_row(row, 3, 2)?,
+                    version_scheme: version_scheme_from_row(row, 4)?,
+                    architecture_qualifier: architecture_qualifier_from_row(row, 5, 6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if !exact.is_empty() {
             return Ok(exact);
         }
 
         let Some((kind, name)) = parse_typed_capability_query(capability) else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-
-        let typed = conn
-            .query_row(
-                "SELECT t.name, t.version
-                 FROM provides p
-                 JOIN troves t ON p.trove_id = t.id
-                 WHERE p.kind = ?1 AND p.capability = ?2
-                 ORDER BY t.id ASC
-                 LIMIT 1",
-                params![kind, name],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-
+        let mut typed_stmt = conn.prepare(
+            "SELECT t.name, t.version, p.version, p.version_relation, p.version_scheme,
+                    p.architecture_qualifier_kind, p.architecture_qualifier
+             FROM provides p
+             JOIN troves t ON p.trove_id = t.id
+             WHERE p.kind = ?1 AND p.capability = ?2
+             ORDER BY t.id ASC, p.id ASC",
+        )?;
+        let typed = typed_stmt
+            .query_map(params![kind, name], |row| {
+                Ok(InstalledProvideContract {
+                    package_name: row.get(0)?,
+                    package_version: row.get(1)?,
+                    capability_version: row.get(2)?,
+                    version_relation: version_relation_from_row(row, 3, 2)?,
+                    version_scheme: version_scheme_from_row(row, 4)?,
+                    architecture_qualifier: architecture_qualifier_from_row(row, 5, 6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(typed)
     }
 
@@ -268,14 +396,18 @@ impl ProvideEntry {
     }
 
     /// Search for typed capabilities matching a kind and pattern
-    pub fn search_typed(conn: &Connection, kind: &str, pattern: &str) -> Result<Vec<Self>> {
+    pub fn search_typed(
+        conn: &Connection,
+        kind: RepositoryCapabilityKind,
+        pattern: &str,
+    ) -> Result<Vec<Self>> {
         let sql = format!(
             "SELECT {} FROM provides WHERE kind = ?1 AND capability LIKE ?2",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let provides = stmt
-            .query_map([kind, pattern], Self::from_row)?
+            .query_map([capability_kind_to_db(kind), pattern], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(provides)
     }
@@ -293,50 +425,128 @@ impl ProvideEntry {
             trove_id: row.get(1)?,
             capability: row.get(2)?,
             version: row.get(3)?,
-            kind: row
-                .get::<_, Option<String>>(4)?
-                .unwrap_or_else(|| "package".to_string()),
+            version_relation: version_relation_from_row(row, 4, 3)?,
+            kind: capability_kind_from_db(&row.get::<_, String>(5)?)?,
+            version_scheme: version_scheme_from_row(row, 6)?,
+            architecture_qualifier: architecture_qualifier_from_row(row, 7, 8)?,
         })
     }
 
     /// Format this provide as a typed string (e.g., "python(requests)")
     pub fn to_typed_string(&self) -> String {
-        if self.kind == "package" || self.kind.is_empty() {
+        if self.kind == RepositoryCapabilityKind::PackageName {
             self.capability.clone()
         } else {
-            format!("{}({})", self.kind, self.capability)
+            format!("{}({})", capability_kind_to_db(self.kind), self.capability)
         }
-    }
-
-    /// Check if a name looks like a virtual provide (capability) rather than a package name
-    ///
-    /// Virtual provides have patterns like:
-    /// - perl(Cwd) - Perl module
-    /// - python3dist(setuptools) - Python package
-    /// - config(package) - Configuration capability
-    /// - pkgconfig(foo) - pkg-config module
-    /// - lib*.so.* - Shared library
-    /// - /usr/bin/foo - File path
-    pub fn is_virtual_provide(name: &str) -> bool {
-        name.contains('(')  // perl(Foo), python3dist(bar), etc.
-            || name.starts_with("lib") && name.contains(".so")  // libfoo.so.1
-            || name.starts_with('/') // File path dependencies
     }
 }
 
-fn parse_typed_capability_query(capability: &str) -> Option<(&str, &str)> {
+fn parse_typed_capability_query(capability: &str) -> Option<(&'static str, &str)> {
     let (kind, value) = capability.split_once('(')?;
     let value = value.strip_suffix(')')?;
-    if kind.is_empty() || value.is_empty() {
+    if value.is_empty() {
         return None;
     }
-    if !kind
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return None;
+    let kind = capability_kind_from_db(kind).ok()?;
+    Some((capability_kind_to_db(kind), value))
+}
+
+fn capability_kind_to_db(kind: RepositoryCapabilityKind) -> &'static str {
+    match kind {
+        RepositoryCapabilityKind::PackageName => "package",
+        RepositoryCapabilityKind::Virtual => "virtual",
+        RepositoryCapabilityKind::Soname => "soname",
+        RepositoryCapabilityKind::File => "file",
+        RepositoryCapabilityKind::Path => "path",
+        RepositoryCapabilityKind::Binary => "binary",
+        RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::Generic => "generic",
     }
-    Some((kind, value))
+}
+
+fn capability_kind_from_db(value: &str) -> rusqlite::Result<RepositoryCapabilityKind> {
+    match value {
+        "package" => Ok(RepositoryCapabilityKind::PackageName),
+        "virtual" => Ok(RepositoryCapabilityKind::Virtual),
+        "soname" => Ok(RepositoryCapabilityKind::Soname),
+        "file" => Ok(RepositoryCapabilityKind::File),
+        "path" => Ok(RepositoryCapabilityKind::Path),
+        "binary" => Ok(RepositoryCapabilityKind::Binary),
+        "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "generic" => Ok(RepositoryCapabilityKind::Generic),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unsupported persisted capability kind '{other}'"),
+            )),
+        )),
+    }
+}
+
+fn architecture_qualifier_to_db(
+    qualifier: &ProvideArchitectureQualifier,
+) -> (&'static str, Option<&str>) {
+    match qualifier {
+        ProvideArchitectureQualifier::Implicit => ("implicit", None),
+        ProvideArchitectureQualifier::Any => ("any", None),
+        ProvideArchitectureQualifier::Exact(architecture) => ("exact", Some(architecture)),
+    }
+}
+
+fn version_relation_from_row(
+    row: &Row<'_>,
+    relation_index: usize,
+    version_index: usize,
+) -> rusqlite::Result<Option<ProvideVersionRelation>> {
+    let relation = row.get::<_, Option<String>>(relation_index)?;
+    let version = row.get::<_, Option<String>>(version_index)?;
+    match (relation, version) {
+        (None, None) => Ok(None),
+        (Some(relation), Some(_)) => ProvideVersionRelation::parse_exact(&relation)
+            .map(Some)
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    relation_index,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                )
+            }),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            relation_index,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "installed provide must carry both version relation and boundary, or neither",
+            )),
+        )),
+    }
+}
+
+fn architecture_qualifier_from_row(
+    row: &Row<'_>,
+    kind_index: usize,
+    architecture_index: usize,
+) -> rusqlite::Result<ProvideArchitectureQualifier> {
+    let kind = row.get::<_, String>(kind_index)?;
+    let architecture = row.get::<_, Option<String>>(architecture_index)?;
+    match (kind.as_str(), architecture) {
+        ("implicit", None) => Ok(ProvideArchitectureQualifier::Implicit),
+        ("any", None) => Ok(ProvideArchitectureQualifier::Any),
+        ("exact", Some(architecture)) if !architecture.is_empty() => {
+            Ok(ProvideArchitectureQualifier::Exact(architecture))
+        }
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            kind_index,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid persisted provider architecture qualifier",
+            )),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -351,43 +561,66 @@ mod tests {
             CREATE TABLE troves (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
-                version TEXT NOT NULL
+                version TEXT NOT NULL,
+                version_scheme TEXT NOT NULL
             );
             CREATE TABLE provides (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trove_id INTEGER NOT NULL REFERENCES troves(id),
                 capability TEXT NOT NULL,
                 version TEXT,
-                kind TEXT DEFAULT 'package',
-                UNIQUE(trove_id, capability)
+                version_relation TEXT,
+                kind TEXT NOT NULL,
+                version_scheme TEXT NOT NULL,
+                architecture_qualifier_kind TEXT NOT NULL,
+                architecture_qualifier TEXT
             );
             CREATE INDEX idx_provides_capability ON provides(capability);
             CREATE INDEX idx_provides_kind ON provides(kind);
 
-            INSERT INTO troves (id, name, version) VALUES (1, 'perl-Text-CharWidth', '0.04');
+            INSERT INTO troves (id, name, version, version_scheme)
+            VALUES (1, 'perl-Text-CharWidth', '0.04', 'rpm');
             ",
         )
         .unwrap();
         conn
     }
 
+    fn typed(
+        trove_id: i64,
+        kind: RepositoryCapabilityKind,
+        capability: &str,
+        version: Option<&str>,
+    ) -> ProvideEntry {
+        ProvideEntry::new_typed(
+            trove_id,
+            kind,
+            capability.to_string(),
+            version.map(str::to_string),
+            VersionScheme::Rpm,
+            ProvideArchitectureQualifier::Implicit,
+        )
+    }
+
     #[test]
     fn test_insert_and_find() {
         let conn = setup_test_db();
 
-        let mut provide = ProvideEntry::new_typed(
+        let mut provide = typed(
             1,
-            "perl",
-            "Text::CharWidth".to_string(),
-            Some("0.04".to_string()),
+            RepositoryCapabilityKind::Generic,
+            "Text::CharWidth",
+            Some("0.04"),
         );
         provide.insert(&conn).unwrap();
 
-        let found = ProvideEntry::find_typed(&conn, "perl", "Text::CharWidth").unwrap();
+        let found =
+            ProvideEntry::find_typed(&conn, RepositoryCapabilityKind::Generic, "Text::CharWidth")
+                .unwrap();
         assert!(found.is_some());
         let found = found.unwrap();
         assert_eq!(found.capability, "Text::CharWidth");
-        assert_eq!(found.kind, "perl");
+        assert_eq!(found.kind, RepositoryCapabilityKind::Generic);
         assert_eq!(found.version, Some("0.04".to_string()));
     }
 
@@ -395,7 +628,7 @@ mod tests {
     fn test_is_capability_satisfied() {
         let conn = setup_test_db();
 
-        let mut provide = ProvideEntry::new_typed(1, "soname", "libc.so.6".to_string(), None);
+        let mut provide = typed(1, RepositoryCapabilityKind::Soname, "libc.so.6", None);
         provide.insert(&conn).unwrap();
 
         // Direct capability check still works
@@ -407,12 +640,19 @@ mod tests {
     fn test_search_capability() {
         let conn = setup_test_db();
 
-        let mut p1 = ProvideEntry::new_typed(1, "perl", "Text::CharWidth".to_string(), None);
-        let mut p2 = ProvideEntry::new_typed(1, "perl", "Text::Wrap".to_string(), None);
+        let mut p1 = typed(
+            1,
+            RepositoryCapabilityKind::Generic,
+            "Text::CharWidth",
+            None,
+        );
+        let mut p2 = typed(1, RepositoryCapabilityKind::Generic, "Text::Wrap", None);
         p1.insert(&conn).unwrap();
         p2.insert(&conn).unwrap();
 
-        let results = ProvideEntry::search_typed(&conn, "perl", "Text::%").unwrap();
+        let results =
+            ProvideEntry::search_typed(&conn, RepositoryCapabilityKind::Generic, "Text::%")
+                .unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -420,9 +660,14 @@ mod tests {
     fn cli_exact_query_does_not_match_normalized_non_package_rows() {
         let conn = setup_test_db();
 
-        let mut typed = ProvideEntry::new_typed(1, "soname", "libssl.so.3".to_string(), None);
+        let mut typed = typed(1, RepositoryCapabilityKind::Soname, "libssl.so.3", None);
         typed.insert(&conn).unwrap();
-        let mut raw = ProvideEntry::new(1, "soname(libssl.so.3)".to_string(), None);
+        let mut raw = ProvideEntry::new(
+            1,
+            "soname(libssl.so.3)".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         raw.insert(&conn).unwrap();
 
         let untyped = ProvideEntry::find_all_by_cli_exact_query(&conn, "libssl.so.3").unwrap();
@@ -434,15 +679,20 @@ mod tests {
 
     #[test]
     fn test_to_typed_string() {
-        let provide = ProvideEntry::new_typed(
+        let provide = typed(
             1,
-            "python",
-            "requests".to_string(),
-            Some("2.28".to_string()),
+            RepositoryCapabilityKind::Generic,
+            "requests",
+            Some("2.28"),
         );
-        assert_eq!(provide.to_typed_string(), "python(requests)");
+        assert_eq!(provide.to_typed_string(), "generic(requests)");
 
-        let provide = ProvideEntry::new(1, "nginx".to_string(), Some("1.24".to_string()));
+        let provide = ProvideEntry::new(
+            1,
+            "nginx".to_string(),
+            Some("1.24".to_string()),
+            VersionScheme::Rpm,
+        );
         assert_eq!(provide.to_typed_string(), "nginx");
     }
 
@@ -451,12 +701,18 @@ mod tests {
         let conn = setup_test_db();
 
         conn.execute(
-            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            "INSERT INTO troves (id, name, version, version_scheme)
+             VALUES (2, 'glibc', '2.42', 'rpm')",
             [],
         )
         .unwrap();
 
-        let mut provide = ProvideEntry::new(2, "libc.so.6(GLIBC_2.34)(64bit)".to_string(), None);
+        let mut provide = ProvideEntry::new(
+            2,
+            "libc.so.6(GLIBC_2.34)(64bit)".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         provide.insert(&conn).unwrap();
 
         let result = ProvideEntry::find_satisfying_provider(&conn, "libc.so.6").unwrap();
@@ -468,12 +724,13 @@ mod tests {
         let conn = setup_test_db();
 
         conn.execute(
-            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            "INSERT INTO troves (id, name, version, version_scheme)
+             VALUES (2, 'glibc', '2.42', 'rpm')",
             [],
         )
         .unwrap();
 
-        let mut provide = ProvideEntry::new_typed(2, "soname", "libc.so.6".to_string(), None);
+        let mut provide = typed(2, RepositoryCapabilityKind::Soname, "libc.so.6", None);
         provide.insert(&conn).unwrap();
 
         let result =
@@ -482,16 +739,51 @@ mod tests {
     }
 
     #[test]
+    fn declared_provider_contract_requires_exact_installed_version_scheme() {
+        let conn = setup_test_db();
+        let mut provide = typed(
+            1,
+            RepositoryCapabilityKind::Virtual,
+            "virtual-abi",
+            Some("2"),
+        );
+        provide.insert(&conn).unwrap();
+
+        let contracts =
+            ProvideEntry::find_declared_provider_contracts(&conn, "virtual-abi").unwrap();
+        assert_eq!(contracts[0].version_scheme, VersionScheme::Rpm);
+
+        conn.execute(
+            "UPDATE provides SET version_scheme = 'unknown' WHERE trove_id = 1",
+            [],
+        )
+        .unwrap();
+        let error = ProvideEntry::find_declared_provider_contracts(&conn, "virtual-abi")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("unsupported persisted native version scheme 'unknown'"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn find_satisfying_provider_does_not_guess_versioned_soname_to_base_provider() {
         let conn = setup_test_db();
 
         conn.execute(
-            "INSERT INTO troves (id, name, version) VALUES (2, 'glibc', '2.42')",
+            "INSERT INTO troves (id, name, version, version_scheme)
+             VALUES (2, 'glibc', '2.42', 'rpm')",
             [],
         )
         .unwrap();
 
-        let mut provide = ProvideEntry::new(2, "libm.so.6()(64bit)".to_string(), None);
+        let mut provide = ProvideEntry::new(
+            2,
+            "libm.so.6()(64bit)".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
         provide.insert(&conn).unwrap();
 
         let result = ProvideEntry::find_satisfying_provider(&conn, "libm.so.6(GLIBC_2.0)").unwrap();

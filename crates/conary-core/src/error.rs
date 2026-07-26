@@ -2,6 +2,43 @@
 
 use thiserror::Error;
 
+/// Exact failure class attached where scriptlet execution fails.
+///
+/// This is transaction authority. Human-readable error text must never be
+/// inspected to recover the class later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptletFailureKind {
+    /// The script process ran and returned a non-zero status or signal.
+    ScriptExited,
+    /// The script process exceeded its configured timeout.
+    ScriptTimedOut,
+    /// A typed lifecycle command or scriptlet contract was malformed.
+    ContractViolation,
+    /// A required interpreter or exact lifecycle program was unavailable.
+    ProgramUnavailable,
+    /// Staging, spawning, waiting, or another process boundary failed.
+    ProcessSetupFailed,
+    /// Namespace, mount, root, or other sandbox setup failed.
+    SandboxSetupUnavailable,
+    /// Landlock, seccomp, or capability enforcement setup failed.
+    EnforcementSetupFailed,
+}
+
+impl ScriptletFailureKind {
+    /// Stable value for diagnostics and persisted changeset metadata.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ScriptExited => "ScriptExited",
+            Self::ScriptTimedOut => "ScriptTimedOut",
+            Self::ContractViolation => "ContractViolation",
+            Self::ProgramUnavailable => "ProgramUnavailable",
+            Self::ProcessSetupFailed => "ProcessSetupFailed",
+            Self::SandboxSetupUnavailable => "SandboxSetupUnavailable",
+            Self::EnforcementSetupFailed => "EnforcementSetupFailed",
+        }
+    }
+}
+
 /// Core error types for Conary
 #[derive(Error, Debug)]
 pub enum Error {
@@ -29,6 +66,10 @@ pub enum Error {
     #[error("Version parse error: {0}")]
     VersionParse(String),
 
+    /// Exact native or Conary version parsing/comparison failure
+    #[error(transparent)]
+    VersionComparison(#[from] crate::repository::versioning::VersionComparisonError),
+
     /// Hash error
     #[error("Hash error: {0}")]
     HashError(#[from] crate::hash::HashError),
@@ -45,9 +86,24 @@ pub enum Error {
     #[error("Download failed: {0}")]
     DownloadError(String),
 
+    /// HTTP response status from an exact repository URL
+    #[error("HTTP {status} from {url}")]
+    HttpStatus { status: u16, url: String },
+
     /// Resource conflict (e.g., duplicate name)
     #[error("Conflict: {0}")]
     ConflictError(String),
+
+    /// Eligible package candidates remain tied without a comparable version
+    /// contract or an explicit repository/priority winner.
+    #[error(
+        "Ambiguous package selection for '{package}': {candidates:?}. \
+         Select a repository explicitly or assign distinct repository priorities"
+    )]
+    AmbiguousPackageSelection {
+        package: String,
+        candidates: Vec<String>,
+    },
 
     /// Checksum mismatch
     #[error("Checksum mismatch: expected {expected}, got {actual}")]
@@ -65,9 +121,12 @@ pub enum Error {
     #[error("GPG verification failed: {0}")]
     GpgVerificationFailed(String),
 
-    /// Scriptlet execution error
-    #[error("Scriptlet error: {0}")]
-    ScriptletError(String),
+    /// Scriptlet execution error with an exact failure class.
+    #[error("Scriptlet error ({kind:?}): {message}")]
+    ScriptletExecution {
+        kind: ScriptletFailureKind,
+        message: String,
+    },
 
     /// Trigger execution error
     #[error("Trigger error: {0}")]
@@ -136,6 +195,16 @@ pub enum Error {
 
 /// Result type alias using Conary's Error type
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    /// Build a scriptlet error whose semantic class is independent of its text.
+    pub fn scriptlet(kind: ScriptletFailureKind, message: impl Into<String>) -> Self {
+        Self::ScriptletExecution {
+            kind,
+            message: message.into(),
+        }
+    }
+}
 
 impl From<crate::capability::CapabilityError> for Error {
     fn from(value: crate::capability::CapabilityError) -> Self {

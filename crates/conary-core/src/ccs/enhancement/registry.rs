@@ -1,9 +1,7 @@
 // conary-core/src/ccs/enhancement/registry.rs
 //! Enhancement registry for managing enhancement plugins
 
-use super::{
-    EnhancementContext, EnhancementEngine, EnhancementError, EnhancementResult, EnhancementType,
-};
+use super::{EnhancementContext, EnhancementEngine, EnhancementResult, EnhancementType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -33,9 +31,7 @@ impl EnhancementRegistry {
 
     /// Register the built-in enhancement engines
     fn register_builtins(&mut self) {
-        self.register(Arc::new(CapabilityEnhancer));
         self.register(Arc::new(ProvenanceEnhancer));
-        self.register(Arc::new(SubpackageEnhancer));
     }
 
     /// Register an enhancement engine
@@ -69,70 +65,6 @@ impl Default for EnhancementRegistry {
 // Built-in Enhancement Engines
 // ============================================================================
 
-/// Capability inference enhancer
-///
-/// Uses the capability inference module to determine what system resources
-/// a package needs based on its files and dependencies.
-struct CapabilityEnhancer;
-
-impl EnhancementEngine for CapabilityEnhancer {
-    fn enhancement_type(&self) -> EnhancementType {
-        EnhancementType::Capabilities
-    }
-
-    fn should_enhance(&self, _ctx: &EnhancementContext) -> bool {
-        // Enhance if we have files to analyze
-        // Skip packages that already have capabilities stored
-        true // For now, always attempt - the context will handle deduplication
-    }
-
-    fn enhance(&self, ctx: &mut EnhancementContext) -> EnhancementResult<()> {
-        use crate::capability::inference::{InferenceOptions, infer_capabilities};
-
-        // Clone metadata before mutable borrow of files
-        let metadata = ctx.metadata.clone();
-
-        // Load files for analysis
-        ctx.load_file_contents()?;
-        let files = ctx.get_files()?;
-
-        // Run capability inference
-        let options = InferenceOptions::default();
-        let inferred = infer_capabilities(files, &metadata, &options)
-            .map_err(|e| EnhancementError::InferenceFailed(e.to_string()))?;
-
-        // Store raw inference for audit trail
-        ctx.store_inferred_capabilities(&inferred)?;
-
-        // Convert to capability declaration and store
-        let declaration = inferred.to_declaration();
-        let declaration_json = serde_json::to_string(&declaration)?;
-
-        // Insert or update capabilities table
-        ctx.conn.execute(
-            "INSERT INTO capabilities (trove_id, declaration_json, declaration_version)
-             VALUES (?1, ?2, 1)
-             ON CONFLICT(trove_id) DO UPDATE SET
-                declaration_json = excluded.declaration_json,
-                declared_at = CURRENT_TIMESTAMP",
-            rusqlite::params![ctx.trove_id, declaration_json],
-        )?;
-
-        tracing::info!(
-            "Enhanced capabilities for {} (tier {}, confidence {:?})",
-            ctx.metadata.name,
-            inferred.tier_used,
-            inferred.confidence.primary
-        );
-
-        Ok(())
-    }
-
-    fn description(&self) -> &'static str {
-        "Infer security capabilities from package binaries and files"
-    }
-}
-
 /// Provenance extraction enhancer
 ///
 /// Extracts provenance information from the original package metadata
@@ -150,9 +82,8 @@ impl EnhancementEngine for ProvenanceEnhancer {
     }
 
     fn enhance(&self, ctx: &mut EnhancementContext) -> EnhancementResult<()> {
-        // Extract provenance based on original format
-        // For now, we create a basic provenance record
-        // Phase 3 will add full extraction from RPM/DEB/Arch metadata
+        // Preserve the exact source-format and conversion metadata available at
+        // this boundary; native-package extraction belongs to the converter.
 
         #[derive(serde::Serialize)]
         struct ExtractedProvenance {
@@ -189,7 +120,7 @@ impl EnhancementEngine for ProvenanceEnhancer {
             .unwrap_or(false);
 
         if !exists {
-            // Create a basic provenance record
+            // Link the durable package row to Conary's conversion provenance.
             ctx.conn.execute(
                 "INSERT INTO provenance (trove_id, builder)
                  VALUES (?1, ?2)",
@@ -211,83 +142,6 @@ impl EnhancementEngine for ProvenanceEnhancer {
     }
 }
 
-/// Subpackage relationship enhancer
-///
-/// Detects and records relationships between base packages and their
-/// subpackages (e.g., nginx-devel is a subpackage of nginx).
-struct SubpackageEnhancer;
-
-impl EnhancementEngine for SubpackageEnhancer {
-    fn enhancement_type(&self) -> EnhancementType {
-        EnhancementType::Subpackages
-    }
-
-    fn should_enhance(&self, _ctx: &EnhancementContext) -> bool {
-        true
-    }
-
-    fn enhance(&self, ctx: &mut EnhancementContext) -> EnhancementResult<()> {
-        // Detect subpackage pattern based on format
-        let suffixes: &[(&str, &str)] = match ctx.original_format.as_str() {
-            "rpm" => &[
-                ("-devel", "devel"),
-                ("-doc", "doc"),
-                ("-docs", "doc"),
-                ("-debuginfo", "debuginfo"),
-                ("-debugsource", "debugsource"),
-                ("-libs", "libs"),
-                ("-common", "common"),
-                ("-data", "data"),
-            ],
-            "deb" => &[
-                ("-dev", "devel"),
-                ("-doc", "doc"),
-                ("-dbg", "debuginfo"),
-                ("-common", "common"),
-                ("-data", "data"),
-            ],
-            "arch" => &[("-docs", "doc")],
-            _ => &[],
-        };
-
-        let name = &ctx.metadata.name.clone();
-
-        for (suffix, component_type) in suffixes {
-            if name.ends_with(suffix) {
-                let base = name.trim_end_matches(suffix);
-
-                // 1. Store the relationship in subpackage_relationships table
-                ctx.store_subpackage_relationship(base, component_type)?;
-
-                // 2. Add implicit dependency: subpackage depends on base package
-                // e.g., nginx-devel depends on nginx
-                ctx.add_implicit_dependency(base)?;
-
-                // 3. Add virtual provide: subpackage provides base:component
-                // e.g., nginx-devel provides nginx:devel
-                let virtual_provide = format!("{}:{}", base, component_type);
-                ctx.add_virtual_provide(&virtual_provide)?;
-
-                tracing::info!(
-                    "Detected subpackage relationship: {} is {} of {} (provides {})",
-                    name,
-                    component_type,
-                    base,
-                    virtual_provide
-                );
-                return Ok(());
-            }
-        }
-
-        // Not a subpackage - nothing to do
-        Ok(())
-    }
-
-    fn description(&self) -> &'static str {
-        "Detect and record subpackage relationships"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,22 +150,19 @@ mod tests {
     fn test_registry_builtins() {
         let registry = EnhancementRegistry::with_builtins();
 
-        assert!(registry.has(EnhancementType::Capabilities));
         assert!(registry.has(EnhancementType::Provenance));
-        assert!(registry.has(EnhancementType::Subpackages));
-
-        assert_eq!(registry.registered_types().len(), 3);
+        assert_eq!(registry.registered_types().len(), 1);
     }
 
     #[test]
     fn test_registry_get() {
         let registry = EnhancementRegistry::with_builtins();
 
-        let caps = registry.get(EnhancementType::Capabilities);
-        assert!(caps.is_some());
+        let provenance = registry.get(EnhancementType::Provenance);
+        assert!(provenance.is_some());
         assert_eq!(
-            caps.unwrap().enhancement_type(),
-            EnhancementType::Capabilities
+            provenance.unwrap().enhancement_type(),
+            EnhancementType::Provenance
         );
     }
 }

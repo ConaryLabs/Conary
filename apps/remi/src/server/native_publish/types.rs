@@ -21,7 +21,7 @@ pub enum NativePublishErrorCode {
     OutputIdentityMismatch,
     LocalDevArtifactRefused,
     UnsupportedDistro,
-    LifecycleUnsupported,
+    InvalidAuthority,
     MetadataCommitFailed,
     IoError,
 }
@@ -37,7 +37,7 @@ impl NativePublishErrorCode {
             Self::OutputIdentityMismatch => "OUTPUT_IDENTITY_MISMATCH",
             Self::LocalDevArtifactRefused => "LOCAL_DEV_ARTIFACT_REFUSED",
             Self::UnsupportedDistro => "UNSUPPORTED_DISTRO",
-            Self::LifecycleUnsupported => "LIFECYCLE_UNSUPPORTED",
+            Self::InvalidAuthority => "INVALID_AUTHORITY",
             Self::MetadataCommitFailed => "METADATA_COMMIT_FAILED",
             Self::IoError => "IO_ERROR",
         }

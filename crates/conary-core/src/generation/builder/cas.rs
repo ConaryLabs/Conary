@@ -2,17 +2,26 @@
 
 use std::path::{Path, PathBuf};
 
-use super::FileEntryRef;
 use crate::generation::artifact::{
     CasObjectRef, verify_cas_object_files_exist_with_expected_sizes,
 };
+use crate::generation::root_manifest::{GenerationRootManifest, MutableStateManifest};
 
-pub(super) fn cas_objects_from_file_refs(file_refs: &[FileEntryRef]) -> Vec<CasObjectRef> {
-    file_refs
-        .iter()
-        .map(|file| CasObjectRef {
-            sha256: file.sha256_hash.clone(),
-            size: file.size,
+pub(super) fn cas_objects_from_manifests(
+    generation: &GenerationRootManifest,
+    state: &MutableStateManifest,
+) -> Vec<CasObjectRef> {
+    generation
+        .regular_contents()
+        .chain(
+            state
+                .entries
+                .iter()
+                .filter_map(|entry| entry.content.as_ref()),
+        )
+        .map(|content| CasObjectRef {
+            sha256: content.sha256.clone(),
+            size: content.size,
         })
         .collect()
 }

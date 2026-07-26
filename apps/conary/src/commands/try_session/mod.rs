@@ -1,13 +1,15 @@
 // apps/conary/src/commands/try_session/mod.rs
 //! Try-session policy helpers.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use conary_core::ccs::verify::TrustPolicy;
 use conary_core::db::models::TrySession;
 use std::path::{Path, PathBuf};
 
 mod executor;
 mod install;
 mod namespace;
+mod package_verification;
 mod session;
 mod util;
 mod validation;
@@ -24,8 +26,8 @@ pub(crate) use session::{
 pub(crate) struct TryStartRequest<'a> {
     pub db_path: &'a str,
     pub package_path: &'a Path,
+    pub trust_policy: &'a TrustPolicy,
     pub activate: bool,
-    pub allow_irreversible: bool,
     pub command: Option<&'a [&'a str]>,
     pub watch_marker: Option<TryWatchMarkerRequest<'a>>,
 }
@@ -41,6 +43,7 @@ pub(crate) struct TryRefreshRequest<'a> {
     pub(crate) session_id: &'a str,
     pub(crate) expected_try_generation_id: i64,
     pub(crate) package_path: &'a Path,
+    pub(crate) trust_policy: &'a TrustPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,16 +69,22 @@ pub(crate) struct TryStartOutcome {
 pub(crate) async fn cmd_try_package(
     db_path: &str,
     package_path: &Path,
+    trust_policy_path: &Path,
     activate: bool,
-    allow_irreversible: bool,
     run: &[String],
 ) -> Result<()> {
+    let trust_policy = TrustPolicy::from_file(trust_policy_path).with_context(|| {
+        format!(
+            "failed to load try trust policy {}",
+            trust_policy_path.display()
+        )
+    })?;
     let command = run.iter().map(String::as_str).collect::<Vec<_>>();
     let outcome = begin_try_session(TryStartRequest {
         db_path,
         package_path,
+        trust_policy: &trust_policy,
         activate,
-        allow_irreversible,
         command: if command.is_empty() {
             None
         } else {
@@ -141,6 +150,7 @@ pub(crate) async fn cmd_try_watch(
     db_path: &str,
     target: &str,
     recipe: Option<&str>,
+    signing_key_path: &Path,
     isolated: bool,
     json: bool,
 ) -> Result<()> {
@@ -148,6 +158,7 @@ pub(crate) async fn cmd_try_watch(
         db_path,
         target,
         recipe,
+        signing_key_path,
         isolated,
         json,
     })
@@ -160,13 +171,22 @@ pub(super) mod test_support {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
-    use conary_core::ccs::builder::write_ccs_package;
+    use conary_core::ccs::builder::write_signed_current_ccs_package;
     use conary_core::ccs::manifest::{
         AlternativeHook, CcsManifest, DirectoryHook, GroupHook, SysctlHook, SystemdHook,
         TmpfilesHook, UserHook,
     };
-    use conary_core::ccs::{BuildResult, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, ComponentData, FileEntry, SigningKeyPair, TrustPolicy};
     use conary_core::db::models::TrySession;
+    use conary_core::generation::artifact::{
+        ArtifactWriteInputs, BootAssetSources, CasObjectVerification, stage_boot_assets,
+        write_generation_artifact,
+    };
+    use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+    use conary_core::generation::root_manifest::{
+        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest, MutableStateManifest,
+    };
+    use conary_core::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode};
     use conary_core::runtime_root::ConaryRuntimeRoot;
 
     use super::{TryStartOutcome, TryStartRequest, begin_try_session};
@@ -176,6 +196,8 @@ pub(super) mod test_support {
         pub(super) root: PathBuf,
         pub(super) db_path: PathBuf,
         pub(super) db_path_string: String,
+        pub(super) signing_key: SigningKeyPair,
+        pub(super) trust_policy: TrustPolicy,
     }
 
     impl TryRuntimeFixture {
@@ -186,11 +208,15 @@ pub(super) mod test_support {
             let db_path_string = db_path.to_string_lossy().into_owned();
             conary_core::db::init(&db_path).unwrap();
             stage_test_boot_assets(&root);
+            let signing_key = SigningKeyPair::generate().with_key_id("try-session-test");
+            let trust_policy = TrustPolicy::strict(vec![signing_key.public_key_base64()]);
             Self {
                 _temp: temp,
                 root,
                 db_path,
                 db_path_string,
+                signing_key,
+                trust_policy,
             }
         }
 
@@ -199,7 +225,11 @@ pub(super) mod test_support {
         }
 
         pub(super) fn write_package(&self, name: &str, manifest: CcsManifest) -> PathBuf {
-            write_try_package(self.root.join(format!("{name}.ccs")), manifest)
+            write_try_package(
+                self.root.join(format!("{name}.ccs")),
+                manifest,
+                &self.signing_key,
+            )
         }
 
         pub(super) fn open(&self) -> rusqlite::Connection {
@@ -208,9 +238,7 @@ pub(super) mod test_support {
     }
 
     fn stage_test_boot_assets(root: &Path) {
-        let kernel_version =
-            conary_core::generation::builder::detect_kernel_version_from_troves(&[])
-                .unwrap_or_else(|| "test-kernel".to_string());
+        let kernel_version = "test-kernel";
         let boot_root = root.join("boot");
         std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
         std::fs::write(
@@ -226,7 +254,11 @@ pub(super) mod test_support {
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
     }
 
-    fn write_try_package(package_path: PathBuf, manifest: CcsManifest) -> PathBuf {
+    fn write_try_package(
+        package_path: PathBuf,
+        manifest: CcsManifest,
+        signing_key: &SigningKeyPair,
+    ) -> PathBuf {
         let tool_content = format!("#!/bin/sh\necho {}\n", manifest.package.name).into_bytes();
         let tool_hash = conary_core::hash::sha256(&tool_content);
         let init_content = b"#!/bin/sh\nexec true\n".to_vec();
@@ -234,22 +266,29 @@ pub(super) mod test_support {
         let files = vec![
             FileEntry {
                 path: format!("/usr/bin/{}", manifest.package.name),
-                hash: tool_hash.clone(),
-                size: tool_content.len() as u64,
-                mode: 0o100755,
+                node: test_regular_node(0o755),
+                content: Some(PayloadContentAuthority {
+                    sha256: tool_hash.clone(),
+                    size: tool_content.len() as u64,
+                }),
                 component: "runtime".to_string(),
-                file_type: FileType::Regular,
-                target: None,
                 chunks: None,
             },
             FileEntry {
                 path: "/usr/sbin/init".to_string(),
-                hash: init_hash.clone(),
-                size: init_content.len() as u64,
-                mode: 0o100755,
+                node: test_regular_node(0o755),
+                content: Some(PayloadContentAuthority {
+                    sha256: init_hash.clone(),
+                    size: init_content.len() as u64,
+                }),
                 component: "runtime".to_string(),
-                file_type: FileType::Regular,
-                target: None,
+                chunks: None,
+            },
+            FileEntry {
+                path: "/sbin".to_string(),
+                node: test_symlink_node("usr/sbin"),
+                content: None,
+                component: "runtime".to_string(),
                 chunks: None,
             },
         ];
@@ -271,8 +310,28 @@ pub(super) mod test_support {
             chunked: false,
             chunk_stats: None,
         };
-        write_ccs_package(&result, &package_path).unwrap();
+        write_signed_current_ccs_package(&result, &package_path, signing_key, false).unwrap();
         package_path
+    }
+
+    fn test_regular_node(mode: u32) -> PayloadNode {
+        let mut node = PayloadNode::regular(mode);
+        node.user = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::geteuid() }),
+        };
+        node.group = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::getegid() }),
+        };
+        node
+    }
+
+    fn test_symlink_node(target: &str) -> PayloadNode {
+        let mut node = test_regular_node(0o777);
+        node.kind = conary_core::payload::PayloadNodeKind::Symlink {
+            target: target.to_string(),
+        };
+        node.mode = libc::S_IFLNK | 0o777;
+        node
     }
 
     pub(super) fn begin_namespace_try(
@@ -282,8 +341,8 @@ pub(super) mod test_support {
         begin_try_session(TryStartRequest {
             db_path: &fixture.db_path_string,
             package_path,
+            trust_policy: &fixture.trust_policy,
             activate: false,
-            allow_irreversible: false,
             command: None,
             watch_marker: None,
         })
@@ -296,8 +355,8 @@ pub(super) mod test_support {
         begin_try_session(TryStartRequest {
             db_path: &fixture.db_path_string,
             package_path,
+            trust_policy: &fixture.trust_policy,
             activate: true,
-            allow_irreversible: false,
             command: None,
             watch_marker: None,
         })
@@ -310,7 +369,66 @@ pub(super) mod test_support {
     }
 
     pub(super) fn create_current_generation_link(root: &Path, generation: i64) {
-        std::fs::create_dir_all(root.join(format!("generations/{generation}"))).unwrap();
+        let generation_dir = root.join(format!("generations/{generation}"));
+        let objects_dir = root.join("objects");
+        std::fs::create_dir_all(&generation_dir).unwrap();
+        std::fs::create_dir_all(&objects_dir).unwrap();
+
+        let erofs_path = generation_dir.join("root.erofs");
+        std::fs::write(&erofs_path, b"try-test-root-erofs").unwrap();
+        let mut root_node = test_regular_node(0o755);
+        root_node.kind = conary_core::payload::PayloadNodeKind::Directory;
+        root_node.mode = libc::S_IFDIR | 0o755;
+        GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root: conary_core::payload::ResolvedPayloadNode::from_numeric_source(root_node)
+                .unwrap(),
+            entries: Vec::new(),
+        }
+        .write_to(&generation_dir)
+        .unwrap();
+        MutableStateManifest::empty()
+            .write_to(&generation_dir)
+            .unwrap();
+
+        let kernel_version = "test-kernel".to_string();
+        let boot_root = root.join("boot");
+        let boot_assets = stage_boot_assets(BootAssetSources {
+            generation_dir: &generation_dir,
+            generation,
+            architecture: "x86_64",
+            kernel_version: &kernel_version,
+            kernel: &boot_root.join(format!("vmlinuz-{kernel_version}")),
+            initramfs: &boot_root.join(format!("initramfs-{kernel_version}.img")),
+            efi_bootloader: &boot_root.join("EFI/BOOT/BOOTX64.EFI"),
+        })
+        .unwrap();
+        let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
+            generation_dir: &generation_dir,
+            generation,
+            architecture: "x86_64",
+            erofs_path: &erofs_path,
+            cas_base_rel: "../../objects",
+            cas_verification: CasObjectVerification::Deep,
+            boot_assets,
+        })
+        .unwrap();
+        GenerationMetadata {
+            generation,
+            format: GENERATION_FORMAT.to_string(),
+            erofs_size: Some(std::fs::metadata(&erofs_path).unwrap().len() as i64),
+            cas_objects_referenced: Some(0),
+            fsverity_enabled: false,
+            erofs_verity_digest: None,
+            artifact_manifest_sha256: Some(artifact_manifest_sha256),
+            security_capability_xattr_count: None,
+            created_at: "2026-07-25T00:00:00Z".to_string(),
+            package_count: 0,
+            kernel_version: Some(kernel_version),
+            summary: "try test generation".to_string(),
+        }
+        .write_to(&generation_dir)
+        .unwrap();
         conary_core::generation::mount::update_current_symlink(root, generation).unwrap();
     }
 
@@ -427,8 +545,10 @@ pub(super) mod test_support {
             entry_type: "d".to_string(),
             path: "/var/lib/try-tmpfiles".to_string(),
             mode: "0755".to_string(),
-            owner: "root".to_string(),
+            user: "root".to_string(),
             group: "root".to_string(),
+            age: "-".to_string(),
+            argument: "-".to_string(),
             reversible: Some(true),
         });
         manifest
@@ -439,7 +559,6 @@ pub(super) mod test_support {
         manifest.hooks.sysctl.push(SysctlHook {
             key: "net.ipv4.ip_forward".to_string(),
             value: "0".to_string(),
-            only_if_lower: false,
             reversible: Some(true),
         });
         manifest
@@ -448,6 +567,7 @@ pub(super) mod test_support {
     pub(super) fn manifest_with_alternative_hook() -> CcsManifest {
         let mut manifest = CcsManifest::new_minimal("alternative-hook", "1.0.0");
         manifest.hooks.alternatives.push(AlternativeHook {
+            link: "/usr/bin/try-editor".to_string(),
             name: "try-editor".to_string(),
             path: "/usr/bin/try-editor".to_string(),
             priority: 50,
@@ -483,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn namespace_try_install_plan_uses_scratch_root_no_scripts_and_config_override() {
+    fn namespace_try_install_plan_uses_selected_root_and_shared_runtime() {
         let fixture = TryRuntimeFixture::new();
         let work_dir = fixture.root.join("try/session-a");
         let copied_db = work_dir.join("conary.db");
@@ -495,20 +615,12 @@ mod tests {
             TrySessionMode::Namespace,
         );
 
-        assert_eq!(plan.install_root, work_dir.join("root"));
+        assert_eq!(
+            plan.install_root,
+            work_dir.join("selected-root-session/root")
+        );
         assert_ne!(plan.install_root, PathBuf::from("/"));
-        assert!(
-            plan.no_scripts,
-            "namespace try installs must suppress install-time hooks"
-        );
-        assert_eq!(plan.transaction_config.db_path, copied_db);
-        assert_eq!(
-            plan.transaction_config.objects_dir,
-            fixture.root.join("objects")
-        );
-        assert_eq!(
-            plan.transaction_config.generations_dir,
-            fixture.root.join("generations")
-        );
+        assert_eq!(plan.runtime_root, fixture.runtime_root());
+        assert_eq!(plan.copied_db_path, copied_db);
     }
 }

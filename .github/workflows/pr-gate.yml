@@ -125,6 +125,10 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
+      - name: Enable exact ownership-test namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user --mount --propagation private /bin/true
       - name: Run workspace tests
         run: cargo test --workspace --exclude conary-test --verbose
 
@@ -136,6 +140,48 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
       - name: Test conary-test
         run: cargo test -p conary-test --verbose
+
+  native-cross-source-lifecycle:
+    name: native-cross-source-lifecycle (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora44, ubuntu-26.04, arch]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Require the hosted container runtime
+        run: docker info
+      - name: Build the lifecycle harness
+        run: cargo build -p conary -p conary-test
+      - name: Build the ${{ matrix.distro }} test image
+        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+      - name: Capture the native oracle and run Cartesian lifecycle parity
+        env:
+          CONARY_TEST_REUSE_IMAGE: "1"
+        run: >-
+          cargo run -p conary-test --
+          run
+          --distro "${{ matrix.distro }}"
+          --phase 4
+          --suite native-cross-source-lifecycle
+
+  native-cross-source-lifecycle-gate:
+    name: native-cross-source-lifecycle
+    if: ${{ always() }}
+    needs: native-cross-source-lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every distro lifecycle job
+        env:
+          MATRIX_RESULT: ${{ needs.native-cross-source-lifecycle.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "native cross-source lifecycle matrix result: $MATRIX_RESULT" >&2
+            exit 1
+          fi
 
   doctests:
     name: doctests

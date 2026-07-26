@@ -7,7 +7,7 @@
 //! - Synchronizing repository metadata
 //! - Downloading packages with retry and resume support
 //! - Verifying package checksums
-//! - GPG signature verification
+//! - Ecosystem-native repository and package signature verification
 //! - Native metadata format parsing (Arch, Debian, Fedora)
 
 mod client;
@@ -17,23 +17,27 @@ mod download;
 pub(crate) mod error_helpers;
 mod management;
 mod metadata;
-pub mod metalink;
 pub mod mirror_health;
 pub mod mirror_selector;
 pub mod registry;
 pub mod remi;
+pub mod remi_metadata;
 pub mod resolution;
 pub mod retry;
+mod rpm_verifier;
 pub mod substituter;
 pub mod supported_profiles;
 mod sync;
+pub mod trust;
 
 pub mod dependency_model;
 pub mod effective_policy;
-pub mod gpg;
-pub mod latest_signal;
+pub mod package_relation;
 pub mod parsers;
+pub mod requirement;
 pub mod resolution_policy;
+pub mod rpm_dependency;
+pub mod rpm_runtime;
 pub mod selector;
 pub mod static_repo;
 pub mod versioning;
@@ -42,36 +46,27 @@ pub mod chunk_fetcher;
 
 // Re-export main types and functions
 pub use client::RepositoryClient;
-pub use dependencies::{
-    download_dependencies, resolve_dependencies, resolve_dependencies_transitive,
-    resolve_dependencies_transitive_requests, resolve_dependency_requests,
-};
+pub(crate) use client::{MAX_BYTES_RESPONSE_SIZE, read_response_bytes_with_limit};
+pub use dependencies::download_dependencies;
 pub use download::{
-    DownloadOptions, DownloadProgress, download_delta, download_package, download_package_verified,
-    download_package_verified_with_progress, download_package_with_progress,
-    download_static_package_verified, download_static_package_verified_with_progress,
-    verify_checksum,
+    DownloadOptions, DownloadProgress, download_delta, download_package_verified,
+    download_package_verified_with_progress, download_static_package_verified,
+    download_static_package_verified_with_progress, verify_checksum,
 };
 pub use effective_policy::{
-    EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE,
-    load_effective_policy,
+    EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, load_effective_policy,
 };
-pub use gpg::GpgVerifier;
-pub use latest_signal::LatestSignal;
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
-pub use metalink::{
-    MetalinkFile, MetalinkMirror, extract_base_urls, parse_metalink_headers, parse_metalink_xml,
-};
 pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
 pub use mirror_selector::{MirrorSelector, MirrorStrategy};
-pub use parsers::{ChecksumType, Dependency, DependencyType, RepositoryParser};
-pub use registry::{RepositoryFormat, create_parser, detect_repository_format};
+pub use parsers::{ChecksumType, RepositoryParser};
+pub use registry::{RepositoryFormat, RepositoryParserConfig, create_parser};
 pub use remi::AsyncRemiClient;
 pub use remi::{PackageManifest, RemiClient};
 pub use resolution::{
     PackageResolver, PackageSource, RepositorySourceKind, RepositorySourceMetadata,
-    ResolutionOptions, build_gpg_options, resolve_package,
+    ResolutionOptions, resolve_package,
 };
 pub use retry::{RetryConfig, with_retry};
 pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
@@ -81,8 +76,11 @@ pub use static_repo::{
 };
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
-    current_timestamp, maybe_fetch_gpg_key, needs_sync, parse_timestamp, sync_repository,
-    sync_repository_from_db_path,
+    current_timestamp, needs_sync, parse_timestamp, sync_repository, sync_repository_from_db_path,
+};
+pub use trust::{
+    ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,
+    OpenPgpTrustRoot, RepositoryTrustPolicy, RpmMetadataAuthority, TrustRole,
 };
 
 pub use chunk_fetcher::{
@@ -105,6 +103,8 @@ mod tests {
             &conn,
             "test-repo".to_string(),
             "https://example.com/repo".to_string(),
+            RepositoryParserConfig::Json,
+            None,
             true,
             10,
         )
@@ -124,6 +124,8 @@ mod tests {
             &conn,
             "test-repo".to_string(),
             "https://example.com/repo".to_string(),
+            RepositoryParserConfig::Json,
+            None,
             true,
             10,
         )
@@ -134,6 +136,8 @@ mod tests {
             &conn,
             "test-repo".to_string(),
             "https://example.com/other".to_string(),
+            RepositoryParserConfig::Json,
+            None,
             true,
             10,
         );
@@ -149,6 +153,8 @@ mod tests {
             &conn,
             "test-repo".to_string(),
             "https://example.com/repo".to_string(),
+            RepositoryParserConfig::Json,
+            None,
             true,
             10,
         )
@@ -168,6 +174,8 @@ mod tests {
             &conn,
             "test-repo".to_string(),
             "https://example.com/repo".to_string(),
+            RepositoryParserConfig::Json,
+            None,
             true,
             10,
         )
@@ -186,6 +194,39 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(repo.enabled);
+    }
+
+    #[test]
+    fn disabled_native_repository_requires_trust_before_enable() {
+        let (_temp, conn) = create_test_db();
+
+        let repo = add_repository(
+            &conn,
+            "arch-pending-trust".to_string(),
+            "https://mirror.example.test/arch".to_string(),
+            RepositoryParserConfig::Arch {
+                database: "core".to_string(),
+            },
+            Some("arch".to_string()),
+            false,
+            10,
+        )
+        .unwrap();
+        assert!(!repo.enabled);
+        assert!(repo.trust_policy.is_none());
+
+        let error = set_repository_enabled(&conn, "arch-pending-trust", true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has no ecosystem-native trust policy")
+        );
+        assert!(
+            !Repository::find_by_name(&conn, "arch-pending-trust")
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
@@ -213,32 +254,32 @@ mod tests {
     }
 
     #[test]
-    fn test_repository_gpg_strict() {
+    fn test_repository_native_trust_policy_round_trips() {
         let (_temp, conn) = create_test_db();
 
-        // Create repository with default settings (gpg_strict = true)
         let mut repo = Repository::new(
             "test-repo".to_string(),
             "https://example.com/repo".to_string(),
         );
-        assert!(repo.gpg_strict); // Default should be strict
+        repo.set_parser_config(RepositoryParserConfig::Deb {
+            distribution: "stable".to_string(),
+            component: "main".to_string(),
+            architecture: "amd64".to_string(),
+        })
+        .unwrap();
+        repo.source_profile = Some("ubuntu-26.04".to_string());
+        repo.set_trust_policy(RepositoryTrustPolicy::Debian {
+            release_keys: vec![OpenPgpTrustRoot {
+                url: "https://keys.example.test/debian.gpg".to_string(),
+                fingerprint: "A".repeat(40),
+            }],
+        })
+        .unwrap();
         repo.insert(&conn).unwrap();
 
-        // Verify it was stored correctly
         let fetched = Repository::find_by_name(&conn, "test-repo")
             .unwrap()
             .unwrap();
-        assert!(fetched.gpg_strict);
-
-        // Update to disable strict mode explicitly
-        let mut repo = fetched;
-        repo.gpg_strict = false;
-        repo.update(&conn).unwrap();
-
-        // Verify the update
-        let fetched = Repository::find_by_name(&conn, "test-repo")
-            .unwrap()
-            .unwrap();
-        assert!(!fetched.gpg_strict);
+        assert_eq!(fetched.trust_policy, repo.trust_policy);
     }
 }

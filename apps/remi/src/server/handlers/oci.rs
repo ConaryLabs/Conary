@@ -14,10 +14,11 @@
 //! - GET /v2/{name}/tags/list - List tags (versions)
 
 use crate::server::ServerState;
+use anyhow::Context;
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::ConvertedPackage;
@@ -87,12 +88,25 @@ fn oci_error_response(status: StatusCode, code: &str, message: &str) -> Response
             message: message.to_string(),
         }],
     };
-    let json = serde_json::to_string(&body).unwrap_or_default();
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    let (status, json) = match serde_json::to_vec(&body) {
+        Ok(json) => (status, json),
+        Err(error) => {
+            tracing::error!(%error, "failed to serialize OCI error response");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                br#"{"errors":[{"code":"INTERNAL_ERROR","message":"Failed to serialize OCI error response"}]}"#
+                    .to_vec(),
+            )
+        }
+    };
+
+    let mut response = Response::new(Body::from(json));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
 }
 
 async fn blob_allowed_by_public_gate(
@@ -100,7 +114,7 @@ async fn blob_allowed_by_public_gate(
     hash: String,
 ) -> std::result::Result<bool, Response> {
     match tokio::task::spawn_blocking(move || {
-        crate::server::publication::local_chunk_servable_by_public_gate(&db_path, &hash)
+        crate::server::publication::local_chunk_servable(&db_path, &hash)
     })
     .await
     {
@@ -518,28 +532,32 @@ fn build_manifest(
     };
 
     let conn = Connection::open(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
     let converted = if let Some(ver) = version {
-        ConvertedPackage::find_by_package_identity(&conn, distro, package, Some(ver))?
+        ConvertedPackage::find_by_package_identity(&conn, source_profile.id(), package, Some(ver))?
     } else {
-        ConvertedPackage::find_by_content_hash_identity(&conn, distro, package, reference)?
+        ConvertedPackage::find_by_content_hash_identity(
+            &conn,
+            source_profile.id(),
+            package,
+            reference,
+        )?
     };
-
-    let converted = converted.filter(|converted| {
-        !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-    });
 
     let converted = match converted {
-        Some(c) => c,
+        Some(converted) if !converted.needs_reconversion() => {
+            converted.scriptlet_summary()?;
+            converted
+        }
         None => return Ok(None),
+        Some(_) => return Ok(None),
     };
 
-    // Parse chunk hashes from JSON
-    let chunk_hashes: Vec<String> = converted
-        .chunk_hashes_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok())
-        .unwrap_or_default();
+    let artifact = converted.repository_artifact()?;
+    let chunk_hashes = &artifact.chunk_hashes;
 
     if chunk_hashes.is_empty() {
         return Ok(None);
@@ -547,42 +565,37 @@ fn build_manifest(
 
     // Build layer descriptors from chunk hashes
     let mut layers = Vec::with_capacity(chunk_hashes.len());
-    for hash in &chunk_hashes {
+    for hash in chunk_hashes {
         // Try to get actual size from disk
         let chunk_path = chunk_cache.chunk_path(hash);
-        let size = std::fs::metadata(&chunk_path)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
+        let size = i64::try_from(
+            std::fs::metadata(&chunk_path)
+                .with_context(|| format!("converted chunk {hash} is missing from local CAS"))?
+                .len(),
+        )
+        .context("converted chunk size exceeds OCI descriptor range")?;
+        let digest = if hash.starts_with("sha256:") {
+            hash.to_string()
+        } else {
+            format!("sha256:{hash}")
+        };
 
         layers.push(OciDescriptor {
             media_type: CONARY_CHUNK_MEDIA_TYPE.to_string(),
-            digest: format!("sha256:{}", hash),
+            digest,
             size,
             annotations: None,
         });
     }
 
     // Build config blob (synthetic JSON with package metadata)
-    let pkg_version = converted
-        .package_version
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-    let pkg_name = converted
-        .package_name
-        .clone()
-        .unwrap_or_else(|| package.to_string());
-    let pkg_distro = converted
-        .distro
-        .clone()
-        .unwrap_or_else(|| distro.to_string());
-
     let config_json = serde_json::json!({
-        "name": pkg_name,
-        "version": pkg_version,
-        "distro": pkg_distro,
+        "name": artifact.package_name,
+        "version": artifact.package_version,
+        "distro": distro,
         "format": converted.original_format,
-        "total_size": converted.total_size.unwrap_or(0),
-        "content_hash": converted.content_hash.clone().unwrap_or_default(),
+        "total_size": artifact.total_size,
+        "content_hash": artifact.content_hash,
     });
     let config_bytes = serde_json::to_vec(&config_json)?;
     let config_digest = format!("sha256:{}", conary_core::hash::sha256(&config_bytes));
@@ -617,11 +630,16 @@ fn build_tags_list(
     package: &str,
 ) -> Result<Vec<String>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
-    let mut tags = ConvertedPackage::find_publication_candidates(&conn, distro, Some(package))?
-        .into_iter()
-        .filter(|converted| converted.is_scriptlet_public_ready())
-        .filter_map(|converted| converted.package_version)
-        .collect::<Vec<_>>();
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
+    let mut tags = Vec::new();
+    for converted in
+        ConvertedPackage::find_current_conversions(&conn, source_profile.id(), Some(package))?
+    {
+        converted.scriptlet_summary()?;
+        tags.push(converted.repository_artifact()?.package_version.to_string());
+    }
     tags.sort();
     tags.dedup();
 
@@ -631,18 +649,28 @@ fn build_tags_list(
 /// Build the OCI catalog (list of all repositories)
 fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error> {
     let conn = Connection::open(db_path)?;
-    let mut repositories = ConvertedPackage::list_all(&conn)?
-        .into_iter()
-        .filter(|converted| {
-            !converted.needs_reconversion() && converted.is_scriptlet_public_ready()
-        })
-        .filter_map(|converted| {
-            Some(format!(
-                "conary/{}/{}",
-                converted.distro?, converted.package_name?
-            ))
-        })
-        .collect::<Vec<_>>();
+    let mut repositories = Vec::new();
+    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
+        if converted.needs_reconversion() {
+            continue;
+        }
+        converted.scriptlet_summary()?;
+        let artifact = converted.repository_artifact()?;
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
+            artifact.source_profile,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "converted artifact carries unsupported source profile '{}'",
+                artifact.source_profile
+            )
+        })?;
+        repositories.push(format!(
+            "conary/{}/{}",
+            profile.remi_route_slug(),
+            artifact.package_name
+        ));
+    }
     repositories.sort();
     repositories.dedup();
 
@@ -668,500 +696,5 @@ fn strip_digest_prefix(digest: &str) -> Option<&str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
-    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
-    use conary_core::db::schema;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
-        (temp_file, conn)
-    }
-
-    fn insert_converted_package(
-        conn: &Connection,
-        distro: &str,
-        name: &str,
-        version: &str,
-        chunks: &[String],
-    ) {
-        let mut pkg = ConvertedPackage::new_server(
-            distro.to_string(),
-            name.to_string(),
-            version.to_string(),
-            "rpm".to_string(),
-            format!("sha256:test-{}-{}", name, version),
-            "high".to_string(),
-            chunks,
-            4096,
-            format!("sha256:content-{}-{}", name, version),
-            format!("/data/{}-{}.ccs", name, version),
-        );
-        pkg.insert(conn).unwrap();
-    }
-
-    fn insert_stale_converted_package(
-        conn: &Connection,
-        distro: &str,
-        name: &str,
-        version: &str,
-        chunks: &[String],
-    ) {
-        let mut pkg = ConvertedPackage::new_server(
-            distro.to_string(),
-            name.to_string(),
-            version.to_string(),
-            "rpm".to_string(),
-            format!("sha256:test-{}-{}", name, version),
-            "high".to_string(),
-            chunks,
-            4096,
-            format!("sha256:content-{}-{}", name, version),
-            format!("/data/{}-{}.ccs", name, version),
-        );
-        pkg.conversion_version = CONVERSION_VERSION - 1;
-        pkg.insert(conn).unwrap();
-    }
-
-    fn insert_private_review_converted_package(
-        conn: &Connection,
-        distro: &str,
-        name: &str,
-        version: &str,
-        chunks: &[String],
-    ) {
-        let mut pkg = ConvertedPackage::new_server(
-            distro.to_string(),
-            name.to_string(),
-            version.to_string(),
-            "rpm".to_string(),
-            format!("sha256:test-{}-{}", name, version),
-            "high".to_string(),
-            chunks,
-            4096,
-            format!("sha256:content-{}-{}", name, version),
-            format!("/data/{}-{}.ccs", name, version),
-        );
-        pkg.set_scriptlet_metadata(&ScriptletBundleSummary {
-            publication_status: "private-review".to_string(),
-            scriptlet_fidelity: "review-required".to_string(),
-            target_compatibility: "review-required".to_string(),
-            review_reason_codes: vec!["review-class-debconf".to_string()],
-            ..Default::default()
-        })
-        .unwrap();
-        pkg.insert(conn).unwrap();
-    }
-
-    const OCI_TEST_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-
-    fn private_review_summary() -> ScriptletBundleSummary {
-        ScriptletBundleSummary {
-            publication_status: "private-review".to_string(),
-            scriptlet_fidelity: "review-required".to_string(),
-            target_compatibility: "review-required".to_string(),
-            review_reason_codes: vec!["review-class-debconf".to_string()],
-            ..Default::default()
-        }
-    }
-
-    async fn oci_blob_state_with_db(
-        hash: &str,
-        rows: Vec<ScriptletBundleSummary>,
-    ) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("test.db");
-        let conn = Connection::open(&db_path).unwrap();
-        schema::migrate(&conn).unwrap();
-
-        let chunk_dir = temp.path().join("chunks");
-        let cache_dir = temp.path().join("cache");
-        let chunk_path = crate::server::handlers::cas_object_path(&chunk_dir, hash);
-        std::fs::create_dir_all(chunk_path.parent().unwrap()).unwrap();
-        std::fs::write(&chunk_path, b"blob bytes").unwrap();
-
-        for (index, summary) in rows.into_iter().enumerate() {
-            let mut converted = ConvertedPackage::new_server(
-                "fedora".to_string(),
-                format!("pkg-{index}"),
-                "1.0".to_string(),
-                "rpm".to_string(),
-                format!("sha256:source-{index}"),
-                "high".to_string(),
-                &[hash.to_string()],
-                10,
-                format!("sha256:content-{index}"),
-                format!("/tmp/pkg-{index}.ccs"),
-            );
-            converted.set_scriptlet_metadata(&summary).unwrap();
-            converted.insert(&conn).unwrap();
-        }
-
-        let config = crate::server::ServerConfig {
-            db_path,
-            chunk_dir,
-            cache_dir,
-            enable_bloom_filter: false,
-            upstream_url: None,
-            ..Default::default()
-        };
-        std::fs::create_dir_all(&config.cache_dir).unwrap();
-        let state = crate::server::ServerState::new(config).expect("test server state");
-        (Arc::new(RwLock::new(state)), temp)
-    }
-
-    #[test]
-    fn test_parse_oci_name_namespaced() {
-        let (distro, pkg) = parse_oci_name("conary/fedora/nginx").unwrap();
-        assert_eq!(distro, "fedora");
-        assert_eq!(pkg, "nginx");
-    }
-
-    #[test]
-    fn test_parse_oci_name_bare() {
-        let (distro, pkg) = parse_oci_name("fedora/nginx").unwrap();
-        assert_eq!(distro, "fedora");
-        assert_eq!(pkg, "nginx");
-    }
-
-    #[test]
-    fn test_parse_oci_name_invalid() {
-        assert!(parse_oci_name("nginx").is_none());
-        assert!(parse_oci_name("").is_none());
-        assert!(parse_oci_name("/nginx").is_none());
-        assert!(parse_oci_name("fedora/").is_none());
-        // Nested packages not supported
-        assert!(parse_oci_name("fedora/nginx/extra").is_none());
-    }
-
-    #[test]
-    fn test_split_oci_segment() {
-        let (name, reference) =
-            split_oci_segment("conary/fedora/nginx/manifests/1.24.0", "/manifests/").unwrap();
-        assert_eq!(name, "conary/fedora/nginx");
-        assert_eq!(reference, "1.24.0");
-
-        let (name, digest) =
-            split_oci_segment("fedora/curl/blobs/sha256:abc123", "/blobs/").unwrap();
-        assert_eq!(name, "fedora/curl");
-        assert_eq!(digest, "sha256:abc123");
-    }
-
-    #[test]
-    fn test_split_oci_segment_missing() {
-        assert!(split_oci_segment("foo/bar", "/manifests/").is_none());
-        assert!(split_oci_segment("/manifests/ref", "/manifests/").is_none());
-        assert!(split_oci_segment("foo/manifests/", "/manifests/").is_none());
-    }
-
-    #[test]
-    fn test_strip_digest_prefix() {
-        // Valid: sha256 prefix with exactly 64 hex chars
-        let valid_hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-        assert_eq!(
-            strip_digest_prefix(&format!("sha256:{}", valid_hash)),
-            Some(valid_hash)
-        );
-
-        // Missing sha256: prefix
-        assert_eq!(strip_digest_prefix(valid_hash), None);
-
-        // Wrong algorithm prefix
-        assert_eq!(strip_digest_prefix("sha512:abc"), None);
-
-        // sha256: prefix but invalid hex (too short)
-        assert_eq!(strip_digest_prefix("sha256:abc123"), None);
-
-        // sha256: prefix but contains path traversal characters
-        assert_eq!(
-            strip_digest_prefix(
-                "sha256:../../etc/passwd/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            ),
-            None
-        );
-
-        // sha256: prefix but contains non-hex chars (64 chars total)
-        assert_eq!(
-            strip_digest_prefix(
-                "sha256:zzzzzz1234567890abcdef1234567890abcdef1234567890abcdef12345678"
-            ),
-            None
-        );
-
-        // sha256: prefix with uppercase (is_valid_hash accepts ascii hex which includes A-F)
-        let upper_hash = "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890";
-        assert_eq!(
-            strip_digest_prefix(&format!("sha256:{}", upper_hash)),
-            Some(upper_hash)
-        );
-    }
-
-    #[test]
-    fn test_build_tags_list() {
-        let (temp_file, conn) = create_test_db();
-
-        insert_converted_package(
-            &conn,
-            "fedora",
-            "nginx",
-            "1.24.0-1.fc44",
-            &["chunk1".to_string()],
-        );
-        insert_converted_package(
-            &conn,
-            "fedora",
-            "nginx",
-            "1.25.0-1.fc44",
-            &["chunk2".to_string()],
-        );
-        insert_converted_package(&conn, "arch", "nginx", "1.25.0-1", &["chunk3".to_string()]);
-
-        let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
-        assert_eq!(tags, vec!["1.24.0-1.fc44", "1.25.0-1.fc44"]);
-
-        let tags = build_tags_list(temp_file.path(), "arch", "nginx").unwrap();
-        assert_eq!(tags, vec!["1.25.0-1"]);
-
-        let tags = build_tags_list(temp_file.path(), "fedora", "nonexistent").unwrap();
-        assert!(tags.is_empty());
-    }
-
-    #[test]
-    fn oci_tags_ignore_stale_converted_rows() {
-        let (temp_file, conn) = create_test_db();
-
-        insert_stale_converted_package(
-            &conn,
-            "fedora",
-            "nginx",
-            "1.24.0-1.fc44",
-            &["stale-chunk".to_string()],
-        );
-        insert_converted_package(
-            &conn,
-            "fedora",
-            "nginx",
-            "1.25.0-1.fc44",
-            &["current-chunk".to_string()],
-        );
-
-        let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
-        assert_eq!(tags, vec!["1.25.0-1.fc44"]);
-    }
-
-    #[test]
-    fn test_build_catalog() {
-        let (temp_file, conn) = create_test_db();
-
-        insert_converted_package(&conn, "fedora", "nginx", "1.24.0", &["chunk1".to_string()]);
-        insert_converted_package(&conn, "fedora", "curl", "8.5.0", &["chunk2".to_string()]);
-        insert_converted_package(&conn, "arch", "nginx", "1.25.0", &["chunk3".to_string()]);
-
-        let catalog = build_catalog(temp_file.path()).unwrap();
-        assert_eq!(
-            catalog.repositories,
-            vec![
-                "conary/arch/nginx",
-                "conary/fedora/curl",
-                "conary/fedora/nginx",
-            ]
-        );
-    }
-
-    #[test]
-    fn oci_catalog_ignores_stale_converted_rows() {
-        let (temp_file, conn) = create_test_db();
-
-        insert_stale_converted_package(
-            &conn,
-            "fedora",
-            "stale-only",
-            "1.0.0",
-            &["stale-chunk".to_string()],
-        );
-        insert_converted_package(
-            &conn,
-            "fedora",
-            "current",
-            "1.0.0",
-            &["current-chunk".to_string()],
-        );
-
-        let catalog = build_catalog(temp_file.path()).unwrap();
-        assert_eq!(catalog.repositories, vec!["conary/fedora/current"]);
-    }
-
-    #[test]
-    fn test_build_catalog_empty() {
-        let (temp_file, _conn) = create_test_db();
-        let catalog = build_catalog(temp_file.path()).unwrap();
-        assert!(catalog.repositories.is_empty());
-    }
-
-    #[test]
-    fn test_build_manifest() {
-        let (temp_file, conn) = create_test_db();
-
-        let chunks = vec!["aabbccdd".to_string(), "eeff0011".to_string()];
-        insert_converted_package(&conn, "fedora", "nginx", "1.24.0", &chunks);
-
-        // Create a temporary chunk cache directory
-        let chunk_dir = tempfile::tempdir().unwrap();
-        let chunk_cache = crate::server::ChunkCache::new(
-            chunk_dir.path().to_path_buf(),
-            1024 * 1024 * 1024,
-            30,
-            temp_file.path().to_path_buf(),
-        );
-
-        let result =
-            build_manifest(temp_file.path(), "fedora", "nginx", "1.24.0", &chunk_cache).unwrap();
-
-        assert!(result.is_some());
-        let (json, digest) = result.unwrap();
-
-        // Verify it parses as valid JSON
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["schemaVersion"], 2);
-        assert_eq!(parsed["mediaType"], OCI_MANIFEST_MEDIA_TYPE);
-
-        // Should have 2 layers (one per chunk)
-        let layers = parsed["layers"].as_array().unwrap();
-        assert_eq!(layers.len(), 2);
-        assert_eq!(layers[0]["digest"], "sha256:aabbccdd");
-        assert_eq!(layers[1]["digest"], "sha256:eeff0011");
-
-        // Config should be present
-        assert!(
-            parsed["config"]["digest"]
-                .as_str()
-                .unwrap()
-                .starts_with("sha256:")
-        );
-
-        // Digest should be sha256
-        assert!(digest.starts_with("sha256:"));
-    }
-
-    #[test]
-    fn test_build_manifest_not_found() {
-        let (temp_file, _conn) = create_test_db();
-        let chunk_dir = tempfile::tempdir().unwrap();
-        let chunk_cache = crate::server::ChunkCache::new(
-            chunk_dir.path().to_path_buf(),
-            1024 * 1024 * 1024,
-            30,
-            temp_file.path().to_path_buf(),
-        );
-
-        let result = build_manifest(
-            temp_file.path(),
-            "fedora",
-            "nonexistent",
-            "1.0.0",
-            &chunk_cache,
-        )
-        .unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn oci_manifest_ignores_stale_converted_rows() {
-        let (temp_file, conn) = create_test_db();
-        insert_stale_converted_package(
-            &conn,
-            "fedora",
-            "nginx",
-            "1.24.0",
-            &["stale-chunk".to_string()],
-        );
-
-        let chunk_dir = tempfile::tempdir().unwrap();
-        let chunk_cache = crate::server::ChunkCache::new(
-            chunk_dir.path().to_path_buf(),
-            1024 * 1024 * 1024,
-            30,
-            temp_file.path().to_path_buf(),
-        );
-
-        let result =
-            build_manifest(temp_file.path(), "fedora", "nginx", "1.24.0", &chunk_cache).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn oci_tags_catalog_and_manifest_ignore_non_public_rows() {
-        let (temp_file, conn) = create_test_db();
-        insert_private_review_converted_package(
-            &conn,
-            "fedora",
-            "private-only",
-            "1.0",
-            &["private-chunk".to_string()],
-        );
-
-        let chunk_dir = tempfile::tempdir().unwrap();
-        let chunk_cache = crate::server::ChunkCache::new(
-            chunk_dir.path().to_path_buf(),
-            1024 * 1024 * 1024,
-            30,
-            temp_file.path().to_path_buf(),
-        );
-
-        let tags = build_tags_list(temp_file.path(), "fedora", "private-only").unwrap();
-        let catalog = build_catalog(temp_file.path()).unwrap();
-        let manifest = build_manifest(
-            temp_file.path(),
-            "fedora",
-            "private-only",
-            "1.0",
-            &chunk_cache,
-        )
-        .unwrap();
-
-        assert!(tags.is_empty());
-        assert!(catalog.repositories.is_empty());
-        assert!(manifest.is_none());
-    }
-
-    #[tokio::test]
-    async fn oci_blob_returns_not_found_for_non_public_only_hash() {
-        let (state, _temp) =
-            oci_blob_state_with_db(OCI_TEST_HASH, vec![private_review_summary()]).await;
-        let digest = format!("sha256:{OCI_TEST_HASH}");
-
-        let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn oci_head_blob_returns_not_found_for_non_public_only_hash() {
-        let (state, _temp) =
-            oci_blob_state_with_db(OCI_TEST_HASH, vec![private_review_summary()]).await;
-        let digest = format!("sha256:{OCI_TEST_HASH}");
-
-        let response = head_blob_inner(state, "conary/fedora/pkg", &digest).await;
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn oci_blob_allows_hash_shared_with_public_ready_row() {
-        let (state, _temp) = oci_blob_state_with_db(
-            OCI_TEST_HASH,
-            vec![private_review_summary(), ScriptletBundleSummary::default()],
-        )
-        .await;
-        let digest = format!("sha256:{OCI_TEST_HASH}");
-
-        let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-}
+#[path = "oci/tests.rs"]
+mod tests;

@@ -47,12 +47,12 @@ pub fn set_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
 
     #[test]
     fn test_metadata_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
 
         assert_eq!(
             get_metadata(&conn, MetadataTable::Server, "missing").unwrap(),
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn test_client_metadata() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
 
         set_metadata(&conn, MetadataTable::Client, "etag", "W/\"v5\"").unwrap();
         assert_eq!(

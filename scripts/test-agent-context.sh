@@ -177,11 +177,7 @@ grep -q '^Alpha Feature |' <<<"$path_brief_out" \
 grep -q '^# Task Packet: Alpha Feature$' "$tmp/path-full.out" \
     || fail "--path without --brief did not print the full packet"
 
-for planning_path in \
-    docs/designs/2099-01-01-example-design.md \
-    docs/plans/2099-01-01-example-plan.md \
-    docs/roadmaps/example-roadmap.md
-do
+for planning_path in docs/roadmaps/example-roadmap.md; do
     fallback_out="$("$script" --path "$planning_path" --map "$fixture_map")"
     grep -q '^Planning docs |' <<<"$fallback_out" \
         || fail "$planning_path did not use the planning fallback; got: $fallback_out"
@@ -189,6 +185,15 @@ do
         || fail "$planning_path fallback did not name documentation truth proof"
     grep -q 'risk-proportional review gate' <<<"$fallback_out" \
         || fail "$planning_path fallback did not name the proportional review gate"
+done
+
+for retired_planning_path in \
+    docs/designs/2099-01-01-example-design.md \
+    docs/plans/2099-01-01-example-plan.md
+do
+    fallback_out="$("$script" --path "$retired_planning_path" --map "$fixture_map")"
+    grep -q '^No feature-card hint matched\.' <<<"$fallback_out" \
+        || fail "$retired_planning_path still used a retired planning fallback; got: $fallback_out"
 done
 
 fallback_out="$("$script" --path docs/modules/anything-at-all.md --map "$fixture_map")"
@@ -341,7 +346,20 @@ run_validate_expect_fail "$vr" "equal-specificity Paths overlap for a/alpha.rs"
 vr="$tmp/validate-missing-start"
 make_validate_repo "$vr"
 sed -i 's|`a/alpha.rs`;|`a/missing.rs`;|' "$vr/map.md"
-run_validate_expect_fail "$vr" "references untracked path: a/missing.rs"
+run_validate_expect_fail "$vr" "references missing working-tree path: a/missing.rs"
+
+vr="$tmp/validate-deleted-start"
+make_validate_repo "$vr"
+rm "$vr/a/alpha.rs"
+run_validate_expect_fail "$vr" "references missing working-tree path: a/alpha.rs"
+
+vr="$tmp/validate-untracked-start"
+make_validate_repo "$vr"
+printf 'new alpha\n' > "$vr/a/new-alpha.rs"
+sed -i 's|`a/alpha.rs`;|`a/new-alpha.rs`;|' "$vr/map.md"
+good_out="$( (cd "$vr" && bash "$script" --map map.md --validate) )"
+grep -q "validation passed" <<<"$good_out" \
+    || fail "untracked nonignored start-here path did not validate; got: $good_out"
 
 vr="$tmp/validate-no-proof-command"
 make_validate_repo "$vr"
@@ -379,11 +397,40 @@ grep -q "command failed: false" "$tmp/run-fail.out" \
 real_list="$("$script" --list)"
 grep -q $'^packaging\t' <<<"$real_list" || fail "real map --list missing packaging slug"
 grep -q $'^profiles\t' <<<"$real_list" || fail "real map --list missing profiles slug"
-[[ "$(wc -l <<<"$real_list")" -eq 13 ]] || fail "real map --list did not print 13 cards"
+grep -q $'^resolution\t' <<<"$real_list" || fail "real map --list missing resolution slug"
+grep -q $'^canonical-map\t' <<<"$real_list" || fail "real map --list missing canonical-map slug"
+[[ "$(wc -l <<<"$real_list")" -eq 15 ]] || fail "real map --list did not print 15 cards"
 
 "$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
 grep -q '^slug: install$' "$tmp/real-install.out" \
     || fail "install path did not route to the install card"
+"$script" --path apps/conary/src/commands/system/tests/rollback/generation.rs > "$tmp/real-rollback.out"
+grep -q '^slug: install$' "$tmp/real-rollback.out" \
+    || fail "rollback reconstruction test did not route to the install card"
+"$script" --path crates/conary-core/src/db/models/package_payload_ownership/tests.rs > "$tmp/real-payload-ownership.out"
+grep -q '^slug: install$' "$tmp/real-payload-ownership.out" \
+    || fail "package payload ownership did not route to the install card"
+"$script" --path crates/conary-core/src/filesystem/selected_root.rs > "$tmp/real-selected-root.out"
+grep -q '^slug: install$' "$tmp/real-selected-root.out" \
+    || fail "selected-root node inspection did not route to the install card"
+"$script" --path crates/conary-core/src/payload.rs > "$tmp/real-payload.out"
+grep -q '^slug: ccs$' "$tmp/real-payload.out" \
+    || fail "shared payload authority did not route to the ccs card"
+"$script" --path crates/conary-core/src/config_transaction/tests.rs > "$tmp/real-config-transaction.out"
+grep -q '^slug: generation$' "$tmp/real-config-transaction.out" \
+    || fail "config transaction tests did not route to the generation card"
+"$script" --path crates/conary-core/src/resolver/sat/relations.rs > "$tmp/real-resolution.out"
+grep -q '^slug: resolution$' "$tmp/real-resolution.out" \
+    || fail "SAT relation path did not route to the resolution card"
+"$script" --path crates/conary-core/src/canonical/exchange.rs > "$tmp/real-canonical-map.out"
+grep -q '^slug: canonical-map$' "$tmp/real-canonical-map.out" \
+    || fail "canonical exchange did not route to the canonical-map card"
+"$script" --path apps/remi/src/server/canonical_job.rs > "$tmp/real-canonical-job.out"
+grep -q '^slug: canonical-map$' "$tmp/real-canonical-job.out" \
+    || fail "Remi canonical job did not route to the canonical-map card"
+"$script" --path crates/conary-core/src/repository/sync/remi.rs > "$tmp/real-canonical-sync.out"
+grep -q '^slug: canonical-map$' "$tmp/real-canonical-sync.out" \
+    || fail "Remi canonical sync did not route to the canonical-map card"
 "$script" --path apps/remi/src/server/mcp.rs > "$tmp/real-mcp.out"
 grep -q '^slug: agent-mcp$' "$tmp/real-mcp.out" \
     || fail "remi mcp.rs did not route to agent-mcp (specificity)"
@@ -393,6 +440,18 @@ grep -q '^slug: bootstrap$' "$tmp/real-bootstrap.out" \
 "$script" --path apps/remi/src/federation/mod.rs > "$tmp/real-federation.out"
 grep -q '^slug: remi$' "$tmp/real-federation.out" \
     || fail "federation path did not fold into the remi card"
+"$script" --path apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh > "$tmp/real-native-matrix.out"
+grep -q '^slug: conary-test$' "$tmp/real-native-matrix.out" \
+    || fail "native lifecycle matrix helper did not route to conary-test"
+"$script" --path apps/conary/tests/fixtures/phase4-signed-update/rpm/ccs.toml > "$tmp/real-fixture.out"
+grep -q '^slug: conary-test$' "$tmp/real-fixture.out" \
+    || fail "integration fixture payload did not route to conary-test"
+"$script" --path apps/conary/src/commands/cook/foreign_package.rs > "$tmp/real-foreign-cook.out"
+grep -q '^slug: packaging$' "$tmp/real-foreign-cook.out" \
+    || fail "foreign-package cook path did not route to packaging"
+"$script" --path crates/conary-core/src/derivation/pipeline/tests.rs > "$tmp/real-derivation-pipeline.out"
+grep -q '^slug: packaging$' "$tmp/real-derivation-pipeline.out" \
+    || fail "packaging derivation pipeline did not route to packaging"
 
 # --- real-map gate prose: no mangled output ---
 agent_mcp_gate="$("$script" --feature agent-mcp)"
@@ -402,7 +461,7 @@ bootstrap_gate="$("$script" --feature bootstrap)"
 grep -q '^when: the local environment is intended to build or run the image\.$' <<<"$bootstrap_gate" \
     || fail "bootstrap gate when-prose was mangled"
 conary_test_gate="$("$script" --feature conary-test)"
-grep -q '^when: the touched manifest or feature-card suite selection changes\.$' <<<"$conary_test_gate" \
+grep -q '^when: run for each configured distro when native conversion/lifecycle behavior or image build-context staging changes\.$' <<<"$conary_test_gate" \
     || fail "conary-test gate when-prose was mangled"
 
 echo "agent-context tests passed."

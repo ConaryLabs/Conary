@@ -11,7 +11,6 @@ use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
 pub(super) async fn dispatch_system_generation_command(
     gen_cmd: cli::GenerationCommands,
-    allow_live_system_mutation: bool,
 ) -> Result<()> {
     match gen_cmd {
         cli::GenerationCommands::List => {
@@ -19,7 +18,7 @@ pub(super) async fn dispatch_system_generation_command(
         }
         cli::GenerationCommands::Build { summary, yes, db } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation build"),
                 LiveMutationClass::AlwaysLive,
                 false,
@@ -28,7 +27,7 @@ pub(super) async fn dispatch_system_generation_command(
         }
         cli::GenerationCommands::Publish { changeset, yes, db } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation publish"),
                 LiveMutationClass::AlwaysLive,
                 false,
@@ -37,6 +36,18 @@ pub(super) async fn dispatch_system_generation_command(
         }
         cli::GenerationCommands::Pending { db } => {
             commands::generation::commands::cmd_generation_pending(&db.db_path)
+        }
+        cli::GenerationCommands::Activate { db } => {
+            let summary =
+                commands::generation::activation_intents::cmd_generation_activate(&db.db_path)?;
+            if let Some(generation) = summary.generation_number {
+                tracing::info!(
+                    generation,
+                    applied = summary.applied,
+                    "generation activation intents consumed"
+                );
+            }
+            Ok(())
         }
         cli::GenerationCommands::VerifyDbBackup {
             generation,
@@ -56,7 +67,7 @@ pub(super) async fn dispatch_system_generation_command(
             db,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation recover-db"),
                 LiveMutationClass::AlwaysLive,
                 dry_run,
@@ -92,7 +103,7 @@ pub(super) async fn dispatch_system_generation_command(
             yes,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation switch"),
                 LiveMutationClass::AlwaysLive,
                 false,
@@ -101,7 +112,7 @@ pub(super) async fn dispatch_system_generation_command(
         }
         cli::GenerationCommands::Rollback { yes } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation rollback"),
                 LiveMutationClass::AlwaysLive,
                 false,
@@ -110,19 +121,19 @@ pub(super) async fn dispatch_system_generation_command(
         }
         cli::GenerationCommands::Gc { keep, yes, db } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation gc"),
                 LiveMutationClass::AlwaysLive,
                 false,
             )?;
-            commands::generation::commands::cmd_generation_gc(keep, &db.db_path).await
+            commands::generation::gc::cmd_generation_gc(keep, &db.db_path).await
         }
         cli::GenerationCommands::Info { number } => {
             commands::generation::commands::cmd_generation_info(number).await
         }
         cli::GenerationCommands::Recover { yes, db } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system generation recover"),
                 LiveMutationClass::AlwaysLive,
                 false,

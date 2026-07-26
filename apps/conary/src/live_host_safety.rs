@@ -7,15 +7,12 @@ use std::borrow::Cow;
 pub enum MutationIntent {
     Missing,
     Apply,
-    DeprecatedLiveSystemMutationFlag,
 }
 
 impl MutationIntent {
-    pub fn from_apply_intent(apply_intent: bool, deprecated_live_ack: bool) -> Self {
+    pub fn from_apply_intent(apply_intent: bool) -> Self {
         if apply_intent {
             Self::Apply
-        } else if deprecated_live_ack {
-            Self::DeprecatedLiveSystemMutationFlag
         } else {
             Self::Missing
         }
@@ -38,25 +35,6 @@ pub struct LiveMutationRequest {
     pub class: LiveMutationClass,
     pub dry_run: bool,
     pub intent: MutationIntent,
-}
-
-pub fn require_live_system_mutation_ack(
-    allow_live_system_mutation: bool,
-    request: &LiveMutationRequest,
-) -> anyhow::Result<()> {
-    let intent = if request.intent.is_present() {
-        request.intent
-    } else {
-        MutationIntent::from_apply_intent(false, allow_live_system_mutation)
-    };
-    let request = LiveMutationRequest {
-        command_label: request.command_label.clone(),
-        class: request.class,
-        dry_run: request.dry_run,
-        intent,
-    };
-
-    require_mutation_intent(&request)
 }
 
 pub fn require_mutation_intent(request: &LiveMutationRequest) -> anyhow::Result<()> {
@@ -101,10 +79,7 @@ pub fn require_mutation_intent(request: &LiveMutationRequest) -> anyhow::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LiveMutationClass, LiveMutationRequest, MutationIntent, require_live_system_mutation_ack,
-        require_mutation_intent,
-    };
+    use super::{LiveMutationClass, LiveMutationRequest, MutationIntent, require_mutation_intent};
     use std::borrow::Cow;
 
     #[test]
@@ -116,7 +91,7 @@ mod tests {
             intent: MutationIntent::Missing,
         };
 
-        assert!(require_live_system_mutation_ack(false, &request).is_ok());
+        assert!(require_mutation_intent(&request).is_ok());
     }
 
     #[test]
@@ -126,18 +101,6 @@ mod tests {
             class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
             dry_run: false,
             intent: MutationIntent::Apply,
-        };
-
-        assert!(require_mutation_intent(&request).is_ok());
-    }
-
-    #[test]
-    fn deprecated_global_flag_still_passes_for_persisted_retry_commands() {
-        let request = LiveMutationRequest {
-            command_label: Cow::Borrowed("conary system generation publish"),
-            class: LiveMutationClass::AlwaysLive,
-            dry_run: false,
-            intent: MutationIntent::DeprecatedLiveSystemMutationFlag,
         };
 
         assert!(require_mutation_intent(&request).is_ok());
@@ -159,18 +122,6 @@ mod tests {
         assert!(message.contains("--yes"));
         assert!(!message.contains("--allow-live-system-mutation"));
         assert!(!message.contains("early software"));
-    }
-
-    #[test]
-    fn allow_live_mutation_ack_passes() {
-        let request = LiveMutationRequest {
-            command_label: Cow::Borrowed("conary install"),
-            class: LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
-            dry_run: false,
-            intent: MutationIntent::Missing,
-        };
-
-        assert!(require_live_system_mutation_ack(true, &request).is_ok());
     }
 
     #[test]
@@ -198,7 +149,7 @@ mod tests {
             intent: MutationIntent::Missing,
         };
 
-        let err = require_live_system_mutation_ack(false, &request).unwrap_err();
+        let err = require_mutation_intent(&request).unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("conary ccs install"));
         assert!(message.contains("--root"));
@@ -214,7 +165,7 @@ mod tests {
             intent: MutationIntent::Missing,
         };
 
-        let err = require_live_system_mutation_ack(false, &request).unwrap_err();
+        let err = require_mutation_intent(&request).unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("Conary DB"));
         assert!(message.contains("CAS"));

@@ -63,7 +63,7 @@
 					<img src="/brand/conary-mark.svg" alt="" width="42" height="42" />
 					<span>Conary</span>
 				</a>
-				<p>Early-preview Linux package management with reversible native-package adoption.</p>
+				<p>Early-preview cross-distro package management with exact source-format semantics.</p>
 			</div>
 
 			<nav class="footer-nav" aria-label="Footer navigation">

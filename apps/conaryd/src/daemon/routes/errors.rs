@@ -44,15 +44,6 @@ pub(super) fn bad_request_error(message: &str) -> ApiError {
     ApiError(Box::new(DaemonError::bad_request(message)))
 }
 
-pub(super) fn not_implemented_error(detail: &str) -> ApiError {
-    ApiError(Box::new(DaemonError::new(
-        "not_implemented",
-        "Not Implemented",
-        501,
-        detail,
-    )))
-}
-
 pub(super) fn internal_error(message: &str) -> DaemonError {
     tracing::error!("{message}");
     DaemonError::internal(INTERNAL_ERROR_DETAIL)

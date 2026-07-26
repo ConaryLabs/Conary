@@ -3,7 +3,7 @@
 //!
 //! This module implements the CCS native package format, including:
 //! - Manifest parsing (ccs.toml)
-//! - Binary manifest (CBOR-encoded with Merkle root)
+//! - Signed v2 authority manifest (canonical CBOR)
 //! - Package building
 //! - Package inspection and verification
 //! - Package installation (via PackageFormat trait)
@@ -11,55 +11,47 @@
 
 pub mod archive_reader;
 pub mod attestation;
-pub mod binary_manifest;
 pub mod builder;
 pub mod chunking;
 pub mod convert;
 pub mod enhancement;
+pub mod evidence_normalization;
 pub mod export;
 pub mod hooks;
 pub mod inspector;
-pub mod legacy;
-pub mod legacy_replay;
-pub mod legacy_scriptlets;
-pub mod lockfile;
 pub mod manifest;
 pub mod manifest_provenance;
+pub mod native_export;
+pub mod native_lifecycle;
+pub mod native_transaction;
 pub mod package;
 pub mod policy;
-pub mod security_policy;
 pub mod signing;
-pub mod target_compatibility;
 pub mod v2;
 pub mod verify;
 
-pub use binary_manifest::{BinaryManifest, ComponentRef, Hash, MerkleTree};
-pub use builder::{BuildResult, CcsBuilder, ChunkStats, ComponentData, FileEntry, FileType};
+pub use builder::{BuildResult, BuilderError, CcsBuilder, ChunkStats, ComponentData, FileEntry};
 pub use chunking::{Chunk, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats};
-pub use convert::{
-    ConversionOptions, ConversionResult, FidelityLevel, FidelityReport, LegacyConverter,
-};
+pub use convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 pub use enhancement::{
     ENHANCEMENT_VERSION, EnhancementContext, EnhancementEngine, EnhancementError,
     EnhancementRegistry, EnhancementRunner, EnhancementStatus, EnhancementType,
 };
-pub use hooks::{AppliedHook, HookExecutionResults, HookExecutor, HookResult, HookType};
-pub use inspector::InspectedPackage;
-pub use legacy_scriptlets::{
-    LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry,
+pub use hooks::{
+    AppliedHook, CapturedCcsActivation, CcsActivationSource, ExecutableInterface,
+    HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION, HOST_CAPABILITY_INVENTORY_SETTING,
+    HookExecutionResults, HookExecutor, HookResult, HookType, HostCapabilityInventory,
+    HostCapabilityInventoryError, HostCapabilityPreflightError, HostCapabilityRequirement,
+    HostExecutableContract, HostExecutableImplementation, InitSystemCapability, SystemdInterface,
+    SystemdOperation, TmpfilesInterface,
 };
-pub use lockfile::{
-    DependencyKind, LOCKFILE_NAME, LOCKFILE_VERSION, LockedDependency, Lockfile, LockfileError,
-};
+pub use inspector::UntrustedPackageInspection;
 pub use manifest::CcsManifest;
+pub use native_lifecycle::{
+    NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
+    NativeLifecycleEntry, NativeLifecycleEntryKind,
+};
 pub use package::CcsPackage;
 pub use policy::{BuildPolicy, BuildPolicyConfig, PolicyAction, PolicyChain};
 pub use signing::SigningKeyPair;
-pub use target_compatibility::{
-    CompatibilityDecisionStatus, CompatibilityPreflightCheck, CompatibilityPreflightEnvironment,
-    MatrixPreflightRequirements, ObservedHelper, ObservedPath, RequiredHelper, RequiredPath,
-    SecurityPolicyRequirement, ServiceManagerRequirement, TargetCompatibilityDecision,
-    TargetCompatibilityMatch, TargetCompatibilityMatrix, TargetCompatibilityMatrixEntry,
-    TargetSelector, TargetSelectorArch, TargetSelectorRelease,
-};
-pub use verify::{TrustPolicy, VerificationResult};
+pub use verify::{TrustPolicy, VerifiedCcsArchive};

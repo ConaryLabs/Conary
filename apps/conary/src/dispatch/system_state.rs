@@ -9,10 +9,7 @@ use crate::cli;
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
-pub(super) async fn dispatch_system_state_command(
-    state_cmd: cli::StateCommands,
-    allow_live_system_mutation: bool,
-) -> Result<()> {
+pub(super) async fn dispatch_system_state_command(state_cmd: cli::StateCommands) -> Result<()> {
     match state_cmd {
         cli::StateCommands::List { db, limit } => {
             commands::cmd_state_list(&db.db_path, limit).await
@@ -35,7 +32,7 @@ pub(super) async fn dispatch_system_state_command(
             yes,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system state revert"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
@@ -59,12 +56,12 @@ pub(super) async fn dispatch_system_state_command(
             yes,
         } => {
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary system state rollback"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 false,
             )?;
-            commands::cmd_rollback(changeset_id, &common.db.db_path, &common.root).await
+            commands::cmd_rollback(changeset_id, &common.db.db_path).await
         }
     }
 }

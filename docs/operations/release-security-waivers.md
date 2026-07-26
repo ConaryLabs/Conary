@@ -1,5 +1,6 @@
 ---
-last_updated: 2026-07-15
+last_updated: 2026-07-25
+revision: 1
 status: active
 summary: Limited-preview RustSec waiver policy and resolved W1 crossbeam blocker
 ---

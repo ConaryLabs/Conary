@@ -82,7 +82,7 @@ pub async fn list_runs(State(state): State<AppState>) -> Response {
 
     // Fall back to in-memory DashMap.
     let mut summaries = service::list_runs(&state, usize::MAX);
-    // HTTP handler sorts ascending by run_id for backwards compatibility.
+    // HTTP responses use a deterministic ascending run order.
     summaries.sort_by_key(|s| s.run_id);
     Json(serde_json::json!(summaries)).into_response()
 }

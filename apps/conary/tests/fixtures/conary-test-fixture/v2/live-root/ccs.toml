@@ -1,0 +1,20 @@
+[package]
+name = "conary-test-fixture"
+version = "2.0.0"
+version_scheme = "rpm"
+release = "1"
+kind = "package"
+description = "RPM-versioned payload fixture for selected-root install and update proof"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["conary-test-fixture"]
+binaries = []
+
+[components]
+default = ["runtime"]

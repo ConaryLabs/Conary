@@ -3,34 +3,14 @@
 /// Package format types for argument handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageFormat {
+    Conary,
     Rpm,
     Deb,
     Arch,
 }
 
-impl PackageFormat {
-    /// Parse from string representation
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "rpm" => Some(Self::Rpm),
-            "deb" => Some(Self::Deb),
-            "arch" => Some(Self::Arch),
-            _ => None,
-        }
-    }
-
-    /// Convert to string representation
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Rpm => "rpm",
-            Self::Deb => "deb",
-            Self::Arch => "arch",
-        }
-    }
-}
-
 /// Execution mode determines arguments passed to scriptlets
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionMode {
     /// Fresh install
     Install,
@@ -43,17 +23,4 @@ pub enum ExecutionMode {
     /// DEB: "upgrade <new_version>" (not "remove")
     /// Arch: Should NOT be used - Arch skips old package scripts during upgrade
     UpgradeRemoval { new_version: String },
-}
-
-#[cfg(test)]
-mod tests {
-    use super::PackageFormat;
-
-    #[test]
-    fn test_package_format_from_str() {
-        assert_eq!(PackageFormat::parse("rpm"), Some(PackageFormat::Rpm));
-        assert_eq!(PackageFormat::parse("deb"), Some(PackageFormat::Deb));
-        assert_eq!(PackageFormat::parse("arch"), Some(PackageFormat::Arch));
-        assert_eq!(PackageFormat::parse("unknown"), None);
-    }
 }

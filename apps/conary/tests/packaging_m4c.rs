@@ -11,15 +11,20 @@ use conary_core::ccs::attestation::{
 use conary_core::ccs::builder::write_v2_ccs_package;
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::ccs::v2::schema::{
-    AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-    FileAuthorityV2, FileTypeV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-    PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+    AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
+    FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
+    PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2, ProvidedCapabilityV2,
 };
+use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use conary_core::recipe::hermetic::{
     BuildInputIdentity, BuilderEnvironmentIdentity, BuilderEnvironmentKind, DependencyLock,
-    DivergenceReport, EcosystemPolicyReport, HERMETIC_EVIDENCE_SCHEMA_V1, HermeticBuildEvidence,
-    RecipeIdentity, ReproducibilityRecord, SourceIdentity,
+    DivergenceReport, HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence, RecipeIdentity,
+    ReproducibilityRecord, SourceIdentity,
 };
+use conary_core::repository::dependency_model::{
+    ProvideArchitectureQualifier, ProvideVersionRelation,
+};
+use conary_core::repository::versioning::VersionScheme;
 use remi::server::config::{ReleasePublishSection, TrustedBuildAttestationSigner};
 use remi::server::{ServerConfig, ServerState};
 use rusqlite::params;
@@ -188,7 +193,7 @@ impl M4cFixture {
         fs::write(
             &policy_path,
             format!(
-                "trusted_keys = [\"{}\"]\nallow_unsigned = false\n",
+                "trusted_keys = [\"{}\"]\nrequire_timestamp = false\n",
                 self.signer.public_key_base64()
             ),
         )
@@ -203,7 +208,7 @@ impl M4cFixture {
             .arg("--root")
             .arg(&self.install_root)
             .arg("--sandbox")
-            .arg("never")
+            .arg("always")
             .arg("--dry-run")
             .arg("--no-deps")
             .arg("--policy")
@@ -218,7 +223,7 @@ impl M4cFixture {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM converted_packages
-                 WHERE distro = ?1 AND package_name = ?2",
+                 WHERE source_profile = ?1 AND package_name = ?2",
                 params![TEST_DISTRO, TEST_PACKAGE],
                 |row| row.get(0),
             )
@@ -320,30 +325,41 @@ fn release_artifact_with_attestation(
         identity: PackageIdentityV2 {
             name: name.to_string(),
             version: version.to_string(),
+            version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
             release: release.to_string(),
             architecture: Some(TEST_ARCH.to_string()),
+            debian_multi_arch: None,
             platform: Some("linux".to_string()),
             kind: PackageKindTagV2::Package,
         },
         kind: PackageKindV2::Package(PackageDataV2 {
             files: vec![FileAuthorityV2 {
                 path: payload_path.clone(),
-                sha256: payload_hash,
-                size: payload.len() as u64,
-                file_type: FileTypeV2::Regular,
-                mode: 0o644,
-                owner: "root".to_string(),
-                group: "root".to_string(),
+                node: PayloadNode::regular(0o644),
+                content: Some(PayloadContentAuthority {
+                    sha256: payload_hash,
+                    size: payload.len() as u64,
+                }),
                 component: "main".to_string(),
-                symlink_target: None,
                 config: None,
                 conflict: ConflictPolicyV2::Error,
             }],
             config: Vec::new(),
             policy: PackagePolicyV2::default(),
         }),
-        provides: Vec::new(),
-        requires: Vec::new(),
+        provides: vec![ProvidedCapabilityV2 {
+            kind: DependencyKindV2::Package,
+            name: name.to_string(),
+            provider_version: Some(version.to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Conary,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            target: None,
+            component: None,
+        }],
+        requirements: Vec::new(),
+        relations: Vec::new(),
+        capabilities: None,
         components: BTreeMap::from([(
             "main".to_string(),
             ComponentAuthorityV2 {
@@ -389,7 +405,7 @@ fn release_artifact_with_attestation(
         publish_policy_digest: RELEASE_PUBLISH_POLICY_DIGEST.to_string(),
         command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
         sandbox_profile: "kitchen-pristine-network-none".to_string(),
-        seccomp_profile: Some("scriptlet-v1".to_string()),
+        seccomp_profile: None,
         builder_identity: "m4c-integration-test-builder".to_string(),
         conary_version: "test".to_string(),
         issued_at: "2026-06-18T00:00:00Z".to_string(),
@@ -414,14 +430,11 @@ fn release_artifact_with_attestation(
 
 fn sample_hermetic_evidence(name: &str, version: &str) -> HermeticBuildEvidence {
     HermeticBuildEvidence {
-        schema_version: HERMETIC_EVIDENCE_SCHEMA_V1,
+        schema_version: HERMETIC_EVIDENCE_SCHEMA,
         build_input: BuildInputIdentity {
-            recipe: RecipeIdentity::GeneratedRecipe {
-                generator: "m4c-integration-test".to_string(),
-                canonical_hash: conary_core::hash::sha256_prefixed(
-                    format!("{name}:{version}").as_bytes(),
-                ),
-                inference_trace_hash: conary_core::hash::sha256_prefixed(b"test"),
+            recipe: RecipeIdentity::ExplicitRecipe {
+                path: "recipe.toml".to_string(),
+                hash: conary_core::hash::sha256_prefixed(format!("{name}:{version}").as_bytes()),
             },
             source: SourceIdentity::Archive {
                 url: "https://example.invalid/source.tar.gz".to_string(),
@@ -430,7 +443,6 @@ fn sample_hermetic_evidence(name: &str, version: &str) -> HermeticBuildEvidence 
             additional_sources: Vec::new(),
             patches: Vec::new(),
             local_tree: None,
-            ecosystem_dependencies: Vec::new(),
             builder_environment: BuilderEnvironmentIdentity {
                 kind: BuilderEnvironmentKind::Pristine,
                 sysroot_hash: Some("sha256:sysroot".to_string()),
@@ -439,8 +451,7 @@ fn sample_hermetic_evidence(name: &str, version: &str) -> HermeticBuildEvidence 
             },
         },
         dependency_lock: DependencyLock::default(),
-        ecosystem_policy: EcosystemPolicyReport::clean("test"),
-        command_risk: conary_core::recipe::hermetic::BuildCommandRiskReport::clean(),
+        command_risk: conary_core::recipe::hermetic::BuildCommandRiskReport::no_findings(),
         reproducibility: ReproducibilityRecord {
             source_date_epoch: Some(1),
             path_remap_count: 1,

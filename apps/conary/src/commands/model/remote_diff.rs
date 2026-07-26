@@ -55,7 +55,15 @@ pub async fn cmd_model_remote_diff(model_path: &str, db_path: &str, refresh: boo
         }
 
         // Fetch the remote collection
-        let collection = match fetch_remote_collection(&conn, &name, label_str, false).await {
+        let collection = match fetch_remote_collection(
+            &conn,
+            &name,
+            label_str,
+            false,
+            &model.include.trusted_keys,
+        )
+        .await
+        {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("  Failed to fetch '{}': {}", spec, e);
@@ -176,7 +184,10 @@ mod tests {
     use crate::commands::test_helpers::create_test_db;
     use conary_core::db::models::RemoteCollection;
     use conary_core::model::SystemState;
-    use std::collections::{HashMap, HashSet};
+    use conary_core::model::remote::{CollectionData, CollectionMemberData};
+    use conary_core::model::signing::sign_collection;
+    use ed25519_dalek::SigningKey;
+    use std::collections::{BTreeMap, HashMap, HashSet};
 
     #[test]
     fn test_version_matches_constraint_exact() {
@@ -206,30 +217,53 @@ mod tests {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
         // Create a cached remote collection with members
-        let collection_data = serde_json::json!({
-            "name": "group-test",
-            "version": "1.0",
-            "members": [
-                {"name": "nginx", "version_constraint": "1.24.*", "is_optional": false},
-                {"name": "redis", "version_constraint": null, "is_optional": false},
-                {"name": "memcached", "version_constraint": null, "is_optional": true}
+        let mut signed_data = CollectionData {
+            name: "group-test".to_string(),
+            version: "1.0".to_string(),
+            members: vec![
+                CollectionMemberData {
+                    name: "nginx".to_string(),
+                    version_constraint: Some("1.24.*".to_string()),
+                    is_optional: false,
+                },
+                CollectionMemberData {
+                    name: "redis".to_string(),
+                    version_constraint: None,
+                    is_optional: false,
+                },
+                CollectionMemberData {
+                    name: "memcached".to_string(),
+                    version_constraint: None,
+                    is_optional: true,
+                },
             ],
-            "includes": [],
-            "pins": {},
-            "exclude": [],
-            "content_hash": "sha256:test123",
-            "published_at": "2026-01-01T00:00:00Z"
-        });
+            includes: vec![],
+            pins: BTreeMap::new(),
+            exclude: vec![],
+            content_hash: String::new(),
+            published_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let mut hash_input = signed_data.clone();
+        hash_input.content_hash.clear();
+        signed_data.content_hash = conary_core::hash::sha256_prefixed(
+            &conary_core::json::canonical_json(&hash_input).unwrap(),
+        );
 
         let mut cache_entry = RemoteCollection::new(
             "group-test".to_string(),
             Some("myrepo:stable".to_string()),
-            "sha256:test123".to_string(),
-            serde_json::to_string(&collection_data).unwrap(),
+            signed_data.content_hash.clone(),
+            serde_json::to_string(&signed_data).unwrap(),
             "2099-12-31T23:59:59".to_string(),
         );
+        let signing_key = SigningKey::from_bytes(&[9; 32]);
+        cache_entry.signature = Some(sign_collection(&signed_data, &signing_key).unwrap());
+        cache_entry.signer_key_id = Some(conary_core::model::signing::key_id(
+            &signing_key.verifying_key(),
+        ));
         cache_entry.version = Some("1.0".to_string());
         cache_entry.upsert(&conn).unwrap();
+        let trusted_keys = vec![hex::encode(signing_key.verifying_key().to_bytes())];
 
         // Create a system state with only nginx installed
         let state = SystemState {
@@ -247,7 +281,6 @@ mod tests {
             explicit: HashSet::from(["nginx".to_string()]),
             pinned: HashSet::new(),
             source_pin: None,
-            selection_mode: None,
             allowed_distros: Vec::new(),
         };
 
@@ -257,6 +290,7 @@ mod tests {
             "group-test",
             "myrepo:stable",
             false,
+            &trusted_keys,
         )
         .await
         .unwrap();

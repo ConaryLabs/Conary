@@ -11,9 +11,7 @@ use fs2::FileExt;
 
 use crate::ccs::signing::SigningKeyPair;
 use crate::hash;
-use crate::repository::static_repo::package_staging::{
-    PendingPackageWrites, collect_package_entries, stage_packages,
-};
+use crate::repository::static_repo::package_staging::{PendingPackageWrites, stage_packages};
 use crate::repository::static_repo::publish_context::{
     ArtifactGateContext, DestinationState, PendingKeyPromotions, PendingKeyRecovery,
     PreparedStaticPublishContext, StaticPublishForm, StaticPublishPrepareOptions,
@@ -37,7 +35,6 @@ const TARGETS_EXPIRES_DAYS: i64 = 90;
 const SNAPSHOT_EXPIRES_DAYS: i64 = 90;
 const TIMESTAMP_EXPIRES_HOURS: i64 = 720;
 const ROOT_IDENTITY_WARNING: &str = "the root key **is** the repo's identity — store `root.private` offline if possible, and back up the whole directory; losing it means clients must manually re-trust (§7.4).";
-const FORCE_REINIT_WARNING: &str = "force reinit started a fresh repo identity; clients must run repo reset-trust and re-pin the new repo fingerprint";
 const ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 1024;
 static ATOMIC_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -49,8 +46,6 @@ pub struct StaticPublishOptions {
     pub state_file: PathBuf,
     pub package_paths: Vec<PathBuf>,
     pub refresh: bool,
-    pub force_reinit: bool,
-    pub accept_destination_state: bool,
     pub rotate_publish_key: bool,
     pub rotate_root_key: bool,
     pub artifact_gate_context: Option<ArtifactGateContext>,
@@ -115,7 +110,6 @@ fn publish_static_repo_inner(
         destination: options.destination.clone(),
         key_dir: Some(options.key_dir.clone()),
         publish_form,
-        force_reinit: options.force_reinit,
     }
     .prepare()?;
     commit_static_publish(options, context, forced_refresh)
@@ -130,6 +124,7 @@ fn commit_static_publish(
         destination,
         key_dir,
         active_publish_key,
+        accepted_signers,
         ..
     } = context;
     let RepoLocation::File { root: repo_root } = &destination else {
@@ -144,7 +139,7 @@ fn commit_static_publish(
     let mut root_key = ensure_key_pair(&key_dir, "root")?;
     let mut publish_key = active_publish_key;
     let mut pending_key_promotions = PendingKeyPromotions::default();
-    let destination = read_destination_state(repo_root, options.force_reinit)?;
+    let destination = read_destination_state(repo_root)?;
     check_watermark(&destination, &options)?;
 
     let mut old_publish_public_key = None;
@@ -175,8 +170,8 @@ fn commit_static_publish(
         verify_destination_matches_operator_keys(&root_metadata, &root_key, &publish_key)?;
     }
 
-    let mut root_changed = destination.initial || options.force_reinit;
-    let mut identity_changed = destination.initial || options.force_reinit;
+    let mut root_changed = destination.initial;
+    let mut identity_changed = destination.initial;
     let should_rotate_publish_key = options.rotate_publish_key && !recovered_pending_keys.publish;
     let should_rotate_root_key = options.rotate_root_key && !recovered_pending_keys.root;
     if should_rotate_publish_key {
@@ -214,13 +209,22 @@ fn commit_static_publish(
     let old_index = destination
         .index_bytes
         .as_deref()
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        .and_then(|text| StaticIndex::parse(text).ok());
+        .map(|bytes| {
+            let text = std::str::from_utf8(bytes)
+                .context("verified destination index.json is not UTF-8")?;
+            StaticIndex::parse(text).context("verified destination index.json is invalid")
+        })
+        .transpose()?;
     let old_package_keys = destination
         .package_keys_bytes
         .as_deref()
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        .and_then(|text| PackageKeysFile::parse(text).ok());
+        .map(|bytes| {
+            let text = std::str::from_utf8(bytes)
+                .context("verified destination package-keys.json is not UTF-8")?;
+            PackageKeysFile::parse(text)
+                .context("verified destination package-keys.json is invalid")
+        })
+        .transpose()?;
 
     if let Some(gate_context) = options.artifact_gate_context.as_ref() {
         for package_path in &options.package_paths {
@@ -235,25 +239,32 @@ fn commit_static_publish(
         }
     }
 
-    let mut pending_package_writes =
-        stage_packages(repo_root, &options.package_paths, &publish_key)?;
-    let package_entries = if options.refresh
-        && options.package_paths.is_empty()
-        && old_index.is_some()
-        && should_preserve_index_packages(&destination, forced_refresh)
-    {
-        old_index.clone().expect("checked").packages
-    } else {
-        let mut entries = collect_package_entries(repo_root)?;
-        entries.extend(
-            pending_package_writes
-                .package_entries()
-                .into_iter()
-                .cloned(),
-        );
-        entries.sort_by(|left, right| left.path.cmp(&right.path));
-        entries
-    };
+    let mut pending_package_writes = stage_packages(
+        repo_root,
+        &options.package_paths,
+        &accepted_signers,
+        &publish_key,
+    )?;
+    let mut package_entries = old_index
+        .as_ref()
+        .map(|index| index.packages.clone())
+        .unwrap_or_default();
+    for staged in pending_package_writes.package_entries() {
+        if let Some(existing) = package_entries
+            .iter()
+            .find(|entry| entry.path == staged.path)
+        {
+            if existing.sha256 != staged.sha256 || existing.size != staged.size {
+                bail!(
+                    "immutable package index entry {} disagrees with verified artifact bytes",
+                    staged.path
+                );
+            }
+            continue;
+        }
+        package_entries.push(staged.clone());
+    }
+    package_entries.sort_by(|left, right| left.path.cmp(&right.path));
 
     let targets_bump = destination.initial
         || !options.package_paths.is_empty()
@@ -383,7 +394,6 @@ fn commit_static_publish(
         root_bytes: &root_bytes,
         identity_changed,
         identity_bytes: &identity_bytes,
-        force_reinit: options.force_reinit,
     })?;
     if targets_bump {
         conditional_write(
@@ -391,14 +401,12 @@ fn commit_static_publish(
             "index.json",
             &index_bytes,
             destination.index_bytes.as_deref(),
-            options.force_reinit,
         )?;
         conditional_write(
             repo_root,
             "metadata/targets.json",
             &targets_bytes,
             destination.targets_bytes.as_deref(),
-            options.force_reinit,
         )?;
     }
     if snapshot_bump {
@@ -407,7 +415,6 @@ fn commit_static_publish(
             "metadata/snapshot.json",
             &snapshot_bytes,
             destination.snapshot_bytes.as_deref(),
-            options.force_reinit,
         )?;
     }
     pending_key_promotions.promote(&key_dir)?;
@@ -418,7 +425,6 @@ fn commit_static_publish(
         "metadata/timestamp.json",
         &timestamp_bytes,
         destination.timestamp_bytes.as_deref(),
-        options.force_reinit,
     )?;
     pending_package_writes.commit();
 
@@ -432,12 +438,8 @@ fn commit_static_publish(
 
     let (publish_key_id, _) =
         signing_keypair_to_tuf_key(&publish_key).map_err(anyhow::Error::from)?;
-    let warning = if options.force_reinit {
-        FORCE_REINIT_WARNING.to_string()
-    } else if destination.initial || identity_changed {
+    let warning = if destination.initial || identity_changed {
         ROOT_IDENTITY_WARNING.to_string()
-    } else if options.accept_destination_state {
-        "accepted destination versions below local watermark".to_string()
     } else {
         String::new()
     };
@@ -505,10 +507,6 @@ struct PublishWatermark {
 }
 
 fn check_watermark(destination: &DestinationState, options: &StaticPublishOptions) -> Result<()> {
-    if options.force_reinit {
-        return Ok(());
-    }
-
     let Some(bytes) = read_state_file(&options.state_file)? else {
         return Ok(());
     };
@@ -541,7 +539,7 @@ fn check_watermark(destination: &DestinationState, options: &StaticPublishOption
         || destination_versions.targets_version < watermark.targets_version
         || destination_versions.snapshot_version < watermark.snapshot_version
         || destination_versions.timestamp_version < watermark.timestamp_version;
-    if regressed && !options.accept_destination_state {
+    if regressed {
         bail!(
             "destination versions root={} targets={} snapshot={} timestamp={} are below local watermark root={} targets={} snapshot={} timestamp={}",
             destination_versions.root_version,
@@ -557,6 +555,10 @@ fn check_watermark(destination: &DestinationState, options: &StaticPublishOption
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "publish/tests.rs"]
+mod tests;
 
 fn read_state_file(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
@@ -609,15 +611,6 @@ fn should_refresh_snapshot(
 
 fn is_near_expiry(expires: chrono::DateTime<Utc>, lifetime_hours: i64) -> bool {
     expires - Utc::now() <= Duration::hours(lifetime_hours / 4)
-}
-
-fn should_preserve_index_packages(destination: &DestinationState, forced: ForcedRefresh) -> bool {
-    forced.targets
-        || forced.root
-        || forced.snapshot
-        || destination.targets.as_ref().is_some_and(|metadata| {
-            is_near_expiry(metadata.signed.expires, TARGETS_EXPIRES_DAYS * 24)
-        })
 }
 
 fn refresh_root(
@@ -763,7 +756,6 @@ struct StepAWrite<'a> {
     root_bytes: &'a [u8],
     identity_changed: bool,
     identity_bytes: &'a [u8],
-    force_reinit: bool,
 }
 
 fn write_step_a(input: StepAWrite<'_>) -> Result<()> {
@@ -772,22 +764,15 @@ fn write_step_a(input: StepAWrite<'_>) -> Result<()> {
         "keys/package-keys.json",
         input.package_keys_bytes,
         input.destination.package_keys_bytes.as_deref(),
-        input.force_reinit,
     )?;
     if input.root_changed {
         let historical_root = format!("metadata/{}.root.json", input.root_metadata.signed.version);
-        write_immutable(
-            input.repo_root,
-            &historical_root,
-            input.root_bytes,
-            input.force_reinit,
-        )?;
+        write_immutable(input.repo_root, &historical_root, input.root_bytes)?;
         conditional_write(
             input.repo_root,
             "metadata/root.json",
             input.root_bytes,
             input.destination.root_bytes.as_deref(),
-            input.force_reinit,
         )?;
     }
     if input.identity_changed {
@@ -796,26 +781,17 @@ fn write_step_a(input: StepAWrite<'_>) -> Result<()> {
             "conary-repo.toml",
             input.identity_bytes,
             input.destination.identity_bytes.as_deref(),
-            input.force_reinit,
         )?;
     }
     Ok(())
 }
 
-fn write_immutable(
-    repo_root: &Path,
-    relative: &str,
-    bytes: &[u8],
-    force_reinit: bool,
-) -> Result<()> {
+fn write_immutable(repo_root: &Path, relative: &str, bytes: &[u8]) -> Result<()> {
     validate_repo_relative_path(relative)?;
     let path = repo_root.join(relative);
     if let Ok(existing) = fs::read(&path) {
         if existing == bytes {
             return Ok(());
-        }
-        if force_reinit {
-            return write_file_atomic(&path, bytes);
         }
         bail!("immutable static repo path {relative} already exists with different bytes");
     }
@@ -827,13 +803,12 @@ fn conditional_write(
     relative: &str,
     bytes: &[u8],
     expected_previous: Option<&[u8]>,
-    force_reinit: bool,
 ) -> Result<()> {
     validate_repo_relative_path(relative)?;
     let path = repo_root.join(relative);
     match fs::read(&path) {
         Ok(existing) => {
-            if !force_reinit && expected_previous != Some(existing.as_slice()) {
+            if expected_previous != Some(existing.as_slice()) {
                 bail!("static repo path {relative} changed during publish");
             }
             if existing == bytes {
@@ -841,7 +816,7 @@ fn conditional_write(
             }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            if expected_previous.is_some() && !force_reinit {
+            if expected_previous.is_some() {
                 bail!("static repo path {relative} disappeared during publish");
             }
         }
@@ -961,975 +936,4 @@ fn validate_static_repo_name(repo_name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        ForcedRefreshForTest, StaticPublishOptions, prepare_static_key_dir, publish_static_repo,
-        publish_static_repo_with_forced_refresh_for_test, try_acquire_publish_lock_for_test,
-        unique_atomic_temp_path,
-    };
-    use crate::ccs::builder::{CcsBuilder, write_ccs_package};
-    use crate::ccs::manifest::CcsManifest;
-    use crate::ccs::signing::SigningKeyPair;
-    use crate::ccs::verify::{SignatureStatus, TrustPolicy, verify_package};
-    use crate::packages::traits::PackageFormat;
-    use crate::repository::static_repo::package_staging::stage_packages;
-    use crate::repository::static_repo::publish_context::{
-        ArtifactGateContext, STATIC_PUBLISH_POLICY_DIGEST_V1, save_key_pair,
-    };
-    use crate::repository::static_repo::publish_gate::AcceptedStaticSignerSet;
-    use crate::repository::static_repo::{
-        PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoLocation, StaticIndex,
-    };
-    use crate::trust::keys::sign_tuf_metadata;
-    use crate::trust::metadata::{
-        RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
-    };
-    use crate::trust::signing_keypair_to_tuf_key;
-    use chrono::{Duration, Utc};
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use tempfile::TempDir;
-
-    const ROOT_IDENTITY_WARNING: &str = "the root key **is** the repo's identity — store `root.private` offline if possible, and back up the whole directory; losing it means clients must manually re-trust (§7.4).";
-
-    #[test]
-    #[cfg(unix)]
-    fn prepare_static_key_dir_creates_repo_key_dir_0700() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let key_base = temp_dir.path().join(".config/conary/keys");
-
-        let key_dir = prepare_static_key_dir(&key_base, "test-repo").unwrap();
-
-        assert_eq!(key_dir, key_base.join("test-repo"));
-        assert!(key_dir.is_dir());
-        let mode = std::fs::metadata(&key_dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700);
-    }
-
-    #[test]
-    fn prepare_static_key_dir_rejects_empty_repo_name() {
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        let error = prepare_static_key_dir(temp_dir.path(), "").unwrap_err();
-
-        assert!(
-            error.to_string().contains("repo name must not be empty"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn prepare_static_key_dir_rejects_unsafe_repo_name_segments() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let key_base = temp_dir.path().join(".config/conary/keys");
-        let absolute_name = temp_dir.path().join("escape").display().to_string();
-
-        for repo_name in [
-            "nested/repo",
-            "../escape",
-            &absolute_name,
-            r"nested\repo",
-            "   ",
-            ".",
-            "..",
-        ] {
-            let error = prepare_static_key_dir(&key_base, repo_name).unwrap_err();
-            assert!(
-                error.to_string().contains("safe path segment"),
-                "unexpected error for {repo_name:?}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn initial_publish_creates_static_repo_layout_and_identity_warning() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-
-        let outcome = publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        assert_eq!(outcome.root_version, 1);
-        assert_eq!(outcome.targets_version, 1);
-        assert_eq!(outcome.snapshot_version, 1);
-        assert_eq!(outcome.timestamp_version, 1);
-        assert_eq!(outcome.package_count, 1);
-        assert_eq!(outcome.preview_warning, ROOT_IDENTITY_WARNING);
-        assert_eq!(outcome.root_key_ids.len(), 1);
-        assert!(!outcome.publish_key_id.is_empty());
-
-        for relative in [
-            "conary-repo.toml",
-            "metadata/1.root.json",
-            "metadata/root.json",
-            "metadata/targets.json",
-            "metadata/snapshot.json",
-            "metadata/timestamp.json",
-            "index.json",
-            "keys/package-keys.json",
-            "packages/widget/widget-1.0.0-1-x86_64.ccs",
-        ] {
-            assert!(
-                fixture.repo_path(relative).exists(),
-                "expected {relative} to be published"
-            );
-        }
-
-        assert_eq!(
-            fs::read(fixture.repo_path("metadata/1.root.json")).unwrap(),
-            fs::read(fixture.repo_path("metadata/root.json")).unwrap()
-        );
-
-        let identity = read_identity(&fixture.repo_path("conary-repo.toml"));
-        let root = read_root(&fixture.repo_path("metadata/root.json"));
-        assert_eq!(
-            identity.trust.root_key_ids,
-            root.signed.roles["root"].keyids
-        );
-        assert_eq!(identity.trust.root_key_ids, outcome.root_key_ids);
-    }
-
-    #[test]
-    fn package_overwrite_with_different_bytes_fails() {
-        let fixture = PublishFixture::new();
-        let first = fixture.build_package("widget", "1.0.0", "x86_64", b"first\n");
-        publish_static_repo(fixture.options(vec![first])).unwrap();
-        let second = fixture.build_package("widget", "1.0.0", "x86_64", b"second\n");
-
-        let error = publish_static_repo(fixture.options(vec![second])).unwrap_err();
-
-        assert!(
-            error.to_string().contains("immutable package artifact"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn index_version_matches_targets_and_package_keys_include_active_publish_key() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        let outcome = publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let index = read_index(&fixture.repo_path("index.json"));
-        let targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let package_keys = read_package_keys(&fixture.repo_path("keys/package-keys.json"));
-
-        assert_eq!(index.index_version, targets.signed.version);
-        assert!(targets.signed.targets.contains_key("index.json"));
-        assert!(
-            targets
-                .signed
-                .targets
-                .contains_key("keys/package-keys.json")
-        );
-        assert_eq!(package_keys.keys.len(), 1);
-        assert!(matches!(
-            package_keys.keys[0].status,
-            PackageKeyStatus::Active
-        ));
-        assert_eq!(package_keys.keys[0].key_id.as_deref(), Some("publish"));
-
-        let publish_key = SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private"))
-            .expect("publish key loads");
-        let (publish_key_id, _) = signing_keypair_to_tuf_key(&publish_key).unwrap();
-        assert_eq!(outcome.publish_key_id, publish_key_id);
-        assert_eq!(
-            package_keys.keys[0].public_key,
-            publish_key.public_key_base64()
-        );
-    }
-
-    #[test]
-    fn publish_signs_unsigned_package_with_active_publish_key() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let index = read_index(&fixture.repo_path("index.json"));
-        let package_keys = read_package_keys(&fixture.repo_path("keys/package-keys.json"));
-        let active_public_key = package_keys
-            .keys
-            .iter()
-            .find(|key| matches!(key.status, PackageKeyStatus::Active))
-            .expect("active package key")
-            .public_key
-            .clone();
-        let published_package = fixture.repo_path(&index.packages[0].path);
-        let verification = verify_package(
-            &published_package,
-            &TrustPolicy::strict(vec![active_public_key]),
-        )
-        .unwrap();
-
-        assert!(verification.valid);
-        assert!(matches!(
-            verification.signature_status,
-            SignatureStatus::Valid { .. }
-        ));
-    }
-
-    #[test]
-    fn refresh_without_near_expiry_changes_only_timestamp() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let before_index = fs::read(fixture.repo_path("index.json")).unwrap();
-        let before_targets = fs::read(fixture.repo_path("metadata/targets.json")).unwrap();
-        let before_snapshot = fs::read(fixture.repo_path("metadata/snapshot.json")).unwrap();
-        let before_timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        assert_eq!(outcome.root_version, 1);
-        assert_eq!(outcome.targets_version, 1);
-        assert_eq!(outcome.snapshot_version, 1);
-        assert_eq!(outcome.timestamp_version, 2);
-        assert_eq!(
-            fs::read(fixture.repo_path("index.json")).unwrap(),
-            before_index
-        );
-        assert_eq!(
-            fs::read(fixture.repo_path("metadata/targets.json")).unwrap(),
-            before_targets
-        );
-        assert_eq!(
-            fs::read(fixture.repo_path("metadata/snapshot.json")).unwrap(),
-            before_snapshot
-        );
-        assert_eq!(
-            read_timestamp(&fixture.repo_path("metadata/timestamp.json"))
-                .signed
-                .version,
-            before_timestamp.signed.version + 1
-        );
-    }
-
-    #[test]
-    fn publish_rejects_tampered_package_keys_before_refresh() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let extra_key = SigningKeyPair::generate().with_key_id("extra");
-        let mut package_keys = read_package_keys(&fixture.repo_path("keys/package-keys.json"));
-        package_keys.keys.push(PackageKeyEntry {
-            algorithm: "ed25519".to_string(),
-            public_key: extra_key.public_key_base64(),
-            key_id: Some("extra".to_string()),
-            status: PackageKeyStatus::Active,
-            comment: Some("unauthorized injected key".to_string()),
-        });
-        fs::write(
-            fixture.repo_path("keys/package-keys.json"),
-            serde_json::to_vec_pretty(&package_keys).unwrap(),
-        )
-        .unwrap();
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let error = publish_static_repo_with_forced_refresh_for_test(
-            options,
-            ForcedRefreshForTest {
-                root: false,
-                targets: true,
-                snapshot: false,
-            },
-        )
-        .unwrap_err();
-
-        assert!(
-            error.to_string().contains("keys/package-keys.json"),
-            "expected package-keys target verification failure, got: {error:?}"
-        );
-    }
-
-    #[test]
-    fn publish_rejects_timestamp_that_does_not_pin_current_snapshot() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let publish_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        let mut timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
-        let snapshot_ref = timestamp
-            .signed
-            .meta
-            .get_mut("snapshot.json")
-            .expect("timestamp pins snapshot");
-        snapshot_ref.version += 1;
-        timestamp.signatures = vec![sign_tuf_metadata(&publish_key, &timestamp.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/timestamp.json"), &timestamp);
-
-        let error = publish_static_repo(fixture.options(Vec::new())).unwrap_err();
-
-        assert!(
-            error.to_string().contains("timestamp") && error.to_string().contains("snapshot.json"),
-            "expected timestamp/snapshot consistency failure, got: {error:?}"
-        );
-    }
-
-    #[test]
-    fn publish_rejects_timestamp_that_omits_snapshot_length() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let publish_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        let mut timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
-        let snapshot_ref = timestamp
-            .signed
-            .meta
-            .get_mut("snapshot.json")
-            .expect("timestamp pins snapshot");
-        snapshot_ref.length = None;
-        timestamp.signatures = vec![sign_tuf_metadata(&publish_key, &timestamp.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/timestamp.json"), &timestamp);
-
-        let error = publish_static_repo(fixture.options(Vec::new())).unwrap_err();
-
-        assert!(
-            error.to_string().contains("timestamp")
-                && error.to_string().contains("snapshot.json")
-                && error.to_string().contains("length"),
-            "expected missing snapshot length failure, got: {error:?}"
-        );
-    }
-
-    #[test]
-    fn forced_targets_refresh_cascades_to_snapshot_timestamp_and_preserves_packages() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let before_index = read_index(&fixture.repo_path("index.json"));
-        let before_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let before_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let outcome = publish_static_repo_with_forced_refresh_for_test(
-            options,
-            ForcedRefreshForTest {
-                root: false,
-                targets: true,
-                snapshot: false,
-            },
-        )
-        .unwrap();
-
-        let after_index = read_index(&fixture.repo_path("index.json"));
-        let after_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let after_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-
-        assert_eq!(outcome.root_version, 1);
-        assert_eq!(outcome.targets_version, before_targets.signed.version + 1);
-        assert_eq!(outcome.snapshot_version, before_snapshot.signed.version + 1);
-        assert_eq!(outcome.timestamp_version, 2);
-        assert_eq!(after_index.index_version, after_targets.signed.version);
-        assert_ne!(after_index.generated, before_index.generated);
-        assert_eq!(after_index.packages.len(), before_index.packages.len());
-        assert_eq!(after_index.packages[0].path, before_index.packages[0].path);
-        assert_eq!(
-            after_index.packages[0].sha256,
-            before_index.packages[0].sha256
-        );
-        assert_eq!(
-            after_snapshot.signed.meta["targets.json"].version,
-            after_targets.signed.version
-        );
-    }
-
-    #[test]
-    fn refresh_selects_near_expiry_targets_and_preserves_packages() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let before_index = read_index(&fixture.repo_path("index.json"));
-        let before_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let before_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let before_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-        set_targets_expiry(&fixture, Utc::now() + Duration::days(10));
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        let after_index = read_index(&fixture.repo_path("index.json"));
-        let after_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let after_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let after_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-
-        assert_eq!(outcome.root_version, before_root.signed.version);
-        assert_eq!(outcome.targets_version, before_targets.signed.version + 1);
-        assert_eq!(outcome.snapshot_version, before_snapshot.signed.version + 1);
-        assert_eq!(outcome.timestamp_version, 2);
-        assert_eq!(after_root.signed.version, before_root.signed.version);
-        assert_eq!(after_index.index_version, after_targets.signed.version);
-        assert_ne!(after_index.generated, before_index.generated);
-        assert_eq!(
-            serde_json::to_value(&after_index.packages).unwrap(),
-            serde_json::to_value(&before_index.packages).unwrap()
-        );
-        assert_eq!(
-            after_snapshot.signed.meta["targets.json"].version,
-            after_targets.signed.version
-        );
-    }
-
-    #[test]
-    fn forced_root_refresh_cascades_to_snapshot_and_timestamp() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let before_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let before_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let before_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let outcome = publish_static_repo_with_forced_refresh_for_test(
-            options,
-            ForcedRefreshForTest {
-                root: true,
-                targets: false,
-                snapshot: false,
-            },
-        )
-        .unwrap();
-
-        let after_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let after_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let after_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-
-        assert_eq!(outcome.root_version, before_root.signed.version + 1);
-        assert_eq!(outcome.targets_version, before_targets.signed.version);
-        assert_eq!(outcome.snapshot_version, before_snapshot.signed.version + 1);
-        assert_eq!(outcome.timestamp_version, 2);
-        assert_eq!(
-            after_root.signed.roles["root"].keyids,
-            before_root.signed.roles["root"].keyids
-        );
-        assert_eq!(after_targets.signed.version, before_targets.signed.version);
-        assert_eq!(
-            after_snapshot.signed.meta["root.json"].version,
-            after_root.signed.version
-        );
-    }
-
-    #[test]
-    fn refresh_selects_near_expiry_root_and_cascades_without_targets_bump() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-
-        let before_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let before_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let before_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-        set_root_expiry(&fixture, Utc::now() + Duration::days(80));
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        let after_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let after_targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        let after_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-
-        assert_eq!(outcome.root_version, before_root.signed.version + 1);
-        assert_eq!(outcome.targets_version, before_targets.signed.version);
-        assert_eq!(outcome.snapshot_version, before_snapshot.signed.version + 1);
-        assert_eq!(outcome.timestamp_version, 2);
-        assert_eq!(after_targets.signed.version, before_targets.signed.version);
-        assert_eq!(
-            after_snapshot.signed.meta["root.json"].version,
-            after_root.signed.version
-        );
-    }
-
-    #[test]
-    fn refresh_repairs_expired_snapshot_destination_metadata() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-        let before_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-        set_snapshot_expiry(&fixture, Utc::now() - Duration::hours(1));
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        let after_snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-        let after_timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
-
-        assert_eq!(outcome.snapshot_version, before_snapshot.signed.version + 1);
-        assert!(after_snapshot.signed.expires > Utc::now());
-        assert!(after_timestamp.signed.expires > Utc::now());
-    }
-
-    #[test]
-    fn state_file_watermark_rejects_destination_version_regression() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-        fs::write(
-            &fixture.state_file,
-            "root_version = 1\ntargets_version = 5\nsnapshot_version = 5\ntimestamp_version = 5\n",
-        )
-        .unwrap();
-
-        let mut options = fixture.options(Vec::new());
-        options.refresh = true;
-        let error = publish_static_repo(options).unwrap_err();
-
-        assert!(
-            error.to_string().contains("destination versions")
-                && error.to_string().contains("watermark"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn force_reinit_allows_unverifiable_destination_with_new_identity_warning() {
-        let fixture = PublishFixture::new();
-        fs::create_dir_all(fixture.repo_path("metadata")).unwrap();
-        fs::write(fixture.repo_path("metadata/timestamp.json"), b"not json").unwrap();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-
-        let mut options = fixture.options(vec![package]);
-        options.force_reinit = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        assert_eq!(outcome.root_version, 1);
-        assert!(
-            outcome.preview_warning.contains("repo reset-trust")
-                && outcome
-                    .preview_warning
-                    .contains("re-pin the new repo fingerprint"),
-            "unexpected warning: {}",
-            outcome.preview_warning
-        );
-        assert!(fixture.repo_path("metadata/root.json").exists());
-    }
-
-    #[test]
-    fn force_reinit_ignores_old_watermark_and_writes_new_watermark() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-        fs::write(
-            &fixture.state_file,
-            "root_version = 9\ntargets_version = 9\nsnapshot_version = 9\ntimestamp_version = 9\n",
-        )
-        .unwrap();
-        fs::write(fixture.repo_path("metadata/timestamp.json"), b"not json").unwrap();
-
-        let mut options = fixture.options(Vec::new());
-        options.force_reinit = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        assert_eq!(outcome.root_version, 1);
-        assert_eq!(outcome.targets_version, 1);
-        assert_eq!(outcome.snapshot_version, 1);
-        assert_eq!(outcome.timestamp_version, 1);
-        let watermark = fs::read_to_string(&fixture.state_file).unwrap();
-        assert!(watermark.contains("root_version = 1"));
-        assert!(watermark.contains("targets_version = 1"));
-        assert!(watermark.contains("snapshot_version = 1"));
-        assert!(watermark.contains("timestamp_version = 1"));
-    }
-
-    #[test]
-    fn publish_key_rotation_updates_roles_and_retires_old_package_key() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-        let before_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let before_keys = read_package_keys(&fixture.repo_path("keys/package-keys.json"));
-        let old_public_key = before_keys.keys[0].public_key.clone();
-
-        let mut options = fixture.options(Vec::new());
-        options.rotate_publish_key = true;
-        let outcome = publish_static_repo(options).unwrap();
-
-        let after_root = read_root(&fixture.repo_path("metadata/root.json"));
-        let after_keys = read_package_keys(&fixture.repo_path("keys/package-keys.json"));
-
-        assert_eq!(outcome.root_version, before_root.signed.version + 1);
-        assert_eq!(
-            after_root.signed.roles["root"].keyids,
-            before_root.signed.roles["root"].keyids
-        );
-        for role in ["targets", "snapshot", "timestamp"] {
-            assert_ne!(
-                after_root.signed.roles[role].keyids,
-                before_root.signed.roles[role].keyids
-            );
-            assert_eq!(
-                after_root.signed.roles[role].keyids,
-                after_root.signed.roles["targets"].keyids
-            );
-        }
-        assert!(after_keys.keys.iter().any(|key| {
-            key.public_key == old_public_key && matches!(key.status, PackageKeyStatus::Retired)
-        }));
-        assert!(after_keys.keys.iter().any(|key| {
-            key.public_key != old_public_key && matches!(key.status, PackageKeyStatus::Active)
-        }));
-    }
-
-    #[test]
-    fn failed_publish_key_rotation_keeps_active_key_files_unchanged() {
-        let fixture = PublishFixture::new();
-        let first = fixture.build_package("widget", "1.0.0", "x86_64", b"first\n");
-        publish_static_repo(fixture.options(vec![first])).unwrap();
-        let before_private = fs::read(fixture.key_dir.join("publish.private")).unwrap();
-        let before_public = fs::read(fixture.key_dir.join("publish.public")).unwrap();
-        let before_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-
-        let conflicting = fixture.build_package("widget", "1.0.0", "x86_64", b"second\n");
-        let mut options = fixture.options(vec![conflicting]);
-        options.rotate_publish_key = true;
-        let error = publish_static_repo(options).unwrap_err();
-
-        assert!(
-            error.to_string().contains("immutable package artifact"),
-            "unexpected error: {error}"
-        );
-        assert_eq!(
-            fs::read(fixture.key_dir.join("publish.private")).unwrap(),
-            before_private
-        );
-        assert_eq!(
-            fs::read(fixture.key_dir.join("publish.public")).unwrap(),
-            before_public
-        );
-        let after_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        assert_eq!(
-            after_key.public_key_base64(),
-            before_key.public_key_base64()
-        );
-    }
-
-    #[test]
-    fn package_staging_keeps_rotation_artifact_pending_until_promoted() {
-        let fixture = PublishFixture::new();
-        let first = fixture.build_package("widget", "1.0.0", "x86_64", b"first\n");
-        publish_static_repo(fixture.options(vec![first])).unwrap();
-
-        let pending_key = SigningKeyPair::generate().with_key_id("publish");
-        let staged = fixture.build_package("gadget", "1.0.0", "x86_64", b"pending\n");
-        let mut pending = stage_packages(
-            &fixture.repo_dir,
-            std::slice::from_ref(&staged),
-            &pending_key,
-        )
-        .unwrap();
-        let entries = pending.package_entries();
-        let relative = entries[0].path.clone();
-        let pending_path = pending.writes[0].pending_path.clone();
-        let final_path = fixture.repo_path(&relative);
-
-        assert!(pending_path.exists());
-        assert!(
-            !final_path.exists(),
-            "package staging must not expose final immutable path before commit"
-        );
-
-        pending.promote().unwrap();
-        assert!(final_path.exists());
-        pending.commit();
-    }
-
-    #[test]
-    fn publish_rejects_pending_rotation_state_before_timestamp_upload() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"first\n");
-        publish_static_repo(fixture.options(vec![package])).unwrap();
-        let old_private = fs::read(fixture.key_dir.join("publish.private")).unwrap();
-        let old_public = fs::read(fixture.key_dir.join("publish.public")).unwrap();
-        let old_timestamp = fs::read(fixture.repo_path("metadata/timestamp.json")).unwrap();
-        let old_watermark = fs::read(&fixture.state_file).unwrap();
-
-        let mut rotate = fixture.options(Vec::new());
-        rotate.rotate_publish_key = true;
-        publish_static_repo(rotate).unwrap();
-        let rotated_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        save_key_pair(&rotated_key, &fixture.key_dir, "publish.pending").unwrap();
-        fs::write(fixture.key_dir.join("publish.private"), old_private).unwrap();
-        fs::write(fixture.key_dir.join("publish.public"), old_public).unwrap();
-        fs::write(fixture.repo_path("metadata/timestamp.json"), old_timestamp).unwrap();
-        fs::write(&fixture.state_file, old_watermark).unwrap();
-
-        let mut retry = fixture.options(Vec::new());
-        retry.rotate_publish_key = true;
-        let error = publish_static_repo(retry).unwrap_err();
-
-        let active_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        assert_ne!(
-            active_key.public_key_base64(),
-            rotated_key.public_key_base64()
-        );
-        assert!(
-            error.to_string().contains("timestamp"),
-            "expected torn timestamp/root state to fail closed, got: {error}"
-        );
-        assert!(fixture.key_dir.join("publish.pending.private").exists());
-        assert!(fixture.key_dir.join("publish.pending.public").exists());
-    }
-
-    #[test]
-    fn publish_lock_rejects_second_local_holder() {
-        let fixture = PublishFixture::new();
-        fs::create_dir_all(&fixture.repo_dir).unwrap();
-        let _first = try_acquire_publish_lock_for_test(&fixture.repo_dir).unwrap();
-
-        let error = try_acquire_publish_lock_for_test(&fixture.repo_dir).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("another static repo publish is already running"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn artifact_gate_context_rejects_before_package_staging() {
-        let fixture = PublishFixture::new();
-        let package = fixture.build_package("widget", "1.0.0", "x86_64", b"hello\n");
-        let mut options = fixture.options(vec![package]);
-        options.artifact_gate_context = Some(ArtifactGateContext {
-            accepted_signers: AcceptedStaticSignerSet::from_initial_key(
-                "publish",
-                "not-a-real-public-key",
-            ),
-            publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
-        });
-
-        let error = publish_static_repo(options).unwrap_err();
-        let error = error.to_string();
-
-        assert!(
-            error.contains("artifact package signature is missing, invalid, or untrusted"),
-            "{error}"
-        );
-        assert!(!fixture.repo_path("index.json").exists());
-    }
-
-    #[test]
-    fn atomic_temp_paths_are_unique_next_to_destination() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let destination = temp_dir.path().join("metadata/timestamp.json");
-
-        let first = unique_atomic_temp_path(&destination);
-        let second = unique_atomic_temp_path(&destination);
-
-        assert_ne!(first, second);
-        assert_eq!(first.parent(), destination.parent());
-        assert_eq!(second.parent(), destination.parent());
-    }
-
-    struct PublishFixture {
-        _temp: TempDir,
-        repo_dir: PathBuf,
-        key_dir: PathBuf,
-        state_file: PathBuf,
-        package_dir: PathBuf,
-    }
-
-    impl PublishFixture {
-        fn new() -> Self {
-            let temp = tempfile::tempdir().unwrap();
-            let repo_dir = temp.path().join("repo");
-            let key_dir = temp.path().join("keys");
-            let state_file = temp.path().join("last-published.toml");
-            let package_dir = temp.path().join("packages");
-            fs::create_dir_all(&package_dir).unwrap();
-
-            Self {
-                _temp: temp,
-                repo_dir,
-                key_dir,
-                state_file,
-                package_dir,
-            }
-        }
-
-        fn options(&self, package_paths: Vec<PathBuf>) -> StaticPublishOptions {
-            StaticPublishOptions {
-                repo_name: "test-repo".to_string(),
-                repo_description: Some("test static repo".to_string()),
-                destination: RepoLocation::File {
-                    root: self.repo_dir.clone(),
-                },
-                key_dir: self.key_dir.clone(),
-                state_file: self.state_file.clone(),
-                package_paths,
-                refresh: false,
-                force_reinit: false,
-                accept_destination_state: false,
-                rotate_publish_key: false,
-                rotate_root_key: false,
-                artifact_gate_context: None,
-            }
-        }
-
-        fn repo_path(&self, relative: &str) -> PathBuf {
-            self.repo_dir.join(relative)
-        }
-
-        fn build_package(&self, name: &str, version: &str, arch: &str, content: &[u8]) -> PathBuf {
-            let source_dir = self
-                .package_dir
-                .join(format!("{name}-{version}-{arch}-src"));
-            fs::create_dir_all(source_dir.join("usr/share")).unwrap();
-            fs::write(source_dir.join("usr/share/payload"), content).unwrap();
-            let manifest = CcsManifest::parse(&format!(
-                r#"
-[package]
-name = "{name}"
-version = "{version}"
-description = "fixture package"
-license = "MIT"
-
-[package.platform]
-arch = "{arch}"
-"#
-            ))
-            .unwrap();
-            let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
-            let package_path = self
-                .package_dir
-                .join(format!("{name}-{version}-{arch}-input.ccs"));
-            write_ccs_package(&result, &package_path).unwrap();
-
-            let parsed =
-                crate::ccs::package::CcsPackage::parse(package_path.to_str().unwrap()).unwrap();
-            assert_eq!(parsed.name(), name);
-            assert_eq!(parsed.version(), version);
-            assert_eq!(parsed.architecture(), Some(arch));
-
-            package_path
-        }
-    }
-
-    fn read_identity(path: &Path) -> RepoIdentity {
-        RepoIdentity::parse(&fs::read_to_string(path).unwrap()).unwrap()
-    }
-
-    fn read_index(path: &Path) -> StaticIndex {
-        StaticIndex::parse(&fs::read_to_string(path).unwrap()).unwrap()
-    }
-
-    fn read_package_keys(path: &Path) -> PackageKeysFile {
-        PackageKeysFile::parse(&fs::read_to_string(path).unwrap()).unwrap()
-    }
-
-    fn read_root(path: &Path) -> Signed<RootMetadata> {
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    fn read_targets(path: &Path) -> Signed<TargetsMetadata> {
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    fn read_snapshot(path: &Path) -> Signed<SnapshotMetadata> {
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    fn read_timestamp(path: &Path) -> Signed<TimestampMetadata> {
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    fn set_root_expiry(fixture: &PublishFixture, expires: chrono::DateTime<Utc>) {
-        let root_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("root.private")).unwrap();
-        let mut root = read_root(&fixture.repo_path("metadata/root.json"));
-        root.signed.expires = expires;
-        root.signatures = vec![sign_tuf_metadata(&root_key, &root.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/root.json"), &root);
-        write_json(
-            &fixture.repo_path(&format!("metadata/{}.root.json", root.signed.version)),
-            &root,
-        );
-    }
-
-    fn set_targets_expiry(fixture: &PublishFixture, expires: chrono::DateTime<Utc>) {
-        let publish_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        let mut targets = read_targets(&fixture.repo_path("metadata/targets.json"));
-        targets.signed.expires = expires;
-        targets.signatures = vec![sign_tuf_metadata(&publish_key, &targets.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/targets.json"), &targets);
-        repin_snapshot_targets_and_timestamp(fixture, &publish_key);
-    }
-
-    fn set_snapshot_expiry(fixture: &PublishFixture, expires: chrono::DateTime<Utc>) {
-        let publish_key =
-            SigningKeyPair::load_from_file(&fixture.key_dir.join("publish.private")).unwrap();
-        let mut snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-        snapshot.signed.expires = expires;
-        snapshot.signatures = vec![sign_tuf_metadata(&publish_key, &snapshot.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/snapshot.json"), &snapshot);
-        repin_timestamp_snapshot(fixture, &publish_key);
-    }
-
-    fn repin_snapshot_targets_and_timestamp(
-        fixture: &PublishFixture,
-        publish_key: &SigningKeyPair,
-    ) {
-        let targets_bytes = fs::read(fixture.repo_path("metadata/targets.json")).unwrap();
-        let mut snapshot = read_snapshot(&fixture.repo_path("metadata/snapshot.json"));
-        let targets_ref = snapshot
-            .signed
-            .meta
-            .get_mut("targets.json")
-            .expect("snapshot pins targets");
-        targets_ref.length = Some(targets_bytes.len() as u64);
-        targets_ref.hashes = Some({
-            let mut hashes = std::collections::BTreeMap::new();
-            hashes.insert("sha256".to_string(), crate::hash::sha256(&targets_bytes));
-            hashes
-        });
-        snapshot.signatures = vec![sign_tuf_metadata(publish_key, &snapshot.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/snapshot.json"), &snapshot);
-        repin_timestamp_snapshot(fixture, publish_key);
-    }
-
-    fn repin_timestamp_snapshot(fixture: &PublishFixture, publish_key: &SigningKeyPair) {
-        let snapshot_bytes = fs::read(fixture.repo_path("metadata/snapshot.json")).unwrap();
-        let mut timestamp = read_timestamp(&fixture.repo_path("metadata/timestamp.json"));
-        let snapshot_ref = timestamp
-            .signed
-            .meta
-            .get_mut("snapshot.json")
-            .expect("timestamp pins snapshot");
-        snapshot_ref.length = Some(snapshot_bytes.len() as u64);
-        snapshot_ref.hashes = Some({
-            let mut hashes = std::collections::BTreeMap::new();
-            hashes.insert("sha256".to_string(), crate::hash::sha256(&snapshot_bytes));
-            hashes
-        });
-        timestamp.signatures = vec![sign_tuf_metadata(publish_key, &timestamp.signed).unwrap()];
-        write_json(&fixture.repo_path("metadata/timestamp.json"), &timestamp);
-    }
-
-    fn write_json<T: serde::Serialize>(path: &Path, value: &T) {
-        fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
-    }
 }

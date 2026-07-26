@@ -42,7 +42,7 @@ scripts/bootstrap-vm/validate-selfhost-vm.sh \
   --repo-name remi \
   --repo-url "$REPO_URL" \
   --remi-endpoint "$REMI_ENDPOINT" \
-  --remi-distro fedora-44 \
+  --source-profile fedora-44 \
   --root-json /absolute/path/to/root.json
 ```
 
@@ -139,7 +139,7 @@ The guest validation path is intentionally explicit about infrastructure:
 - `--repo-name`: local Conary repository name inside the guest
 - `--repo-url`: repository metadata URL used by `conary repo add`
 - `--remi-endpoint`: Remi conversion endpoint for the default strategy
-- `--remi-distro`: exact public Remi distro ID, for example `fedora-44`
+- `--source-profile`: exact public source profile ID, for example `fedora-44`
 - `--root-json`: optional absolute path to initial TUF root metadata copied
   into the guest after boot
 

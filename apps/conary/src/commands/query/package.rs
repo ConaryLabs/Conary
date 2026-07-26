@@ -171,13 +171,11 @@ fn show_package_info(
     );
     println!("Source      : {}", trove.install_source.as_str());
 
-    if let Some(source_distro) = &trove.source_distro {
-        println!("Distro      : {}", source_distro);
+    if let Some(source_profile) = &trove.source_profile {
+        println!("Profile     : {}", source_profile);
     }
 
-    if let Some(version_scheme) = &trove.version_scheme {
-        println!("Versioning  : {}", version_scheme);
-    }
+    println!("Versioning  : {}", trove.version_scheme.as_str());
 
     if let Some(repository_id) = trove.installed_from_repository_id {
         println!(
@@ -207,18 +205,22 @@ fn show_package_info(
     println!("Pinned      : {}", if trove.pinned { "yes" } else { "no" });
 
     // Count files
-    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
-    println!("Files       : {}", files.len());
+    let payload = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?;
+    println!("Files       : {}", payload.entries().len());
 
     // Calculate total size
-    let total_size: i64 = files.iter().map(|f| f.size).sum();
+    let total_size: u64 = payload
+        .entries()
+        .iter()
+        .filter_map(|file| file.content.as_ref().map(|content| content.size))
+        .sum();
     println!(
         "Size        : {}",
-        crate::commands::format_bytes(total_size as u64)
+        crate::commands::format_bytes(total_size)
     );
 
     // Dependencies
-    let deps = conary_core::db::models::DependencyEntry::find_by_trove(conn, trove_id)?;
+    let deps = conary_core::db::models::InstalledRequirementAtom::find_by_trove(conn, trove_id)?;
     if !deps.is_empty() {
         println!("\nDependencies ({}):", deps.len());
         for dep in &deps {
@@ -266,7 +268,8 @@ fn list_package_files(
     lsl: bool,
 ) -> Result<()> {
     let trove_id = trove.id.ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
-    let files = conary_core::db::models::FileEntry::list_files_lsl(conn, trove_id)?;
+    let payload = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?;
+    let files = payload.entries();
 
     if files.is_empty() {
         println!("No files in package {} {}", trove.name, trove.version);
@@ -282,24 +285,31 @@ fn list_package_files(
 
     if lsl {
         // ls -l style output
-        for file in &files {
+        for file in files {
             println!(
                 "{} {:>8} {:>8} {:>8} {}",
                 file.format_permissions(),
-                file.owner.as_deref().unwrap_or("root"),
-                file.group_name.as_deref().unwrap_or("root"),
+                display_payload_identity(&file.node.source.user),
+                display_payload_identity(&file.node.source.group),
                 file.size_human(),
                 file.path
             );
         }
     } else {
         // Simple list
-        for file in &files {
+        for file in files {
             println!("{}", file.path);
         }
     }
 
     Ok(())
+}
+
+fn display_payload_identity(identity: &conary_core::payload::PayloadIdentity) -> String {
+    match identity {
+        conary_core::payload::PayloadIdentity::Numeric { id } => id.to_string(),
+        conary_core::payload::PayloadIdentity::Named { name } => name.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -310,7 +320,7 @@ mod tests {
 
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         conn
     }
 

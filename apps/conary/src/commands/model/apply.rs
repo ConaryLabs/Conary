@@ -1,5 +1,7 @@
 // src/commands/model/apply.rs
 
+mod derived;
+
 use std::path::Path;
 
 use super::context::load_model_and_diff;
@@ -7,28 +9,24 @@ use super::presentation::{
     is_replatform_action, is_source_policy_action, print_source_policy_and_replatform,
     render_replatform_summary, source_policy_replatform_note, source_policy_summary,
 };
+use crate::commands::install::cmd_install_replatform;
 use crate::commands::replatform_rendering::{
     render_replatform_blocked_reason, render_replatform_execution_plan,
 };
-use crate::commands::{InstallOptions, LegacyReplayOptions, SandboxMode, cmd_install, cmd_remove};
+use crate::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove};
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
-    DerivedOverride, DerivedPackage, DerivedPatch, DistroPin, Repository, Trove, VersionPolicy,
-    settings,
+    DistroPin, Repository, RepositoryPackage, Trove, TroveType, settings,
 };
-use conary_core::derived::{build_from_definition, persist_build_artifact};
 use conary_core::filesystem::CasStore;
-use conary_core::hash::sha256;
 use conary_core::model::parser::SystemModel;
-use conary_core::model::{DiffAction, ModelDerivedPackage, replatform_execution_plan};
-use conary_core::repository::versioning::{VersionScheme, infer_version_scheme};
-use conary_core::repository::{
-    SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE, resolution_policy::SelectionMode,
-};
+use conary_core::model::{DiffAction, replatform_execution_plan};
+use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
+use derived::{build_derived_package, create_derived_from_model};
 use rusqlite::Connection;
 #[cfg(test)]
 use std::cell::Cell;
-use tracing::{debug, info};
+use tracing::debug;
 
 #[cfg(test)]
 thread_local! {
@@ -39,7 +37,6 @@ thread_local! {
 pub struct ApplyOptions<'a> {
     pub model_path: &'a str,
     pub db_path: &'a str,
-    #[allow(dead_code)] // reserved for future chroot support
     pub root: &'a str,
     pub dry_run: bool,
     pub skip_optional: bool,
@@ -183,15 +180,9 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
 
     if autoremove {
         println!();
-        if let Err(e) = crate::commands::cmd_autoremove(
-            db_path,
-            root,
-            false,
-            false,
-            crate::commands::SandboxMode::Always,
-            crate::commands::LegacyReplayOptions::default(),
-        )
-        .await
+        if let Err(e) =
+            crate::commands::cmd_autoremove(db_path, false, crate::commands::SandboxMode::Always)
+                .await
         {
             errors.push(format!("Autoremove: {}", e));
         }
@@ -258,8 +249,7 @@ pub(super) fn apply_source_policy_changes(
     for action in actions {
         match action {
             DiffAction::SetSourcePin { distro, strength } => {
-                let strength = strength.as_deref().unwrap_or("guarded");
-                DistroPin::set(conn, distro, strength)?;
+                DistroPin::set(conn, distro, *strength)?;
                 println!("Updated source policy pin: {} ({})", distro, strength);
                 count += 1;
             }
@@ -268,48 +258,24 @@ pub(super) fn apply_source_policy_changes(
                 println!("Cleared source policy pin");
                 count += 1;
             }
-            DiffAction::SetSelectionMode { mode } => {
-                settings::set(
-                    conn,
-                    SETTINGS_KEY_SELECTION_MODE,
-                    selection_mode_value(*mode),
-                )?;
-                println!(
-                    "Updated source policy selection mode: {}",
-                    selection_mode_value(*mode)
-                );
-                count += 1;
-            }
-            DiffAction::ClearSelectionMode => {
-                settings::delete(conn, SETTINGS_KEY_SELECTION_MODE)?;
-                println!("Cleared source policy selection mode");
-                count += 1;
-            }
             DiffAction::SetAllowedDistros { distros } => {
                 settings::set(
                     conn,
                     SETTINGS_KEY_ALLOWED_DISTROS,
                     &serde_json::to_string(distros)?,
                 )?;
-                println!("Updated allowed source distros: {}", distros.join(", "));
+                println!("Updated allowed source profiles: {}", distros.join(", "));
                 count += 1;
             }
             DiffAction::ClearAllowedDistros => {
                 settings::delete(conn, SETTINGS_KEY_ALLOWED_DISTROS)?;
-                println!("Cleared allowed source distros");
+                println!("Cleared allowed source profiles");
                 count += 1;
             }
             _ => {}
         }
     }
     Ok(count)
-}
-
-fn selection_mode_value(mode: SelectionMode) -> &'static str {
-    match mode {
-        SelectionMode::Policy => "policy",
-        SelectionMode::Latest => "latest",
-    }
 }
 
 /// Apply executable replatform transactions through the shared install path.
@@ -376,30 +342,41 @@ pub(super) async fn apply_replatform_changes(
             "Replatformed from {} to {} by model apply",
             current_source, transaction.target_distro
         );
+        let exact_release = {
+            let repository_package_id = transaction
+                .install_repository_package_id
+                .context("executable replatform plan has no exact repository package id")?;
+            let conn = rusqlite::Connection::open(db_path)?;
+            let package = RepositoryPackage::find_by_id(&conn, repository_package_id)?
+                .context("exact replatform repository package row disappeared")?;
+            if package.name != transaction.package
+                || package.version != transaction.target_version
+                || package.architecture != transaction.architecture
+            {
+                anyhow::bail!("exact replatform repository package row drifted after planning");
+            }
+            package.package_release
+        };
 
-        match cmd_install(
+        match cmd_install_replatform(
             &transaction.package,
             InstallOptions {
                 db_path,
                 root,
                 version: Some(transaction.target_version.clone()),
+                package_release: Some(exact_release),
                 repo: Some(repository),
                 architecture: transaction.architecture.clone(),
                 dry_run: false,
                 no_deps: false,
-                no_scripts: false,
                 selection_reason: Some(selection_reason.as_str()),
-                sandbox_mode: SandboxMode::None,
+                sandbox_mode: SandboxMode::Always,
                 allow_downgrade: true,
-                allow_capabilities: false,
                 convert_to_ccs: false,
-                no_capture: true,
-                force: false,
-                dep_mode: None,
+                ownership: None,
                 yes: true,
-                from_distro: None,
+                from_profile: None,
                 repository_provenance: None,
-                legacy_replay: LegacyReplayOptions::default(),
             },
         )
         .await
@@ -442,13 +419,7 @@ pub(super) async fn apply_replatform_changes(
 }
 
 fn format_replatform_install_error(package: &str, err: anyhow::Error) -> String {
-    let error = err.to_string();
-    let guidance = if error.contains("LegacyReplayFeatureDisabled") {
-        " Safe choices: select a different target distro or wait for adapter coverage."
-    } else {
-        ""
-    };
-    format!("Replatform '{package}': {error}{guidance}")
+    format!("Replatform '{package}': {err}")
 }
 
 fn finalize_replatform_provenance(
@@ -466,9 +437,8 @@ fn finalize_replatform_provenance(
     let repository_id = repository
         .id
         .ok_or_else(|| anyhow!("repository '{repository_name}' missing id"))?;
-    let version_scheme = infer_version_scheme(&repository)
-        .ok_or_else(|| anyhow!("unable to infer version scheme for '{repository_name}'"))?;
     let installed = find_installed_replatform_trove(conn, transaction)?;
+    let version_scheme = installed.version_scheme;
     let installed_id = installed.id.ok_or_else(|| {
         anyhow!(
             "installed replatform trove '{}' missing id",
@@ -480,7 +450,7 @@ fn finalize_replatform_provenance(
         conn,
         installed_id,
         &transaction.target_distro,
-        version_scheme_to_str(version_scheme),
+        version_scheme,
         repository_id,
         selection_reason,
     )?;
@@ -494,29 +464,23 @@ fn find_installed_replatform_trove(
 ) -> Result<Trove> {
     let matches = Trove::find_by_name(conn, &transaction.package)?
         .into_iter()
-        .filter(|trove| trove.version == transaction.target_version)
+        .filter(|trove| {
+            trove.version == transaction.target_version && trove.trove_type == TroveType::Package
+        })
         .collect::<Vec<_>>();
 
-    if let Some(expected_arch) = transaction.architecture.as_deref()
-        && let Some(installed) = matches.iter().find(|trove| {
-            trove.architecture.as_deref() == Some(expected_arch)
-                || trove.architecture.as_deref().is_none()
-        })
-    {
-        return Ok(installed.clone());
-    }
-
-    match matches.as_slice() {
-        [installed] => Ok(installed.clone()),
-        [] => Err(anyhow!(
+    select_replatform_variant(
+        &matches,
+        transaction.architecture.as_deref(),
+        &transaction.package,
+    )?
+    .cloned()
+    .ok_or_else(|| {
+        anyhow!(
             "installed replatform trove '{}' not found",
             transaction.package
-        )),
-        _ => Err(anyhow!(
-            "installed replatform trove '{}' is ambiguous after install",
-            transaction.package
-        )),
-    }
+        )
+    })
 }
 
 fn find_current_replatform_source(
@@ -525,30 +489,70 @@ fn find_current_replatform_source(
 ) -> Result<Option<String>> {
     let matches = Trove::find_by_name(conn, &transaction.package)?
         .into_iter()
-        .filter(|trove| trove.version == transaction.current_version)
+        .filter(|trove| {
+            trove.version == transaction.current_version && trove.trove_type == TroveType::Package
+        })
         .collect::<Vec<_>>();
 
-    if let Some(expected_arch) = transaction.current_architecture.as_deref()
-        && let Some(installed) = matches.iter().find(|trove| {
-            trove.architecture.as_deref() == Some(expected_arch)
-                || trove.architecture.as_deref().is_none()
-        })
-    {
-        return Ok(installed.source_distro.clone());
-    }
-
-    Ok(matches
-        .into_iter()
-        .next()
-        .and_then(|trove| trove.source_distro))
+    Ok(select_replatform_variant(
+        &matches,
+        transaction.current_architecture.as_deref(),
+        &transaction.package,
+    )?
+    .and_then(|trove| trove.source_profile.clone()))
 }
 
-fn version_scheme_to_str(scheme: VersionScheme) -> &'static str {
-    match scheme {
-        VersionScheme::Rpm => "rpm",
-        VersionScheme::Debian => "debian",
-        VersionScheme::Arch => "arch",
+fn select_replatform_variant<'a>(
+    matches: &'a [Trove],
+    expected_architecture: Option<&str>,
+    package: &str,
+) -> Result<Option<&'a Trove>> {
+    let exact = matches
+        .iter()
+        .filter(|trove| trove.architecture.as_deref() == expected_architecture)
+        .collect::<Vec<_>>();
+    match exact.as_slice() {
+        [trove] => return Ok(Some(*trove)),
+        [] => {}
+        _ => {
+            return Err(anyhow!(
+                "replatform package '{}' has multiple exact architecture matches for {}",
+                package,
+                format_replatform_architecture(expected_architecture),
+            ));
+        }
     }
+
+    if expected_architecture.is_none() {
+        return match matches {
+            [] => Ok(None),
+            [trove] => Ok(Some(trove)),
+            _ => Err(anyhow!(
+                "replatform package '{}' has multiple installed variants but no architecture selector",
+                package,
+            )),
+        };
+    }
+
+    let architecture_independent = matches
+        .iter()
+        .filter(|trove| trove.architecture.is_none())
+        .collect::<Vec<_>>();
+    match architecture_independent.as_slice() {
+        [trove] => Ok(Some(*trove)),
+        [] => Ok(None),
+        _ => Err(anyhow!(
+            "replatform package '{}' has multiple architecture-independent matches for {}",
+            package,
+            format_replatform_architecture(expected_architecture),
+        )),
+    }
+}
+
+fn format_replatform_architecture(architecture: Option<&str>) -> String {
+    architecture
+        .map(|architecture| format!("architecture '{architecture}'"))
+        .unwrap_or_else(|| "architecture-independent identity".to_string())
 }
 
 fn mark_replatform_partial_failure(
@@ -621,13 +625,10 @@ pub(super) async fn apply_package_changes(
                 match cmd_remove(
                     package,
                     db_path,
-                    root,
                     Some(current_version.clone()),
                     arch.cloned(),
-                    false,
                     SandboxMode::Always,
                     false,
-                    LegacyReplayOptions::default(),
                 )
                 .await
                 {
@@ -670,23 +671,19 @@ pub(super) async fn apply_package_changes(
                         db_path,
                         root,
                         version: pin.clone(),
+                        package_release: None,
                         repo: None,
                         architecture: None,
                         dry_run: false,
                         no_deps: false,
-                        no_scripts: false,
                         selection_reason: Some("Installed by model apply"),
                         sandbox_mode: SandboxMode::Always,
                         allow_downgrade: false,
-                        allow_capabilities: false,
                         convert_to_ccs: false,
-                        no_capture: false,
-                        force: false,
-                        dep_mode: None,
+                        ownership: None,
                         yes: true,
-                        from_distro: None,
+                        from_profile: None,
                         repository_provenance: None,
-                        legacy_replay: LegacyReplayOptions::default(),
                     },
                 )
                 .await
@@ -720,23 +717,19 @@ pub(super) async fn apply_package_changes(
                         db_path,
                         root,
                         version: Some(target_version.clone()),
+                        package_release: None,
                         repo: None,
                         architecture: None,
                         dry_run: false,
                         no_deps: false,
-                        no_scripts: false,
                         selection_reason: Some("Updated by model apply"),
                         sandbox_mode: SandboxMode::Always,
                         allow_downgrade: true,
-                        allow_capabilities: false,
                         convert_to_ccs: false,
-                        no_capture: false,
-                        force: false,
-                        dep_mode: None,
+                        ownership: None,
                         yes: true,
-                        from_distro: None,
+                        from_profile: None,
                         repository_provenance: None,
-                        legacy_replay: LegacyReplayOptions::default(),
                     },
                 )
                 .await
@@ -880,35 +873,53 @@ pub(super) fn apply_metadata_changes(
                 }
                 Err(e) => errors.push(format!("Unpin '{}': {}", package, e)),
             },
-            DiffAction::MarkExplicit { package } => {
-                match Trove::promote_to_explicit(
-                    conn,
-                    package,
-                    Some("Marked explicit by model apply"),
-                ) {
-                    Ok(true) => {
-                        println!("Marked '{}' as explicitly installed", package);
-                        applied += 1;
-                    }
-                    Ok(false) => {
-                        debug!("'{}' already explicit or not found", package);
-                    }
-                    Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
-                }
-            }
+            DiffAction::MarkExplicit { package } => match Trove::find_one_by_name(conn, package) {
+                Ok(Some(trove)) => match trove.id {
+                    Some(trove_id) => match Trove::promote_to_explicit(
+                        conn,
+                        trove_id,
+                        Some("Marked explicit by model apply"),
+                    ) {
+                        Ok(true) => {
+                            println!("Marked '{}' as explicitly installed", package);
+                            applied += 1;
+                        }
+                        Ok(false) => {
+                            debug!("'{}' already explicit or not found", package);
+                        }
+                        Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
+                    },
+                    None => errors.push(format!(
+                        "MarkExplicit '{}': installed trove has no persisted ID",
+                        package
+                    )),
+                },
+                Ok(None) => debug!("'{}' not installed", package),
+                Err(e) => errors.push(format!("MarkExplicit '{}': {}", package, e)),
+            },
             DiffAction::MarkDependency { package } => {
-                match conn.execute(
-                    "UPDATE troves SET install_reason = 'dependency' \
-                     WHERE name = ?1 AND install_reason = 'explicit' AND type = 'package'",
-                    rusqlite::params![package],
-                ) {
-                    Ok(rows) if rows > 0 => {
-                        println!("Marked '{}' as dependency", package);
-                        applied += 1;
-                    }
-                    Ok(_) => {
-                        debug!("'{}' already a dependency or not found", package);
-                    }
+                match Trove::find_one_by_name(conn, package) {
+                    Ok(Some(trove)) => match trove.id {
+                        Some(trove_id) => match conn.execute(
+                            "UPDATE troves SET install_reason = 'dependency' \
+                             WHERE id = ?1 AND install_reason = 'explicit' AND type = 'package'",
+                            rusqlite::params![trove_id],
+                        ) {
+                            Ok(rows) if rows > 0 => {
+                                println!("Marked '{}' as dependency", package);
+                                applied += 1;
+                            }
+                            Ok(_) => {
+                                debug!("'{}' already a dependency", package);
+                            }
+                            Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
+                        },
+                        None => errors.push(format!(
+                            "MarkDependency '{}': installed trove has no persisted ID",
+                            package
+                        )),
+                    },
+                    Ok(None) => debug!("'{}' not installed", package),
                     Err(e) => errors.push(format!("MarkDependency '{}': {}", package, e)),
                 }
             }
@@ -919,645 +930,5 @@ pub(super) fn apply_metadata_changes(
     (applied, errors)
 }
 
-fn create_derived_from_model(
-    conn: &Connection,
-    model_derived: &ModelDerivedPackage,
-    model_dir: &Path,
-    cas: &CasStore,
-) -> Result<i64> {
-    if let Some(existing) = DerivedPackage::find_by_name(conn, &model_derived.name)? {
-        info!(
-            "Derived package '{}' already exists, updating",
-            model_derived.name
-        );
-        return existing.id.ok_or_else(|| {
-            anyhow!(
-                "Derived package '{}' exists but has no database id",
-                model_derived.name
-            )
-        });
-    }
-
-    let version_policy = if model_derived.version == "inherit" {
-        VersionPolicy::Inherit
-    } else if model_derived.version.starts_with('+') {
-        VersionPolicy::Suffix(model_derived.version.clone())
-    } else {
-        VersionPolicy::Specific(model_derived.version.clone())
-    };
-
-    let mut derived = DerivedPackage::new(model_derived.name.clone(), model_derived.from.clone());
-    derived.version_policy = version_policy;
-    derived.model_source = Some(model_dir.display().to_string());
-
-    let derived_id = derived.insert(conn)?;
-    info!(
-        "Created derived package '{}' with id={}",
-        model_derived.name, derived_id
-    );
-
-    for (order, patch_path) in model_derived.patches.iter().enumerate() {
-        let full_path = model_dir.join(patch_path);
-        if !full_path.exists() {
-            return Err(anyhow!(
-                "Patch file not found: {} (for derived package '{}')",
-                full_path.display(),
-                model_derived.name
-            ));
-        }
-
-        let patch_content = std::fs::read(&full_path)
-            .with_context(|| format!("Failed to read patch file '{}'", full_path.display()))?;
-        let patch_hash = sha256(&patch_content);
-        let patch_name = Path::new(patch_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("patch")
-            .to_string();
-
-        let mut patch = DerivedPatch::new(derived_id, (order + 1) as i32, patch_name, patch_hash);
-        patch.insert(conn)?;
-        cas.store(&patch_content)?;
-    }
-
-    for (target_path, source_path) in &model_derived.override_files {
-        if source_path.is_empty() || source_path == "REMOVE" {
-            let mut ov = DerivedOverride::new_remove(derived_id, target_path.clone());
-            ov.insert(conn)?;
-        } else {
-            let full_source = model_dir.join(source_path);
-            if !full_source.exists() {
-                return Err(anyhow!(
-                    "Override source file not found: {} (for derived package '{}')",
-                    full_source.display(),
-                    model_derived.name
-                ));
-            }
-
-            let content = std::fs::read(&full_source).with_context(|| {
-                format!(
-                    "Failed to read override source file '{}'",
-                    full_source.display()
-                )
-            })?;
-            let source_hash = sha256(&content);
-
-            let mut ov = DerivedOverride::new_replace(derived_id, target_path.clone(), source_hash);
-            ov.source_path = Some(source_path.clone());
-            ov.insert(conn)?;
-            cas.store(&content)?;
-        }
-    }
-
-    Ok(derived_id)
-}
-
-fn build_derived_package(conn: &Connection, name: &str, cas: &CasStore) -> Result<()> {
-    let mut derived = DerivedPackage::find_by_name(conn, name)?
-        .ok_or_else(|| anyhow!("Derived package '{}' not found", name))?;
-
-    match build_from_definition(conn, &derived, cas) {
-        Ok(build_result) => {
-            let build_meta = persist_build_artifact(conn, &mut derived, &build_result, cas)?;
-            println!(
-                "  Built '{}': {} files, {} patches applied ({})",
-                name,
-                build_result.files.len(),
-                build_result.patches_applied.len(),
-                build_meta.artifact_path
-            );
-            Ok(())
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            derived.mark_error(conn, &error_msg)?;
-            Err(anyhow!("Build failed for '{}': {}", name, error_msg))
-        }
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::super::context::compute_model_diff;
-    use super::super::test_support::{
-        ReplatformMetadataFailpointReset, build_test_ccs_package,
-        build_test_ccs_package_with_bundle, legacy_replatform_upgrade_bundle, serve_test_file,
-    };
-    use super::*;
-    use crate::commands::test_helpers::create_test_db;
-    use conary_core::db::models::{DistroPin, settings};
-    use conary_core::model::capture_current_state;
-    use conary_core::model::parser::SystemModel;
-    use conary_core::repository::{SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE};
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn test_model_apply_updates_source_policy_without_package_changes() {
-        let (_temp_file, db_path) = create_test_db();
-        let model_dir = tempdir().unwrap();
-        let model_path = model_dir.path().join("system.toml");
-        std::fs::write(
-            &model_path,
-            r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-        )
-        .unwrap();
-
-        cmd_model_apply(ApplyOptions {
-            model_path: model_path.to_str().unwrap(),
-            db_path: &db_path,
-            root: "/",
-            dry_run: false,
-            skip_optional: false,
-            strict: false,
-            autoremove: false,
-            offline: true,
-        })
-        .await
-        .unwrap();
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let pin = DistroPin::get_current(&conn).unwrap().unwrap();
-        assert_eq!(pin.distro, "arch");
-        assert_eq!(pin.mixing_policy, "strict");
-    }
-
-    #[tokio::test]
-    async fn test_model_apply_updates_selection_mode_without_package_changes() {
-        let (_temp_file, db_path) = create_test_db();
-        let model_dir = tempdir().unwrap();
-        let model_path = model_dir.path().join("system.toml");
-        std::fs::write(
-            &model_path,
-            r#"
-[model]
-version = 1
-
-[system]
-selection_mode = "latest"
-"#,
-        )
-        .unwrap();
-
-        cmd_model_apply(ApplyOptions {
-            model_path: model_path.to_str().unwrap(),
-            db_path: &db_path,
-            root: "/",
-            dry_run: false,
-            skip_optional: false,
-            strict: false,
-            autoremove: false,
-            offline: true,
-        })
-        .await
-        .unwrap();
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        assert_eq!(
-            settings::get(&conn, SETTINGS_KEY_SELECTION_MODE).unwrap(),
-            Some("latest".to_string())
-        );
-        assert!(DistroPin::get_current(&conn).unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_model_apply_updates_allowed_distros_without_package_changes() {
-        let (_temp_file, db_path) = create_test_db();
-        let model_dir = tempdir().unwrap();
-        let model_path = model_dir.path().join("system.toml");
-        std::fs::write(
-            &model_path,
-            r#"
-[model]
-version = 1
-
-[system]
-allowed_distros = ["arch"]
-"#,
-        )
-        .unwrap();
-
-        cmd_model_apply(ApplyOptions {
-            model_path: model_path.to_str().unwrap(),
-            db_path: &db_path,
-            root: "/",
-            dry_run: false,
-            skip_optional: false,
-            strict: false,
-            autoremove: false,
-            offline: true,
-        })
-        .await
-        .unwrap();
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        assert_eq!(
-            settings::get(&conn, SETTINGS_KEY_ALLOWED_DISTROS).unwrap(),
-            Some("[\"arch\"]".to_string())
-        );
-        assert!(DistroPin::get_current(&conn).unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_model_apply_executes_replatform_replacement_when_route_is_executable() {
-        use conary_core::db::models::{
-            DistroPin, InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
-            RepositoryPackage, ResolutionStrategy, Trove, TroveType,
-        };
-
-        let (_temp_file, db_path) = create_test_db();
-        let temp_dir = tempdir().unwrap();
-        let install_root = temp_dir.path().join("root");
-        std::fs::create_dir_all(&install_root).unwrap();
-
-        let package_path = build_test_ccs_package(temp_dir.path(), "vim", "9.1.0");
-        let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
-        let (package_url, _server_handle) = serve_test_file(package_path.clone());
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-
-        let mut fedora_repo = Repository::new(
-            "fedora".to_string(),
-            "https://example.test/fedora".to_string(),
-        );
-        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
-        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
-
-        let mut arch_repo = Repository::new(
-            "arch-core".to_string(),
-            "https://example.test/arch".to_string(),
-        );
-        arch_repo.default_strategy_distro = Some("arch".to_string());
-        let arch_repo_id = arch_repo.insert(&conn).unwrap();
-
-        let mut fedora_label = LabelEntry::new(
-            "fedora".to_string(),
-            "f43".to_string(),
-            "stable".to_string(),
-        );
-        fedora_label.repository_id = Some(fedora_repo_id);
-        let fedora_label_id = fedora_label.insert(&conn).unwrap();
-
-        let mut installed = Trove::new_with_source(
-            "vim".to_string(),
-            "9.0.1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-        );
-        installed.label_id = Some(fedora_label_id);
-        installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
-        installed.installed_from_repository_id = Some(fedora_repo_id);
-        installed.insert(&conn).unwrap();
-
-        let mut arch_pkg = RepositoryPackage::new(
-            arch_repo_id,
-            "vim".to_string(),
-            "9.1.0".to_string(),
-            package_checksum.clone(),
-            std::fs::metadata(&package_path)
-                .unwrap()
-                .len()
-                .try_into()
-                .unwrap(),
-            package_url.clone(),
-        );
-        arch_pkg.architecture = Some("x86_64".to_string());
-        arch_pkg.insert(&conn).unwrap();
-
-        let mut exact_resolution = PackageResolution::new(
-            arch_repo_id,
-            "vim".to_string(),
-            vec![ResolutionStrategy::Binary {
-                url: package_url,
-                checksum: package_checksum,
-                delta_base: None,
-            }],
-        );
-        exact_resolution.version = Some("9.1.0".to_string());
-        exact_resolution.primary_strategy = PrimaryStrategy::Binary;
-        exact_resolution.insert(&conn).unwrap();
-        drop(conn);
-
-        let model_path = temp_dir.path().join("system.toml");
-        std::fs::write(
-            &model_path,
-            r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-        )
-        .unwrap();
-
-        let result = cmd_model_apply(ApplyOptions {
-            model_path: model_path.to_str().unwrap(),
-            db_path: &db_path,
-            root: install_root.to_str().unwrap(),
-            dry_run: false,
-            skip_optional: false,
-            strict: false,
-            autoremove: false,
-            offline: true,
-        });
-
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
-        let result = result.await;
-
-        result.unwrap();
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
-        assert_eq!(installed_troves.len(), 1);
-        let installed = &installed_troves[0];
-        assert_eq!(installed.version, "9.1.0");
-        assert_eq!(installed.source_distro.as_deref(), Some("arch"));
-        assert_eq!(installed.version_scheme.as_deref(), Some("arch"));
-        assert_eq!(installed.installed_from_repository_id, Some(arch_repo_id));
-        assert_eq!(
-            installed.selection_reason.as_deref(),
-            Some("Replatformed from fedora-44 to arch by model apply")
-        );
-        assert_eq!(
-            DistroPin::get_current(&conn).unwrap().unwrap().distro,
-            "arch"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_model_apply_replatform_legacy_replay_failure_names_safe_choices() {
-        use conary_core::db::models::{
-            InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
-            RepositoryPackage, ResolutionStrategy, Trove, TroveType,
-        };
-
-        let (_temp_file, db_path) = create_test_db();
-        let temp_dir = tempdir().unwrap();
-        let install_root = temp_dir.path().join("root");
-        std::fs::create_dir_all(&install_root).unwrap();
-
-        let package_path = build_test_ccs_package_with_bundle(
-            temp_dir.path(),
-            "vim",
-            "9.1.0",
-            Some(legacy_replatform_upgrade_bundle("vim", "9.1.0")),
-        );
-        let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
-        let (package_url, _server_handle) = serve_test_file(package_path.clone());
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-
-        let mut fedora_repo = Repository::new(
-            "fedora".to_string(),
-            "https://example.test/fedora".to_string(),
-        );
-        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
-        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
-
-        let mut arch_repo = Repository::new(
-            "arch-core".to_string(),
-            "https://example.test/arch".to_string(),
-        );
-        arch_repo.default_strategy_distro = Some("arch".to_string());
-        let arch_repo_id = arch_repo.insert(&conn).unwrap();
-
-        let mut fedora_label = LabelEntry::new(
-            "fedora".to_string(),
-            "f43".to_string(),
-            "stable".to_string(),
-        );
-        fedora_label.repository_id = Some(fedora_repo_id);
-        let fedora_label_id = fedora_label.insert(&conn).unwrap();
-
-        let mut installed = Trove::new_with_source(
-            "vim".to_string(),
-            "9.0.1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-        );
-        installed.label_id = Some(fedora_label_id);
-        installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
-        installed.installed_from_repository_id = Some(fedora_repo_id);
-        installed.insert(&conn).unwrap();
-
-        let mut arch_pkg = RepositoryPackage::new(
-            arch_repo_id,
-            "vim".to_string(),
-            "9.1.0".to_string(),
-            package_checksum.clone(),
-            std::fs::metadata(&package_path)
-                .unwrap()
-                .len()
-                .try_into()
-                .unwrap(),
-            package_url.clone(),
-        );
-        arch_pkg.architecture = Some("x86_64".to_string());
-        arch_pkg.insert(&conn).unwrap();
-
-        let mut exact_resolution = PackageResolution::new(
-            arch_repo_id,
-            "vim".to_string(),
-            vec![ResolutionStrategy::Binary {
-                url: package_url,
-                checksum: package_checksum,
-                delta_base: None,
-            }],
-        );
-        exact_resolution.version = Some("9.1.0".to_string());
-        exact_resolution.primary_strategy = PrimaryStrategy::Binary;
-        exact_resolution.insert(&conn).unwrap();
-
-        let model: SystemModel = toml::from_str(
-            r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-        )
-        .unwrap();
-
-        let state = capture_current_state(&conn).unwrap();
-        let diff = compute_model_diff(&model, &state, &conn, true, false)
-            .await
-            .unwrap();
-        let action_refs = diff.actions.iter().collect::<Vec<_>>();
-        apply_source_policy_changes(&conn, &action_refs).unwrap();
-        drop(conn);
-
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
-        let (executed, errors) =
-            apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)
-                .await
-                .unwrap();
-
-        assert_eq!(executed, 0);
-        assert_eq!(errors.len(), 1);
-        let error = &errors[0];
-        assert!(error.contains("Replatform 'vim'"), "{error}");
-        assert!(error.contains("LegacyReplayFeatureDisabled"), "{error}");
-        assert!(
-            error.contains("select a different target distro"),
-            "{error}"
-        );
-        assert!(error.contains("wait for adapter coverage"), "{error}");
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
-        assert_eq!(installed_troves.len(), 1);
-        assert_eq!(installed_troves[0].version, "9.0.1");
-    }
-
-    #[tokio::test]
-    async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatform() {
-        use conary_core::db::models::{
-            InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
-            RepositoryPackage, ResolutionStrategy, Trove, TroveType,
-        };
-
-        let (_temp_file, db_path) = create_test_db();
-        let temp_dir = tempdir().unwrap();
-        let install_root = temp_dir.path().join("root");
-        std::fs::create_dir_all(&install_root).unwrap();
-
-        let package_path = build_test_ccs_package(temp_dir.path(), "vim", "9.1.0");
-        let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
-        let (package_url, _server_handle) = serve_test_file(package_path.clone());
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-
-        let mut fedora_repo = Repository::new(
-            "fedora".to_string(),
-            "https://example.test/fedora".to_string(),
-        );
-        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
-        let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
-
-        let mut arch_repo = Repository::new(
-            "arch-core".to_string(),
-            "https://example.test/arch".to_string(),
-        );
-        arch_repo.default_strategy_distro = Some("arch".to_string());
-        let arch_repo_id = arch_repo.insert(&conn).unwrap();
-
-        let mut fedora_label = LabelEntry::new(
-            "fedora".to_string(),
-            "f43".to_string(),
-            "stable".to_string(),
-        );
-        fedora_label.repository_id = Some(fedora_repo_id);
-        let fedora_label_id = fedora_label.insert(&conn).unwrap();
-
-        let mut installed = Trove::new_with_source(
-            "vim".to_string(),
-            "9.0.1".to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-        );
-        installed.label_id = Some(fedora_label_id);
-        installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
-        installed.version_scheme = Some("rpm".to_string());
-        installed.installed_from_repository_id = Some(fedora_repo_id);
-        installed.insert(&conn).unwrap();
-
-        let mut arch_pkg = RepositoryPackage::new(
-            arch_repo_id,
-            "vim".to_string(),
-            "9.1.0".to_string(),
-            package_checksum.clone(),
-            std::fs::metadata(&package_path)
-                .unwrap()
-                .len()
-                .try_into()
-                .unwrap(),
-            package_url.clone(),
-        );
-        arch_pkg.architecture = Some("x86_64".to_string());
-        arch_pkg.insert(&conn).unwrap();
-
-        let mut exact_resolution = PackageResolution::new(
-            arch_repo_id,
-            "vim".to_string(),
-            vec![ResolutionStrategy::Binary {
-                url: package_url,
-                checksum: package_checksum,
-                delta_base: None,
-            }],
-        );
-        exact_resolution.version = Some("9.1.0".to_string());
-        exact_resolution.primary_strategy = PrimaryStrategy::Binary;
-        exact_resolution.insert(&conn).unwrap();
-
-        let model: SystemModel = toml::from_str(
-            r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-        )
-        .unwrap();
-
-        let state = capture_current_state(&conn).unwrap();
-        let diff = compute_model_diff(&model, &state, &conn, true, false)
-            .await
-            .unwrap();
-        drop(conn);
-
-        set_replatform_metadata_failpoint_for_test(true);
-        let _reset = ReplatformMetadataFailpointReset;
-
-        let action_refs = diff.actions.iter().collect::<Vec<_>>();
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
-        let (executed, errors) =
-            apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)
-                .await
-                .unwrap();
-
-        assert_eq!(executed, 0);
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].contains("failed to finalize replatform metadata"),
-            "expected explicit execution failure, got: {}",
-            errors[0]
-        );
-        assert!(
-            !errors[0].contains("blocked"),
-            "execution failure should not be reported as blocked: {}",
-            errors[0]
-        );
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
-        assert_eq!(installed_troves.len(), 1);
-        let installed = &installed_troves[0];
-        assert_eq!(installed.version, "9.1.0");
-        assert_eq!(installed.source_distro.as_deref(), Some("arch"));
-        assert_eq!(installed.version_scheme.as_deref(), Some("arch"));
-        assert_eq!(installed.installed_from_repository_id, Some(arch_repo_id));
-        assert_eq!(
-            installed.selection_reason.as_deref(),
-            Some("Replatform partial failure after install: injected replatform metadata failure")
-        );
-    }
-}
+mod tests;

@@ -1,6 +1,9 @@
 // conary-core/tests/native_abi.rs
 
-use conary_core::ccs::convert::{ConversionOptions, FidelityLevel, LegacyConverter};
+use conary_core::ccs::{
+    SigningKeyPair,
+    convert::{ConversionOptions, NativePackageConverter},
+};
 use conary_core::db::models::{Trove, TroveType};
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::native_scriptlet_support::upstream_native_scriptlet_support_rows;
@@ -8,7 +11,7 @@ use conary_core::packages::traits::{
     ArchAlpmHookOperation, ArchAlpmHookTriggerType, ArchNativeScriptletMetadata, DebControlMember,
     DebTriggerAwaitMode, DebTriggerDirective, NativeArgumentValue, NativeLifecyclePath,
     NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport,
-    NativeStdinContract, NativeTransactionPosition, PackageFile, PackageFormat, ScriptletPhase,
+    NativeStdinContract, NativeTransactionPosition, PackageFile, PackageFormat,
 };
 use conary_core::packages::{arch::ArchPackage, deb::DebPackage, rpm::RpmPackage};
 use flate2::{Compression, write::GzEncoder};
@@ -16,6 +19,7 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 #[test]
@@ -35,6 +39,10 @@ fn package_format_trait_exposes_native_abi_default_empty_for_test_double() {
             "0"
         }
 
+        fn version_scheme(&self) -> conary_core::repository::versioning::VersionScheme {
+            conary_core::repository::versioning::VersionScheme::Conary
+        }
+
         fn architecture(&self) -> Option<&str> {
             None
         }
@@ -47,18 +55,23 @@ fn package_format_trait_exposes_native_abi_default_empty_for_test_double() {
             &[]
         }
 
-        fn dependencies(&self) -> &[conary_core::packages::traits::Dependency] {
+        fn requirements(
+            &self,
+        ) -> &[conary_core::repository::dependency_model::RepositoryRequirementGroup] {
             &[]
         }
 
-        fn extract_file_contents(
-            &self,
-        ) -> conary_core::Result<Vec<conary_core::packages::traits::ExtractedFile>> {
-            Ok(Vec::new())
+        fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
+            Ok(conary_core::packages::PackagePayload::default())
         }
 
         fn to_trove(&self) -> Trove {
-            Trove::new("empty".to_string(), "0".to_string(), TroveType::Package)
+            Trove::new(
+                "empty".to_string(),
+                "0".to_string(),
+                TroveType::Package,
+                conary_core::repository::versioning::VersionScheme::Conary,
+            )
         }
     }
 
@@ -109,34 +122,16 @@ fn rpm_parser_preserves_native_scriptlet_and_trigger_slots() {
             "%transfiletriggerpostun",
         ],
     );
-    assert!(
-        package
-            .scriptlets()
-            .iter()
-            .any(|scriptlet| scriptlet.phase == ScriptletPhase::PreInstall)
-    );
-    assert!(
-        !package
-            .scriptlets()
-            .iter()
-            .any(|scriptlet| scriptlet.phase == ScriptletPhase::Trigger)
-    );
-    assert!(
-        !package
-            .scriptlets()
-            .iter()
-            .any(|scriptlet| scriptlet.content.contains("verify"))
-    );
+    assert!(package.native_scriptlet_abi().iter().any(|entry| {
+        entry.primary_lifecycle == NativeLifecyclePath::PreInstall && entry.native_slot == "%pre"
+    }));
 
     let verify = package
         .native_scriptlet_abi()
         .iter()
         .find(|entry| entry.native_slot == "%verify")
         .expect("verify entry");
-    assert_eq!(
-        verify.support.reason_code(),
-        Some("rpm-verify-scriptlet-deferred")
-    );
+    assert_eq!(verify.support, NativeScriptletSupport::Parsed);
 
     let trans_postun = package
         .native_scriptlet_abi()
@@ -149,13 +144,16 @@ fn rpm_parser_preserves_native_scriptlet_and_trigger_slots() {
         panic!("expected rpm metadata");
     };
     assert_eq!(
-        meta.trigger.as_ref().expect("trigger metadata").file_globs,
+        meta.trigger
+            .as_ref()
+            .expect("trigger metadata")
+            .path_prefixes,
         vec!["/usr/bin".to_string()]
     );
 }
 
 #[test]
-fn deb_parser_preserves_maintainer_scripts_and_triggers_control_artifacts() {
+fn deb_parser_preserves_maintainer_scripts_and_package_control_artifacts() {
     let temp = TempDir::new().expect("tempdir");
     let path = write_deb_fixture(temp.path());
     let package =
@@ -166,7 +164,13 @@ fn deb_parser_preserves_maintainer_scripts_and_triggers_control_artifacts() {
     assert_contains_all(
         &slots,
         &[
-            "config", "preinst", "postinst", "prerm", "postrm", "triggers",
+            "config",
+            "preinst",
+            "postinst",
+            "prerm",
+            "postrm",
+            "templates",
+            "triggers",
         ],
     );
 
@@ -178,23 +182,13 @@ fn deb_parser_preserves_maintainer_scripts_and_triggers_control_artifacts() {
     assert_eq!(preinst.interpreter.as_deref(), Some("/usr/bin/perl"));
     assert_eq!(preinst.interpreter_args, vec!["-w".to_string()]);
 
-    let flattened_preinst = package
-        .scriptlets()
-        .iter()
-        .find(|scriptlet| scriptlet.phase == ScriptletPhase::PreInstall)
-        .expect("flattened preinst");
-    assert_eq!(flattened_preinst.interpreter, "/usr/bin/perl -w");
-
     let triggers = package
         .native_scriptlet_abi()
         .iter()
         .find(|entry| entry.native_slot == "triggers")
         .expect("triggers entry");
     assert_eq!(triggers.kind, NativeScriptletKind::ControlArtifact);
-    assert_eq!(
-        triggers.support.reason_code(),
-        Some("deb-trigger-semantics-deferred")
-    );
+    assert_eq!(triggers.support, NativeScriptletSupport::Parsed);
     let NativeScriptletMetadata::Deb(meta) = &triggers.metadata else {
         panic!("expected deb metadata");
     };
@@ -224,17 +218,30 @@ fn deb_parser_preserves_maintainer_scripts_and_triggers_control_artifacts() {
             .any(|declaration| declaration.await_mode == DebTriggerAwaitMode::NoAwait)
     );
 
-    assert!(
-        package
-            .scriptlets()
-            .iter()
-            .any(|scriptlet| scriptlet.phase == ScriptletPhase::PostInstall)
+    assert!(package.native_scriptlet_abi().iter().any(|entry| {
+        entry.primary_lifecycle == NativeLifecyclePath::PostInstall
+            && entry.native_slot == "postinst"
+    }));
+
+    let templates = package
+        .native_scriptlet_abi()
+        .iter()
+        .find(|entry| entry.native_slot == "templates")
+        .expect("templates entry");
+    assert_eq!(templates.kind, NativeScriptletKind::ControlArtifact);
+    assert_eq!(
+        templates.primary_lifecycle,
+        NativeLifecyclePath::PackageControl
     );
+    let NativeScriptletMetadata::DebconfTemplates(metadata) = &templates.metadata else {
+        panic!("expected debconf templates metadata");
+    };
+    assert_eq!(metadata.records[0].template, "native-abi-deb/question");
     assert!(
-        !package
-            .scriptlets()
+        metadata.records[0]
+            .fields
             .iter()
-            .any(|scriptlet| scriptlet.content.contains("/usr/share/debconf/confmodule"))
+            .any(|field| field.name == "Description-de_DE.UTF-8")
     );
 }
 
@@ -263,6 +270,17 @@ fn arch_parser_preserves_install_source_and_packaged_alpm_hook() {
             .iter()
             .any(|slot| slot.starts_with("alpm-hook:/usr/share/libalpm/hooks/"))
     );
+    assert!(
+        !slots
+            .iter()
+            .any(|slot| slot.contains("/etc/pacman.d/hooks/"))
+    );
+    assert!(
+        package
+            .files()
+            .iter()
+            .any(|file| file.path == "/etc/pacman.d/hooks/30-target-policy.hook")
+    );
 
     let post_install = package
         .native_scriptlet_abi()
@@ -282,7 +300,15 @@ fn arch_parser_preserves_install_source_and_packaged_alpm_hook() {
     else {
         panic!("expected arch install metadata");
     };
-    assert_eq!(meta.function_body.as_deref(), Some("echo arch-post"));
+    assert_eq!(meta.function_name, "post_install");
+    assert!(
+        post_install
+            .body
+            .text
+            .as_deref()
+            .expect("utf8 install source")
+            .contains("echo arch-post")
+    );
 
     let post_upgrade = package
         .native_scriptlet_abi()
@@ -329,17 +355,11 @@ fn arch_parser_preserves_install_source_and_packaged_alpm_hook() {
         ArchAlpmHookTriggerType::Package
     );
     assert_eq!(meta.triggers[2].trigger_type, ArchAlpmHookTriggerType::Path);
-    let action = meta.action.as_ref().expect("alpm hook action");
+    let action = &meta.action;
     assert_eq!(action.when, NativeTransactionPosition::BeforeTransaction);
     assert_eq!(action.depends, vec!["shared-mime-info".to_string()]);
     assert!(action.abort_on_fail);
     assert!(action.needs_targets);
-    assert!(
-        package
-            .scriptlets()
-            .iter()
-            .any(|scriptlet| scriptlet.content == "echo arch-post")
-    );
 }
 
 #[test]
@@ -348,15 +368,15 @@ fn conversion_preserves_upstream_native_entries_in_ccs_scriptlet_bundle() {
 
     let rpm_path = write_rpm_fixture(temp.path());
     let rpm = RpmPackage::parse(rpm_path.to_str().expect("utf8 rpm path")).expect("parse rpm");
-    assert_conversion_preserves_native_entries(&rpm, &rpm_path, "rpm");
+    assert_conversion_preserves_native_entries(&rpm, &rpm_path, "rpm", "fedora-44");
 
     let deb_path = write_deb_fixture(temp.path());
     let deb = DebPackage::parse(deb_path.to_str().expect("utf8 deb path")).expect("parse deb");
-    assert_conversion_preserves_native_entries(&deb, &deb_path, "deb");
+    assert_conversion_preserves_native_entries(&deb, &deb_path, "deb", "ubuntu-26.04");
 
     let arch_path = write_arch_fixture(temp.path());
     let arch = ArchPackage::parse(arch_path.to_str().expect("utf8 arch path")).expect("parse arch");
-    assert_conversion_preserves_native_entries(&arch, &arch_path, "arch");
+    assert_conversion_preserves_native_entries(&arch, &arch_path, "arch", "arch");
 }
 
 fn native_slots(package: &impl PackageFormat) -> BTreeSet<&str> {
@@ -427,35 +447,36 @@ fn assert_conversion_preserves_native_entries(
     package: &impl PackageFormat,
     package_path: &Path,
     format: &str,
+    source_profile: &str,
 ) {
     let output = TempDir::new().expect("converter output tempdir");
-    let converter = LegacyConverter::new(ConversionOptions {
-        capture_scriptlets: false,
-        enable_inference: false,
-        min_fidelity: FidelityLevel::Low,
+    let converter = NativePackageConverter::new(ConversionOptions {
         output_dir: output.path().to_path_buf(),
-        ..ConversionOptions::default()
-    });
+    })
+    .with_signing_key(Arc::new(
+        SigningKeyPair::generate().with_key_id("native-abi-test"),
+    ))
+    .with_source_profile(source_profile);
     let metadata = metadata_from_package(package, package_path);
-    let files = package
-        .extract_file_contents()
-        .expect("extract package file contents");
+    let payload = package
+        .package_payload()
+        .expect("open package payload sources");
 
     let result = converter
-        .convert(
+        .convert_payload(
             &metadata,
-            &files,
+            payload.files(),
             format,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
-        .expect("convert package");
+        .unwrap_or_else(|error| panic!("convert {format} package: {error}"));
 
     let bundle = result
         .build_result
         .manifest
-        .legacy_scriptlets
+        .native_lifecycle
         .as_ref()
-        .expect("ccs legacy scriptlet bundle");
+        .expect("ccs native lifecycle bundle");
     for entry in package.native_scriptlet_abi() {
         let bundle_entry = bundle
             .entries
@@ -463,24 +484,25 @@ fn assert_conversion_preserves_native_entries(
             .find(|bundle_entry| bundle_entry.id == entry.id)
             .unwrap_or_else(|| {
                 panic!(
-                    "CCS legacy scriptlet bundle dropped native ABI entry {}",
+                    "CCS native lifecycle bundle dropped native ABI entry {}",
                     entry.id
                 )
             });
         assert_eq!(bundle_entry.native_slot, entry.native_slot);
         assert_eq!(bundle_entry.body_sha256, entry.body.sha256);
+        assert_eq!(
+            bundle_entry.kind,
+            match entry.kind {
+                NativeScriptletKind::Executable => {
+                    conary_core::ccs::native_lifecycle::NativeLifecycleEntryKind::Executable
+                }
+                NativeScriptletKind::ControlArtifact => {
+                    conary_core::ccs::native_lifecycle::NativeLifecycleEntryKind::ControlArtifact
+                }
+            }
+        );
 
-        match &entry.support {
-            NativeScriptletSupport::Parsed => {}
-            NativeScriptletSupport::DeferredReview { reason_code } => {
-                assert_eq!(bundle_entry.decision.as_str(), "review", "{}", entry.id);
-                assert_eq!(&bundle_entry.reason_code, reason_code, "{}", entry.id);
-            }
-            NativeScriptletSupport::Unpreservable { reason_code } => {
-                assert_eq!(bundle_entry.decision.as_str(), "blocked", "{}", entry.id);
-                assert_eq!(&bundle_entry.reason_code, reason_code, "{}", entry.id);
-            }
-        }
+        assert_eq!(entry.support, NativeScriptletSupport::Parsed);
 
         match &entry.metadata {
             NativeScriptletMetadata::Rpm(metadata) => {
@@ -488,8 +510,8 @@ fn assert_conversion_preserves_native_entries(
                     let projected = bundle_entry.rpm_trigger.as_ref().unwrap_or_else(|| {
                         panic!("missing RPM trigger projection for {}", entry.id)
                     });
-                    assert_eq!(projected.file_globs, trigger.file_globs);
-                    assert!(projected.transaction_order.is_some());
+                    assert_eq!(projected.path_prefixes, trigger.path_prefixes);
+                    assert!(!bundle_entry.transaction_order.position.is_empty());
                 }
             }
             NativeScriptletMetadata::Deb(metadata) => {
@@ -497,30 +519,41 @@ fn assert_conversion_preserves_native_entries(
                     let projected = bundle_entry.deb_maintainer.as_ref().unwrap_or_else(|| {
                         panic!("missing DEB trigger projection for {}", entry.id)
                     });
-                    assert_eq!(projected.triggers_content, entry.body.text);
                     assert_eq!(
-                        projected.trigger_names.len(),
-                        metadata.trigger_declarations.len()
+                        projected
+                            .trigger_declarations
+                            .iter()
+                            .map(|declaration| declaration.raw_line.as_str())
+                            .collect::<Vec<_>>(),
+                        metadata
+                            .trigger_declarations
+                            .iter()
+                            .map(|declaration| declaration.raw_line.as_str())
+                            .collect::<Vec<_>>()
                     );
-                    assert!(bundle_entry.extra.contains_key("deb_trigger_declarations"));
                 }
+            }
+            NativeScriptletMetadata::DebconfTemplates(metadata) => {
+                assert!(bundle_entry.deb_maintainer.is_none());
+                let authority = bundle
+                    .debconf_templates()
+                    .expect("validate templates authority")
+                    .expect("templates authority");
+                assert_eq!(authority.source_package, package.name());
+                assert_eq!(authority.raw_bytes, entry.body.bytes);
+                assert_eq!(authority.raw_sha256, metadata.raw_sha256);
+                assert_eq!(authority.records, metadata.records);
             }
             NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(metadata)) => {
                 let projected = bundle_entry
                     .arch_install
                     .as_ref()
                     .unwrap_or_else(|| panic!("missing Arch install projection for {}", entry.id));
-                assert_eq!(
-                    projected.called_function.as_deref(),
-                    Some(metadata.function_name.as_str())
-                );
-                assert_eq!(
-                    projected.install_digest.as_deref(),
-                    Some(metadata.install_source_sha256.as_str())
-                );
+                assert_eq!(projected.called_function, metadata.function_name);
+                assert_eq!(projected.install_digest, metadata.install_source_sha256);
             }
             NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::AlpmHook(_)) => {
-                assert!(bundle_entry.extra.contains_key("arch_alpm_hook"));
+                assert!(bundle_entry.arch_hook.is_some());
             }
         }
     }
@@ -531,12 +564,15 @@ fn metadata_from_package(package: &impl PackageFormat, package_path: &Path) -> P
         package_path: package_path.to_path_buf(),
         name: package.name().to_string(),
         version: package.version().to_string(),
+        version_scheme: package.version_scheme(),
         architecture: package.architecture().map(str::to_string),
+        debian_multi_arch: package.debian_multi_arch(),
         description: package.description().map(str::to_string),
         files: package.files().to_vec(),
-        dependencies: package.dependencies().to_vec(),
+        requirements: package.requirements().to_vec(),
         provides: package.provides().to_vec(),
-        scriptlets: package.scriptlets().to_vec(),
+        relations: package.relations().to_vec(),
+        diagnostic_scriptlet_evidence: Vec::new(),
         native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
         config_files: package.config_files().to_vec(),
     }
@@ -587,6 +623,7 @@ fn write_deb_fixture(dir: &Path) -> PathBuf {
     let postinst = b"#!/bin/sh\necho postinst\n";
     let prerm = b"#!/bin/sh\necho prerm\n";
     let postrm = b"#!/bin/sh\necho postrm\n";
+    let templates = b"Template: native-abi-deb/question\nType: string\nDescription: Question\n Extended description\nDescription-de_DE.UTF-8: Frage\n";
     let triggers = b"interest cache-default\ninterest-await cache-await\ninterest-noawait update-icon-caches\nactivate ldconfig\nactivate-await ldconfig-await\nactivate-noawait ldconfig-noawait\n";
     let control_tar = tar_bytes(&[
         ("control", control.as_slice()),
@@ -595,6 +632,7 @@ fn write_deb_fixture(dir: &Path) -> PathBuf {
         ("postinst", postinst.as_slice()),
         ("prerm", prerm.as_slice()),
         ("postrm", postrm.as_slice()),
+        ("templates", templates.as_slice()),
         ("triggers", triggers.as_slice()),
     ]);
     let data_tar = tar_bytes(&[("usr/bin/native-abi", b"#!/bin/sh\n".as_slice())]);
@@ -635,7 +673,7 @@ post_remove() {
     echo arch-post-remove
 }
 "#;
-    let hook = b"[Trigger]\nOperation = Install\nOperation = Upgrade\nOperation = Remove\nType = Path\nTarget = usr/share/mime/*\n\n[Trigger]\nOperation = Install\nType = Package\nTarget = shared-mime-info\n\n[Trigger]\nOperation = Remove\nType = File\nTarget = usr/share/icons/*\n\n[Action]\nDescription = update mime cache\nWhen = PreTransaction\nExec = /usr/bin/update-mime-database /usr/share/mime\nDepends = shared-mime-info\nAbortOnFail\nNeedsTargets\n";
+    let hook = b"[Trigger]\nOperation = Install\nOperation = Upgrade\nOperation = Remove\nType = Path\nTarget = usr/share/mime/*\n\n[Trigger]\nOperation = Install\nType = Package\nTarget = shared-mime-info\n\n[Trigger]\nOperation = Remove\nType = Path\nTarget = usr/share/icons/*\n\n[Action]\nDescription = update mime cache\nWhen = PreTransaction\nExec = /usr/bin/update-mime-database /usr/share/mime\nDepends = shared-mime-info\nAbortOnFail\nNeedsTargets\n";
     let raw_tar = tar_bytes(&[
         (".PKGINFO", pkginfo.as_slice()),
         (".INSTALL", install.as_slice()),
@@ -643,6 +681,7 @@ post_remove() {
             "usr/share/libalpm/hooks/30-native-abi.hook",
             hook.as_slice(),
         ),
+        ("etc/pacman.d/hooks/30-target-policy.hook", hook.as_slice()),
     ]);
     let gz = gzip(raw_tar);
     let path = dir.join("native-abi.pkg.tar.gz");
@@ -656,6 +695,9 @@ fn tar_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut header = tar::Header::new_gnu();
         header.set_size(body.len() as u64);
         header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
         header.set_cksum();
         builder
             .append_data(&mut header, *path, Cursor::new(*body))

@@ -8,7 +8,9 @@
 //! The broad module exports are for workspace convenience and integration-test
 //! reuse. They are not a stable external public API or SDK contract.
 
+pub mod activation;
 pub mod automation;
+pub mod boot_runtime;
 pub mod bootstrap;
 pub mod canonical;
 pub mod capability;
@@ -16,8 +18,8 @@ pub mod ccs;
 mod child_wait;
 pub mod components;
 pub mod compression;
+pub mod config_transaction;
 pub mod container;
-pub mod critical_packages;
 pub mod db;
 pub mod delta;
 pub mod dependencies;
@@ -36,6 +38,7 @@ pub mod label;
 pub mod model;
 pub mod operations;
 pub mod packages;
+pub mod payload;
 pub mod progress;
 pub mod provenance;
 pub mod recipe;
@@ -58,8 +61,8 @@ pub use bootstrap::{
 };
 pub use capability::enforcement::{EnforcementMode, EnforcementPolicy};
 pub use capability::{CapabilityDeclaration, SyscallCapabilities};
-pub use components::{ComponentClassifier, ComponentType};
-pub use dependencies::{DependencyClass, LanguageDep, LanguageDepDetector};
+pub use components::ComponentType;
+pub use dependencies::{DependencyClass, LanguageDep};
 pub use error::{Error, Result};
 pub use flavor::ArchSpec;
 pub use hash::{Hash, Hasher};

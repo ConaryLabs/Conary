@@ -53,10 +53,6 @@ pub enum JobStatus {
     Converting,
     /// Conversion complete, manifest available
     Ready,
-    /// Conversion complete but private review is required before public serving
-    ReviewRequired,
-    /// Conversion complete but blocked by publication policy
-    Blocked,
     /// Conversion failed
     Failed(String),
 }
@@ -74,10 +70,8 @@ pub struct ConversionResult {
     pub ccs_path: std::path::PathBuf,
     /// Actual package version (from repo metadata, may differ from requested)
     pub actual_version: String,
-    /// Sanitized passive legacy scriptlet summary.
+    /// Sanitized passive native lifecycle summary.
     pub scriptlets: crate::server::conversion::ScriptletPackageMetadata,
-    /// Publication refusal report for non-public conversion outcomes.
-    pub publication: Option<crate::server::publication::PublicationGateReport>,
 }
 
 /// A conversion job
@@ -221,18 +215,9 @@ impl JobManager {
     }
 
     /// Update job status with conversion result
-    pub fn complete_with_result(
-        &mut self,
-        id: &JobId,
-        status: JobStatus,
-        result: ConversionResult,
-    ) {
-        debug_assert!(matches!(
-            &status,
-            JobStatus::Ready | JobStatus::ReviewRequired | JobStatus::Blocked
-        ));
+    pub fn complete_with_result(&mut self, id: &JobId, result: ConversionResult) {
         if let Some(job) = self.jobs.get_mut(id) {
-            job.status = status;
+            job.status = JobStatus::Ready;
             job.completed_at = Some(Instant::now());
             job.result = Some(result);
         }
@@ -279,8 +264,6 @@ impl JobManager {
         let mut pending = 0;
         let mut converting = 0;
         let mut completed = 0;
-        let mut review_required = 0;
-        let mut blocked = 0;
         let mut failed = 0;
 
         for job in self.jobs.values() {
@@ -288,8 +271,6 @@ impl JobManager {
                 JobStatus::Pending => pending += 1,
                 JobStatus::Converting => converting += 1,
                 JobStatus::Ready => completed += 1,
-                JobStatus::ReviewRequired => review_required += 1,
-                JobStatus::Blocked => blocked += 1,
                 JobStatus::Failed(_) => failed += 1,
             }
         }
@@ -298,8 +279,6 @@ impl JobManager {
             pending,
             converting,
             completed,
-            review_required,
-            blocked,
             failed,
             total: self.jobs.len(),
         }
@@ -307,10 +286,7 @@ impl JobManager {
 }
 
 fn is_terminal_status(status: &JobStatus) -> bool {
-    matches!(
-        status,
-        JobStatus::Ready | JobStatus::ReviewRequired | JobStatus::Blocked | JobStatus::Failed(_)
-    )
+    matches!(status, JobStatus::Ready | JobStatus::Failed(_))
 }
 
 /// Job statistics
@@ -319,8 +295,6 @@ pub struct JobStats {
     pub pending: usize,
     pub converting: usize,
     pub completed: usize,
-    pub review_required: usize,
-    pub blocked: usize,
     pub failed: usize,
     pub total: usize,
 }
@@ -437,28 +411,5 @@ mod tests {
             .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
             .expect("existing keys should still deduplicate");
         assert_eq!(deduped, existing);
-    }
-
-    #[test]
-    fn review_required_and_blocked_jobs_are_terminal_not_failed() {
-        let mut manager = JobManager::new(2);
-        let review = manager
-            .create_job("review".into(), "fedora".into(), "pkg".into(), None, None)
-            .unwrap();
-        let blocked = manager
-            .create_job("blocked".into(), "fedora".into(), "pkg2".into(), None, None)
-            .unwrap();
-
-        manager.update_status(&review, JobStatus::ReviewRequired);
-        manager.update_status(&blocked, JobStatus::Blocked);
-
-        assert!(manager.get_job(&review).unwrap().completed_at.is_some());
-        assert!(manager.get_job(&blocked).unwrap().completed_at.is_some());
-
-        let stats = manager.stats();
-        assert_eq!(stats.completed, 0);
-        assert_eq!(stats.failed, 0);
-        assert_eq!(stats.review_required, 1);
-        assert_eq!(stats.blocked, 1);
     }
 }

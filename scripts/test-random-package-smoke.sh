@@ -11,13 +11,13 @@ output="$(
             --plan-only \
             --seed issue35 \
             --count 2 \
-            --modes satisfy,adopt
+            --modes preserve,takeover
 )"
 
 grep -q '^Selected packages: htop jq$' <<<"$output"
-grep -q '^Modes: satisfy adopt$' <<<"$output"
-grep -q -- '--dep-mode satisfy' <<<"$output"
-grep -q -- '--dep-mode adopt' <<<"$output"
+grep -q '^Ownership modes: preserve takeover$' <<<"$output"
+grep -q -- '--ownership preserve' <<<"$output"
+grep -q -- '--ownership takeover' <<<"$output"
 grep -q -- '--dry-run' <<<"$output"
 
 plan_count="$(grep -c '^PLAN ' <<<"$output")"

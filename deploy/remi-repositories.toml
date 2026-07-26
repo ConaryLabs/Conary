@@ -1,0 +1,144 @@
+# deploy/remi-repositories.toml
+# Public package-source authority for the hosted Remi service.
+
+schema_version = 2
+
+[[repositories]]
+name = "fedora-44"
+url = "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os"
+profile = "fedora-44"
+enabled = true
+priority = 100
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "rpm"
+architecture = "x86_64"
+
+[repositories.trust]
+ecosystem = "rpm"
+
+[repositories.trust.metadata]
+kind = "metalink"
+url = "https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64"
+
+[[repositories.trust.package_keys]]
+url = "https://fedoraproject.org/fedora.gpg"
+fingerprint = "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"
+
+[[repositories]]
+name = "ubuntu-26.04"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+enabled = true
+priority = 90
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "deb"
+distribution = "resolute"
+component = "main"
+architecture = "amd64"
+
+[repositories.trust]
+ecosystem = "debian"
+
+[[repositories.trust.release_keys]]
+url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg"
+fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+
+[[repositories]]
+name = "arch-core"
+url = "https://geo.mirror.pkgbuild.com/core/os/x86_64"
+profile = "arch"
+enabled = true
+priority = 80
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "arch"
+database = "core"
+
+[repositories.trust]
+ecosystem = "arch"
+
+[repositories.trust.keyring]
+url = "https://archlinux.org/packages/core/any/archlinux-keyring/download/"
+format = "alpm-package-zstd"
+packager_key_threshold = 3
+master_fingerprints = [
+  "2AC0A42EFB0B5CBC7A0402ED4DC95B6D7BE9892E",
+  "3572FA2A1B067F22C58AF155F8B821B42A6FDCD7",
+  "69E6471E3AE065297529832E6BA0F5A2037F4F41",
+  "99B6618472A3B3B814185BAED7D3D823B88BDB9B",
+  "D8AFDDA07A5B6EDFA7D8CCDAD6D055F927843F1C",
+]
+
+[repositories.trust.sig_level]
+database = "optional"
+package = "required"
+trust = "trusted-only"
+
+[[repositories]]
+name = "arch-extra"
+url = "https://geo.mirror.pkgbuild.com/extra/os/x86_64"
+profile = "arch"
+enabled = true
+priority = 70
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "arch"
+database = "extra"
+
+[repositories.trust]
+ecosystem = "arch"
+
+[repositories.trust.keyring]
+url = "https://archlinux.org/packages/core/any/archlinux-keyring/download/"
+format = "alpm-package-zstd"
+packager_key_threshold = 3
+master_fingerprints = [
+  "2AC0A42EFB0B5CBC7A0402ED4DC95B6D7BE9892E",
+  "3572FA2A1B067F22C58AF155F8B821B42A6FDCD7",
+  "69E6471E3AE065297529832E6BA0F5A2037F4F41",
+  "99B6618472A3B3B814185BAED7D3D823B88BDB9B",
+  "D8AFDDA07A5B6EDFA7D8CCDAD6D055F927843F1C",
+]
+
+[repositories.trust.sig_level]
+database = "optional"
+package = "required"
+trust = "trusted-only"
+
+[[repositories]]
+name = "arch-multilib"
+url = "https://geo.mirror.pkgbuild.com/multilib/os/x86_64"
+profile = "arch"
+enabled = true
+priority = 60
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "arch"
+database = "multilib"
+
+[repositories.trust]
+ecosystem = "arch"
+
+[repositories.trust.keyring]
+url = "https://archlinux.org/packages/core/any/archlinux-keyring/download/"
+format = "alpm-package-zstd"
+packager_key_threshold = 3
+master_fingerprints = [
+  "2AC0A42EFB0B5CBC7A0402ED4DC95B6D7BE9892E",
+  "3572FA2A1B067F22C58AF155F8B821B42A6FDCD7",
+  "69E6471E3AE065297529832E6BA0F5A2037F4F41",
+  "99B6618472A3B3B814185BAED7D3D823B88BDB9B",
+  "D8AFDDA07A5B6EDFA7D8CCDAD6D055F927843F1C",
+]
+
+[repositories.trust.sig_level]
+database = "optional"
+package = "required"
+trust = "trusted-only"

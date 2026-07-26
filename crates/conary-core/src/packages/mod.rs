@@ -11,10 +11,13 @@ pub mod common;
 pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
+pub mod install_reason;
+pub mod installed_identity;
 pub mod native_abi;
 #[doc(hidden)]
 pub mod native_scriptlet_support;
 pub mod pacman_query;
+pub mod payload;
 pub mod query_common;
 pub mod registry;
 pub mod rpm;
@@ -22,15 +25,18 @@ pub mod rpm_query;
 pub mod traits;
 
 pub use common::PackageMetadata;
+pub use installed_identity::InstalledPackageIdentity;
 pub use registry::{PackageFormatType, detect_format, parse_package};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::repository::versioning::VersionScheme;
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::path::Path;
+use std::process::Command;
 use tracing::info;
 
-pub use query_common::{DependencyInfo, InstalledFileInfo};
+pub use payload::{PackagePayload, PackagePayloadFile, ReopenablePayload};
+pub use query_common::{InstalledFileInfo, InstalledPackageRecord};
 pub use rpm_query::InstalledRpmInfo;
 pub use traits::{ExtractedFile, PackageFormat};
 
@@ -43,34 +49,121 @@ pub enum SystemPackageManager {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct InstalledSourceIdentity {
-    pub source_distro: Option<String>,
-    pub version_scheme: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeDatabaseObservation {
+    manager: SystemPackageManager,
+    package_count: usize,
 }
 
 impl SystemPackageManager {
     /// Resolve a system package manager from recorded package version metadata.
-    pub fn from_version_scheme(version_scheme: Option<&str>) -> Option<Self> {
-        let scheme = version_scheme?.trim().to_ascii_lowercase();
-        match scheme.as_str() {
-            "rpm" => Some(Self::Rpm),
-            "debian" | "deb" | "dpkg" => Some(Self::Dpkg),
-            "arch" | "pacman" => Some(Self::Pacman),
-            _ => None,
+    pub const fn from_version_scheme(version_scheme: VersionScheme) -> Option<Self> {
+        match version_scheme {
+            VersionScheme::Conary => None,
+            VersionScheme::Rpm => Some(Self::Rpm),
+            VersionScheme::Debian => Some(Self::Dpkg),
+            VersionScheme::Arch => Some(Self::Pacman),
         }
     }
 
-    /// Detect the available system package manager
-    pub fn detect() -> Self {
-        if rpm_query::is_rpm_available() {
-            Self::Rpm
-        } else if dpkg_query::is_dpkg_available() {
-            Self::Dpkg
-        } else if pacman_query::is_pacman_available() {
-            Self::Pacman
-        } else {
-            Self::Unknown
+    /// Detect package authority from exact, non-empty native package databases.
+    ///
+    /// Installed query binaries are only discovery. Their parsed inventories
+    /// provide authority. Multiple populated databases are an explicit
+    /// ambiguity and never resolve through binary precedence.
+    pub fn detect() -> Result<Self> {
+        Self::resolve(None)
+    }
+
+    /// Resolve native package authority, honoring an explicit typed selection.
+    ///
+    /// An explicit selection is accepted only when its query binary is
+    /// available and its exact native inventory is populated.
+    pub fn resolve(requested: Option<Self>) -> Result<Self> {
+        if requested == Some(Self::Unknown) {
+            return Err(Error::ConfigError(
+                "unknown is not a selectable native package-manager authority".to_string(),
+            ));
+        }
+
+        let mut observations = Vec::new();
+
+        for manager in [Self::Rpm, Self::Dpkg, Self::Pacman] {
+            if requested.is_some_and(|requested| requested != manager) {
+                continue;
+            }
+            let (binary, args) = match manager {
+                Self::Rpm => ("rpm", &["--version"][..]),
+                Self::Dpkg => ("dpkg-query", &["--version"][..]),
+                Self::Pacman => ("pacman", &["--version"][..]),
+                Self::Unknown => unreachable!("unknown authority was rejected"),
+            };
+            if query_binary_available(binary, args)? {
+                let package_count = match manager {
+                    Self::Rpm => rpm_query::query_all_packages()?.len(),
+                    Self::Dpkg => dpkg_query::query_all_packages()?.len(),
+                    Self::Pacman => pacman_query::query_all_packages()?.len(),
+                    Self::Unknown => unreachable!("unknown authority was rejected"),
+                };
+                observations.push(NativeDatabaseObservation {
+                    manager,
+                    package_count,
+                });
+            }
+        }
+
+        Self::from_native_database_observations(&observations, requested)
+    }
+
+    fn from_native_database_observations(
+        observations: &[NativeDatabaseObservation],
+        requested: Option<Self>,
+    ) -> Result<Self> {
+        if let Some(requested) = requested {
+            let observation = observations
+                .iter()
+                .find(|observation| observation.manager == requested)
+                .ok_or_else(|| {
+                    Error::InitError(format!(
+                        "Selected native package-manager authority '{}' is unavailable: its query binary could not be found",
+                        requested.cli_name()
+                    ))
+                })?;
+            if observation.package_count == 0 {
+                return Err(Error::InitError(format!(
+                    "Selected native package-manager authority '{}' has an empty native package database",
+                    requested.cli_name()
+                )));
+            }
+            return Ok(requested);
+        }
+
+        let populated = observations
+            .iter()
+            .filter(|observation| observation.package_count > 0)
+            .collect::<Vec<_>>();
+        match populated.as_slice() {
+            [] => Ok(Self::Unknown),
+            [observation] => Ok(observation.manager),
+            _ => {
+                let databases = populated
+                    .iter()
+                    .map(|observation| {
+                        format!(
+                            "{} ({} packages)",
+                            observation.manager.display_name(),
+                            observation.package_count
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(Error::ConflictError(format!(
+                    "Multiple populated native package databases were detected: {databases}. \
+                     Conary will not guess package authority; select one with \
+                     '--package-manager rpm', '--package-manager dpkg', or \
+                     '--package-manager pacman'."
+                )))
+            }
         }
     }
 
@@ -83,6 +176,16 @@ impl SystemPackageManager {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Rpm => "RPM",
+            Self::Dpkg => "dpkg",
+            Self::Pacman => "pacman",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Stable CLI spelling for explicit native authority selection.
+    pub fn cli_name(&self) -> &'static str {
+        match self {
+            Self::Rpm => "rpm",
             Self::Dpkg => "dpkg",
             Self::Pacman => "pacman",
             Self::Unknown => "unknown",
@@ -110,81 +213,31 @@ impl SystemPackageManager {
     }
 
     pub fn version_scheme_name(&self) -> Option<&'static str> {
+        self.version_scheme().map(VersionScheme::as_str)
+    }
+
+    pub const fn version_scheme(self) -> Option<VersionScheme> {
         match self {
-            Self::Rpm => Some("rpm"),
-            Self::Dpkg => Some("debian"),
-            Self::Pacman => Some("arch"),
+            Self::Rpm => Some(VersionScheme::Rpm),
+            Self::Dpkg => Some(VersionScheme::Debian),
+            Self::Pacman => Some(VersionScheme::Arch),
             Self::Unknown => None,
         }
     }
+}
 
-    pub fn detect_source_identity(&self) -> InstalledSourceIdentity {
-        let Some(version_scheme) = self.version_scheme_name() else {
-            return InstalledSourceIdentity::default();
-        };
-
-        let mut identity = std::fs::read_to_string("/etc/os-release")
-            .ok()
-            .map(|contents| detect_source_identity_from_os_release(*self, &contents))
-            .unwrap_or_default();
-        if identity.version_scheme.is_none() {
-            identity.version_scheme = Some(version_scheme.to_string());
-        }
-        identity
+fn query_binary_available(binary: &str, version_args: &[&str]) -> Result<bool> {
+    match Command::new(binary).args(version_args).output() {
+        Ok(output) if output.status.success() => Ok(true),
+        Ok(output) => Err(Error::InitError(format!(
+            "Native package query binary '{binary}' exists but its version probe failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::InitError(format!(
+            "Failed to probe native package query binary '{binary}': {error}"
+        ))),
     }
-}
-
-fn detect_source_identity_from_os_release(
-    pkg_mgr: SystemPackageManager,
-    contents: &str,
-) -> InstalledSourceIdentity {
-    let entries = parse_os_release(contents);
-    let source_distro = entries.get("ID").map(|id| {
-        let normalized_id = id.trim().to_ascii_lowercase();
-        match entries
-            .get("VERSION_ID")
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-        {
-            Some(version_id) if normalized_id != "arch" => format!("{normalized_id}-{version_id}"),
-            _ => normalized_id,
-        }
-    });
-
-    InstalledSourceIdentity {
-        source_distro,
-        version_scheme: pkg_mgr.version_scheme_name().map(str::to_string),
-    }
-}
-
-fn parse_os_release(contents: &str) -> HashMap<String, String> {
-    contents
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (key, value) = line.split_once('=')?;
-            Some((
-                key.trim().to_string(),
-                strip_os_release_quotes(value.trim()),
-            ))
-        })
-        .collect()
-}
-
-fn strip_os_release_quotes(value: &str) -> String {
-    value
-        .strip_prefix('"')
-        .and_then(|inner| inner.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|inner| inner.strip_suffix('\''))
-        })
-        .unwrap_or(value)
-        .to_string()
 }
 
 /// Result of extracting a package in parallel
@@ -195,8 +248,8 @@ pub struct ExtractedPackage {
     pub name: String,
     /// Package version
     pub version: String,
-    /// Extracted file contents
-    pub files: Vec<ExtractedFile>,
+    /// Independently reopenable payload sources
+    pub files: PackagePayload,
     /// The parsed package (boxed for dynamic dispatch)
     pub package: Box<dyn PackageFormat + Send>,
 }
@@ -207,7 +260,7 @@ impl std::fmt::Debug for ExtractedPackage {
             .field("path", &self.path)
             .field("name", &self.name)
             .field("version", &self.version)
-            .field("files_count", &self.files.len())
+            .field("files_count", &self.files.files().len())
             .finish()
     }
 }
@@ -239,8 +292,7 @@ pub fn extract_packages_parallel(
             // Detect format and parse using registry
             let package = parse_package(path)?;
 
-            // Extract contents
-            let files = package.extract_file_contents()?;
+            let files = package.package_payload()?;
 
             Ok(ExtractedPackage {
                 path: path.to_string_lossy().to_string(),
@@ -256,39 +308,6 @@ pub fn extract_packages_parallel(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn detect_source_identity_uses_real_distro_for_fedora() {
-        let identity = detect_source_identity_from_os_release(
-            SystemPackageManager::Rpm,
-            "ID=fedora\nVERSION_ID=44\nNAME=Fedora Linux\n",
-        );
-
-        assert_eq!(identity.source_distro.as_deref(), Some("fedora-44"));
-        assert_eq!(identity.version_scheme.as_deref(), Some("rpm"));
-    }
-
-    #[test]
-    fn detect_source_identity_uses_real_distro_for_ubuntu() {
-        let identity = detect_source_identity_from_os_release(
-            SystemPackageManager::Dpkg,
-            "ID=ubuntu\nVERSION_ID=\"24.04\"\nVERSION_CODENAME=noble\n",
-        );
-
-        assert_eq!(identity.source_distro.as_deref(), Some("ubuntu-24.04"));
-        assert_eq!(identity.version_scheme.as_deref(), Some("debian"));
-    }
-
-    #[test]
-    fn detect_source_identity_handles_rolling_arch() {
-        let identity = detect_source_identity_from_os_release(
-            SystemPackageManager::Pacman,
-            "ID=arch\nPRETTY_NAME=\"Arch Linux\"\n",
-        );
-
-        assert_eq!(identity.source_distro.as_deref(), Some("arch"));
-        assert_eq!(identity.version_scheme.as_deref(), Some("arch"));
-    }
 
     #[test]
     fn native_update_commands_cover_supported_package_managers() {
@@ -309,25 +328,114 @@ mod tests {
     #[test]
     fn native_manager_identity_comes_from_recorded_version_scheme() {
         assert_eq!(
-            SystemPackageManager::from_version_scheme(Some("rpm")),
+            SystemPackageManager::from_version_scheme(VersionScheme::Rpm),
             Some(SystemPackageManager::Rpm)
         );
         assert_eq!(
-            SystemPackageManager::from_version_scheme(Some("debian")),
+            SystemPackageManager::from_version_scheme(VersionScheme::Debian),
             Some(SystemPackageManager::Dpkg)
         );
         assert_eq!(
-            SystemPackageManager::from_version_scheme(Some("deb")),
-            Some(SystemPackageManager::Dpkg)
-        );
-        assert_eq!(
-            SystemPackageManager::from_version_scheme(Some("arch")),
+            SystemPackageManager::from_version_scheme(VersionScheme::Arch),
             Some(SystemPackageManager::Pacman)
         );
-        assert_eq!(SystemPackageManager::from_version_scheme(None), None);
         assert_eq!(
-            SystemPackageManager::from_version_scheme(Some("unknown")),
+            SystemPackageManager::from_version_scheme(VersionScheme::Conary),
             None
         );
+    }
+
+    #[test]
+    fn native_manager_detection_requires_one_populated_database() {
+        assert_eq!(
+            SystemPackageManager::from_native_database_observations(&[], None).unwrap(),
+            SystemPackageManager::Unknown
+        );
+        assert_eq!(
+            SystemPackageManager::from_native_database_observations(
+                &[
+                    NativeDatabaseObservation {
+                        manager: SystemPackageManager::Rpm,
+                        package_count: 0,
+                    },
+                    NativeDatabaseObservation {
+                        manager: SystemPackageManager::Dpkg,
+                        package_count: 42,
+                    },
+                ],
+                None
+            )
+            .unwrap(),
+            SystemPackageManager::Dpkg
+        );
+    }
+
+    #[test]
+    fn native_manager_detection_rejects_multiple_populated_databases() {
+        let error = SystemPackageManager::from_native_database_observations(
+            &[
+                NativeDatabaseObservation {
+                    manager: SystemPackageManager::Rpm,
+                    package_count: 12,
+                },
+                NativeDatabaseObservation {
+                    manager: SystemPackageManager::Dpkg,
+                    package_count: 34,
+                },
+            ],
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("RPM (12 packages)"), "{error}");
+        assert!(error.contains("dpkg (34 packages)"), "{error}");
+        assert!(
+            error.contains("will not guess package authority"),
+            "{error}"
+        );
+        assert!(error.contains("--package-manager dpkg"), "{error}");
+    }
+
+    #[test]
+    fn explicit_native_manager_selection_requires_its_populated_database() {
+        let observations = [
+            NativeDatabaseObservation {
+                manager: SystemPackageManager::Rpm,
+                package_count: 12,
+            },
+            NativeDatabaseObservation {
+                manager: SystemPackageManager::Dpkg,
+                package_count: 34,
+            },
+        ];
+        assert_eq!(
+            SystemPackageManager::from_native_database_observations(
+                &observations,
+                Some(SystemPackageManager::Dpkg),
+            )
+            .unwrap(),
+            SystemPackageManager::Dpkg
+        );
+
+        let empty = [NativeDatabaseObservation {
+            manager: SystemPackageManager::Pacman,
+            package_count: 0,
+        }];
+        let error = SystemPackageManager::from_native_database_observations(
+            &empty,
+            Some(SystemPackageManager::Pacman),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("empty native package database"), "{error}");
+
+        let error = SystemPackageManager::from_native_database_observations(
+            &[],
+            Some(SystemPackageManager::Rpm),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("query binary could not be found"), "{error}");
     }
 }

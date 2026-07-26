@@ -4,9 +4,8 @@
 //! Supports TOML configuration files with the following sections:
 //! - [server] - Bind address, workers, admin settings
 //! - [storage] - Root directory, eviction thresholds
-//! - [upstream.*] - Upstream repository configuration
+//! - repository_manifest - typed package-source manifest path
 //! - [conversion] - CCS conversion settings
-//! - [non_public_test_serving] - Default-off admin/test serving for non-public conversions
 //! - [release_publish] - Trusted release signer and repository signing settings
 //! - [federation] - Federation peer settings
 //! - [security] - Rate limiting, banning, CORS
@@ -14,7 +13,6 @@
 use crate::server::ServerConfig;
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -23,6 +21,7 @@ const DEFAULT_MAX_CONVERSIONS: usize = 32;
 
 /// TOML configuration file structure
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RemiConfig {
     /// Server settings
     #[serde(default)]
@@ -32,17 +31,13 @@ pub struct RemiConfig {
     #[serde(default)]
     pub storage: StorageSection,
 
-    /// Upstream repositories
+    /// Typed package-source authority loaded and reconciled at startup.
     #[serde(default)]
-    pub upstream: HashMap<String, UpstreamSection>,
+    pub repository_manifest: Option<PathBuf>,
 
     /// Conversion settings
     #[serde(default)]
     pub conversion: ConversionSection,
-
-    /// Non-public conversion test-serving settings
-    #[serde(default)]
-    pub non_public_test_serving: NonPublicTestServingSection,
 
     /// Release artifact publication settings
     #[serde(default)]
@@ -185,40 +180,6 @@ fn default_negative_cache_ttl() -> String {
     "15m".to_string()
 }
 
-/// Upstream repository configuration
-#[derive(Debug, Deserialize)]
-pub struct UpstreamSection {
-    /// Metalink URL for mirror discovery
-    pub metalink: Option<String>,
-
-    /// Direct base URL
-    pub base_url: Option<String>,
-
-    /// Supported releases
-    #[serde(default)]
-    pub releases: Vec<String>,
-
-    /// Supported architectures
-    #[serde(default)]
-    pub arches: Vec<String>,
-
-    /// Metadata refresh interval (e.g., "6h", "24h")
-    #[serde(default = "default_metadata_refresh")]
-    pub metadata_refresh: String,
-
-    /// Priority (lower = preferred)
-    #[serde(default = "default_priority")]
-    pub priority: u32,
-}
-
-fn default_metadata_refresh() -> String {
-    "6h".to_string()
-}
-
-fn default_priority() -> u32 {
-    100
-}
-
 /// CCS conversion configuration
 #[derive(Debug, Deserialize)]
 pub struct ConversionSection {
@@ -274,14 +235,6 @@ fn default_chunk_max() -> usize {
 
 fn default_max_conversions() -> usize {
     DEFAULT_MAX_CONVERSIONS
-}
-
-/// Admin/test access for converted artifacts that are not public-ready.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct NonPublicTestServingSection {
-    /// Allow admin/test endpoints to serve blocked or review-required conversions.
-    #[serde(default)]
-    pub enabled: bool,
 }
 
 /// Release artifact publication settings.
@@ -753,6 +706,23 @@ impl RemiConfig {
             anyhow::bail!("conversion.chunk_avg must be <= conversion.chunk_max");
         }
 
+        let prewarm_interval = parse_duration(&self.prewarm.metadata_sync_interval)
+            .context("prewarm.metadata_sync_interval is invalid")?;
+        if prewarm_interval.is_zero() {
+            anyhow::bail!("prewarm.metadata_sync_interval must be greater than zero");
+        }
+        if self.prewarm.convert_top_n == 0 {
+            anyhow::bail!("prewarm.convert_top_n must be greater than zero");
+        }
+        for route in &self.prewarm.distros {
+            if conary_core::repository::supported_profiles::profile_for_remi_route(route).is_none()
+            {
+                anyhow::bail!(
+                    "prewarm.distros route '{route}' does not map to exactly one public profile"
+                );
+            }
+        }
+
         // Validate federation tier
         let valid_tiers = ["region_hub", "cell_hub", "leaf"];
         if !valid_tiers.contains(&self.federation.tier.as_str()) {
@@ -806,7 +776,7 @@ impl RemiConfig {
             chunk_ttl_days: self.chunk_ttl_days(),
             enable_bloom_filter: self.enable_bloom_filter(),
             bloom_expected_chunks: self.bloom_expected_chunks(),
-            upstream_url: self.get_primary_upstream_url(),
+            upstream_url: None,
             upstream_timeout: self.upstream_timeout(),
             enable_rate_limit: self.security.rate_limit,
             rate_limit_rps: self.security.rate_limit_rps,
@@ -816,7 +786,6 @@ impl RemiConfig {
             ban_threshold: self.security.ban_threshold,
             ban_duration_secs: self.ban_duration_secs()?,
             web_root: self.web_root().map(Path::to_path_buf),
-            non_public_test_serving: self.non_public_test_serving.clone(),
             release_publish: self.release_publish.clone(),
         })
     }
@@ -835,13 +804,6 @@ impl RemiConfig {
             .external_bind
             .parse()
             .with_context(|| format!("Invalid external admin bind: {}", self.admin.external_bind))
-    }
-
-    /// Get primary upstream URL (first configured)
-    fn get_primary_upstream_url(&self) -> Option<String> {
-        self.upstream
-            .values()
-            .find_map(|u| u.base_url.clone().or_else(|| u.metalink.clone()))
     }
 
     /// Get the storage root directory
@@ -957,263 +919,5 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_size() {
-        assert_eq!(parse_size("1024").unwrap(), 1024);
-        assert_eq!(parse_size("1KB").unwrap(), 1024);
-        assert_eq!(parse_size("1MB").unwrap(), 1024 * 1024);
-        assert_eq!(parse_size("1GB").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(parse_size("1TB").unwrap(), 1024u64 * 1024 * 1024 * 1024);
-        assert_eq!(parse_size("700GB").unwrap(), 700 * 1024 * 1024 * 1024);
-        assert_eq!(
-            parse_size("1.5GB").unwrap(),
-            (1.5 * 1024.0 * 1024.0 * 1024.0) as u64
-        );
-    }
-
-    #[test]
-    fn test_parse_duration() {
-        assert_eq!(parse_duration("30").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(15 * 60));
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert_eq!(
-            parse_duration("2d").unwrap(),
-            Duration::from_secs(2 * 24 * 3600)
-        );
-    }
-
-    #[test]
-    fn test_default_config() {
-        let config = RemiConfig::default();
-        assert!(config.validate().is_ok());
-        assert_eq!(config.server.bind, "0.0.0.0:8080");
-        assert_eq!(config.server.admin_bind, "127.0.0.1:8081");
-    }
-
-    #[test]
-    fn test_storage_dirs() {
-        let config = RemiConfig::default();
-        let dirs = config.storage_dirs();
-        assert!(dirs.contains(&PathBuf::from("/conary/chunks")));
-        assert!(dirs.contains(&PathBuf::from("/conary/metadata")));
-        assert!(dirs.contains(&PathBuf::from("/conary/bootstrap")));
-    }
-
-    #[test]
-    fn test_default_remi_config_to_server_config_regression() {
-        let runtime = RemiConfig::default().to_server_config().unwrap();
-
-        assert_eq!(runtime.bind_addr, "0.0.0.0:8080".parse().unwrap());
-        assert_eq!(runtime.db_path, PathBuf::from("/conary/metadata/conary.db"));
-        assert_eq!(runtime.chunk_dir, PathBuf::from("/conary/chunks"));
-        assert_eq!(runtime.cache_dir, PathBuf::from("/conary/cache"));
-        assert_eq!(runtime.max_concurrent_conversions, 32);
-        assert_eq!(runtime.cache_max_bytes, 700 * 1024 * 1024 * 1024);
-        assert_eq!(runtime.chunk_ttl_days, 30);
-        assert!(runtime.enable_bloom_filter);
-        assert_eq!(runtime.bloom_expected_chunks, 1_000_000);
-        assert_eq!(runtime.upstream_url, None);
-        assert_eq!(runtime.upstream_timeout, Duration::from_secs(30));
-        assert!(runtime.enable_rate_limit);
-        assert_eq!(runtime.rate_limit_rps, 100);
-        assert_eq!(runtime.rate_limit_burst, 200);
-        assert!(runtime.cors_allowed_origins.is_empty());
-        assert!(runtime.enable_audit_log);
-        assert_eq!(runtime.ban_threshold, 10);
-        assert_eq!(runtime.ban_duration_secs, 300);
-        assert_eq!(runtime.web_root, None);
-    }
-
-    #[test]
-    fn non_public_test_serving_defaults_disabled() {
-        let runtime = RemiConfig::default().to_server_config().unwrap();
-
-        assert!(!runtime.non_public_test_serving.enabled);
-    }
-
-    #[test]
-    fn non_public_test_serving_can_be_enabled_from_toml() {
-        let config: RemiConfig = toml::from_str(
-            r#"
-            [non_public_test_serving]
-            enabled = true
-            "#,
-        )
-        .unwrap();
-
-        let runtime = config.to_server_config().unwrap();
-
-        assert!(runtime.non_public_test_serving.enabled);
-    }
-
-    #[test]
-    fn test_to_server_config_uses_storage_max_cache_override() {
-        let mut config = RemiConfig::default();
-        config.storage.max_cache_size = Some("1TB".to_string());
-
-        let runtime = config.to_server_config().unwrap();
-
-        assert_eq!(runtime.cache_max_bytes, 1024 * 1024 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_to_server_config_preserves_security_mapping() {
-        let mut config = RemiConfig::default();
-        config.security.rate_limit = false;
-        config.security.rate_limit_rps = 12;
-        config.security.rate_limit_burst = 34;
-        config.security.cors_origins = vec!["https://example.com".to_string()];
-        config.server.audit_log = false;
-        config.security.ban_threshold = 56;
-        config.security.ban_duration = "15m".to_string();
-
-        let runtime = config.to_server_config().unwrap();
-
-        assert!(!runtime.enable_rate_limit);
-        assert_eq!(runtime.rate_limit_rps, 12);
-        assert_eq!(runtime.rate_limit_burst, 34);
-        assert_eq!(runtime.cors_allowed_origins, vec!["https://example.com"]);
-        assert!(!runtime.enable_audit_log);
-        assert_eq!(runtime.ban_threshold, 56);
-        assert_eq!(runtime.ban_duration_secs, 15 * 60);
-    }
-
-    #[test]
-    fn test_server_config_default_matches_default_remi_config() {
-        let from_remi = RemiConfig::default().to_server_config().unwrap();
-        let from_server = ServerConfig::default();
-
-        assert_eq!(from_server, from_remi);
-    }
-
-    #[test]
-    fn release_publish_trusted_signers_parse_from_config() {
-        let config: RemiConfig = toml::from_str(
-            r#"
-            [release_publish]
-            repository_keys_dir = "/var/lib/remi/keys"
-            trusted_build_attestation_signers = [
-              { key_id = "publisher", public_key = "cHVibGlzaGVyLXB1YmxpYy1rZXk=" }
-            ]
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            config.release_publish.trusted_build_attestation_signers[0].key_id,
-            "publisher"
-        );
-        assert_eq!(
-            config.release_publish.repository_keys_dir.as_deref(),
-            Some(std::path::Path::new("/var/lib/remi/keys"))
-        );
-    }
-
-    #[test]
-    fn release_publish_empty_trusted_signers_fail_closed() {
-        let config = RemiConfig::default();
-
-        assert!(
-            config
-                .release_publish
-                .trusted_build_attestation_signers
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn test_parse_toml() {
-        let toml_str = r#"
-[server]
-bind = "0.0.0.0:8080"
-admin_bind = "127.0.0.1:8081"
-workers = 4
-
-[storage]
-root = "/conary"
-eviction_threshold = 0.90
-negative_cache_ttl = "15m"
-
-[upstream.fedora]
-metalink = "https://mirrors.fedoraproject.org/metalink"
-releases = ["43"]
-arches = ["x86_64"]
-
-[conversion]
-chunking = true
-chunk_min = 16384
-chunk_avg = 65536
-chunk_max = 262144
-
-[federation]
-enabled = false
-
-[security]
-rate_limit = true
-rate_limit_rps = 100
-
-[admin]
-enabled = true
-external_bind = "0.0.0.0:8082"
-bootstrap_token = "bootstrap-token"
-"#;
-        let config: RemiConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.validate().is_ok());
-        assert_eq!(config.server.workers, 4);
-        assert!(config.upstream.contains_key("fedora"));
-        assert!(!config.federation.enabled);
-        assert!(config.admin.enabled);
-        assert_eq!(
-            config.admin.bootstrap_token.as_deref(),
-            Some("bootstrap-token")
-        );
-    }
-
-    #[test]
-    fn test_admin_section_rejects_legacy_forgejo_fields() {
-        let toml_str = r#"
-[server]
-bind = "0.0.0.0:8080"
-admin_bind = "127.0.0.1:8081"
-
-[storage]
-root = "/conary"
-
-[admin]
-enabled = true
-external_bind = "0.0.0.0:8082"
-forgejo_url = "https://forgejo.example"
-forgejo_token = "secret"
-"#;
-
-        let err = toml::from_str::<RemiConfig>(toml_str)
-            .expect_err("legacy forgejo admin keys should be rejected");
-        let message = err.to_string();
-        assert!(message.contains("forgejo_url") || message.contains("forgejo_token"));
-    }
-
-    #[test]
-    fn test_invalid_eviction_threshold() {
-        let toml_str = r#"
-[storage]
-eviction_threshold = 1.5
-"#;
-        let config: RemiConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_invalid_chunk_sizes() {
-        let toml_str = r#"
-[conversion]
-chunk_min = 100000
-chunk_avg = 50000
-"#;
-        let config: RemiConfig = toml::from_str(toml_str).unwrap();
-        assert!(config.validate().is_err());
-    }
-}
+#[path = "config/tests.rs"]
+mod tests;

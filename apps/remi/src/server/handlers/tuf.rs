@@ -409,7 +409,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         (temp_file, conn)
     }
 
@@ -419,7 +419,7 @@ mod tests {
         {
             let conn = Connection::open(&db_path).unwrap();
             conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-            schema::migrate(&conn).unwrap();
+            schema::ensure_current(&conn).unwrap();
         }
 
         let config = crate::server::ServerConfig {
@@ -825,7 +825,7 @@ mod tests {
 
             let conn = Connection::open(&db_path).unwrap();
             conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-            schema::migrate(&conn).unwrap();
+            schema::ensure_current(&conn).unwrap();
             let repo_id = insert_tuf_repo(&conn, distro);
             insert_tuf_metadata(&conn, repo_id, "snapshot", &snapshot_metadata_for_tests());
             drop(conn);

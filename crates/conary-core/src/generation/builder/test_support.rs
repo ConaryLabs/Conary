@@ -1,6 +1,6 @@
 // conary-core/src/generation/builder/test_support.rs
 
-#[cfg(unix)]
+#[cfg(any(unix, feature = "composefs-rs"))]
 use std::path::Path;
 #[cfg(feature = "composefs-rs")]
 use std::path::PathBuf;
@@ -8,9 +8,74 @@ use std::path::PathBuf;
 #[cfg(feature = "composefs-rs")]
 use crate::db::models::{FileEntry, Trove, TroveType};
 #[cfg(feature = "composefs-rs")]
-use crate::db::schema::migrate;
+use crate::db::schema::ensure_current;
 #[cfg(feature = "composefs-rs")]
 use crate::filesystem::CasStore;
+#[cfg(feature = "composefs-rs")]
+use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode};
+
+#[cfg(feature = "composefs-rs")]
+pub(super) fn regular_file_entry(
+    path: &str,
+    sha256: String,
+    size: usize,
+    mode: u32,
+    trove_id: i64,
+) -> FileEntry {
+    FileEntry::new(
+        path.to_string(),
+        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(mode & 0o7777)).unwrap(),
+        Some(PayloadContentAuthority {
+            sha256,
+            size: size as u64,
+        }),
+        trove_id,
+    )
+}
+
+#[cfg(feature = "composefs-rs")]
+pub(crate) fn insert_regular_file_with_parents(
+    conn: &rusqlite::Connection,
+    path: &str,
+    sha256: String,
+    size: usize,
+    mode: u32,
+    trove_id: i64,
+) {
+    let path = Path::new(path);
+    assert!(path.is_absolute(), "fixture path must be absolute");
+
+    let mut parents = path
+        .ancestors()
+        .skip(1)
+        .filter(|parent| *parent != Path::new("/"))
+        .collect::<Vec<_>>();
+    parents.reverse();
+    for parent in parents {
+        let parent = parent.to_str().unwrap();
+        if let Some(existing) = FileEntry::find_by_path(conn, parent).unwrap() {
+            assert!(
+                matches!(existing.node.source.kind, PayloadNodeKind::Directory),
+                "fixture parent {parent} must be a directory"
+            );
+            continue;
+        }
+
+        let mut node = PayloadNode::regular(0o755);
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        let mut entry = FileEntry::new(
+            parent.to_string(),
+            ResolvedPayloadNode::from_numeric_source(node).unwrap(),
+            None,
+            trove_id,
+        );
+        entry.insert(conn).unwrap();
+    }
+
+    let mut entry = regular_file_entry(path.to_str().unwrap(), sha256, size, mode, trove_id);
+    entry.insert(conn).unwrap();
+}
 
 #[cfg(unix)]
 pub(super) fn write_executable(path: &Path, contents: &str) {
@@ -23,8 +88,13 @@ pub(super) fn write_executable(path: &Path, contents: &str) {
 }
 
 #[cfg(feature = "composefs-rs")]
-pub(super) fn runtime_generation_db_with_invalid_regular_file()
--> (tempfile::TempDir, rusqlite::Connection, PathBuf, PathBuf) {
+pub(super) fn runtime_generation_db_with_wrong_sized_regular_file_cas_object() -> (
+    tempfile::TempDir,
+    rusqlite::Connection,
+    PathBuf,
+    PathBuf,
+    String,
+) {
     let tmp = tempfile::TempDir::new().unwrap();
     let generations_root = tmp.path().join("generations");
     let objects_dir = tmp.path().join("objects");
@@ -36,34 +106,37 @@ pub(super) fn runtime_generation_db_with_invalid_regular_file()
     std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
     let cas = CasStore::new(&objects_dir).unwrap();
+    let bad_bytes = b"bad";
+    let bad_hash = cas.store(bad_bytes).unwrap();
     let init_hash = cas.store(b"init").unwrap();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    migrate(&conn).unwrap();
+    ensure_current(&conn).unwrap();
     let mut trove = Trove::new(
         "kernel-core".to_string(),
         "6.19.8-conary".to_string(),
         TroveType::Package,
+        crate::repository::versioning::VersionScheme::Conary,
     );
     trove.architecture = Some("x86_64".to_string());
     let trove_id = trove.insert(&conn).unwrap();
-    let mut bad = FileEntry::new(
-        "/usr/bin/bad".to_string(),
-        "not-a-sha256".to_string(),
-        0,
+    insert_regular_file_with_parents(
+        &conn,
+        "/usr/bin/bad",
+        bad_hash.clone(),
+        bad_bytes.len() + 1,
         0o100755,
         trove_id,
     );
-    bad.insert(&conn).unwrap();
-    let mut init = FileEntry::new(
-        "/usr/sbin/init".to_string(),
+    insert_regular_file_with_parents(
+        &conn,
+        "/sbin/init",
         init_hash,
-        b"init".len() as i64,
+        b"init".len(),
         0o100755,
         trove_id,
     );
-    init.insert(&conn).unwrap();
 
-    (tmp, conn, generations_root, boot_root)
+    (tmp, conn, generations_root, boot_root, bad_hash)
 }
 
 #[cfg(feature = "composefs-rs")]
@@ -88,43 +161,37 @@ pub(super) fn runtime_generation_db_with_missing_regular_file_cas_object() -> (
     let init_hash = cas.store(b"init").unwrap();
     let missing_hash = CasStore::compute_sha256(b"missing");
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    migrate(&conn).unwrap();
+    ensure_current(&conn).unwrap();
     let mut trove = Trove::new(
         "kernel-core".to_string(),
         "6.19.8-conary".to_string(),
         TroveType::Package,
+        crate::repository::versioning::VersionScheme::Conary,
     );
     trove.architecture = Some("x86_64".to_string());
     let trove_id = trove.insert(&conn).unwrap();
-    let mut missing = FileEntry::new(
-        "/usr/bin/missing".to_string(),
+    insert_regular_file_with_parents(
+        &conn,
+        "/usr/bin/missing",
         missing_hash.clone(),
-        b"missing".len() as i64,
+        b"missing".len(),
         0o100755,
         trove_id,
     );
-    missing.insert(&conn).unwrap();
-    let mut init = FileEntry::new(
-        "/usr/sbin/init".to_string(),
+    insert_regular_file_with_parents(
+        &conn,
+        "/sbin/init",
         init_hash,
-        b"init".len() as i64,
+        b"init".len(),
         0o100755,
         trove_id,
     );
-    init.insert(&conn).unwrap();
 
     (tmp, conn, generations_root, boot_root, missing_hash)
 }
 
-pub(super) fn assert_invalid_runtime_input_error(error: &str) {
-    for snippet in [
-        "exportable runtime generation is not self-contained",
-        "package kernel-core",
-        "/usr/bin/bad",
-        "invalid SHA-256 digest for regular file",
-        "conary system adopt --system --full",
-        "conary system takeover --up-to generation",
-    ] {
+pub(super) fn assert_cas_size_mismatch_error(error: &str, hash: &str) {
+    for snippet in ["CAS object", hash, "size mismatch"] {
         assert!(
             error.contains(snippet),
             "expected error to contain {snippet:?}; got {error}"

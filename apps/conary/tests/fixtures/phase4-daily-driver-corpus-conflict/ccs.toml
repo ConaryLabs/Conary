@@ -1,0 +1,22 @@
+[package]
+name = "phase4-corpus-conflict"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "Phase 4 exact file-conflict fixture"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["phase4-corpus-conflict"]
+binaries = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt"]
+
+[components]
+default = ["runtime"]
+
+[hooks]

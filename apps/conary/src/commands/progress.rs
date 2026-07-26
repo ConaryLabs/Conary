@@ -219,7 +219,6 @@ impl RemoveProgress {
             RemovePhase::PreScript => "Running pre-remove script...",
             RemovePhase::RemovingFiles => "Removing files...",
             RemovePhase::RemovingDirs => "Cleaning up directories...",
-            RemovePhase::PostScript => "Running post-remove script...",
             RemovePhase::UpdatingDb => "Updating database...",
         };
         self.status.set_message(msg.to_string());
@@ -256,7 +255,6 @@ pub enum RemovePhase {
     PreScript,
     RemovingFiles,
     RemovingDirs,
-    PostScript,
     UpdatingDb,
 }
 

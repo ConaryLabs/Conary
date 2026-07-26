@@ -6,7 +6,7 @@
 
 <PageMeta
 	title="Conary — One reversible package model for Linux"
-	description="Conary is building portable, inspectable, and reversible package state across Linux distributions, from native-package adoption to declarative systems."
+	description="Conary installs RPM, DEB, Arch, and CCS packages across Linux distributions through one inspectable and reversible package model."
 	path="/"
 />
 
@@ -14,11 +14,11 @@
 	<div class="container grid-12 hero-grid">
 		<div class="hero-copy">
 			<p class="eyebrow">A package system for Linux · {previewRelease.tag}</p>
-			<h1>Make Linux package state portable, inspectable, and reversible.</h1>
+			<h1>Install the package you want, not only the format your distro chose.</h1>
 			<p class="hero-lede">
-				Conary is building one model for packages and systems across distributions:
-				adopt the machine you have, move authority only when you choose, and grow
-				toward reproducible packages and selectable system state.
+				Conary carries RPM, Debian, and Arch package semantics across distro
+				boundaries, executes them through typed host capabilities, and owns the
+				resulting transaction, rollback, and system state.
 			</p>
 			<div class="button-row hero-actions">
 				<a href="/features/" class="btn btn-primary">Explore the product direction</a>
@@ -26,7 +26,7 @@
 			</div>
 			<ul class="hero-meta" aria-label="Conary principles">
 				<li>Fedora · Ubuntu · Arch</li>
-				<li>Native authority by default</li>
+				<li>RPM · DEB · Arch · CCS</li>
 				<li>Preview available now</li>
 			</ul>
 		</div>
@@ -40,15 +40,14 @@
 				aria-hidden="true"
 			/>
 			<div class="authority-labels" aria-hidden="true">
-				<span class="authority-label native"><b>native authority</b><small>dnf / apt / pacman</small></span>
-				<span class="authority-label tracked"><b>reversible tracking</b><small>adopt ⇄ unadopt</small></span>
-				<span class="authority-label owned"><b>explicit opt-in</b><small>Conary-owned</small></span>
-				<span class="authority-motto">reversible first · authority moves only when you choose</span>
+				<span class="authority-label native"><b>source package ABI</b><small>RPM / Debian / ALPM</small></span>
+				<span class="authority-label tracked"><b>typed target</b><small>capabilities · state</small></span>
+				<span class="authority-label owned"><b>Conary authority</b><small>install · update · rollback</small></span>
+				<span class="authority-motto">preserve semantics · cross the distro boundary</span>
 			</div>
 			<figcaption class="visually-hidden">
-				The preview uses host-matching packages and repositories, then moves from
-				native package-manager authority through reversible tracking. Conary-owned
-				state remains a separate explicit choice.
+				A source package keeps its RPM, Debian, or ALPM semantics while typed
+				target capabilities feed one Conary-owned package transaction.
 			</figcaption>
 		</figure>
 	</div>
@@ -62,22 +61,22 @@
 				<h2 class="section-heading">One model, from package intent to a complete system.</h2>
 			</div>
 			<p class="section-copy">
-				Linux distributions should not become interchangeable. Their package formats,
-				policies, and native tools matter. Conary aims to add a shared control plane
-				above those differences—without hiding who owns each change.
+				Distribution differences are inputs, not walls. Conary preserves each source
+				format's lifecycle, dependency, version, payload, and configuration rules,
+				then executes them against the capabilities of the target Linux system.
 			</p>
 		</div>
 
 		<div class="vision-grid">
 			<article>
 				<span class="vision-status available">foundation available</span>
-				<h3>Express package intent across distributions</h3>
-				<p>Use shared package concepts while Conary resolves host-matching RPM, DEB, Arch, and CCS inputs with distribution-aware identity.</p>
+				<h3>Install across package-format boundaries</h3>
+				<p>Install an RPM on Ubuntu, a DEB on Fedora, or an Arch package on either without delegating the transaction to dnf, apt, or pacman.</p>
 			</article>
 			<article>
 				<span class="vision-status available">preview today</span>
-				<h3>Adopt a system without reinstalling it</h3>
-				<p>Bring existing native packages into view, keep dnf, apt, or pacman authoritative, and transfer ownership only through an explicit decision.</p>
+				<h3>Bring the existing system along</h3>
+				<p>Adopt packages already owned by dnf, apt, or pacman as a reversible migration bridge, then transfer authority only through an explicit takeover.</p>
 			</article>
 			<article>
 				<span class="vision-status building">available · growing</span>
@@ -111,10 +110,11 @@
 	<div class="container grid-12">
 		<div class="evaluate-heading">
 			<p class="eyebrow">Available now · limited preview</p>
-			<h2 class="section-heading">Start without starting over.</h2>
+			<h2 class="section-heading">Cross the package boundary deliberately.</h2>
 			<p class="section-copy">
-				The first public loop is deliberately focused: prove Conary can add useful
-				package state to a real host before asking users to trust the larger vision.
+				The public loop is deliberately focused: inspect a foreign-format package,
+				confirm its exact target capabilities, install it through Conary, and prove
+				that query, update planning, removal, and rollback still agree.
 			</p>
 		</div>
 
@@ -122,10 +122,10 @@
 			<li>
 				<span class="capability-mark track" aria-hidden="true"></span>
 				<div>
-					<h3>Track what is already installed</h3>
-					<p>Adopt RPM, DEB, or pacman packages into Conary tracking while the native package manager keeps authority.</p>
+					<h3>Run a foreign package as its source format intended</h3>
+					<p>Keep RPM, Debian, or ALPM lifecycle arguments and ordering while Conary supplies the target root, users, services, and other typed interfaces.</p>
 				</div>
-				<span class="capability-state">reversible</span>
+				<span class="capability-state">source exact</span>
 			</li>
 			<li>
 				<span class="capability-mark inspect" aria-hidden="true"></span>
@@ -138,10 +138,10 @@
 			<li>
 				<span class="capability-mark cross" aria-hidden="true"></span>
 				<div>
-					<h3>Use one preview workflow on three hosts</h3>
-					<p>Exercise the same Conary concepts with host-matching packages and repositories on the current Fedora 44, Ubuntu 26.04 LTS, and Arch profiles.</p>
+					<h3>Use one package engine on three hosts</h3>
+					<p>Exercise the same RPM, DEB, Arch, and CCS pipeline on Fedora 44, Ubuntu 26.04 LTS, and Arch while retaining source-specific version and dependency rules.</p>
 				</div>
-				<span class="capability-state">limited scope</span>
+				<span class="capability-state">matrix proof</span>
 			</li>
 		</ol>
 	</div>
@@ -150,32 +150,33 @@
 <section class="section section-band evidence">
 	<div class="container grid-12">
 		<div class="evidence-copy">
-			<p class="eyebrow">Authority-boundary preview</p>
-			<h2 class="section-heading">See the boundary before you cross it.</h2>
+			<p class="eyebrow">Cross-distro transaction preview</p>
+			<h2 class="section-heading">See the source ABI and target contract before apply.</h2>
 			<p class="section-copy">
-				Start with the documented dry-run. Adoption adds Conary tracking; it does not silently
-				replace the native package database or remove the native package files.
+				Start with the documented dry-run. Conary shows the package's typed lifecycle,
+				dependencies, payload, and required host capabilities before it mutates the
+				selected root.
 			</p>
 
 			<div class="authority-summary">
 				<div>
 					<span class="summary-label">What changes</span>
-					<p>Conary records the package relationship and can report tracked state.</p>
+					<p>Conary owns the installed files, state, lifecycle transaction, and rollback record.</p>
 				</div>
 				<div>
-					<span class="summary-label">What stays authoritative</span>
-					<p>dnf, apt, or pacman continues to own the native package until you choose a later boundary.</p>
+					<span class="summary-label">What stays source-native</span>
+					<p>The RPM, Debian, or ALPM ABI—not command-name guesses or the host's package manager.</p>
 				</div>
 			</div>
 		</div>
 
 		<div class="evidence-terminal">
-			<TerminalFrame title="reversible adoption sequence">
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system adopt --system --dry-run</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system adopt --system</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system unadopt --all --dry-run</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary system unadopt --all --yes</span></span>
+			<TerminalFrame title="cross-distro package sequence">
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install ./package.deb --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install ./package.deb --yes</span></span>
+				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list package --info</span></span>
+				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update package --dry-run</span></span>
+				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove package --yes</span></span>
 			</TerminalFrame>
 			<p class="evidence-note">Command-only illustration. Output varies by host; use the ordered install runbook to capture evidence.</p>
 		</div>
@@ -186,13 +187,14 @@
 	<div class="container grid-12">
 		<div class="fit-title">
 			<p class="eyebrow">Honest fit check</p>
-			<h2 class="section-heading">Evaluate the migration path, not the package count.</h2>
+			<h2 class="section-heading">Evaluate package portability, then the migration path.</h2>
 		</div>
 		<div class="fit-copy">
 			<p>
 				apt, dnf, pacman, and Nix are mature systems with much larger ecosystems.
-				Conary is worth testing if reversible adoption, shared package-state concepts,
-				and a gradual path toward Conary-owned state solve a real problem for you.
+				Conary's bet is different: existing distro repositories become source inputs
+				to one package engine, while adoption remains the bridge for the machine you
+				already have.
 			</p>
 			<a href="/compare/" class="text-link">Compare the trade-offs <span aria-hidden="true">→</span></a>
 		</div>
@@ -202,9 +204,9 @@
 <section class="section final-cta">
 	<div class="container cta-box">
 		<div>
-			<p class="eyebrow">See the idea on a real host</p>
-			<h2>Start with the reversible layer.</h2>
-			<p>The larger system is the direction. The pinned, checksum-verified preview is where you can begin safely today.</p>
+			<p class="eyebrow">See the package bridge on a real host</p>
+			<h2>Try a package your distro did not ship.</h2>
+			<p>Use the pinned, checksum-verified preview on a disposable host and inspect the complete transaction before apply.</p>
 		</div>
 		<div class="button-row">
 			<a href="/install/" class="btn btn-primary">Open the install guide</a>

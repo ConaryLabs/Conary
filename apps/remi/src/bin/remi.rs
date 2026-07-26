@@ -39,6 +39,11 @@ enum Command {
         #[command(subcommand)]
         command: TrustCommand,
     },
+    /// Prepare or roll back an atomic service deployment transition.
+    Deployment {
+        #[command(subcommand)]
+        command: DeploymentCommand,
+    },
 }
 
 #[derive(Args, Default)]
@@ -109,9 +114,9 @@ struct IndexGenArgs {
     #[arg(short, long, default_value = "/var/lib/conary/data/repo")]
     output_dir: String,
 
-    /// Distribution to generate index for (fedora-44, ubuntu-26.04, arch)
+    /// Exact source profile to generate (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
-    distro: Option<String>,
+    source_profile: Option<String>,
 
     /// Sign the index with the specified key file
     #[arg(long)]
@@ -131,6 +136,10 @@ struct PrewarmArgs {
     /// Path to cache/scratch directory
     #[arg(long, default_value = "/var/lib/conary/data/cache")]
     cache_dir: String,
+
+    /// Directory containing per-distro TUF authority keys
+    #[arg(long)]
+    repository_keys_dir: Option<PathBuf>,
 
     /// Distribution to pre-warm (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
@@ -167,6 +176,10 @@ struct ConversionBenchmarkArgs {
     #[arg(long, default_value = "/var/lib/conary/data/cache")]
     cache_dir: String,
 
+    /// Directory containing per-distro TUF authority keys
+    #[arg(long)]
+    repository_keys_dir: Option<PathBuf>,
+
     /// Distribution to benchmark (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
     distro: String,
@@ -182,10 +195,6 @@ struct ConversionBenchmarkArgs {
     /// Emit JSON lines instead of pretty JSON.
     #[arg(long)]
     jsonl: bool,
-
-    /// Parse package metadata and scriptlets without writing converted CCS packages.
-    #[arg(long)]
-    scan_only: bool,
 
     /// Optional R2 endpoint. When omitted, R2 write-through timing is recorded as skipped.
     #[arg(long)]
@@ -251,6 +260,57 @@ struct TrustRotateKeyArgs {
     db: String,
 }
 
+#[derive(Subcommand)]
+enum DeploymentCommand {
+    /// Back up current state and prepare current config/schema authority.
+    Prepare(DeploymentPrepareArgs),
+    /// Restore a prepared deployment transition.
+    Rollback(DeploymentRollbackArgs),
+    /// Verify current schema, source authority, and repopulation state.
+    Inspect(DeploymentInspectArgs),
+}
+
+#[derive(Args)]
+struct DeploymentPrepareArgs {
+    /// Current Remi service configuration.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
+
+    /// Staged typed repository manifest.
+    #[arg(long)]
+    repository_manifest: PathBuf,
+
+    /// Installed typed repository manifest path.
+    #[arg(long, default_value = "/etc/conary/remi-repositories.toml")]
+    repository_manifest_target: PathBuf,
+
+    /// Stable deployment identity used in the recoverable backup name.
+    #[arg(long)]
+    deployment_id: String,
+
+    /// Maximum concurrent package conversions.
+    #[arg(long)]
+    max_concurrent: usize,
+}
+
+#[derive(Args)]
+struct DeploymentRollbackArgs {
+    /// Transition manifest emitted by `deployment prepare`.
+    #[arg(long)]
+    manifest: PathBuf,
+}
+
+#[derive(Args)]
+struct DeploymentInspectArgs {
+    /// Current Remi service configuration.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
+
+    /// Fail until every source has metadata and converted artifacts.
+    #[arg(long)]
+    require_repopulated: bool,
+}
+
 fn main() {
     conary_bootstrap::init_server_tracing();
 
@@ -261,6 +321,7 @@ fn main() {
         Some(Command::Prewarm(args)) => run_prewarm_command(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
+        Some(Command::Deployment { command }) => run_deployment_command(command),
         None => run_server_command(cli.serve),
     };
 
@@ -268,6 +329,32 @@ fn main() {
     if code != 0 {
         std::process::exit(code);
     }
+}
+
+fn run_deployment_command(command: DeploymentCommand) -> Result<()> {
+    match command {
+        DeploymentCommand::Prepare(args) => {
+            let manifest = remi::deployment::prepare(&remi::deployment::PrepareOptions {
+                config_path: args.config,
+                repository_manifest_source: args.repository_manifest,
+                repository_manifest_target: args.repository_manifest_target,
+                deployment_id: args.deployment_id,
+                max_concurrent: args.max_concurrent,
+            })?;
+            println!("{}", manifest.display());
+        }
+        DeploymentCommand::Rollback(args) => {
+            remi::deployment::rollback(&args.manifest)?;
+        }
+        DeploymentCommand::Inspect(args) => {
+            let state = remi::deployment::inspect_state(&args.config)?;
+            println!("{}", serde_json::to_string_pretty(&state)?);
+            if args.require_repopulated && !state.repopulation_complete() {
+                anyhow::bail!("Remi source and conversion state is not repopulated");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn report_top_level_error(err: &anyhow::Error) {
@@ -376,7 +463,7 @@ fn run_index_gen_command(args: IndexGenArgs) -> Result<()> {
         db_path: args.db,
         chunk_dir: args.chunk_dir,
         output_dir: args.output_dir,
-        distro: args.distro,
+        source_profile: args.source_profile,
         sign_key: args.sign_key,
     };
 
@@ -387,7 +474,7 @@ fn run_index_gen_command(args: IndexGenArgs) -> Result<()> {
         for result in results {
             println!(
                 "{}: {} packages ({} versions) -> {}{}",
-                result.distro,
+                result.source_profile,
                 result.package_count,
                 result.version_count,
                 result.index_path,
@@ -404,6 +491,7 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
         db_path: args.db,
         chunk_dir: args.chunk_dir,
         cache_dir: args.cache_dir,
+        repository_keys_dir: args.repository_keys_dir,
         distro: args.distro,
         max_packages: args.max_packages,
         popularity_file: args.popularity_file,
@@ -458,7 +546,8 @@ fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()>
             PathBuf::from(args.cache_dir),
             PathBuf::from(args.db),
             r2_store,
-        );
+        )
+        .with_repository_keys_dir(args.repository_keys_dir);
 
         let packages = if args.packages.is_empty() {
             service
@@ -476,15 +565,9 @@ fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()>
         }
 
         for package in packages {
-            let result = if args.scan_only {
-                service
-                    .scan_package_scriptlets(&args.distro, &package, None, None)
-                    .await
-            } else {
-                service
-                    .benchmark_package_conversion(&args.distro, &package, None, None)
-                    .await
-            };
+            let result = service
+                .benchmark_package_conversion(&args.distro, &package, None, None)
+                .await;
 
             match result {
                 Ok(evidence) => {

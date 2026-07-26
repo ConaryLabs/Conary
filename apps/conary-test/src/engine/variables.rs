@@ -17,6 +17,25 @@ pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, S
     vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
     if let Some(fixture_dir) = &config.paths.fixture_dir {
         vars.insert("FIXTURE_DIR".to_string(), fixture_dir.clone());
+        let fixture_root = std::path::Path::new(fixture_dir);
+        vars.insert(
+            "FIXTURE_CCS_KEY".to_string(),
+            crate::paths::fixture_ccs_key_path_for(fixture_root)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        vars.insert(
+            "FIXTURE_CCS_POLICY".to_string(),
+            crate::paths::fixture_ccs_policy_path_for(fixture_root)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        vars.insert(
+            "FIXTURE_CCS_EXPIRED_POLICY".to_string(),
+            crate::paths::fixture_ccs_expired_policy_path_for(fixture_root)
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
 
     if let Some(fixtures) = &config.fixtures {
@@ -218,7 +237,8 @@ mod tests {
             "fedora44".to_string(),
             DistroConfig {
                 remi_distro: "fedora-44".to_string(),
-                repo_name: "remi".to_string(),
+                repo_name: "remi-fedora-44".to_string(),
+                build_context: crate::config::DistroBuildContext::Binary,
                 containerfile: None,
                 test_packages: vec![TestPackage {
                     package: "conary-test-fixture".to_string(),
@@ -245,12 +265,12 @@ mod tests {
                 added_file: Some("/usr/share/conary-test/added.txt".to_string()),
                 marker: Some("/var/lib/conary-test/installed".to_string()),
                 v1_version: Some("1.0.0".to_string()),
-                v1_ccs_file: Some("conary-test-fixture-1.0.0.ccs".to_string()),
+                v1_ccs_file: Some("conary-test-fixture-1.0.0-1.ccs".to_string()),
                 v1_hello_sha256: Some(
                     "18933c865fcf7230f8ea99b059747facc14285b7ed649758115f9c9a73f42a53".to_string(),
                 ),
                 v2_version: Some("2.0.0".to_string()),
-                v2_ccs_file: Some("conary-test-fixture-2.0.0.ccs".to_string()),
+                v2_ccs_file: Some("conary-test-fixture-2.0.0-1.ccs".to_string()),
                 v2_hello_sha256: Some(
                     "bd80c5e8a7138bd13d0f10e1358bda6f9727c266b6909d4b6c9293ab141ec1db".to_string(),
                 ),
@@ -307,10 +327,22 @@ mod tests {
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
         assert_eq!(vars["REMI_DISTRO"], "fedora-44");
-        assert_eq!(vars["REPO_NAME"], "remi");
+        assert_eq!(vars["REPO_NAME"], "remi-fedora-44");
         assert_eq!(vars["TEST_PACKAGE_1"], "conary-test-fixture");
         assert_eq!(vars["TEST_BINARY_1"], "/usr/bin/true");
         assert_eq!(vars["FIXTURE_PKG_NAME"], "conary-test-fixture");
+        assert_eq!(
+            vars["FIXTURE_CCS_KEY"],
+            "/opt/remi-tests/fixtures/ccs-test-authority/fixture-signing-key.private"
+        );
+        assert_eq!(
+            vars["FIXTURE_CCS_POLICY"],
+            "/opt/remi-tests/fixtures/ccs-test-authority/trust-policy.toml"
+        );
+        assert_eq!(
+            vars["FIXTURE_CCS_EXPIRED_POLICY"],
+            "/opt/remi-tests/fixtures/ccs-test-authority/expired-trust-policy.toml"
+        );
     }
 
     #[test]
@@ -320,11 +352,11 @@ mod tests {
 
         assert_eq!(
             vars["FIXTURE_V1_CCS"],
-            "/opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0.ccs"
+            "/opt/remi-tests/fixtures/conary-test-fixture/v1/output/conary-test-fixture-1.0.0-1.ccs"
         );
         assert_eq!(
             vars["FIXTURE_V2_CCS"],
-            "/opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0.ccs"
+            "/opt/remi-tests/fixtures/conary-test-fixture/v2/output/conary-test-fixture-2.0.0-1.ccs"
         );
     }
 

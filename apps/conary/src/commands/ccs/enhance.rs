@@ -8,7 +8,6 @@ use conary_core::ccs::enhancement::runner::EnhancementOptions;
 use conary_core::ccs::enhancement::{
     ENHANCEMENT_VERSION, EnhancementResult_, EnhancementRunner, EnhancementType,
 };
-use std::path::PathBuf;
 
 /// Run the `conary ccs enhance` command
 #[allow(clippy::too_many_arguments)]
@@ -21,7 +20,6 @@ pub async fn cmd_ccs_enhance(
     force: bool,
     stats: bool,
     dry_run: bool,
-    install_root: &str,
 ) -> Result<()> {
     let conn = open_db(db_path)?;
 
@@ -37,7 +35,7 @@ pub async fn cmd_ccs_enhance(
 
     if enhancement_types.is_empty() && types.is_some() {
         eprintln!("Error: No valid enhancement types specified.");
-        eprintln!("Valid types: capabilities, provenance, subpackages");
+        eprintln!("Valid type: provenance");
         return Ok(());
     }
 
@@ -50,10 +48,7 @@ pub async fn cmd_ccs_enhance(
     let options = EnhancementOptions {
         types: enhancement_types,
         force,
-        install_root: PathBuf::from(install_root),
         fail_fast: false,
-        parallel: true,
-        parallel_workers: 0, // auto-detect
         cancel_token: None,
     };
 

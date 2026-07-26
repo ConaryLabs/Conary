@@ -8,17 +8,28 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     println!("Syncing canonical registry...");
 
-    // Try fetching from configured Remi servers first
-    let repos: Vec<(String, String)> = {
+    let authorities: Vec<(String, String)> = {
         let mut stmt = conn.prepare(
-            "SELECT name, url FROM repositories WHERE enabled = 1 ORDER BY priority DESC",
+            "SELECT name, default_strategy_endpoint
+             FROM repositories
+             WHERE enabled = 1
+               AND default_strategy = 'remi'
+               AND default_strategy_endpoint IS NOT NULL
+             ORDER BY priority DESC",
         )?;
         stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    for (name, url) in &repos {
-        let endpoint = url.trim_end_matches('/');
+    if authorities.is_empty() {
+        anyhow::bail!(
+            "No canonical authority is configured; add an enabled repository with an explicit Remi strategy endpoint"
+        );
+    }
+
+    let mut errors = Vec::new();
+    for (name, configured_endpoint) in &authorities {
+        let endpoint = configured_endpoint.trim_end_matches('/');
         match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
             Ok(Some(count)) => {
                 println!("Fetched {count} canonical mappings from {name} ({endpoint})");
@@ -31,82 +42,15 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
                 return Ok(());
             }
             Err(e) => {
-                tracing::debug!("Canonical fetch from {name} failed: {e}");
-                continue;
+                errors.push(format!("{name} ({endpoint}): {e}"));
             }
         }
     }
 
-    // Fallback: local YAML rules
-    println!("Server fetch unavailable, falling back to local rules...");
-    let rules_dir = std::path::Path::new("/usr/share/conary/canonical-rules");
-    let local_dir = std::path::Path::new("data/canonical-rules");
-    let dir = if rules_dir.exists() {
-        rules_dir
-    } else {
-        local_dir
-    };
-
-    if dir.exists() {
-        let engine = conary_core::canonical::rules::RulesEngine::load_from_dir(dir)?;
-        println!("Loaded {} curated rules", engine.rule_count());
-
-        // Persist curated rules into the database
-        use conary_core::canonical::repology::repo_to_distro;
-        use conary_core::db::models::{CanonicalPackage, PackageImplementation};
-
-        let tx = conn.unchecked_transaction()?;
-        let mut count = 0;
-        for rule in engine.rules() {
-            if rule.setname.is_empty() || (rule.name.is_empty() && rule.namepat.is_none()) {
-                continue;
-            }
-            let kind = rule.kind.as_deref().unwrap_or("package").to_string();
-            let mut canonical = CanonicalPackage::new(rule.setname.clone(), kind);
-            let id = canonical.insert_or_ignore(&tx)?;
-            let canonical_id = match id {
-                Some(cid) => cid,
-                None => match CanonicalPackage::find_by_name(&tx, &rule.setname)? {
-                    Some(existing) => existing.id.ok_or_else(|| {
-                        anyhow::anyhow!("existing canonical package row has no id")
-                    })?,
-                    None => continue,
-                },
-            };
-
-            // Insert the implementation mapping if this rule has a concrete name + repo.
-            // StringOrVec can hold one or many repos; take the first for the mapping.
-            if !rule.name.is_empty()
-                && let Some(ref repo) = rule.repo
-            {
-                let repo_str = match repo {
-                    conary_core::canonical::rules::StringOrVec::Single(s) => s.as_str(),
-                    conary_core::canonical::rules::StringOrVec::Multiple(v) => {
-                        if let Some(first) = v.first() {
-                            first.as_str()
-                        } else {
-                            continue;
-                        }
-                    }
-                };
-                let distro = repo_to_distro(repo_str).unwrap_or_else(|| repo_str.replace('_', "-"));
-                let mut imp = PackageImplementation::new(
-                    canonical_id,
-                    distro,
-                    rule.name.clone(),
-                    "curated".to_string(),
-                );
-                imp.insert_or_ignore(&tx)?;
-            }
-            count += 1;
-        }
-        tx.commit()?;
-        println!("Persisted {count} canonical entries to database");
-    } else {
-        println!("No canonical rules found at {}", dir.display());
-    }
-    crate::ui::status("Updated", "registry.");
-    Ok(())
+    anyhow::bail!(
+        "All configured canonical authorities failed: {}",
+        errors.join("; ")
+    )
 }
 
 pub async fn cmd_registry_stats(db_path: &str) -> Result<()> {
@@ -167,7 +111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_registry_update_with_local_rules() {
+    async fn registry_update_requires_explicit_authority() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let db_str = db_path.to_str().unwrap();
@@ -175,8 +119,7 @@ mod tests {
         // Initialize the database (creates file + schema)
         conary_core::db::init(db_str).unwrap();
 
-        // Update should succeed (may not find rules dir, but should not error)
-        let result = cmd_registry_update(db_str).await;
-        assert!(result.is_ok());
+        let error = cmd_registry_update(db_str).await.unwrap_err();
+        assert!(error.to_string().contains("No canonical authority"));
     }
 }

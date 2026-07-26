@@ -236,9 +236,12 @@ where
 pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &str) -> Result<i64> {
     // Step 0: Check convergence intent -- generation building requires at least CAS-backed
     let convergence = if model::model_exists(None) {
-        model::load_model(None)
-            .ok()
-            .map(|m| m.system.convergence.clone())
+        Some(
+            model::load_model(None)
+                .context("Failed to load the configured system model")?
+                .system
+                .convergence,
+        )
     } else {
         None
     };
@@ -258,7 +261,7 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
     }
 
     // Check for non-CAS-backed packages that will be excluded from the generation.
-    let all_troves = Trove::list_all(conn).unwrap_or_default();
+    let all_troves = Trove::list_all(conn)?;
     let track_only_count = all_troves
         .iter()
         .filter(|t| t.install_source == InstallSource::AdoptedTrack)
@@ -324,8 +327,6 @@ pub fn build_generation(conn: &rusqlite::Connection, db_path: &str, summary: &st
 
     Ok(gen_number)
 }
-
-// hex_to_digest tests live in conary_core::generation::builder::tests
 
 #[cfg(test)]
 mod tests {

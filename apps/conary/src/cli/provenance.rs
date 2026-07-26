@@ -158,7 +158,7 @@ pub enum ProvenanceCommands {
         #[arg(long)]
         missing: Option<String>,
 
-        /// Include converted (legacy) packages
+        /// Include packages converted from native formats
         #[arg(long)]
         include_converted: bool,
     },

@@ -1,7 +1,7 @@
 // conary-core/src/scriptlet/arguments.rs
 
 use super::{ExecutionMode, PackageFormat, ScriptletExecutor};
-use tracing::warn;
+use crate::error::{Error, Result, ScriptletFailureKind};
 
 impl ScriptletExecutor {
     /// Get arguments based on distro and execution mode
@@ -10,8 +10,22 @@ impl ScriptletExecutor {
     /// - RPM: Integer count of packages remaining after operation
     /// - DEB: Action word + optional version string (per Debian Policy)
     /// - Arch: Version string(s)
-    pub(super) fn get_args(&self, mode: &ExecutionMode, phase: &str) -> Vec<String> {
+    pub(super) fn get_args(&self, mode: &ExecutionMode, phase: &str) -> Result<Vec<String>> {
+        let unsupported = || {
+            Error::scriptlet(
+                ScriptletFailureKind::ContractViolation,
+                format!(
+                    "unsupported {} lifecycle phase '{phase}' for {}",
+                    package_format_name(self.package_format),
+                    execution_mode_name(mode)
+                ),
+            )
+        };
         match self.package_format {
+            PackageFormat::Conary => match (mode, phase) {
+                (ExecutionMode::Remove, "pre-remove") => Ok(Vec::new()),
+                _ => Err(unsupported()),
+            },
             PackageFormat::Rpm => {
                 // RPM uses integer arguments (count of packages remaining):
                 // Install: $1 = 1
@@ -19,10 +33,26 @@ impl ScriptletExecutor {
                 // Upgrade (old pkg removal): $1 = 1 (NOT 0! another version remains)
                 // Remove: $1 = 0
                 match mode {
-                    ExecutionMode::Install => vec!["1".to_string()],
-                    ExecutionMode::Remove => vec!["0".to_string()],
-                    ExecutionMode::Upgrade { .. } => vec!["2".to_string()],
-                    ExecutionMode::UpgradeRemoval { .. } => vec!["1".to_string()],
+                    ExecutionMode::Install if matches!(phase, "pre-install" | "post-install") => {
+                        Ok(vec!["1".to_string()])
+                    }
+                    ExecutionMode::Remove if matches!(phase, "pre-remove" | "post-remove") => {
+                        Ok(vec!["0".to_string()])
+                    }
+                    ExecutionMode::Upgrade { .. }
+                        if matches!(phase, "pre-install" | "post-install") =>
+                    {
+                        Ok(vec!["2".to_string()])
+                    }
+                    ExecutionMode::UpgradeRemoval { .. }
+                        if matches!(phase, "pre-remove" | "post-remove") =>
+                    {
+                        Ok(vec!["1".to_string()])
+                    }
+                    ExecutionMode::Install
+                    | ExecutionMode::Remove
+                    | ExecutionMode::Upgrade { .. }
+                    | ExecutionMode::UpgradeRemoval { .. } => Err(unsupported()),
                 }
             }
             PackageFormat::Deb => {
@@ -33,25 +63,33 @@ impl ScriptletExecutor {
                 // postrm: remove | upgrade <new-version>
                 match mode {
                     ExecutionMode::Install => match phase {
-                        "pre-install" => vec!["install".to_string()],
-                        "post-install" => vec!["configure".to_string()],
-                        _ => vec!["install".to_string()],
+                        "pre-install" => Ok(vec!["install".to_string()]),
+                        "post-install" => Ok(vec!["configure".to_string()]),
+                        _ => Err(unsupported()),
                     },
-                    ExecutionMode::Remove => {
-                        vec!["remove".to_string()]
-                    }
+                    ExecutionMode::Remove => match phase {
+                        "pre-remove" | "post-remove" => Ok(vec!["remove".to_string()]),
+                        _ => Err(unsupported()),
+                    },
                     ExecutionMode::Upgrade { old_version } => {
                         // For NEW package scripts during upgrade
                         match phase {
-                            "pre-install" => vec!["upgrade".to_string(), old_version.clone()],
-                            "post-install" => vec!["configure".to_string(), old_version.clone()],
-                            _ => vec!["upgrade".to_string(), old_version.clone()],
+                            "pre-install" => Ok(vec!["upgrade".to_string(), old_version.clone()]),
+                            "post-install" => {
+                                Ok(vec!["configure".to_string(), old_version.clone()])
+                            }
+                            _ => Err(unsupported()),
                         }
                     }
                     ExecutionMode::UpgradeRemoval { new_version } => {
                         // For OLD package scripts during upgrade
                         // prerm/postrm get "upgrade <new_version>"
-                        vec!["upgrade".to_string(), new_version.clone()]
+                        match phase {
+                            "pre-remove" | "post-remove" => {
+                                Ok(vec!["upgrade".to_string(), new_version.clone()])
+                            }
+                            _ => Err(unsupported()),
+                        }
                     }
                 }
             }
@@ -62,42 +100,42 @@ impl ScriptletExecutor {
                 // Upgrade: $1 = new_version, $2 = old_version
                 // UpgradeRemoval: Should NOT be called for Arch!
                 match mode {
-                    ExecutionMode::Install => vec![self.package_version.clone()],
-                    ExecutionMode::Remove => vec![self.package_version.clone()],
-                    ExecutionMode::Upgrade { old_version } => {
-                        vec![self.package_version.clone(), old_version.clone()]
+                    ExecutionMode::Install if matches!(phase, "pre-install" | "post-install") => {
+                        Ok(vec![self.package_version.clone()])
                     }
-                    ExecutionMode::UpgradeRemoval { .. } => {
-                        // This should never be called for Arch - log warning
-                        // Arch does NOT run old package scripts during upgrade
-                        warn!("UpgradeRemoval mode called for Arch package - this is a bug!");
-                        vec![self.package_version.clone()]
+                    ExecutionMode::Remove if matches!(phase, "pre-remove" | "post-remove") => {
+                        Ok(vec![self.package_version.clone()])
                     }
+                    ExecutionMode::Upgrade { old_version }
+                        if matches!(phase, "pre-upgrade" | "post-upgrade") =>
+                    {
+                        Ok(vec![self.package_version.clone(), old_version.clone()])
+                    }
+                    ExecutionMode::Install
+                    | ExecutionMode::Remove
+                    | ExecutionMode::Upgrade { .. }
+                    | ExecutionMode::UpgradeRemoval { .. } => Err(unsupported()),
                 }
             }
         }
     }
+}
 
-    /// Generate wrapper script for Arch .INSTALL function libraries
-    ///
-    /// Arch .INSTALL files define functions like post_install(), pre_upgrade(), etc.
-    /// but don't call them. We need to source the file and call the appropriate function.
-    pub(super) fn prepare_arch_wrapper(&self, content: &str, phase: &str) -> String {
-        // Map phase to Arch function name
-        let function_name = match phase {
-            "pre-install" => "pre_install",
-            "post-install" => "post_install",
-            "pre-remove" => "pre_remove",
-            "post-remove" => "post_remove",
-            "pre-upgrade" => "pre_upgrade",
-            "post-upgrade" => "post_upgrade",
-            _ => "post_install", // Fallback
-        };
+fn package_format_name(package_format: PackageFormat) -> &'static str {
+    match package_format {
+        PackageFormat::Conary => "conary",
+        PackageFormat::Rpm => "rpm",
+        PackageFormat::Deb => "deb",
+        PackageFormat::Arch => "arch",
+    }
+}
 
-        format!(
-            "#!/bin/bash\nset -e\n\n# Arch .INSTALL content:\n{}\n\n# Call the function if it exists\nif declare -f {} > /dev/null; then\n    {} \"$@\"\nfi\n",
-            content, function_name, function_name
-        )
+fn execution_mode_name(mode: &ExecutionMode) -> &'static str {
+    match mode {
+        ExecutionMode::Install => "install",
+        ExecutionMode::Remove => "remove",
+        ExecutionMode::Upgrade { .. } => "upgrade",
+        ExecutionMode::UpgradeRemoval { .. } => "upgrade-removal",
     }
 }
 
@@ -112,31 +150,39 @@ mod tests {
             ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
 
         assert_eq!(
-            executor.get_args(&ExecutionMode::Install, "pre-install"),
-            vec!["1"]
+            executor
+                .get_args(&ExecutionMode::Install, "pre-install")
+                .unwrap(),
+            vec!["1".to_string()]
         );
         assert_eq!(
-            executor.get_args(&ExecutionMode::Remove, "pre-remove"),
-            vec!["0"]
+            executor
+                .get_args(&ExecutionMode::Remove, "pre-remove")
+                .unwrap(),
+            vec!["0".to_string()]
         );
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::Upgrade {
-                    old_version: "0.9.0".to_string()
-                },
-                "pre-install"
-            ),
-            vec!["2"]
+            executor
+                .get_args(
+                    &ExecutionMode::Upgrade {
+                        old_version: "0.9.0".to_string()
+                    },
+                    "pre-install"
+                )
+                .unwrap(),
+            vec!["2".to_string()]
         );
         // UpgradeRemoval: old package scripts get $1=1 (NOT 0!)
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::UpgradeRemoval {
-                    new_version: "1.0.0".to_string()
-                },
-                "pre-remove"
-            ),
-            vec!["1"]
+            executor
+                .get_args(
+                    &ExecutionMode::UpgradeRemoval {
+                        new_version: "1.0.0".to_string()
+                    },
+                    "pre-remove"
+                )
+                .unwrap(),
+            vec!["1".to_string()]
         );
     }
 
@@ -147,61 +193,77 @@ mod tests {
 
         // Fresh install
         assert_eq!(
-            executor.get_args(&ExecutionMode::Install, "pre-install"),
-            vec!["install"]
+            executor
+                .get_args(&ExecutionMode::Install, "pre-install")
+                .unwrap(),
+            vec!["install".to_string()]
         );
         assert_eq!(
-            executor.get_args(&ExecutionMode::Install, "post-install"),
-            vec!["configure"]
+            executor
+                .get_args(&ExecutionMode::Install, "post-install")
+                .unwrap(),
+            vec!["configure".to_string()]
         );
 
         // Remove
         assert_eq!(
-            executor.get_args(&ExecutionMode::Remove, "pre-remove"),
-            vec!["remove"]
+            executor
+                .get_args(&ExecutionMode::Remove, "pre-remove")
+                .unwrap(),
+            vec!["remove".to_string()]
         );
         assert_eq!(
-            executor.get_args(&ExecutionMode::Remove, "post-remove"),
-            vec!["remove"]
+            executor
+                .get_args(&ExecutionMode::Remove, "post-remove")
+                .unwrap(),
+            vec!["remove".to_string()]
         );
 
         // Upgrade
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::Upgrade {
-                    old_version: "0.9.0".to_string()
-                },
-                "pre-install"
-            ),
-            vec!["upgrade", "0.9.0"]
+            executor
+                .get_args(
+                    &ExecutionMode::Upgrade {
+                        old_version: "0.9.0".to_string()
+                    },
+                    "pre-install"
+                )
+                .unwrap(),
+            vec!["upgrade".to_string(), "0.9.0".to_string()]
         );
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::Upgrade {
-                    old_version: "0.9.0".to_string()
-                },
-                "post-install"
-            ),
-            vec!["configure", "0.9.0"]
+            executor
+                .get_args(
+                    &ExecutionMode::Upgrade {
+                        old_version: "0.9.0".to_string()
+                    },
+                    "post-install"
+                )
+                .unwrap(),
+            vec!["configure".to_string(), "0.9.0".to_string()]
         );
         // UpgradeRemoval: OLD package scripts get "upgrade <new_version>"
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::UpgradeRemoval {
-                    new_version: "1.0.0".to_string()
-                },
-                "pre-remove"
-            ),
-            vec!["upgrade", "1.0.0"]
+            executor
+                .get_args(
+                    &ExecutionMode::UpgradeRemoval {
+                        new_version: "1.0.0".to_string()
+                    },
+                    "pre-remove"
+                )
+                .unwrap(),
+            vec!["upgrade".to_string(), "1.0.0".to_string()]
         );
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::UpgradeRemoval {
-                    new_version: "1.0.0".to_string()
-                },
-                "post-remove"
-            ),
-            vec!["upgrade", "1.0.0"]
+            executor
+                .get_args(
+                    &ExecutionMode::UpgradeRemoval {
+                        new_version: "1.0.0".to_string()
+                    },
+                    "post-remove"
+                )
+                .unwrap(),
+            vec!["upgrade".to_string(), "1.0.0".to_string()]
         );
     }
 
@@ -211,35 +273,69 @@ mod tests {
             ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
 
         assert_eq!(
-            executor.get_args(&ExecutionMode::Install, "post-install"),
-            vec!["1.0.0"]
+            executor
+                .get_args(&ExecutionMode::Install, "post-install")
+                .unwrap(),
+            vec!["1.0.0".to_string()]
         );
         assert_eq!(
-            executor.get_args(&ExecutionMode::Remove, "pre-remove"),
-            vec!["1.0.0"]
+            executor
+                .get_args(&ExecutionMode::Remove, "pre-remove")
+                .unwrap(),
+            vec!["1.0.0".to_string()]
         );
         assert_eq!(
-            executor.get_args(
-                &ExecutionMode::Upgrade {
-                    old_version: "0.9.0".to_string()
-                },
-                "post-upgrade"
-            ),
-            vec!["1.0.0", "0.9.0"]
+            executor
+                .get_args(
+                    &ExecutionMode::Upgrade {
+                        old_version: "0.9.0".to_string()
+                    },
+                    "post-upgrade"
+                )
+                .unwrap(),
+            vec!["1.0.0".to_string(), "0.9.0".to_string()]
         );
     }
 
     #[test]
-    fn test_arch_wrapper_generation() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
+    fn guessed_lifecycle_arguments_are_rejected() {
+        let conary =
+            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Conary);
+        assert!(
+            conary
+                .get_args(&ExecutionMode::Install, "post-install")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported conary lifecycle phase 'post-install' for install")
+        );
 
-        let content = "post_install() {\n    echo \"Hello\"\n}";
-        let wrapper = executor.prepare_arch_wrapper(content, "post-install");
+        let rpm = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm);
+        assert!(
+            rpm.get_args(&ExecutionMode::Install, "trigger")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported rpm lifecycle phase 'trigger' for install")
+        );
 
-        assert!(wrapper.contains("#!/bin/bash"));
-        assert!(wrapper.contains("set -e"));
-        assert!(wrapper.contains(content));
-        assert!(wrapper.contains("post_install \"$@\""));
+        let deb = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb);
+        assert!(
+            deb.get_args(&ExecutionMode::Install, "trigger")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported deb lifecycle phase 'trigger' for install")
+        );
+
+        let arch = ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
+        assert!(
+            arch.get_args(
+                &ExecutionMode::UpgradeRemoval {
+                    new_version: "2.0.0".to_string(),
+                },
+                "pre-remove",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported arch lifecycle phase 'pre-remove' for upgrade-removal")
+        );
     }
 }

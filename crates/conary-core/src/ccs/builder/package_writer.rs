@@ -5,27 +5,11 @@
 //! `builder.rs` focuses on scanning and assembling build state; this module
 //! owns the final archive-writing and manifest serialization steps.
 
-use super::{BuildResult, BuilderError};
-use crate::ccs::manifest::parse_octal_mode;
-use crate::hash;
+use super::BuildResult;
 use anyhow::{Context, Result};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-
-/// Write a CCS package to disk (unsigned).
-pub fn write_ccs_package(result: &BuildResult, output_path: &Path) -> Result<()> {
-    write_ccs_package_internal(result, output_path, None)
-}
-
-/// Write a signed CCS package to disk.
-pub fn write_signed_ccs_package(
-    result: &BuildResult,
-    output_path: &Path,
-    signing_key: &super::super::signing::SigningKeyPair,
-) -> Result<()> {
-    write_ccs_package_internal(result, output_path, Some(signing_key))
-}
 
 pub fn write_v2_ccs_package(
     authority: &crate::ccs::v2::AuthorityDocumentV2,
@@ -36,8 +20,67 @@ pub fn write_v2_ccs_package(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<()> {
-    use crate::ccs::builder::{ComponentData, FileEntry, FileType};
-    use crate::ccs::v2::schema::{FileTypeV2, PackageKindV2};
+    write_v2_ccs_package_with_open(
+        authority,
+        output_path,
+        signing_key,
+        debug_toml,
+        build_attestation,
+        foreign_conversion_boundary,
+        |path| {
+            let payload = payloads_by_path
+                .get(path)
+                .with_context(|| format!("missing payload for {path}"))?;
+            Ok(Box::new(std::io::Cursor::new(payload.as_slice())) as Box<dyn std::io::Read>)
+        },
+    )
+}
+
+/// Emit a signed CCS archive from independently reopenable payload sources.
+pub fn write_v2_ccs_package_from_sources(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    payloads: &[crate::packages::payload::PackagePayloadFile],
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    debug_toml: Option<&str>,
+    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+) -> Result<()> {
+    let mut by_path = std::collections::HashMap::with_capacity(payloads.len());
+    for file in payloads {
+        if by_path.insert(file.path.as_str(), file).is_some() {
+            anyhow::bail!("payload source path {} appears more than once", file.path);
+        }
+    }
+    write_v2_ccs_package_with_open(
+        authority,
+        output_path,
+        signing_key,
+        debug_toml,
+        build_attestation,
+        foreign_conversion_boundary,
+        |path| {
+            by_path
+                .get(path)
+                .with_context(|| format!("missing payload source for {path}"))?
+                .open_content()
+                .map(|reader| reader as Box<dyn std::io::Read>)
+                .map_err(anyhow::Error::from)
+        },
+    )
+}
+
+fn write_v2_ccs_package_with_open<'a>(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    debug_toml: Option<&str>,
+    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+    mut open_payload: impl FnMut(&str) -> Result<Box<dyn std::io::Read + 'a>>,
+) -> Result<()> {
+    use crate::ccs::builder::{ComponentData, FileEntry};
+    use crate::ccs::v2::schema::PackageKindV2;
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::collections::BTreeMap;
@@ -89,43 +132,36 @@ pub fn write_v2_ccs_package(
         .collect();
 
     let objects_dir = temp_dir.path().join("objects");
+    let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
     for file in &data.files {
         let entry = FileEntry {
             path: file.path.clone(),
-            hash: file.sha256.clone(),
-            size: file.size,
-            mode: file.mode,
+            node: file.node.clone(),
+            content: file.content.clone(),
             component: file.component.clone(),
-            file_type: match file.file_type {
-                FileTypeV2::Regular => FileType::Regular,
-                FileTypeV2::Directory => FileType::Directory,
-                FileTypeV2::Symlink => FileType::Symlink,
-            },
-            target: file.symlink_target.clone(),
             chunks: None,
         };
-        if matches!(file.file_type, FileTypeV2::Regular) {
-            let payload = payloads_by_path
-                .get(&file.path)
-                .with_context(|| format!("missing payload for {}", file.path))?;
-            if crate::hash::sha256(payload) != file.sha256 || payload.len() as u64 != file.size {
-                anyhow::bail!(
-                    "payload for {} does not match signed v2 authority",
+        if file.node.kind.is_regular() {
+            let content = file.content.as_ref().with_context(|| {
+                format!(
+                    "regular payload node {} has no content authority",
                     file.path
-                );
-            }
-            if file.sha256.len() < 2 {
-                anyhow::bail!("invalid signed v2 sha256 for {}", file.path);
-            }
-            let (prefix, suffix) = file.sha256.split_at(2);
-            let object_dir = objects_dir.join(prefix);
-            fs::create_dir_all(&object_dir)?;
-            fs::write(object_dir.join(suffix), payload)?;
+                )
+            })?;
+            let mut reader = open_payload(&file.path)?;
+            object_store
+                .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
+                .with_context(|| {
+                    format!(
+                        "payload for {} does not match signed v2 authority",
+                        file.path
+                    )
+                })?;
         }
         let component = components
             .get_mut(&file.component)
             .with_context(|| format!("missing component {}", file.component))?;
-        component.size += file.size;
+        component.size += file.content.as_ref().map_or(0, |content| content.size);
         component.files.push(entry);
     }
 
@@ -144,9 +180,43 @@ pub fn write_v2_ccs_package(
     let output_file = fs::File::create(output_path)?;
     let encoder = GzEncoder::new(output_file, Compression::default());
     let mut archive = Builder::new(encoder);
-    archive.append_dir_all(".", temp_dir.path())?;
+    let timestamp = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1_704_067_200);
+    append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
     archive.into_inner()?.finish()?;
     Ok(())
+}
+
+/// Project a builder result into the sole current CCS archive contract and
+/// authenticate it with the supplied authority key.
+pub fn write_signed_current_ccs_package(
+    result: &BuildResult,
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    local_dev: bool,
+) -> Result<()> {
+    let debug_toml = result
+        .manifest
+        .to_toml()
+        .context("serialize CCS diagnostic projection")?;
+    let projected = crate::ccs::v2::project_build_result_to_v2(crate::ccs::v2::V2AuthoringInput {
+        build: result,
+        local_dev,
+        debug_toml: Some(debug_toml),
+    })
+    .context("project current CCS v2 authority")?;
+    let provenance = result.manifest.provenance.as_ref();
+    write_v2_ccs_package(
+        &projected.authority,
+        &projected.payloads_by_path,
+        output_path,
+        signing_key,
+        projected.debug_toml.as_deref(),
+        provenance.and_then(|value| value.build_attestation.as_ref()),
+        provenance.and_then(|value| value.foreign_conversion_boundary.as_ref()),
+    )
 }
 
 /// Print a concise build summary.
@@ -192,99 +262,65 @@ pub fn print_build_summary(result: &BuildResult) {
     }
 }
 
-fn write_ccs_package_internal(
-    result: &BuildResult,
-    output_path: &Path,
-    signing_key: Option<&super::super::signing::SigningKeyPair>,
-) -> Result<()> {
-    use crate::ccs::binary_manifest::{ComponentRef, Hash, MerkleTree};
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-    use std::collections::BTreeMap;
-    use tar::Builder;
-
-    let temp_dir = tempfile::tempdir()?;
-
-    let components_dir = temp_dir.path().join("components");
-    fs::create_dir_all(&components_dir)?;
-
-    let mut component_refs: BTreeMap<String, ComponentRef> = BTreeMap::new();
-    let default_components = &result.manifest.components.default;
-
-    for (name, component) in &result.components {
-        let component_json = serde_json::to_string_pretty(component)?;
-        let component_path = components_dir.join(format!("{}.json", name));
-        fs::write(&component_path, &component_json)?;
-
-        let hash = Hash::sha256(component_json.as_bytes());
-        component_refs.insert(
-            name.clone(),
-            ComponentRef {
-                hash,
-                file_count: component.files.len() as u32,
-                total_size: component.size,
-                default: default_components.contains(name),
-            },
-        );
-    }
-
-    let content_root = MerkleTree::calculate_root(&component_refs);
-    let mut binary_manifest = build_binary_manifest(result, component_refs, content_root)?;
-
-    let manifest_toml = result.manifest.to_toml()?;
-    binary_manifest.toml_integrity_hash = Some(hash::sha256(manifest_toml.as_bytes()));
-
-    let manifest_cbor = binary_manifest
-        .to_cbor()
-        .map_err(|e| BuilderError::ManifestEncoding(e.to_string()))?;
-    fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
-    fs::write(temp_dir.path().join("MANIFEST.toml"), &manifest_toml)?;
-
-    if let Some(key) = signing_key {
-        let signature = key.sign(&manifest_cbor);
-        let sig_json = serde_json::to_string_pretty(&signature)?;
-        fs::write(temp_dir.path().join("MANIFEST.sig"), &sig_json)?;
-    }
-
-    let objects_dir = temp_dir.path().join("objects");
-    fs::create_dir_all(&objects_dir)?;
-
-    for (hash, content) in &result.blobs {
-        let blob_path = crate::filesystem::object_path(&objects_dir, hash)?;
-        if let Some(parent) = blob_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&blob_path, content)?;
-    }
-
-    let output_file = fs::File::create(output_path)?;
-    let encoder = GzEncoder::new(output_file, Compression::default());
-    let mut archive = Builder::new(encoder);
-
-    if result.manifest.policy.normalize_timestamps {
-        let timestamp = std::env::var("SOURCE_DATE_EPOCH")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(1704067200);
-        append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
-    } else {
-        archive.append_dir_all(".", temp_dir.path())?;
-    }
-
-    let encoder = archive.into_inner()?;
-    encoder.finish()?;
-
-    Ok(())
-}
-
 fn append_dir_with_mtime<W: std::io::Write>(
     archive: &mut tar::Builder<W>,
     base_path: &Path,
     archive_path: &str,
     mtime: u64,
 ) -> Result<()> {
-    for entry in fs::read_dir(base_path)? {
-        let entry = entry?;
+    let mut entries = Vec::new();
+    collect_archive_entries(base_path, archive_path, &mut entries)?;
+    for directories in [true, false] {
+        for (path, entry_archive_path, file_type) in &entries {
+            if file_type.is_dir() != directories {
+                continue;
+            }
+            if file_type.is_dir() {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_mode(0o755);
+                header.set_size(0);
+                header.set_mtime(mtime);
+                header.set_cksum();
+
+                archive.append_data(&mut header, entry_archive_path, std::io::empty())?;
+            } else if file_type.is_file() {
+                let metadata = fs::metadata(path)?;
+                let mut content = fs::File::open(path)?;
+
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_mode(metadata.permissions().mode());
+                header.set_size(metadata.len());
+                header.set_mtime(mtime);
+                header.set_cksum();
+
+                archive.append_data(&mut header, entry_archive_path, &mut content)?;
+            } else if file_type.is_symlink() {
+                let target = fs::read_link(path)?;
+
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_mode(0o777);
+                header.set_size(0);
+                header.set_mtime(mtime);
+                header.set_cksum();
+
+                archive.append_link(&mut header, entry_archive_path, &target)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_archive_entries(
+    base_path: &Path,
+    archive_path: &str,
+    collected: &mut Vec<(std::path::PathBuf, String, std::fs::FileType)>,
+) -> Result<()> {
+    let mut entries = fs::read_dir(base_path)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
         let file_type = entry.file_type()?;
         let file_name = entry.file_name();
         let file_name_str = file_name.to_string_lossy();
@@ -294,230 +330,14 @@ fn append_dir_with_mtime<W: std::io::Write>(
         } else {
             format!("{}/{}", archive_path, file_name_str)
         };
-
+        let path = entry.path();
+        collected.push((path.clone(), entry_archive_path.clone(), file_type));
         if file_type.is_dir() {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Directory);
-            header.set_mode(0o755);
-            header.set_size(0);
-            header.set_mtime(mtime);
-            header.set_cksum();
-
-            archive.append_data(&mut header, &entry_archive_path, std::io::empty())?;
-            append_dir_with_mtime(archive, &entry.path(), &entry_archive_path, mtime)?;
-        } else if file_type.is_file() {
-            let content = fs::read(entry.path())?;
-            let metadata = entry.metadata()?;
-
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Regular);
-            header.set_mode(metadata.permissions().mode());
-            header.set_size(content.len() as u64);
-            header.set_mtime(mtime);
-            header.set_cksum();
-
-            archive.append_data(&mut header, &entry_archive_path, content.as_slice())?;
-        } else if file_type.is_symlink() {
-            let target = fs::read_link(entry.path())?;
-
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_mode(0o777);
-            header.set_size(0);
-            header.set_mtime(mtime);
-            header.set_cksum();
-
-            archive.append_link(&mut header, &entry_archive_path, &target)?;
+            collect_archive_entries(&path, &entry_archive_path, collected)?;
         }
     }
 
     Ok(())
-}
-
-fn build_binary_manifest(
-    result: &BuildResult,
-    components: std::collections::BTreeMap<String, super::super::binary_manifest::ComponentRef>,
-    content_root: super::super::binary_manifest::Hash,
-) -> Result<super::super::binary_manifest::BinaryManifest> {
-    use crate::ccs::binary_manifest::{
-        BinaryBuildInfo, BinaryCapability, BinaryManifest, BinaryPlatform, BinaryRequirement,
-        FORMAT_VERSION,
-    };
-
-    let manifest = &result.manifest;
-
-    let platform = manifest.package.platform.as_ref().map(|p| BinaryPlatform {
-        os: p.os.clone(),
-        arch: p.arch.clone(),
-        libc: p.libc.clone(),
-        abi: p.abi.clone(),
-    });
-
-    let provides: Vec<BinaryCapability> = manifest
-        .provides
-        .capabilities
-        .iter()
-        .map(|cap| BinaryCapability {
-            name: cap.clone(),
-            version: None,
-        })
-        .collect();
-
-    let requires: Vec<BinaryRequirement> = manifest
-        .requires
-        .capabilities
-        .iter()
-        .map(|cap| BinaryRequirement {
-            name: cap.name().to_string(),
-            version: cap.version().map(String::from),
-            kind: "capability".to_string(),
-        })
-        .chain(
-            manifest
-                .requires
-                .packages
-                .iter()
-                .map(|pkg| BinaryRequirement {
-                    name: pkg.name.clone(),
-                    version: pkg.version.clone(),
-                    kind: "package".to_string(),
-                }),
-        )
-        .collect();
-
-    let binary_hooks = convert_hooks_to_binary(&manifest.hooks)?;
-
-    let build = manifest.build.as_ref().map(|b| BinaryBuildInfo {
-        source: b.source.clone(),
-        commit: b.commit.clone(),
-        timestamp: b.timestamp.clone(),
-        reproducible: b.reproducible,
-    });
-
-    Ok(BinaryManifest {
-        format_version: FORMAT_VERSION,
-        name: manifest.package.name.clone(),
-        version: manifest.package.version.clone(),
-        description: manifest.package.description.clone(),
-        license: manifest.package.license.clone(),
-        platform,
-        provides,
-        requires,
-        components,
-        hooks: binary_hooks,
-        build,
-        capabilities: manifest.capabilities.clone(),
-        content_root,
-        toml_integrity_hash: None,
-    })
-}
-
-fn convert_hooks_to_binary(
-    hooks: &crate::ccs::manifest::Hooks,
-) -> crate::Result<Option<super::super::binary_manifest::BinaryHooks>> {
-    use crate::ccs::binary_manifest::{
-        BinaryAlternativeHook, BinaryDirectoryHook, BinaryGroupHook, BinaryHooks,
-        BinaryServiceHook, BinarySysctlHook, BinarySystemdHook, BinaryTmpfilesHook, BinaryUserHook,
-    };
-
-    let binary = BinaryHooks {
-        users: hooks
-            .users
-            .iter()
-            .map(|u| BinaryUserHook {
-                name: u.name.clone(),
-                system: u.system,
-                home: u.home.clone(),
-                shell: u.shell.clone(),
-                group: u.group.clone(),
-                reversible: u.reversible,
-            })
-            .collect(),
-        groups: hooks
-            .groups
-            .iter()
-            .map(|g| BinaryGroupHook {
-                name: g.name.clone(),
-                system: g.system,
-                reversible: g.reversible,
-            })
-            .collect(),
-        directories: hooks
-            .directories
-            .iter()
-            .map(|d| {
-                Ok(BinaryDirectoryHook {
-                    path: d.path.clone(),
-                    mode: parse_octal_mode(&d.mode)?,
-                    owner: d.owner.clone(),
-                    group: d.group.clone(),
-                    reversible: d.reversible,
-                })
-            })
-            .collect::<crate::Result<Vec<_>>>()?,
-        services: hooks
-            .services
-            .iter()
-            .map(|s| BinaryServiceHook {
-                name: s.name.clone(),
-                action: s.action.clone(),
-                reversible: s.reversible,
-            })
-            .collect(),
-        systemd: hooks
-            .systemd
-            .iter()
-            .map(|s| BinarySystemdHook {
-                unit: s.unit.clone(),
-                enable: s.enable,
-                reversible: s.reversible,
-            })
-            .collect(),
-        tmpfiles: hooks
-            .tmpfiles
-            .iter()
-            .map(|t| {
-                Ok(BinaryTmpfilesHook {
-                    entry_type: t.entry_type.clone(),
-                    path: t.path.clone(),
-                    mode: parse_octal_mode(&t.mode)?,
-                    owner: t.owner.clone(),
-                    group: t.group.clone(),
-                    reversible: t.reversible,
-                })
-            })
-            .collect::<crate::Result<Vec<_>>>()?,
-        sysctl: hooks
-            .sysctl
-            .iter()
-            .map(|s| BinarySysctlHook {
-                key: s.key.clone(),
-                value: s.value.clone(),
-                only_if_lower: s.only_if_lower,
-                reversible: s.reversible,
-            })
-            .collect(),
-        alternatives: hooks
-            .alternatives
-            .iter()
-            .map(|a| BinaryAlternativeHook {
-                name: a.name.clone(),
-                path: a.path.clone(),
-                priority: a.priority,
-                reversible: a.reversible,
-            })
-            .collect(),
-        post_install: hooks.post_install.as_ref().map(|h| h.script.clone()),
-        post_install_reversible: hooks.post_install.as_ref().and_then(|h| h.reversible),
-        pre_remove: hooks.pre_remove.as_ref().map(|h| h.script.clone()),
-        pre_remove_reversible: hooks.pre_remove.as_ref().and_then(|h| h.reversible),
-    };
-
-    if binary.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(binary))
-    }
 }
 
 #[cfg(test)]
@@ -537,20 +357,19 @@ mod tests {
             &payloads,
             &path,
             &key,
-            Some("[package]\nname = \"hello-v2\"\nversion = \"1.0.0\"\ndescription = \"debug\"\n"),
+            Some(
+                "[package]\nname = \"hello-v2\"\nversion = \"1.0.0\"\nversion_scheme = \"conary\"\ndescription = \"debug\"\n",
+            ),
             None,
             None,
         )
         .unwrap();
 
-        let contents =
-            crate::ccs::archive_reader::read_ccs_archive(std::fs::File::open(path).unwrap())
-                .unwrap();
-        assert_eq!(
-            contents.v2_authority.as_ref().unwrap().identity.name,
-            "hello-v2"
-        );
-        assert!(contents.binary_manifest.is_none());
+        let contents = crate::ccs::archive_reader::inspect_untrusted_ccs_archive(
+            std::fs::File::open(path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(contents.v2_authority.identity.name, "hello-v2");
         assert_eq!(contents.components["main"].files.len(), 1);
         assert!(
             contents

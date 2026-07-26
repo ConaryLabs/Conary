@@ -6,11 +6,16 @@
 //! using the `pacman` command-line tool for Arch Linux systems.
 
 use crate::error::{Error, Result};
+use crate::packages::InstalledPackageIdentity;
 use crate::packages::archive_utils::get_file_metadata;
-use crate::packages::query_common::{DependencyInfo, InstalledFileInfo, run_query_command};
-use std::collections::HashMap;
+use crate::packages::install_reason::{InstallReasonAuthorityError, query_package_names};
+use crate::packages::query_common::{InstalledFileInfo, InstalledPackageRecord};
+use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::requirement::parse_native_requirement;
+use crate::repository::versioning::VersionScheme;
+use std::collections::HashSet;
 use std::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Information about an installed pacman package
 #[derive(Debug, Clone)]
@@ -36,27 +41,13 @@ impl InstalledPacmanInfo {
     }
 }
 
-/// List all installed package names
-pub fn list_installed_packages() -> Result<Vec<String>> {
-    debug!("Querying installed pacman packages");
-
-    let stdout = run_query_command("pacman", &["-Qq"])?;
-    let packages: Vec<String> = stdout
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    debug!("Found {} installed packages", packages.len());
-    Ok(packages)
-}
-
 /// Query detailed information about an installed package
-pub fn query_package(name: &str) -> Result<InstalledPacmanInfo> {
+pub fn query_package(name: &str) -> Result<InstalledPackageRecord<InstalledPacmanInfo>> {
     debug!("Querying package info: {}", name);
 
     let output = Command::new("pacman")
         .args(["-Qi", name])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
@@ -67,57 +58,23 @@ pub fn query_package(name: &str) -> Result<InstalledPacmanInfo> {
         )));
     }
 
-    let info_str = String::from_utf8_lossy(&output.stdout);
-    let matched_names = info_str
-        .lines()
-        .filter_map(|line| {
-            let (key, value) = line.split_once(':')?;
-            (key.trim() == "Name").then(|| value.trim().to_string())
-        })
-        .collect::<Vec<_>>();
-    if matched_names.len() > 1 {
+    let info_str = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("pacman -Qi output is not UTF-8: {error}")))?;
+    let mut records = parse_all_package_info(&info_str)?;
+    if records.len() > 1 {
         return Err(Error::ConflictError(format!(
             "Package '{name}' matches multiple installed pacman packages: {}. Use an exact native package name.",
-            matched_names.join(", ")
+            records
+                .iter()
+                .map(|record| record.identity.selector())
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     }
-    let mut pkg_name = name.to_string();
-    let mut version = String::new();
-    let mut arch = String::new();
-    let mut description = None;
-    let mut url = None;
-    let mut licenses = None;
-    let mut installed_size = None;
-
-    for line in info_str.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            let key = key.trim();
-            let value = value.trim();
-
-            match key {
-                "Name" => pkg_name = value.to_string(),
-                "Version" => version = value.to_string(),
-                "Architecture" => arch = value.to_string(),
-                "Description" => description = Some(value.to_string()),
-                "URL" => url = Some(value.to_string()),
-                "Licenses" => licenses = Some(value.to_string()),
-                "Installed Size" => {
-                    // Parse size like "1.5 MiB" or "100 KiB"
-                    installed_size = parse_size(value);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(InstalledPacmanInfo {
-        name: pkg_name,
-        version,
-        arch,
-        description,
-        url,
-        licenses,
-        installed_size,
+    records.pop().ok_or_else(|| {
+        Error::NotFound(format!(
+            "Package '{name}' returned no pacman database record"
+        ))
     })
 }
 
@@ -146,6 +103,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
 
     let output = Command::new("pacman")
         .args(["-Ql", name])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
@@ -156,35 +114,58 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
         )));
     }
 
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("pacman -Ql output is not UTF-8: {error}")))?;
     let mut files = Vec::new();
 
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for (index, line) in stdout.lines().enumerate() {
         // Format: "package_name /path/to/file"
-        let parts: Vec<&str> = line.splitn(2, ' ').collect();
-        if parts.len() != 2 {
-            continue;
+        let (reported_name, reported_path) = line.split_once(' ').ok_or_else(|| {
+            Error::ParseError(format!(
+                "pacman -Ql record {} is outside the documented package/path grammar",
+                index + 1
+            ))
+        })?;
+        if reported_name != name {
+            return Err(Error::ConflictError(format!(
+                "pacman -Ql query for '{name}' returned a record owned by '{reported_name}'"
+            )));
         }
-
-        let path = parts[1].trim().to_string();
-        if path.is_empty() || path.ends_with('/') {
-            // Skip directories
-            continue;
+        let mut path = reported_path;
+        if path.is_empty() {
+            return Err(Error::ParseError(format!(
+                "pacman -Ql record {} has an empty path",
+                index + 1
+            )));
         }
+        if path.len() > 1 {
+            path = path.trim_end_matches('/');
+        }
+        let path = path.to_string();
 
-        // Get file metadata (skip files that cannot be stat'd, e.g., broken symlinks)
-        let (size, mode) = match get_file_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        // Try to get mtree digest
-        let digest = get_file_digest(name, &path);
+        let (size, mode) = get_file_metadata(&path).map_err(|error| {
+            Error::IoError(format!(
+                "pacman record '{name}' owns '{path}', but its exact live metadata is unavailable: {error}"
+            ))
+        })?;
 
         // Check if this is a symlink and get target
         let link_target = if (mode & 0o170000) == 0o120000 {
-            std::fs::read_link(&path)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
+            Some(
+                std::fs::read_link(&path)
+                    .map_err(|error| {
+                        Error::IoError(format!(
+                            "failed to read exact symlink target for pacman path '{path}': {error}"
+                        ))
+                    })?
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| {
+                        Error::ParseError(format!(
+                            "pacman path '{path}' has a non-UTF-8 symlink target"
+                        ))
+                    })?,
+            )
         } else {
             None
         };
@@ -193,7 +174,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             path,
             size,
             mode,
-            digest,
+            digest: None,
             user: None,
             group: None,
             link_target,
@@ -205,120 +186,34 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
     Ok(files)
 }
 
-/// Get file digest from pacman mtree database
-fn get_file_digest(package: &str, path: &str) -> Option<String> {
-    // Pacman stores mtree files in /var/lib/pacman/local/<package>-<version>/mtree
-    // This is complex to parse, so for now return None
-    // A full implementation would decompress and parse the mtree file
-    let _ = (package, path);
-    None
-}
-
-/// Query dependencies of an installed package (names only)
-pub fn query_package_dependencies(name: &str) -> Result<Vec<String>> {
-    debug!("Querying dependencies for package: {}", name);
-
+/// Query ALPM's installed runtime requirements as exact typed atoms.
+pub fn query_package_requirement_groups(name: &str) -> Result<Vec<RepositoryRequirementGroup>> {
     let output = Command::new("pacman")
         .args(["-Qi", name])
+        .env("LC_ALL", "C")
         .output()
-        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
-
+        .map_err(|error| Error::InitError(format!("Failed to run pacman: {error}")))?;
     if !output.status.success() {
         return Err(Error::NotFound(format!(
-            "Package '{}' not found in pacman database",
-            name
+            "Package '{name}' not found in pacman database"
         )));
     }
 
-    let info_str = String::from_utf8_lossy(&output.stdout);
-    let mut deps = Vec::new();
-
-    for line in info_str.lines() {
-        if let Some((key, value)) = line.split_once(':')
-            && key.trim() == "Depends On"
-        {
-            // Parse dependencies (space-separated, may include version constraints)
-            deps = value
-                .split_whitespace()
-                .filter(|s| *s != "None")
-                .map(|s| {
-                    // Remove version constraints like ">=1.0"
-                    s.split(['>', '<', '=']).next().unwrap_or(s).to_string()
-                })
-                .collect();
-            break;
-        }
-    }
-
-    debug!("Found {} dependencies for package {}", deps.len(), name);
-    Ok(deps)
-}
-
-/// Query dependencies of an installed package with full version constraints
-pub fn query_package_dependencies_full(name: &str) -> Result<Vec<DependencyInfo>> {
-    debug!(
-        "Querying dependencies with constraints for package: {}",
-        name
-    );
-
-    let output = Command::new("pacman")
-        .args(["-Qi", name])
-        .output()
-        .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(Error::NotFound(format!(
-            "Package '{}' not found in pacman database",
-            name
-        )));
-    }
-
-    let info_str = String::from_utf8_lossy(&output.stdout);
-    let mut deps = Vec::new();
-
-    for line in info_str.lines() {
-        if let Some((key, value)) = line.split_once(':')
-            && key.trim() == "Depends On"
-        {
-            // Parse dependencies (space-separated, may include version constraints)
-            deps = value
-                .split_whitespace()
-                .filter(|s| *s != "None")
-                .map(parse_pacman_dependency)
-                .collect();
-            break;
-        }
-    }
-
-    debug!(
-        "Found {} dependencies with constraints for package {}",
-        deps.len(),
-        name
-    );
-    Ok(deps)
-}
-
-/// Parse a pacman dependency string like "package>=1.0" into DependencyInfo
-fn parse_pacman_dependency(dep: &str) -> DependencyInfo {
-    // Pacman dependency format: "package[op version]" (no spaces)
-    // Examples: "glibc>=2.17", "bash", "perl>5.10"
-    if let Some(pos) = dep.find(['>', '<', '=']) {
-        let name = dep[..pos].to_string();
-        let constraint = dep[pos..].to_string();
-        DependencyInfo {
-            name,
-            constraint: if constraint.is_empty() {
-                None
-            } else {
-                Some(constraint)
-            },
-        }
-    } else {
-        DependencyInfo {
-            name: dep.to_string(),
-            constraint: None,
-        }
-    }
+    let info = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("pacman -Qi output is not UTF-8: {error}")))?;
+    let depends = parse_pacman_info_field(&info, "Depends On")?;
+    depends
+        .split_whitespace()
+        .filter(|requirement| *requirement != "None")
+        .map(|requirement| {
+            parse_native_requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Arch,
+                requirement,
+            )
+            .map_err(Error::ParseError)
+        })
+        .collect()
 }
 
 /// Query what a package provides (capabilities it offers)
@@ -331,6 +226,7 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     // Use pacman -Qi and extract the Provides line
     let output = Command::new("pacman")
         .args(["-Qi", name])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
@@ -342,125 +238,254 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut provides = Vec::new();
-
-    // Add the package name itself as a provide
-    provides.push(name.to_string());
-
-    for line in stdout.lines() {
-        if line.starts_with("Provides") {
-            // Format: "Provides        : foo  bar  baz" or "Provides        : None"
-            if let Some(values) = line.split(':').nth(1) {
-                let values = values.trim();
-                if values != "None" {
-                    for provide in values.split_whitespace() {
-                        if !provide.is_empty() {
-                            provides.push(provide.to_string());
-                        }
-                    }
-                }
-            }
-            break;
-        }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("pacman -Qi output is not UTF-8: {error}")))?;
+    let values = parse_pacman_info_field(&stdout, "Provides")?;
+    let mut provides = vec![name.to_string()];
+    if values != "None" {
+        provides.extend(values.split_whitespace().map(str::to_string));
     }
 
     debug!("Package {} provides {} capabilities", name, provides.len());
     Ok(provides)
 }
 
-/// Query all installed packages with their basic info
-/// Returns a map of package name -> InstalledPacmanInfo
-pub fn query_all_packages() -> Result<HashMap<String, InstalledPacmanInfo>> {
-    debug!("Querying all installed pacman packages with info");
-
-    // Use pacman -Q to get all packages with versions
-    let stdout = run_query_command("pacman", &["-Q"])?;
-
-    let mut packages = HashMap::new();
-
-    for line in stdout.lines() {
-        // Format: "package_name version"
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
-            warn!("Skipping malformed pacman output line: {}", line);
+fn parse_pacman_info_field(output: &str, requested_key: &str) -> Result<String> {
+    let mut value: Option<String> = None;
+    let mut collecting = false;
+    for (index, line) in output.lines().enumerate() {
+        if line
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            if collecting {
+                let continuation = line.trim();
+                if !continuation.is_empty() {
+                    let target = value.as_mut().expect("collecting field has value");
+                    if !target.is_empty() {
+                        target.push(' ');
+                    }
+                    target.push_str(continuation);
+                }
+            }
             continue;
         }
+        let (key, field_value) = line.split_once(':').ok_or_else(|| {
+            Error::ParseError(format!(
+                "pacman -Qi line {} is outside the documented key/value grammar",
+                index + 1
+            ))
+        })?;
+        collecting = key.trim() == requested_key;
+        if collecting && value.replace(field_value.trim().to_string()).is_some() {
+            return Err(Error::ParseError(format!(
+                "pacman -Qi repeats required field '{requested_key}'"
+            )));
+        }
+    }
+    value.ok_or_else(|| {
+        Error::ParseError(format!(
+            "pacman -Qi omitted required field '{requested_key}'"
+        ))
+    })
+}
 
-        let name = parts[0].to_string();
-        let version = parts[1].to_string();
+/// Query every installed pacman database record without collapsing variants.
+pub fn query_all_packages() -> Result<Vec<InstalledPackageRecord<InstalledPacmanInfo>>> {
+    debug!("Querying all installed pacman packages with info");
 
+    // `pacman -Qi` reads every record from ALPM's local package database and
+    // includes each package's exact Architecture field. Force the documented
+    // C field names so parsing never depends on the operator's locale.
+    let output = Command::new("pacman")
+        .arg("-Qi")
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|error| Error::InitError(format!("Failed to run pacman -Qi: {error}")))?;
+    if !output.status.success() {
+        return Err(Error::InitError(format!(
+            "pacman -Qi failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("pacman -Qi output is not UTF-8: {error}")))?;
+    let packages = parse_all_package_info(&stdout)?;
+    debug!("Queried {} installed packages", packages.len());
+    Ok(packages)
+}
+
+#[derive(Default)]
+struct PacmanInfoFields {
+    name: Option<String>,
+    version: Option<String>,
+    arch: Option<String>,
+    description: Option<String>,
+    url: Option<String>,
+    licenses: Option<String>,
+    installed_size: Option<String>,
+}
+
+fn parse_all_package_info(
+    output: &str,
+) -> Result<Vec<InstalledPackageRecord<InstalledPacmanInfo>>> {
+    fn finish_record(
+        fields: &mut PacmanInfoFields,
+        packages: &mut Vec<InstalledPackageRecord<InstalledPacmanInfo>>,
+        selectors: &mut HashSet<String>,
+        record: usize,
+    ) -> Result<()> {
+        if fields.name.is_none()
+            && fields.version.is_none()
+            && fields.arch.is_none()
+            && fields.description.is_none()
+            && fields.url.is_none()
+            && fields.licenses.is_none()
+            && fields.installed_size.is_none()
+        {
+            return Ok(());
+        }
+
+        let name = fields.name.take().ok_or_else(|| {
+            Error::ParseError(format!("pacman -Qi record {record} has no Name field"))
+        })?;
+        let version = fields.version.take().ok_or_else(|| {
+            Error::ParseError(format!(
+                "pacman -Qi record {record} for '{name}' has no Version field"
+            ))
+        })?;
+        let arch = fields.arch.take().ok_or_else(|| {
+            Error::ParseError(format!(
+                "pacman -Qi record {record} for '{name}' has no Architecture field"
+            ))
+        })?;
+        if name.is_empty() || version.is_empty() || arch.is_empty() {
+            return Err(Error::ParseError(format!(
+                "pacman -Qi record {record} has an empty required Name, Version, or Architecture field"
+            )));
+        }
+
+        let identity = InstalledPackageIdentity::pacman(&name, &name, &version, &arch)?;
+        if !selectors.insert(identity.selector().to_string()) {
+            return Err(Error::ConflictError(format!(
+                "pacman -Qi reported duplicate installed package identity '{name}'"
+            )));
+        }
+        let installed_size = match fields.installed_size.take() {
+            Some(value) => Some(parse_size(&value).ok_or_else(|| {
+                Error::ParseError(format!(
+                    "pacman -Qi record {record} for '{name}' has invalid Installed Size {value:?}"
+                ))
+            })?),
+            None => None,
+        };
         let info = InstalledPacmanInfo {
             name: name.clone(),
             version,
-            arch: std::env::consts::ARCH.to_string(), // Pacman -Q doesn't show arch, assume native
-            description: None,
-            url: None,
-            licenses: None,
-            installed_size: None,
+            arch,
+            description: fields.description.take().filter(|value| value != "None"),
+            url: fields.url.take().filter(|value| value != "None"),
+            licenses: fields.licenses.take().filter(|value| value != "None"),
+            installed_size,
         };
-
-        packages.insert(name, info);
+        packages.push(InstalledPackageRecord { identity, info });
+        Ok(())
     }
 
-    debug!("Queried {} installed packages", packages.len());
+    let mut packages = Vec::new();
+    let mut selectors = HashSet::new();
+    let mut fields = PacmanInfoFields::default();
+    let mut record = 1;
+    for (line_index, line) in output.lines().enumerate() {
+        if line.is_empty() {
+            finish_record(&mut fields, &mut packages, &mut selectors, record)?;
+            fields = PacmanInfoFields::default();
+            record += 1;
+            continue;
+        }
+        if line
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            // Continuation lines belong to descriptive fields that are not
+            // package identity authority.
+            continue;
+        }
+        let (key, value) = line.split_once(':').ok_or_else(|| {
+            Error::ParseError(format!(
+                "pacman -Qi line {} is outside the documented key/value grammar: {line:?}",
+                line_index + 1
+            ))
+        })?;
+        let value = value.trim().to_string();
+        let target = match key.trim() {
+            "Name" => Some(&mut fields.name),
+            "Version" => Some(&mut fields.version),
+            "Architecture" => Some(&mut fields.arch),
+            "Description" => Some(&mut fields.description),
+            "URL" => Some(&mut fields.url),
+            "Licenses" => Some(&mut fields.licenses),
+            "Installed Size" => Some(&mut fields.installed_size),
+            _ => None,
+        };
+        if let Some(target) = target
+            && target.replace(value).is_some()
+        {
+            return Err(Error::ParseError(format!(
+                "pacman -Qi record {record} repeats field '{}'",
+                key.trim()
+            )));
+        }
+    }
+    finish_record(&mut fields, &mut packages, &mut selectors, record)?;
     Ok(packages)
 }
 
 /// Query which package(s) own a file
 pub fn query_file_owner(path: &str) -> Result<Vec<String>> {
     let output = Command::new("pacman")
-        .args(["-Qo", path])
+        .args(["-Qqo", path])
+        .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
 
     if !output.status.success() {
-        // File not owned by any package
-        return Ok(Vec::new());
+        return Err(Error::NotFound(format!(
+            "pacman could not resolve an owner for {path:?} (status {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
 
-    // Output format: "/path/to/file is owned by package_name version"
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let owners: Vec<String> = output_str
+    let output = String::from_utf8(output.stdout)
+        .map_err(|error| Error::ParseError(format!("pacman owner output is not UTF-8: {error}")))?;
+    output
         .lines()
-        .filter_map(|line| {
-            if let Some(pos) = line.find(" is owned by ") {
-                let rest = &line[pos + " is owned by ".len()..];
-                rest.split_whitespace().next().map(|s| s.to_string())
-            } else {
-                None
+        .map(|owner| {
+            if owner.is_empty()
+                || owner
+                    .chars()
+                    .any(|character| character.is_whitespace() || character.is_control())
+            {
+                return Err(Error::ParseError(format!(
+                    "pacman quiet owner query returned an invalid package name {owner:?}"
+                )));
             }
+            Ok(owner.to_string())
         })
-        .collect();
-
-    Ok(owners)
+        .collect()
 }
 
-/// Query the set of package names explicitly installed by the user (not auto-deps).
+/// Query ALPM's exact explicitly-installed package set.
 ///
-/// Uses `pacman -Qe` which lists packages installed explicitly (as opposed to
-/// `pacman -Qd` which lists packages installed as dependencies). This is the
-/// canonical pacman mechanism for distinguishing user intent.
-pub fn query_user_installed() -> Result<std::collections::HashSet<String>> {
-    debug!("Querying user-installed pacman packages via pacman -Qe");
-
-    let stdout = run_query_command("pacman", &["-Qe"])?;
-
-    // Output format: "package_name version\n..."
-    let user_installed = stdout
-        .lines()
-        .filter_map(|line| {
-            let name = line.split_whitespace().next()?;
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            }
-        })
-        .collect();
-
-    debug!("Queried explicitly-installed pacman packages");
-    Ok(user_installed)
+/// Pacman's documented `-Qe` filter selects explicit installs and `-q`
+/// produces one exact package name per line.
+pub fn query_user_installed()
+-> std::result::Result<std::collections::HashSet<String>, InstallReasonAuthorityError> {
+    debug!("Querying explicitly-installed pacman packages via pacman -Qqe");
+    query_package_names("ALPM", "pacman", &["-Qqe"])
 }
 
 /// Remove a package from the pacman database only (no files deleted).
@@ -529,5 +554,80 @@ mod tests {
 
         assert_eq!(info.full_version(), "1.0.0-1");
         assert_eq!(info.version_only(), "1.0.0-1");
+    }
+
+    #[test]
+    fn all_package_query_uses_each_alpm_architecture() {
+        let output = "\
+Name            : native-tool
+Version         : 1.0-1
+Description     : Native tool
+Architecture    : x86_64
+URL             : https://example.invalid/native
+Licenses        : MIT
+
+Name            : portable-data
+Version         : 2.0-3
+Description     : Portable data
+Architecture    : any
+URL             : None
+Licenses        : CC0
+";
+
+        let packages = parse_all_package_info(output).unwrap();
+        assert_eq!(packages[0].info.arch, "x86_64");
+        assert_eq!(packages[0].identity.selector(), "native-tool");
+        assert_eq!(packages[1].info.arch, "any");
+        assert_eq!(packages[1].info.url, None);
+    }
+
+    #[test]
+    fn all_package_query_rejects_missing_architecture() {
+        let error = parse_all_package_info(
+            "\
+Name            : ambiguous
+Version         : 1.0-1
+",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("has no Architecture field"));
+    }
+
+    #[test]
+    fn all_package_query_rejects_duplicate_identity() {
+        let error = parse_all_package_info(
+            "\
+Name            : duplicate
+Version         : 1.0-1
+Architecture    : x86_64
+
+Name            : duplicate
+Version         : 1.0-2
+Architecture    : any
+",
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate installed package identity")
+        );
+    }
+
+    #[test]
+    fn info_field_parser_preserves_documented_continuation_lines() {
+        let output = "\
+Name            : fixture
+Depends On      : glibc>=2.41  openssl
+                  zlib
+Provides        : fixture-abi
+";
+        assert_eq!(
+            parse_pacman_info_field(output, "Depends On").unwrap(),
+            "glibc>=2.41  openssl zlib"
+        );
+        assert!(parse_pacman_info_field(output, "Missing").is_err());
     }
 }

@@ -61,12 +61,12 @@ impl AppstreamCacheEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::migrate;
+    use crate::db::schema::ensure_current;
 
     #[test]
     fn test_appstream_cache_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        ensure_current(&conn).unwrap();
 
         let entry = AppstreamCacheEntry {
             appstream_id: "org.mozilla.firefox".into(),

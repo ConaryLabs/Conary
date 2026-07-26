@@ -4,31 +4,43 @@
 use anyhow::Result;
 use conary_core::ccs::CcsPackage;
 use conary_core::db::models::TrySessionMode;
+use conary_core::generation::root_manifest::CapturedSelectedRoot;
+use conary_core::packages::PackageFormat;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::TransactionConfig;
 use std::path::{Path, PathBuf};
 
 use crate::commands::install::{
-    CcsTransactionInstallOptions, ComponentSelection, LegacyReplayOptions,
-    install_ccs_package_transactionally_with_config,
+    CcsTransactionInstallOptions, install_ccs_package_transactionally_in_selected_root,
 };
 
 #[derive(Debug, Clone)]
 pub(super) struct TryInstallPlan {
     pub(super) install_root: PathBuf,
     pub(super) copied_db_path: PathBuf,
-    pub(super) transaction_config: TransactionConfig,
-    pub(super) no_scripts: bool,
+    pub(super) runtime_root: ConaryRuntimeRoot,
 }
 
 pub(super) fn install_try_package(
     conn: &mut rusqlite::Connection,
     package: &CcsPackage,
     plan: &TryInstallPlan,
-) -> Result<()> {
+) -> Result<CapturedSelectedRoot> {
     let db_path_string = plan.copied_db_path.to_string_lossy().into_owned();
-    let root_string = plan.install_root.to_string_lossy().into_owned();
-    install_ccs_package_transactionally_with_config(
+    let selected_session_dir = plan
+        .install_root
+        .parent()
+        .expect("try selected root has a session directory")
+        .to_path_buf();
+    let mut selected =
+        crate::commands::generation::selected_root::SelectedRootSession::begin_for_try(
+            conn,
+            &plan.runtime_root,
+            selected_session_dir,
+            format!("Try {}-{}", package.name(), package.version()),
+        )?;
+    let root_string = selected.selected_root().to_string_lossy().into_owned();
+    install_ccs_package_transactionally_in_selected_root(
         conn,
         package,
         CcsTransactionInstallOptions {
@@ -37,19 +49,18 @@ pub(super) fn install_try_package(
             dry_run: false,
             defer_generation: true,
             quiet: true,
-            no_scripts: plan.no_scripts,
-            sandbox_mode: conary_core::scriptlet::SandboxMode::None,
+            sandbox_mode: conary_core::scriptlet::SandboxMode::Always,
             allow_downgrade: false,
+            intent: crate::commands::install::InstallIntent::PackageChange,
             reinstall: false,
             selection_reason: Some("conary try"),
-            component_selection: ComponentSelection::All,
             selected_manifest_components: None,
             repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
         },
-        plan.transaction_config.clone(),
+        &mut selected,
     )?;
-    Ok(())
+    let (_, captured) = selected.capture_preserving_root(&plan.runtime_root)?;
+    Ok(captured)
 }
 
 pub(super) fn build_try_install_plan(
@@ -59,10 +70,9 @@ pub(super) fn build_try_install_plan(
     _mode: TrySessionMode,
 ) -> TryInstallPlan {
     TryInstallPlan {
-        install_root: work_dir.join("root"),
-        copied_db_path: copied_db_path.clone(),
-        transaction_config: build_try_transaction_config(runtime_root, copied_db_path),
-        no_scripts: true,
+        install_root: work_dir.join("selected-root-session/root"),
+        copied_db_path,
+        runtime_root: runtime_root.clone(),
     }
 }
 

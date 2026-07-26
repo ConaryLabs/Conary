@@ -1,53 +1,246 @@
 // conary-core/src/scriptlet/process.rs
 
 use super::ScriptletExecutor;
-use super::runtime::{
-    apply_sanitized_command_env, build_scriptlet_seccomp, chroot_mount_private_flags,
-    chroot_namespace_flags, current_seccomp_mode, log_script_output, wait_and_capture,
-    write_executable_script,
-};
-use crate::capability::enforcement::EnforcementMode;
-use crate::container::Sandbox;
-use crate::error::{Error, Result};
-use std::fs;
+use super::activation_capture::ActivationCaptureSession;
+use super::boot_runtime_capture::BootRuntimeCaptureSession;
+use super::boundary::{SCRIPTLET_BOUNDARY_ABI_V2, ScriptletBoundary};
+use super::runtime::{apply_sanitized_command_env, wait_and_capture};
+use crate::error::{Error, Result, ScriptletFailureKind};
+use nix::errno::Errno;
+use nix::fcntl::{OFlag, open, openat};
+use nix::sys::stat::{Mode, mkdirat};
+use nix::unistd::{UnlinkatFlags, unlinkat};
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
-use tempfile::TempDir;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use uuid::Uuid;
 
-impl ScriptletExecutor {
-    /// Execute scriptlet in sandbox on live root
-    pub(super) fn execute_sandbox_live(
-        &self,
-        phase: &str,
-        interpreter: &str,
-        content: &str,
-        args: &[String],
-        env: &[(&str, &str)],
-    ) -> Result<()> {
-        // Protected live-root mode gives scriptlets private writable /etc and
-        // /var layers, then overlays selected host identity files read-only.
-        // Setup failures are fatal so this mode never silently downgrades to
-        // host-writable /etc or /var.
-        let mut sandbox = Sandbox::new(self.live_sandbox_config()?);
-        let (code, stdout, stderr) = sandbox.execute(interpreter, content, args, env)?;
+const TARGET_SCRIPT_NAME: &str = "scriptlet";
 
-        log_script_output(phase, &stdout, &stderr);
+#[derive(Clone, Copy)]
+pub(super) struct ScriptletProcess<'a> {
+    pub(super) phase: &'a str,
+    pub(super) interpreter: &'a str,
+    pub(super) interpreter_args: &'a [String],
+    pub(super) args: &'a [String],
+    pub(super) env: &'a [(&'a str, &'a str)],
+    pub(super) stdin: &'a [u8],
+}
 
-        if code == 0 {
-            info!("{} scriptlet completed successfully (sandboxed)", phase);
-            Ok(())
-        } else {
-            Err(Error::ScriptletError(format!(
-                "{} scriptlet failed with exit code {} (sandboxed)",
-                phase, code
-            )))
-        }
+#[derive(Debug)]
+pub(super) struct TargetRootScript {
+    tmp_fd: OwnedFd,
+    directory_fd: OwnedFd,
+    directory_name: String,
+    path: PathBuf,
+    root: PathBuf,
+    extra_files: Vec<String>,
+    extra_directories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TargetExecutionBoundary {
+    pub(crate) contract: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct TargetCommandBindMount {
+    pub(super) source: PathBuf,
+    pub(super) target: PathBuf,
+}
+
+impl TargetRootScript {
+    pub(super) fn stage(root: &Path, content: &[u8]) -> Result<Self> {
+        let root_fd = open(
+            root,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let tmp_fd = open_or_create_target_tmp(&root_fd)?;
+
+        let directory_name = loop {
+            let candidate = format!(".conary-scriptlet-{}", Uuid::new_v4().simple());
+            match mkdirat(&tmp_fd, candidate.as_str(), Mode::from_bits_truncate(0o700)) {
+                Ok(()) => break candidate,
+                Err(Errno::EEXIST) => continue,
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+        };
+        let directory_fd = match openat(
+            &tmp_fd,
+            directory_name.as_str(),
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(directory_fd) => directory_fd,
+            Err(error) => {
+                let _ = unlinkat(&tmp_fd, directory_name.as_str(), UnlinkatFlags::RemoveDir);
+                return Err(std::io::Error::from(error).into());
+            }
+        };
+        let staged = Self {
+            tmp_fd,
+            directory_fd,
+            root: root.to_path_buf(),
+            path: root
+                .join("tmp")
+                .join(&directory_name)
+                .join(TARGET_SCRIPT_NAME),
+            directory_name,
+            extra_files: Vec::new(),
+            extra_directories: Vec::new(),
+        };
+        let script_fd = openat(
+            &staged.directory_fd,
+            TARGET_SCRIPT_NAME,
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(0o700),
+        )
+        .map_err(std::io::Error::from)?;
+        let mut script = File::from(script_fd);
+        script.write_all(content)?;
+        script.flush()?;
+        Ok(staged)
     }
 
-    /// Execute scriptlet inside a target root using chroot/container
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn create_extra_file(
+        &mut self,
+        name: &str,
+        content: &[u8],
+        mode: u32,
+    ) -> Result<PathBuf> {
+        let file_fd = openat(
+            &self.directory_fd,
+            name,
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(mode),
+        )
+        .map_err(std::io::Error::from)?;
+        let mut file = File::from(file_fd);
+        file.write_all(content)?;
+        file.flush()?;
+        self.extra_files.push(name.to_string());
+        Ok(self.root.join("tmp").join(&self.directory_name).join(name))
+    }
+
+    pub(super) fn guest_extra_path(&self, name: &str) -> PathBuf {
+        Path::new("/")
+            .join("tmp")
+            .join(&self.directory_name)
+            .join(name)
+    }
+
+    pub(super) fn create_extra_directory_file(
+        &mut self,
+        directory: &str,
+        name: &str,
+        content: &[u8],
+        mode: u32,
+    ) -> Result<PathBuf> {
+        validate_staged_component(directory)?;
+        validate_staged_component(name)?;
+        mkdirat(
+            &self.directory_fd,
+            directory,
+            Mode::from_bits_truncate(0o700),
+        )
+        .map_err(std::io::Error::from)?;
+        self.extra_directories.push(directory.to_string());
+        let directory_fd = openat(
+            &self.directory_fd,
+            directory,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        let file_fd = openat(
+            &directory_fd,
+            name,
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(mode),
+        )
+        .map_err(std::io::Error::from)?;
+        self.extra_files.push(format!("{directory}/{name}"));
+        let mut file = File::from(file_fd);
+        file.write_all(content)?;
+        file.flush()?;
+        Ok(self
+            .root
+            .join("tmp")
+            .join(&self.directory_name)
+            .join(directory)
+            .join(name))
+    }
+}
+
+impl Drop for TargetRootScript {
+    fn drop(&mut self) {
+        for name in self.extra_files.iter().rev() {
+            let _ = unlinkat(
+                &self.directory_fd,
+                name.as_str(),
+                UnlinkatFlags::NoRemoveDir,
+            );
+        }
+        for name in self.extra_directories.iter().rev() {
+            let _ = unlinkat(&self.directory_fd, name.as_str(), UnlinkatFlags::RemoveDir);
+        }
+        let _ = unlinkat(
+            &self.directory_fd,
+            TARGET_SCRIPT_NAME,
+            UnlinkatFlags::NoRemoveDir,
+        );
+        let _ = unlinkat(
+            &self.tmp_fd,
+            self.directory_name.as_str(),
+            UnlinkatFlags::RemoveDir,
+        );
+    }
+}
+
+fn validate_staged_component(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || Path::new(value).components().count() != 1
+        || value.contains('/')
+    {
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::ContractViolation,
+            format!("target-root staged file component is invalid: {value:?}"),
+        ));
+    }
+    Ok(())
+}
+
+fn open_or_create_target_tmp(root_fd: &OwnedFd) -> Result<OwnedFd> {
+    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    match openat(root_fd, "tmp", flags, Mode::empty()) {
+        Ok(tmp_fd) => Ok(tmp_fd),
+        Err(Errno::ENOENT) => {
+            match mkdirat(root_fd, "tmp", Mode::from_bits_truncate(0o1777)) {
+                Ok(()) | Err(Errno::EEXIST) => {}
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+            openat(root_fd, "tmp", flags, Mode::empty())
+                .map_err(std::io::Error::from)
+                .map_err(Error::from)
+        }
+        Err(error) => Err(std::io::Error::from(error).into()),
+    }
+}
+
+impl ScriptletExecutor {
+    /// Execute scriptlet inside a materialized selected/target root.
     ///
     /// This is the key method for bootstrap support. It runs the scriptlet
     /// inside the target filesystem using either:
@@ -55,48 +248,50 @@ impl ScriptletExecutor {
     /// - namespace container (more isolation)
     pub(super) fn execute_in_target(
         &self,
-        phase: &str,
-        interpreter: &str,
-        interpreter_args: &[String],
-        content: &str,
-        args: &[String],
-        env: &[(&str, &str)],
+        process: ScriptletProcess<'_>,
+        content: &[u8],
     ) -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let script_path = temp_dir.path().join("scriptlet.sh");
-        write_executable_script(&script_path, content)?;
-
-        // Copy script into target root temporarily
-        let target_script_dir = self.root.join("tmp/conary-scriptlets");
-        fs::create_dir_all(&target_script_dir)?;
-        let target_script_path = target_script_dir.join("scriptlet.sh");
-        fs::copy(&script_path, &target_script_path)?;
-
-        // Build chroot command
-        // Using unshare for isolation when available, falling back to plain chroot
-        let result = if nix::unistd::geteuid().is_root() {
-            self.execute_with_chroot(
-                phase,
-                interpreter,
-                interpreter_args,
-                &target_script_path,
-                args,
-                env,
-            )
-        } else {
+        self.require_target_root()?;
+        if !nix::unistd::geteuid().is_root() {
             // Non-root: try unshare with user namespace, fall back to error
-            warn!("Target root scriptlet execution requires root privileges or user namespaces");
-            Err(Error::ScriptletError(format!(
-                "Cannot execute {} scriptlet in target root without root privileges",
-                phase
-            )))
-        };
+            tracing::warn!(
+                "Target root scriptlet execution requires root privileges or user namespaces"
+            );
+            return Err(Error::scriptlet(
+                ScriptletFailureKind::SandboxSetupUnavailable,
+                format!(
+                    "Cannot execute {} scriptlet in target root without root privileges",
+                    process.phase
+                ),
+            ));
+        }
 
-        // Cleanup
-        let _ = fs::remove_file(&target_script_path);
-        let _ = fs::remove_dir(&target_script_dir);
-
-        result
+        let mut target_script = TargetRootScript::stage(&self.root, content)?;
+        let capture = ActivationCaptureSession::stage(&mut target_script, &self.root, process.env)?;
+        let mut boot_capture = BootRuntimeCaptureSession::stage(
+            &mut target_script,
+            &self.root,
+            process.env,
+            self.timeout,
+            self.lifecycle_bridge.as_ref(),
+        )?;
+        let mut mounts = capture.mounts().to_vec();
+        mounts.extend_from_slice(boot_capture.mounts());
+        let execution =
+            self.execute_with_chroot(process, target_script.path(), &mounts, &mut boot_capture);
+        let boot_result = boot_capture.finish();
+        execution?;
+        let boot_invocations = boot_result?;
+        let invocations = capture.finish()?;
+        self.activation_invocations
+            .lock()
+            .expect("activation invocation collector poisoned")
+            .extend(invocations);
+        self.boot_runtime_invocations
+            .lock()
+            .expect("boot runtime invocation collector poisoned")
+            .extend(boot_invocations);
+        Ok(())
     }
 
     /// Execute scriptlet using native chroot + seccomp (requires root)
@@ -106,360 +301,168 @@ impl ScriptletExecutor {
     /// syscall filtering via seccomp-BPF for defense-in-depth.
     pub(super) fn execute_with_chroot(
         &self,
-        phase: &str,
-        interpreter: &str,
-        interpreter_args: &[String],
+        process: ScriptletProcess<'_>,
         script_path: &Path,
-        args: &[String],
-        env: &[(&str, &str)],
+        bind_mounts: &[TargetCommandBindMount],
+        boot_capture: &mut BootRuntimeCaptureSession,
     ) -> Result<()> {
+        let ScriptletProcess {
+            phase,
+            interpreter,
+            interpreter_args,
+            args,
+            env,
+            stdin,
+        } = process;
         // Script path relative to chroot
         let script_in_chroot = script_path.strip_prefix(&self.root).unwrap_or(script_path);
         let script_in_chroot = format!("/{}", script_in_chroot.display());
-        let root = self.root.clone();
+        let stdin_file = prepared_stdin(stdin)?;
 
-        // Build seccomp BPF filter in parent process (avoids allocation after fork)
-        let seccomp_mode = current_seccomp_mode();
-        let bpf_filter = build_scriptlet_seccomp(seccomp_mode);
-        let seccomp_enabled = bpf_filter.is_some();
-
-        debug!(
-            "Executing in chroot {}: {} {} {:?} (seccomp: {})",
-            self.root.display(),
-            interpreter,
-            script_in_chroot,
-            args,
-            if seccomp_enabled {
-                "enabled"
-            } else {
-                "unavailable"
-            }
-        );
-
-        // Use interpreter directly with pre_exec for native chroot + seccomp
         let mut cmd = Command::new(interpreter);
         cmd.args(interpreter_args)
             .arg(&script_in_chroot)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(Stdio::from(stdin_file))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        apply_sanitized_command_env(&mut cmd, env);
+        boot_capture.configure_command(&mut cmd)?;
+        let boundary =
+            configure_target_command_boundary_with_mounts(&mut cmd, &self.root, bind_mounts)?;
 
-        for (key, value) in env {
-            cmd.env(*key, *value);
-        }
-
-        // Safety: pre_exec runs between fork and exec in the child process.
-        // All operations (chroot, chdir, prctl, seccomp) are async-signal-safe.
-        unsafe {
-            cmd.pre_exec(move || {
-                // 1. Isolate mount topology before entering the target root.
-                nix::sched::unshare(chroot_namespace_flags())
-                    .map_err(|e| std::io::Error::other(format!("unshare failed: {e}")))?;
-                nix::mount::mount::<str, str, str, str>(
-                    None,
-                    "/",
-                    None,
-                    chroot_mount_private_flags(),
-                    None,
-                )
-                .map_err(|e| std::io::Error::other(format!("mount --make-rprivate failed: {e}")))?;
-
-                // 2. chroot into the target root
-                nix::unistd::chroot(&root).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!("chroot failed: {e}"),
-                    )
-                })?;
-                nix::unistd::chdir("/")
-                    .map_err(|e| std::io::Error::other(format!("chdir failed: {e}")))?;
-
-                // 3. Set NO_NEW_PRIVS (required for unprivileged seccomp)
-                let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-                if ret != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-
-                // 4. Apply seccomp filter
-                if let Some(ref filter) = bpf_filter
-                    && seccompiler::apply_filter(filter).is_err()
-                {
-                    // Use raw write of a static string -- no heap allocation,
-                    // safe after fork in a multi-threaded process.
-                    const MSG: &[u8] = b"[conary] seccomp filter application failed\n";
-                    let _ = libc::write(2, MSG.as_ptr().cast(), MSG.len());
-
-                    if seccomp_mode == EnforcementMode::Enforce {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::PermissionDenied,
-                            "seccomp filter application failed in enforce mode",
-                        ));
-                    }
-                }
-
-                Ok(())
-            });
-        }
+        debug!(
+            "Executing in chroot {}: {} {} {:?} (boundary: {})",
+            self.root.display(),
+            interpreter,
+            script_in_chroot,
+            args,
+            boundary.contract,
+        );
 
         let mut child = cmd.spawn().map_err(|e| {
-            Error::ScriptletError(format!("Failed to spawn scriptlet in chroot: {e}"))
+            Error::scriptlet(
+                ScriptletFailureKind::SandboxSetupUnavailable,
+                format!("Failed to spawn scriptlet in chroot: {e}"),
+            )
         })?;
+        boot_capture.child_spawned();
 
         let context = format!(
-            " (chroot: {}, seccomp: {})",
+            " (chroot: {}, boundary: {})",
             self.root.display(),
-            if seccomp_enabled {
-                "enabled"
-            } else {
-                "unavailable"
-            }
+            boundary.contract,
         );
 
         wait_and_capture(&mut child, self.timeout, phase, &context)
     }
+}
 
-    /// Execute scriptlet directly without sandbox
-    pub(super) fn execute_direct(
-        &self,
-        phase: &str,
-        interpreter: &str,
-        content: &str,
-        args: &[String],
-        env: &[(&str, &str)],
-    ) -> Result<()> {
-        self.execute_direct_with_options(phase, interpreter, &[], content, args, env, self.timeout)
+/// Attach Conary's closed lifecycle boundary to a child that executes exact
+/// argv inside a materialized selected root.
+pub(crate) fn configure_target_command_boundary(
+    command: &mut Command,
+    root: &Path,
+) -> Result<TargetExecutionBoundary> {
+    configure_target_command_boundary_with_mounts(command, root, &[])
+}
+
+pub(super) fn configure_target_command_boundary_with_mounts(
+    command: &mut Command,
+    root: &Path,
+    bind_mounts: &[TargetCommandBindMount],
+) -> Result<TargetExecutionBoundary> {
+    if root == Path::new("/") {
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::ContractViolation,
+            "Lifecycle execution requires a materialized selected/target root; the host root '/' is not an execution target",
+        ));
+    }
+    if !root.is_absolute() {
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::ContractViolation,
+            format!(
+                "Lifecycle execution root must be absolute: {}",
+                root.display()
+            ),
+        ));
+    }
+    if !nix::unistd::geteuid().is_root() {
+        return Err(Error::scriptlet(
+            ScriptletFailureKind::SandboxSetupUnavailable,
+            format!(
+                "Lifecycle execution in target root {} requires root privileges",
+                root.display()
+            ),
+        ));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn execute_direct_with_options(
-        &self,
-        phase: &str,
-        interpreter: &str,
-        interpreter_args: &[String],
-        content: &str,
-        args: &[String],
-        env: &[(&str, &str)],
-        timeout: Duration,
-    ) -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let script_path = temp_dir.path().join("scriptlet.sh");
-        write_executable_script(&script_path, content)?;
+    let root = root.to_path_buf();
+    let bind_mounts = bind_mounts.to_vec();
+    let prepared_boundary = ScriptletBoundary::prepare()?;
+    let boundary = TargetExecutionBoundary {
+        contract: SCRIPTLET_BOUNDARY_ABI_V2,
+    };
 
-        debug!(
-            "Executing script: {} {} {:?}",
-            interpreter,
-            script_path.display(),
-            args
-        );
+    // Safety: pre_exec runs between fork and exec in the child process.
+    // All operations here are async-signal-safe.
+    unsafe {
+        command.pre_exec(move || {
+            nix::sched::unshare(prepared_boundary.namespace_flags())
+                .map_err(|error| std::io::Error::other(format!("unshare failed: {error}")))?;
+            nix::mount::mount::<str, str, str, str>(
+                None,
+                "/",
+                None,
+                prepared_boundary.mount_private_flags(),
+                None,
+            )
+            .map_err(|error| {
+                std::io::Error::other(format!("mount --make-rprivate failed: {error}"))
+            })?;
+            for bind in &bind_mounts {
+                nix::mount::mount(
+                    Some(bind.source.as_path()),
+                    bind.target.as_path(),
+                    None::<&str>,
+                    nix::mount::MsFlags::MS_BIND,
+                    None::<&str>,
+                )
+                .map_err(|error| {
+                    std::io::Error::other(format!(
+                        "failed to bind lifecycle proxy {} over {}: {error}",
+                        bind.source.display(),
+                        bind.target.display()
+                    ))
+                })?;
+            }
+            nix::unistd::chroot(&root).map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("chroot failed: {error}"),
+                )
+            })?;
+            nix::unistd::chdir("/")
+                .map_err(|error| std::io::Error::other(format!("chdir failed: {error}")))?;
 
-        let mut cmd = Command::new(interpreter);
-        cmd.args(interpreter_args)
-            .arg(&script_path)
-            .args(args)
-            .stdin(Stdio::null()) // CRITICAL: Prevent stdin hangs
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        apply_sanitized_command_env(&mut cmd, env);
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::ScriptletError(format!("Failed to spawn scriptlet: {}", e)))?;
-
-        wait_and_capture(&mut child, timeout, phase, "")
+            prepared_boundary.install_after_chroot()
+        });
     }
+    Ok(boundary)
+}
+
+fn prepared_stdin(content: &[u8]) -> Result<File> {
+    let mut file = tempfile::tempfile()?;
+    file.write_all(content)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(file)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::runtime::ENV_LOCK;
-    use super::super::{PackageFormat, SandboxMode, ScriptletExecutor};
+    use super::super::{PackageFormat, ScriptletExecutor};
+    use super::ScriptletProcess;
     use std::path::Path;
-    use std::time::Duration;
-
-    #[test]
-    fn test_execute_basic_success() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            "echo hello",
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_execute_script_failure() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            "exit 42",
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("failed with exit code 42"),
-            "unexpected error: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn test_execute_none_sandbox_runs_directly() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb)
-                .with_sandbox_mode(SandboxMode::None);
-
-        // Verify it runs and can produce output without error
-        let result = executor.execute_direct(
-            "pre-install",
-            "/bin/sh",
-            "echo 'running unsandboxed'; true",
-            &["install".to_string()],
-            &[
-                ("CONARY_PACKAGE_NAME", "test-pkg"),
-                ("CONARY_PHASE", "pre-install"),
-            ],
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_execute_timeout() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_timeout(Duration::from_secs(1))
-                .with_sandbox_mode(SandboxMode::None);
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            "sleep 30",
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("timed out"), "unexpected error: {}", err);
-    }
-
-    #[test]
-    fn test_execute_with_env_vars() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "my-package", "2.5.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
-
-        // Script that checks environment variables are set
-        let script = r#"
-            test "$CONARY_PACKAGE_NAME" = "my-package" || exit 1
-            test "$CONARY_PACKAGE_VERSION" = "2.5.0" || exit 2
-        "#;
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            script,
-            &["1".to_string()],
-            &[
-                ("CONARY_PACKAGE_NAME", "my-package"),
-                ("CONARY_PACKAGE_VERSION", "2.5.0"),
-            ],
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_execute_direct_clears_host_environment() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe {
-            std::env::set_var("CONARY_SCRIPTLET_LEAK", "host-secret");
-        }
-
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            "test -z \"$CONARY_SCRIPTLET_LEAK\"",
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
-        );
-
-        unsafe {
-            std::env::remove_var("CONARY_SCRIPTLET_LEAK");
-        }
-
-        assert!(
-            result.is_ok(),
-            "direct scriptlet execution should not inherit host environment variables: {result:?}"
-        );
-    }
-
-    #[test]
-    fn test_execute_direct_captures_stdout_stderr_without_echild() {
-        // Exercises the take-handles-before-wait pattern that prevents
-        // ECHILD on double-wait when the child produces output.
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::None);
-
-        let script = r#"
-            echo "stdout line"
-            echo "stderr line" >&2
-        "#;
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            script,
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
-        );
-        assert!(
-            result.is_ok(),
-            "Script with stdout/stderr should complete without ECHILD: {:?}",
-            result.unwrap_err()
-        );
-    }
-
-    #[test]
-    fn test_execute_direct_timeout_no_double_wait_panic() {
-        // The timeout path kills the child and returns an error.
-        // Before the fix, calling wait_with_output after wait_timeout could
-        // panic with ECHILD. This test verifies the timeout path is safe.
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_timeout(Duration::from_secs(1))
-                .with_sandbox_mode(SandboxMode::None);
-
-        let result = executor.execute_direct(
-            "post-install",
-            "/bin/sh",
-            "sleep 30",
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("timed out"),
-            "Expected timeout error, got: {}",
-            err
-        );
-    }
 
     #[test]
     fn test_execute_with_chroot_requires_root() {
@@ -477,16 +480,18 @@ mod tests {
         std::fs::create_dir_all(target_root.join("tmp")).unwrap();
         std::fs::create_dir_all(target_root.join("bin")).unwrap();
 
-        let executor = ScriptletExecutor::new(target_root, "test-pkg", "1.0.0", PackageFormat::Rpm)
-            .with_sandbox_mode(SandboxMode::None);
+        let executor = ScriptletExecutor::new(target_root, "test-pkg", "1.0.0", PackageFormat::Rpm);
 
         let result = executor.execute_in_target(
-            "post-install",
-            "/bin/sh",
-            &[],
-            "echo hello",
-            &["1".to_string()],
-            &[("CONARY_PACKAGE_NAME", "test-pkg")],
+            ScriptletProcess {
+                phase: "post-install",
+                interpreter: "/bin/sh",
+                interpreter_args: &[],
+                args: &["1".to_string()],
+                env: &[("CONARY_PACKAGE_NAME", "test-pkg")],
+                stdin: &[],
+            },
+            b"echo hello",
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -495,5 +500,45 @@ mod tests {
             "Expected root-required error, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn target_root_script_staging_rejects_hostile_tmp_symlink() {
+        let target_root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), target_root.path().join("tmp")).unwrap();
+
+        let error = super::TargetRootScript::stage(target_root.path(), b"exit 0")
+            .expect_err("target-root staging must not follow a tmp symlink");
+
+        assert!(
+            error.to_string().contains("I/O error"),
+            "unexpected staging error: {error}"
+        );
+        assert_eq!(
+            std::fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "staging escaped through the target root's tmp symlink"
+        );
+    }
+
+    #[test]
+    fn target_execution_rejects_the_host_root_before_staging() {
+        let executor = ScriptletExecutor::new(Path::new("/"), "fixture", "1", PackageFormat::Deb);
+        let error = executor
+            .execute_in_target(
+                ScriptletProcess {
+                    phase: "post-install",
+                    interpreter: "/bin/sh",
+                    interpreter_args: &[],
+                    args: &[],
+                    env: &[],
+                    stdin: &[],
+                },
+                b"exit 0",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("host root '/'"));
     }
 }

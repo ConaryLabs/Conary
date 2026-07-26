@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/random-package-smoke.sh -- Try seeded random package installs across dep modes.
+# scripts/random-package-smoke.sh -- Try seeded random installs across ownership modes.
 
 set -euo pipefail
 
@@ -10,7 +10,7 @@ Usage: scripts/random-package-smoke.sh [options]
 Options:
   --count N          Number of packages to choose when --package is not used (default: 3)
   --seed TEXT        Deterministic selection seed (default: current date)
-  --modes LIST       Comma or space separated dep modes (default: satisfy,adopt,takeover)
+  --modes LIST       Comma or space separated ownership modes (default: preserve,takeover)
   --package NAME     Add an explicit package. Repeatable; disables random selection.
   --plan-only        Print selected commands without running them.
   --apply            Run real installs. Default is --dry-run.
@@ -21,7 +21,7 @@ Environment:
   PACKAGE_CANDIDATES Newline or space separated candidate package names.
   REMI_ENDPOINT      Remi endpoint (default: https://remi.conary.io).
   REMI_DISTRO        Exact public profile (default: fedora-44).
-  REPO_NAME          Repository name to use (default: remi from system init).
+  REPO_NAME          Repository name to use (default: remi-$REMI_DISTRO).
   DB_PATH            Reuse a DB path instead of a temp DB.
   ROOT               Install root for --apply runs; temp root by default.
   OUT_DIR            Directory for command logs.
@@ -33,7 +33,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 count="${COUNT:-3}"
 seed="${SEED:-$(date +%Y-%m-%d)}"
-modes_text="${MODES:-satisfy,adopt,takeover}"
+modes_text="${MODES:-preserve,takeover}"
 plan_only=0
 dry_run=1
 explicit_packages=()
@@ -89,15 +89,15 @@ mapfile -t modes < <(
 )
 
 if [[ "${#modes[@]}" -eq 0 ]]; then
-    echo "no dep modes selected" >&2
+    echo "no ownership modes selected" >&2
     exit 2
 fi
 
 for mode in "${modes[@]}"; do
     case "$mode" in
-        satisfy | adopt | takeover) ;;
+        preserve | takeover) ;;
         *)
-            echo "unsupported dep mode: $mode" >&2
+            echo "unsupported ownership mode: $mode" >&2
             exit 2
             ;;
     esac
@@ -122,7 +122,7 @@ else
 fi
 
 echo "Selected packages: ${selected_packages[*]}"
-echo "Modes: ${modes[*]}"
+echo "Ownership modes: ${modes[*]}"
 echo "Seed: $seed"
 
 default_conary_bin() {
@@ -138,7 +138,7 @@ default_conary_bin() {
 conary_bin="${CONARY_BIN:-$(default_conary_bin)}"
 remi_endpoint="${REMI_ENDPOINT:-https://remi.conary.io}"
 remi_distro="${REMI_DISTRO:-fedora-44}"
-repo_name="${REPO_NAME:-remi}"
+repo_name="${REPO_NAME:-remi-$remi_distro}"
 
 print_command() {
     local first=1
@@ -161,10 +161,9 @@ build_install_command() {
         install
         "$pkg"
         --repo "$repo_name"
-        --dep-mode "$mode"
+        --ownership "$mode"
         --yes
-        --allow-capabilities
-        --sandbox never
+        --sandbox always
         --db-path "$db_path"
         --root "$root"
     )
@@ -179,7 +178,7 @@ if [[ "$plan_only" -eq 1 ]]; then
     root="${ROOT:-/tmp/conary-random-smoke/root}"
     for pkg in "${selected_packages[@]}"; do
         for mode in "${modes[@]}"; do
-            printf 'PLAN package=%s mode=%s command=' "$pkg" "$mode"
+            printf 'PLAN package=%s ownership=%s command=' "$pkg" "$mode"
             build_install_command "$pkg" "$mode" "$db_path" "$root"
             printf '\n'
         done
@@ -210,15 +209,14 @@ mkdir -p "$root" "$out_dir"
 
 setup_log="$out_dir/setup.log"
 run_setup() {
-    "$conary_bin" system init --profile "$remi_distro" --db-path "$db_path" || return
-    if [[ "$repo_name" != "remi" ]]; then
+    "$conary_bin" system init --db-path "$db_path" || return
+    if [[ "$repo_name" != "remi-$remi_distro" || "$remi_endpoint" != "https://remi.conary.io" ]]; then
+        "$conary_bin" repo remove "$repo_name" --db-path "$db_path" >/dev/null 2>&1 || true
         "$conary_bin" repo add "$repo_name" "$remi_endpoint" \
+            --package-format json \
             --default-strategy remi \
             --remi-endpoint "$remi_endpoint" \
-            --remi-distro "$remi_distro" \
-            --no-gpg-check \
-            --replace \
-            --yes \
+            --source-profile "$remi_distro" \
             --db-path "$db_path" || return
     fi
     "$conary_bin" repo sync "$repo_name" --force --db-path "$db_path" || return

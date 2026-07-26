@@ -1,0 +1,474 @@
+// conary-core/src/repository/trust.rs
+
+//! Typed trust contracts for native package repositories.
+//!
+//! Repository format selects the metadata grammar.  This module separately
+//! records the exact authority chain that must authenticate that grammar.
+//! The policy is persisted as a tagged enum so an RPM repository cannot be
+//! accidentally evaluated with Debian or ALPM signature semantics.
+
+use crate::error::{Error, Result};
+use crate::repository::RepositoryFormat;
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+pub mod openpgp;
+
+/// One explicitly pinned OpenPGP certificate source.
+///
+/// The downloaded object may be an OpenPGP keyring, but only the certificate
+/// whose full fingerprint matches `fingerprint` is admitted to the repository
+/// trust store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenPgpTrustRoot {
+    pub url: String,
+    pub fingerprint: String,
+}
+
+impl OpenPgpTrustRoot {
+    pub fn new(url: String, fingerprint: String) -> Result<Self> {
+        let root = Self { url, fingerprint };
+        root.validate()?;
+        Ok(root)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let parsed = Url::parse(&self.url).map_err(|error| {
+            Error::ConfigError(format!(
+                "OpenPGP trust-root URL '{}' is invalid: {error}",
+                self.url
+            ))
+        })?;
+        if !matches!(parsed.scheme(), "https" | "file") {
+            return Err(Error::ConfigError(format!(
+                "OpenPGP trust-root URL '{}' must use https:// or file://",
+                self.url
+            )));
+        }
+        if parsed.scheme() == "https" && parsed.host_str().is_none() {
+            return Err(Error::ConfigError(format!(
+                "OpenPGP trust-root URL '{}' has no host",
+                self.url
+            )));
+        }
+        if parsed.username() != "" || parsed.password().is_some() || parsed.fragment().is_some() {
+            return Err(Error::ConfigError(format!(
+                "OpenPGP trust-root URL '{}' must not contain credentials or a fragment",
+                self.url
+            )));
+        }
+
+        let fingerprint = self.normalized_fingerprint()?;
+        if fingerprint != self.fingerprint {
+            return Err(Error::ConfigError(format!(
+                "OpenPGP fingerprint '{}' must be uppercase hexadecimal without separators",
+                self.fingerprint
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn normalized_fingerprint(&self) -> Result<String> {
+        let fingerprint = self
+            .fingerprint
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect::<String>()
+            .to_ascii_uppercase();
+        if !matches!(fingerprint.len(), 40 | 64)
+            || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(Error::ConfigError(format!(
+                "OpenPGP fingerprint '{}' must contain exactly 40 or 64 hexadecimal digits",
+                self.fingerprint
+            )));
+        }
+        Ok(fingerprint)
+    }
+}
+
+/// Whether ALPM requires an object signature or verifies it only when present.
+///
+/// `Never` is intentionally not representable.  An optional signature still
+/// fails when present but invalid or signed by an unpinned certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArchSignatureRequirement {
+    Required,
+    Optional,
+}
+
+/// The only trust-level policy currently accepted by Conary.
+///
+/// Pacman's `TrustAll` mode is deliberately absent: a cryptographically valid
+/// signature from an untrusted key is not repository authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArchTrustLevel {
+    TrustedOnly,
+}
+
+/// Exact ALPM `SigLevel` projection used for database and package artifacts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchSigLevel {
+    pub database: ArchSignatureRequirement,
+    pub package: ArchSignatureRequirement,
+    pub trust: ArchTrustLevel,
+}
+
+impl ArchSigLevel {
+    /// Arch's distribution default: packages are required; database
+    /// signatures are checked when the repository publishes them.
+    pub const fn distribution_default() -> Self {
+        Self {
+            database: ArchSignatureRequirement::Optional,
+            package: ArchSignatureRequirement::Required,
+            trust: ArchTrustLevel::TrustedOnly,
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.package != ArchSignatureRequirement::Required {
+            return Err(Error::ConfigError(
+                "Arch package signatures must be required; PackageOptional is not a supported \
+                 repository authority policy"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Pacman-compatible keyring authority.
+///
+/// The keyring supplies packager certificates and certifications. Only paths
+/// rooted at these exact master fingerprints satisfy `TrustedOnly`, so a
+/// changed keyring cannot introduce an unauthenticated signing key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchKeyringTrust {
+    pub url: String,
+    pub format: ArchKeyringFormat,
+    pub master_fingerprints: Vec<String>,
+    /// Number of distinct pinned master keys that must certify a packager key.
+    pub packager_key_threshold: usize,
+}
+
+/// Exact transport grammar used by an Arch keyring source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArchKeyringFormat {
+    OpenPgp,
+    AlpmPackageZstd,
+}
+
+impl ArchKeyringTrust {
+    pub fn validate(&self) -> Result<()> {
+        validate_https_or_file_url(&self.url, "Arch keyring")?;
+        if self.master_fingerprints.is_empty() {
+            return Err(Error::ConfigError(
+                "Arch TrustedOnly authority requires at least one master fingerprint".to_string(),
+            ));
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for fingerprint in &self.master_fingerprints {
+            validate_fingerprint(fingerprint, "Arch master")?;
+            if !unique.insert(fingerprint.as_str()) {
+                return Err(Error::ConfigError(format!(
+                    "Arch keyring repeats master fingerprint '{fingerprint}'"
+                )));
+            }
+        }
+        if self.packager_key_threshold == 0
+            || self.packager_key_threshold > self.master_fingerprints.len()
+        {
+            return Err(Error::ConfigError(format!(
+                "Arch packager-key certification threshold {} must be between 1 and the {} pinned \
+                 master fingerprints",
+                self.packager_key_threshold,
+                self.master_fingerprints.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Exact authority for the rpm-md root object.
+///
+/// DNF's `repo_gpgcheck=true` uses a detached OpenPGP signature. Fedora's
+/// official repositories instead publish an HTTPS metalink containing the
+/// exact `repomd.xml` size and hashes. Both authenticate the same rpm-md root;
+/// neither is a toggle or an opportunistic fallback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RpmMetadataAuthority {
+    OpenPgp { keys: Vec<OpenPgpTrustRoot> },
+    Metalink { url: String },
+}
+
+impl RpmMetadataAuthority {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::OpenPgp { keys } => validate_roots(keys, "RPM repository metadata"),
+            Self::Metalink { url } => validate_https_or_file_url(url, "RPM metalink"),
+        }
+    }
+}
+
+/// Ecosystem-native repository authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "ecosystem", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RepositoryTrustPolicy {
+    /// APT authenticates `InRelease` or `Release` + `Release.gpg`; the signed
+    /// Release SHA-256 entry authenticates `Packages`, whose SHA-256 entries
+    /// authenticate `.deb` payloads.
+    Debian { release_keys: Vec<OpenPgpTrustRoot> },
+    /// RPM keeps repository-metadata and package-signature trust roots
+    /// distinct, matching `repo_gpgcheck` and `gpgcheck`.
+    Rpm {
+        metadata: RpmMetadataAuthority,
+        package_keys: Vec<OpenPgpTrustRoot>,
+    },
+    /// ALPM applies one explicit `SigLevel` to repository databases and
+    /// packages using its configured keyring.
+    Arch {
+        keyring: ArchKeyringTrust,
+        sig_level: ArchSigLevel,
+    },
+}
+
+impl RepositoryTrustPolicy {
+    pub fn format(&self) -> RepositoryFormat {
+        match self {
+            Self::Debian { .. } => RepositoryFormat::Debian,
+            Self::Rpm { .. } => RepositoryFormat::Fedora,
+            Self::Arch { .. } => RepositoryFormat::Arch,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Debian { release_keys } => {
+                validate_roots(release_keys, "Debian Release")?;
+            }
+            Self::Rpm {
+                metadata,
+                package_keys,
+            } => {
+                metadata.validate()?;
+                validate_roots(package_keys, "RPM package")?;
+            }
+            Self::Arch { keyring, sig_level } => {
+                keyring.validate()?;
+                sig_level.validate()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_json(&self) -> Result<String> {
+        self.validate()?;
+        serde_json::to_string(self).map_err(|error| {
+            Error::ParseError(format!(
+                "failed to serialize repository trust policy: {error}"
+            ))
+        })
+    }
+
+    pub fn from_json(value: &str) -> Result<Self> {
+        let policy = serde_json::from_str::<Self>(value).map_err(|error| {
+            Error::ParseError(format!(
+                "invalid persisted repository trust policy: {error}"
+            ))
+        })?;
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    pub fn roots_for_role(&self, role: TrustRole) -> Result<&[OpenPgpTrustRoot]> {
+        match (self, role) {
+            (Self::Debian { release_keys }, TrustRole::DebianRelease) => Ok(release_keys),
+            (
+                Self::Rpm {
+                    metadata: RpmMetadataAuthority::OpenPgp { keys },
+                    ..
+                },
+                TrustRole::RpmMetadata,
+            ) => Ok(keys),
+            (Self::Rpm { package_keys, .. }, TrustRole::RpmPackage) => Ok(package_keys),
+            _ => Err(Error::ConfigError(format!(
+                "trust role '{}' does not belong to '{}' policy",
+                role.as_str(),
+                self.format().as_str()
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustRole {
+    DebianRelease,
+    RpmMetadata,
+    RpmPackage,
+    ArchDatabase,
+    ArchPackage,
+}
+
+impl TrustRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DebianRelease => "debian-release",
+            Self::RpmMetadata => "rpm-metadata",
+            Self::RpmPackage => "rpm-package",
+            Self::ArchDatabase => "arch-database",
+            Self::ArchPackage => "arch-package",
+        }
+    }
+}
+
+fn validate_roots(roots: &[OpenPgpTrustRoot], label: &str) -> Result<()> {
+    if roots.is_empty() {
+        return Err(Error::ConfigError(format!(
+            "{label} trust requires at least one pinned OpenPGP certificate"
+        )));
+    }
+    let mut fingerprints = std::collections::BTreeSet::new();
+    for root in roots {
+        root.validate()?;
+        if !fingerprints.insert(root.fingerprint.as_str()) {
+            return Err(Error::ConfigError(format!(
+                "{label} trust repeats fingerprint '{}'",
+                root.fingerprint
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_fingerprint(fingerprint: &str, label: &str) -> Result<()> {
+    if !matches!(fingerprint.len(), 40 | 64)
+        || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || fingerprint.bytes().any(|byte| byte.is_ascii_lowercase())
+    {
+        return Err(Error::ConfigError(format!(
+            "{label} fingerprint '{fingerprint}' must be exactly 40 or 64 uppercase hexadecimal \
+             digits"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_https_or_file_url(value: &str, label: &str) -> Result<()> {
+    let parsed = Url::parse(value).map_err(|error| {
+        Error::ConfigError(format!("{label} URL '{value}' is invalid: {error}"))
+    })?;
+    if !matches!(parsed.scheme(), "https" | "file") {
+        return Err(Error::ConfigError(format!(
+            "{label} URL '{value}' must use https:// or file://"
+        )));
+    }
+    if parsed.scheme() == "https" && parsed.host_str().is_none() {
+        return Err(Error::ConfigError(format!(
+            "{label} URL '{value}' has no host"
+        )));
+    }
+    if parsed.username() != "" || parsed.password().is_some() || parsed.fragment().is_some() {
+        return Err(Error::ConfigError(format!(
+            "{label} URL '{value}' must not contain credentials or a fragment"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root() -> OpenPgpTrustRoot {
+        OpenPgpTrustRoot {
+            url: "https://keys.example.test/archive.asc".to_string(),
+            fingerprint: "A".repeat(40),
+        }
+    }
+
+    #[test]
+    fn old_boolean_bypass_fields_are_rejected() {
+        let old = serde_json::json!({
+            "ecosystem": "rpm",
+            "metadata": {
+                "kind": "open-pgp",
+                "keys": [root()]
+            },
+            "package_keys": [root()],
+            "gpg_check": false
+        });
+
+        let error = RepositoryTrustPolicy::from_json(&old.to_string()).unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn rpm_roles_are_distinct() {
+        let metadata = root();
+        let mut package = root();
+        package.fingerprint = "B".repeat(40);
+        let policy = RepositoryTrustPolicy::Rpm {
+            metadata: RpmMetadataAuthority::OpenPgp {
+                keys: vec![metadata.clone()],
+            },
+            package_keys: vec![package.clone()],
+        };
+
+        assert_eq!(
+            policy.roots_for_role(TrustRole::RpmMetadata).unwrap(),
+            &[metadata]
+        );
+        assert_eq!(
+            policy.roots_for_role(TrustRole::RpmPackage).unwrap(),
+            &[package]
+        );
+    }
+
+    #[test]
+    fn arch_rejects_package_optional() {
+        let policy = RepositoryTrustPolicy::Arch {
+            keyring: ArchKeyringTrust {
+                url: "https://keys.example.test/archlinux.gpg".to_string(),
+                format: ArchKeyringFormat::OpenPgp,
+                master_fingerprints: vec!["A".repeat(40)],
+                packager_key_threshold: 1,
+            },
+            sig_level: ArchSigLevel {
+                database: ArchSignatureRequirement::Optional,
+                package: ArchSignatureRequirement::Optional,
+                trust: ArchTrustLevel::TrustedOnly,
+            },
+        };
+
+        assert!(policy.validate().is_err());
+    }
+
+    #[test]
+    fn arch_packager_threshold_must_fit_pinned_master_set() {
+        let keyring = ArchKeyringTrust {
+            url: "https://keys.example.test/archlinux.gpg".to_string(),
+            format: ArchKeyringFormat::OpenPgp,
+            master_fingerprints: vec!["A".repeat(40), "B".repeat(40)],
+            packager_key_threshold: 3,
+        };
+
+        let error = keyring.validate().unwrap_err();
+        assert!(error.to_string().contains("between 1 and the 2"));
+    }
+
+    #[test]
+    fn fingerprints_are_exact_not_fuzzy() {
+        let root = OpenPgpTrustRoot {
+            url: "https://keys.example.test/archive.asc".to_string(),
+            fingerprint: "AA BB".repeat(10),
+        };
+        assert!(root.validate().is_err());
+    }
+}

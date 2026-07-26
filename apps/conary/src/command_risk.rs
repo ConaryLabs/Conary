@@ -15,6 +15,9 @@ pub enum CommandRisk {
     DryRunOnly,
     HookRefreshDbMutation,
     DbMutation,
+    /// Internal boot continuation authorized by an exact generation artifact
+    /// and kernel command-line contract rather than an interactive `--yes`.
+    GenerationBootActivation,
     ActiveHostMutation,
     AlwaysLive,
 }
@@ -44,7 +47,8 @@ impl CommandRiskPolicy {
             CommandRisk::ReadOnly
             | CommandRisk::LocalStateMutation
             | CommandRisk::DryRunOnly
-            | CommandRisk::HookRefreshDbMutation => None,
+            | CommandRisk::HookRefreshDbMutation
+            | CommandRisk::GenerationBootActivation => None,
             CommandRisk::DbMutation => Some(LiveMutationClass::LiveConaryState),
             CommandRisk::ActiveHostMutation => {
                 Some(LiveMutationClass::CurrentlyLiveEvenWithRootArguments)
@@ -54,7 +58,7 @@ impl CommandRiskPolicy {
     }
 }
 
-pub fn enforce_cli_policy(allow_live_system_mutation: bool, cli: &Cli) -> Result<()> {
+pub fn enforce_cli_policy(cli: &Cli) -> Result<()> {
     let Some(policy) = classify_cli(cli) else {
         return Ok(());
     };
@@ -75,7 +79,7 @@ pub fn enforce_cli_policy(allow_live_system_mutation: bool, cli: &Cli) -> Result
         command_label: policy.command_label,
         class,
         dry_run: policy.dry_run,
-        intent: MutationIntent::from_apply_intent(policy.apply_intent, allow_live_system_mutation),
+        intent: MutationIntent::from_apply_intent(policy.apply_intent),
     })
 }
 
@@ -152,20 +156,12 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
         Commands::Try {
             target,
             activate,
-            allow_irreversible,
             watch,
             run,
             ..
-        } => Some(classify_try(
-            target.as_deref(),
-            *activate,
-            *allow_irreversible,
-            run,
-            *watch,
-        )),
+        } => Some(classify_try(target.as_deref(), *activate, run, *watch)),
         Commands::Search { .. }
         | Commands::List { .. }
-        | Commands::ConvertPkgbuild { .. }
         | Commands::RecipeAudit { .. }
         | Commands::Canonical(_)
         | Commands::Groups(_)
@@ -221,7 +217,6 @@ pub fn classify_cli(cli: &Cli) -> Option<CommandRiskPolicy> {
 fn classify_try(
     target: Option<&str>,
     activate: bool,
-    allow_irreversible: bool,
     run: &[String],
     watch: bool,
 ) -> CommandRiskPolicy {
@@ -232,7 +227,6 @@ fn classify_try(
     if let Some(target) = target
         && matches!(target, "status" | "rollback" | "keep")
         && !activate
-        && !allow_irreversible
         && run.is_empty()
     {
         return match target {
@@ -283,7 +277,6 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             status,
             dry_run,
             refresh,
-            convert,
             sync_hook,
             quiet,
             from_sync_hook,
@@ -293,7 +286,6 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             status: *status,
             dry_run: *dry_run,
             refresh: *refresh,
-            convert: *convert,
             sync_hook: *sync_hook,
             quiet: *quiet,
             from_sync_hook: *from_sync_hook,
@@ -310,7 +302,6 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             *dry_run,
             *yes,
         )),
-        cli::SystemCommands::Gc { .. } => Some(local_state("conary system gc")),
         cli::SystemCommands::DbBackup { command } => Some(classify_db_backup(command)),
         cli::SystemCommands::State(command) => Some(classify_state(command)),
         cli::SystemCommands::Generation(command) => Some(classify_generation(command)),
@@ -349,7 +340,6 @@ struct AdoptRiskInput {
     status: bool,
     dry_run: bool,
     refresh: bool,
-    convert: bool,
     sync_hook: bool,
     quiet: bool,
     from_sync_hook: bool,
@@ -381,8 +371,6 @@ fn classify_adopt(input: AdoptRiskInput) -> Option<CommandRiskPolicy> {
             "conary system adopt --system --dry-run"
         } else if input.refresh {
             "conary system adopt --refresh --dry-run"
-        } else if input.convert {
-            "conary system adopt --convert --dry-run"
         } else {
             "conary system adopt <pkg> --dry-run"
         };
@@ -393,8 +381,6 @@ fn classify_adopt(input: AdoptRiskInput) -> Option<CommandRiskPolicy> {
         "conary system adopt --system"
     } else if input.refresh {
         "conary system adopt --refresh"
-    } else if input.convert {
-        "conary system adopt --convert"
     } else {
         "conary system adopt <pkg>"
     };
@@ -445,6 +431,11 @@ fn classify_generation(command: &cli::GenerationCommands) -> CommandRiskPolicy {
             *yes,
         ),
         cli::GenerationCommands::Pending { .. } => read_only("conary system generation pending"),
+        cli::GenerationCommands::Activate { .. } => policy(
+            "conary system generation activate",
+            CommandRisk::GenerationBootActivation,
+            false,
+        ),
         cli::GenerationCommands::RecoverDb { dry_run, .. } if *dry_run => {
             read_only("conary system generation recover-db --dry-run")
         }
@@ -517,17 +508,13 @@ fn classify_update_channel(action: &cli::UpdateChannelAction) -> CommandRiskPoli
 
 fn classify_repo(command: &cli::RepoCommands) -> CommandRiskPolicy {
     match command {
-        cli::RepoCommands::List { .. } | cli::RepoCommands::KeyList { .. } => {
-            read_only("conary repo read-only command")
-        }
+        cli::RepoCommands::List { .. } => read_only("conary repo read-only command"),
         cli::RepoCommands::Add { .. }
         | cli::RepoCommands::Remove { .. }
         | cli::RepoCommands::ResetTrust { .. }
         | cli::RepoCommands::Enable { .. }
         | cli::RepoCommands::Disable { .. }
-        | cli::RepoCommands::Sync { .. }
-        | cli::RepoCommands::KeyImport { .. }
-        | cli::RepoCommands::KeyRemove { .. } => local_state("conary repo"),
+        | cli::RepoCommands::Sync { .. } => local_state("conary repo"),
     }
 }
 
@@ -549,8 +536,7 @@ fn classify_distro(command: &cli::DistroCommands) -> CommandRiskPolicy {
         }
         cli::DistroCommands::Set { .. }
         | cli::DistroCommands::Remove { .. }
-        | cli::DistroCommands::Mixing { .. }
-        | cli::DistroCommands::SelectionMode { .. } => local_state("conary distro"),
+        | cli::DistroCommands::Mixing { .. } => local_state("conary distro"),
     }
 }
 
@@ -614,9 +600,7 @@ fn classify_ccs(command: &cli::CcsCommands) -> CommandRiskPolicy {
         | cli::CcsCommands::Verify { .. }
         | cli::CcsCommands::Sign { .. }
         | cli::CcsCommands::Keygen { .. }
-        | cli::CcsCommands::Export { .. }
-        | cli::CcsCommands::Shell { .. }
-        | cli::CcsCommands::Run { .. } => read_only("conary ccs non-host command"),
+        | cli::CcsCommands::Export { .. } => read_only("conary ccs non-host command"),
     }
 }
 
@@ -730,9 +714,9 @@ fn classify_trust(command: &cli::TrustCommands) -> CommandRiskPolicy {
         cli::TrustCommands::KeyGen { .. }
         | cli::TrustCommands::Status { .. }
         | cli::TrustCommands::Verify { .. } => read_only("conary trust read-only command"),
-        cli::TrustCommands::Init { .. }
-        | cli::TrustCommands::Enable { .. }
-        | cli::TrustCommands::Disable { .. } => local_state("conary trust"),
+        cli::TrustCommands::Init { .. } | cli::TrustCommands::Enable { .. } => {
+            local_state("conary trust")
+        }
     }
 }
 
@@ -780,416 +764,4 @@ fn local_state(command_label: &'static str) -> CommandRiskPolicy {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{CommandRisk, classify_cli};
-    use crate::cli::{self, Cli, Commands};
-    use clap::Parser;
-
-    fn parse_cli(args: &[&str]) -> Result<Cli, String> {
-        let args = args
-            .iter()
-            .map(|arg| (*arg).to_string())
-            .collect::<Vec<_>>();
-
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(move || Cli::try_parse_from(args).map_err(|err| err.to_string()))
-            .expect("parser thread should spawn")
-            .join()
-            .expect("parser thread should not panic")
-    }
-
-    fn policy(args: &[&str]) -> super::CommandRiskPolicy {
-        let cli = parse_cli(args).unwrap();
-        classify_cli(&cli).expect("command should be classified")
-    }
-
-    #[test]
-    fn classify_system_adopt_status_as_read_only() {
-        let policy = policy(&["conary", "system", "adopt", "--status"]);
-        assert_eq!(policy.risk, CommandRisk::ReadOnly);
-        assert!(!policy.requires_ack());
-    }
-
-    #[test]
-    fn mcp_packaging_startup_is_read_only() {
-        let cli = Cli {
-            seccomp_warn: false,
-            help_advanced: false,
-            allow_live_system_mutation: false,
-            log_verbose: 0,
-            quiet: false,
-            command: Some(Commands::Mcp(cli::McpCommands::Packaging)),
-        };
-
-        let policy = classify_cli(&cli).expect("mcp packaging should have a risk policy");
-        assert_eq!(policy.command_label, "conary mcp packaging");
-        assert_eq!(policy.risk, CommandRisk::ReadOnly);
-        assert!(!policy.dry_run);
-        assert!(!policy.apply_intent);
-    }
-
-    #[test]
-    fn classify_self_update_default_as_apply_intent() {
-        let policy = policy(&["conary", "self-update"]);
-        assert_eq!(policy.command_label.as_ref(), "conary self-update");
-        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
-        assert!(policy.requires_ack());
-        assert!(policy.apply_intent);
-    }
-
-    #[test]
-    fn classify_self_update_check_and_offline_verification_as_read_only() {
-        for args in [
-            ["conary", "self-update", "--check"].as_slice(),
-            [
-                "conary",
-                "self-update",
-                "--verify-sha256",
-                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "--verify-signature-file",
-                "/tmp/conary.sig",
-            ]
-            .as_slice(),
-            ["conary", "self-update", "--print-trusted-keys"].as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::ReadOnly);
-            assert!(!policy.requires_ack());
-            assert!(!policy.apply_intent);
-        }
-    }
-
-    #[test]
-    fn m4b_ccs_authoring_commands_are_not_active_host_mutations() {
-        let init = policy(&["conary", "ccs", "init", "--template", "minimal-file"]);
-        assert_eq!(init.risk, CommandRisk::LocalStateMutation);
-
-        let lint = policy(&["conary", "ccs", "lint"]);
-        assert_eq!(lint.risk, CommandRisk::ReadOnly);
-
-        let build = policy(&["conary", "ccs", "build", "--format", "v2", "--local-dev"]);
-        assert_eq!(build.risk, CommandRisk::LocalStateMutation);
-
-        let test = policy(&["conary", "ccs", "test", "pkg.ccs", "--dry-run"]);
-        assert_eq!(test.risk, CommandRisk::LocalStateMutation);
-    }
-
-    #[test]
-    fn classify_system_adopt_system_dry_run_as_dry_run_only() {
-        let policy = policy(&["conary", "system", "adopt", "--system", "--dry-run"]);
-        assert_eq!(policy.risk, CommandRisk::DryRunOnly);
-        assert!(!policy.requires_ack());
-    }
-
-    #[test]
-    fn classify_system_adopt_package_as_live_db_mutation() {
-        let policy = policy(&["conary", "system", "adopt", "curl"]);
-        assert_eq!(policy.risk, CommandRisk::DbMutation);
-        assert!(!policy.requires_ack());
-        assert_eq!(policy.command_label.as_ref(), "conary system adopt <pkg>");
-    }
-
-    #[test]
-    fn classify_system_adopt_full_package_as_live_db_mutation() {
-        let policy = policy(&["conary", "system", "adopt", "curl", "--full"]);
-        assert_eq!(policy.risk, CommandRisk::DbMutation);
-        assert!(!policy.requires_ack());
-    }
-
-    #[test]
-    fn classify_system_adopt_convert_dry_run_as_dry_run_only() {
-        let policy = policy(&["conary", "system", "adopt", "--convert", "--dry-run"]);
-        assert_eq!(policy.risk, CommandRisk::DryRunOnly);
-        assert!(!policy.requires_ack());
-    }
-
-    #[test]
-    fn classify_installed_sync_hook_refresh_as_narrow_hook_refresh() {
-        let policy = policy(&[
-            "conary",
-            "system",
-            "adopt",
-            "--refresh",
-            "--quiet",
-            "--from-sync-hook",
-        ]);
-        assert_eq!(policy.risk, CommandRisk::HookRefreshDbMutation);
-        assert!(!policy.requires_ack());
-        assert_eq!(
-            policy.command_label.as_ref(),
-            "conary system adopt --refresh --quiet --from-sync-hook"
-        );
-    }
-
-    #[test]
-    fn from_sync_hook_requires_quiet_refresh_and_rejects_full_capture() {
-        assert!(
-            parse_cli(&["conary", "system", "adopt", "--refresh", "--from-sync-hook"]).is_err()
-        );
-
-        assert!(
-            parse_cli(&[
-                "conary",
-                "system",
-                "adopt",
-                "--refresh",
-                "--quiet",
-                "--full",
-                "--from-sync-hook",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn classify_system_adopt_sync_hook_as_active_host_mutation() {
-        let policy = policy(&["conary", "system", "adopt", "--sync-hook"]);
-        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
-        assert!(policy.requires_ack());
-    }
-
-    #[test]
-    fn classify_system_adopt_remove_hook_as_active_host_mutation() {
-        let policy = policy(&["conary", "system", "adopt", "--sync-hook", "--remove-hook"]);
-        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
-        assert!(policy.requires_ack());
-    }
-
-    #[test]
-    fn classify_pin_and_unpin_as_local_state_mutations() {
-        for args in [
-            ["conary", "pin", "curl"].as_slice(),
-            ["conary", "unpin", "curl"].as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
-            assert!(!policy.requires_ack());
-        }
-    }
-
-    #[test]
-    fn classify_try_commands_by_session_risk() {
-        let namespace = policy(&["conary", "try", "pkg.ccs"]);
-        assert_eq!(namespace.risk, CommandRisk::LocalStateMutation);
-        assert!(!namespace.requires_ack());
-
-        let watch = policy(&["conary", "try", "--watch"]);
-        assert_eq!(watch.command_label.as_ref(), "conary try --watch");
-        assert_eq!(watch.risk, CommandRisk::LocalStateMutation);
-        assert!(!watch.requires_ack());
-
-        let invalid_activated_watch = policy(&["conary", "try", "--watch", "--activate"]);
-        assert_eq!(
-            invalid_activated_watch.risk,
-            CommandRisk::LocalStateMutation
-        );
-        assert!(!invalid_activated_watch.requires_ack());
-
-        let activated = policy(&["conary", "try", "pkg.ccs", "--activate"]);
-        assert_eq!(activated.risk, CommandRisk::ActiveHostMutation);
-        assert!(activated.requires_ack());
-        assert!(
-            activated.apply_intent,
-            "--activate is the explicit host-global try intent"
-        );
-
-        let status = policy(&["conary", "try", "status"]);
-        assert_eq!(status.risk, CommandRisk::ReadOnly);
-        assert!(!status.requires_ack());
-
-        for args in [
-            ["conary", "try", "rollback"].as_slice(),
-            ["conary", "try", "keep"].as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
-            assert!(policy.requires_ack());
-            assert!(
-                policy.apply_intent,
-                "try management actions are explicit decisions"
-            );
-        }
-    }
-
-    #[test]
-    fn classify_cook_as_local_state_mutation_even_when_validate_only() {
-        for args in [
-            ["conary", "cook", "."].as_slice(),
-            ["conary", "cook", ".", "--validate-only"].as_slice(),
-            ["conary", "cook", ".", "--validate-only", "--explain"].as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
-            assert!(!policy.requires_ack());
-            assert_eq!(policy.command_label.as_ref(), "conary cook");
-        }
-    }
-
-    #[test]
-    fn cook_record_is_local_state_mutation_like_cook() {
-        let policy = policy(&["conary", "cook", "--record", ".", "--", "make"]);
-        assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
-        assert!(!policy.requires_ack());
-        assert_eq!(policy.command_label.as_ref(), "conary cook");
-    }
-
-    #[test]
-    fn classify_system_init_and_repo_sync_as_local_state_mutations() {
-        for args in [
-            ["conary", "system", "init", "--profile", "fedora-44"].as_slice(),
-            ["conary", "repo", "sync", "remi"].as_slice(),
-            ["conary", "publish", "./repo"].as_slice(),
-            ["conary", "new", "--from", ".", "--explain"].as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::LocalStateMutation);
-            assert!(!policy.requires_ack());
-        }
-    }
-
-    #[test]
-    fn classify_adoption_dry_runs_with_precise_labels() {
-        let package = policy(&["conary", "system", "adopt", "curl", "--dry-run"]);
-        assert_eq!(
-            package.command_label.as_ref(),
-            "conary system adopt <pkg> --dry-run"
-        );
-        assert_eq!(package.risk, CommandRisk::DryRunOnly);
-        assert!(package.dry_run);
-        assert!(!package.requires_ack());
-
-        let system = policy(&["conary", "system", "adopt", "--system", "--dry-run"]);
-        assert_eq!(
-            system.command_label.as_ref(),
-            "conary system adopt --system --dry-run"
-        );
-
-        let refresh = policy(&["conary", "system", "adopt", "--refresh", "--dry-run"]);
-        assert_eq!(
-            refresh.command_label.as_ref(),
-            "conary system adopt --refresh --dry-run"
-        );
-
-        let convert = policy(&["conary", "system", "adopt", "--convert", "--dry-run"]);
-        assert_eq!(
-            convert.command_label.as_ref(),
-            "conary system adopt --convert --dry-run"
-        );
-    }
-
-    #[test]
-    fn classify_generation_publish_as_always_live() {
-        let policy = policy(&["conary", "system", "generation", "publish"]);
-        assert_eq!(policy.risk, CommandRisk::AlwaysLive);
-        assert!(policy.requires_ack());
-    }
-
-    #[test]
-    fn db_mutation_adopt_no_longer_requires_live_ack() {
-        let policy = policy(&["conary", "system", "adopt", "curl"]);
-        assert_eq!(policy.risk, CommandRisk::DbMutation);
-        assert!(!policy.requires_apply_intent());
-    }
-
-    #[test]
-    fn active_host_install_requires_apply_intent() {
-        let policy = policy(&["conary", "install", "nginx"]);
-        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
-        assert!(policy.requires_apply_intent());
-    }
-
-    #[test]
-    fn classify_generation_pending_as_read_only() {
-        let policy = policy(&["conary", "system", "generation", "pending"]);
-        assert_eq!(policy.risk, CommandRisk::ReadOnly);
-        assert!(!policy.requires_ack());
-    }
-
-    #[test]
-    fn classify_generation_db_backup_verification_and_dry_run_recovery_as_read_only() {
-        for args in [
-            [
-                "conary",
-                "system",
-                "generation",
-                "verify-db-backup",
-                "--current",
-            ]
-            .as_slice(),
-            [
-                "conary",
-                "system",
-                "generation",
-                "recover-db",
-                "--generation",
-                "7",
-                "--dry-run",
-            ]
-            .as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::ReadOnly);
-            assert!(!policy.requires_ack());
-        }
-    }
-
-    #[test]
-    fn classify_generation_db_backup_recover_apply_as_always_live() {
-        let policy = policy(&[
-            "conary",
-            "system",
-            "generation",
-            "recover-db",
-            "--generation",
-            "7",
-            "--yes",
-        ]);
-
-        assert_eq!(policy.risk, CommandRisk::AlwaysLive);
-        assert!(policy.requires_ack());
-        assert_eq!(
-            policy.command_label.as_ref(),
-            "conary system generation recover-db"
-        );
-    }
-
-    #[test]
-    fn classify_db_backup_inspection_as_read_only() {
-        for args in [
-            ["conary", "system", "db-backup", "list"].as_slice(),
-            ["conary", "system", "db-backup", "verify", "--latest"].as_slice(),
-            [
-                "conary",
-                "system",
-                "db-backup",
-                "recover",
-                "--latest",
-                "--dry-run",
-            ]
-            .as_slice(),
-        ] {
-            let policy = policy(args);
-            assert_eq!(policy.risk, CommandRisk::ReadOnly);
-            assert!(!policy.requires_ack());
-        }
-    }
-
-    #[test]
-    fn classify_db_backup_recover_apply_as_active_host_mutation() {
-        let policy = policy(&[
-            "conary",
-            "system",
-            "db-backup",
-            "recover",
-            "--latest",
-            "--yes",
-        ]);
-        assert_eq!(policy.risk, CommandRisk::ActiveHostMutation);
-        assert!(policy.requires_ack());
-        assert_eq!(
-            policy.command_label.as_ref(),
-            "conary system db-backup recover"
-        );
-    }
-}
+mod tests;

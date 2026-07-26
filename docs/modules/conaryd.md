@@ -1,9 +1,15 @@
+---
+last_updated: 2026-07-25
+revision: 5
+summary: Document conaryd authorization, exact-generation package jobs, routes, and daemon boundaries
+---
+
 # conaryd
 
-`conaryd` is the local daemon for query routes, package job queueing, SSE events,
-and selected system-operation stubs. It listens on the configured local socket
-and applies the same apply-intent boundary as the CLI for package mutation
-jobs.
+`conaryd` is the local daemon for query routes, package job queueing, and SSE
+events. It listens on the configured local socket and applies the same
+apply-intent boundary as the CLI for package mutation jobs. Unimplemented
+system-operation routes are absent rather than exposed as placeholders.
 
 ## Authorization
 
@@ -11,15 +17,17 @@ jobs.
 liveness checks. `/v1/*` routes are behind the v1 gate. Query routes are
 read-oriented. Package mutation and system operation routes require the daemon
 authorization checks and still require explicit apply intent in request bodies
-where the operation can mutate the host. New package requests should send
-`apply_intent: true`; `allow_live_system_mutation: true` remains accepted as a
-compatibility alias for existing clients during the migration window.
+where the operation can mutate the host. Package requests send
+`apply_intent: true`; removed acknowledgement aliases are rejected as unknown
+request fields.
 
-PolicyKit authorization is currently fail-closed. Root and the daemon identity
-can perform daemon operations. Other non-root peers may use read-oriented query
-surfaces but cannot perform daemon write operations while PolicyKit write
-authorization remains unimplemented. Membership in `sudo`, `wheel`, or a
-distribution-specific numeric GID is not a default daemon admin path.
+Root, the daemon identity, and members of the exact group passed through
+`--socket-group` can perform daemon operations. At startup, conaryd resolves
+that group once and fails if it does not exist; the same group owns the
+mode-`0660` Unix socket and is checked against `SO_PEERCRED` plus the live
+process supplementary-group list. With no configured group, the API is
+root/daemon-only. There is no PolicyKit placeholder, broad authenticated-user
+fallback, or implicit `sudo`/`wheel` distribution-group selection.
 
 ## Package Job Execution Boundary
 
@@ -31,6 +39,14 @@ therefore need both daemon-route/job proof and the owning CLI package-command
 proof; `package_ops.rs` is the adapter boundary, not an independent package
 manager implementation.
 
+A mutating package operation is complete only when its exact selected-root
+generation is published. If the package database commit succeeds but generation
+publication leaves recoverable debt, the daemon reports the job as failed with
+the persisted publication phase, failure detail, and exact retry command. It
+must not label a database-only mutation as a completed package job. Package
+publication never mutates the ambient root passed to the daemon; the new
+generation is the execution result.
+
 ## Route Reference
 
 The route list below is checked by `scripts/check-doc-truth.sh` against
@@ -40,10 +56,6 @@ The route list below is checked by `scripts/check-doc-truth.sh` against
 GET /health | Health check outside the v1 auth gate
 GET /v1/version | Version and build metadata
 GET /v1/metrics | Prometheus-style daemon metrics
-GET /v1/system/states | Preview stub: system state listing is not implemented in conaryd
-POST /v1/system/rollback | Preview stub: rollback is not implemented in conaryd
-POST /v1/system/verify | Preview stub: verification is not implemented in conaryd
-POST /v1/system/gc | Preview stub: garbage collection is not implemented in conaryd
 GET /v1/transactions | List visible daemon jobs
 POST /v1/transactions | Queue a daemon transaction job
 POST /v1/transactions/dry-run | Preview a daemon transaction request
@@ -65,9 +77,10 @@ GET /v1/events | Stream daemon events
 <!-- conaryd-routes:end -->
 
 Route implementation ownership: `apps/conaryd/src/daemon/routes.rs` is the
-route hub; `routes/router.rs` owns Axum assembly; `routes/types.rs` owns API
-DTOs; `routes/errors.rs` owns API error conversion; `routes/auth.rs` owns
-route-level auth and job/event visibility gates; `routes/db.rs` owns blocking
-DB query plumbing; `routes/sse.rs` owns SSE connection guarding; and
+route hub; `daemon/config.rs` owns runtime configuration and canonical defaults;
+`routes/router.rs` owns Axum assembly; `routes/types.rs` owns API DTOs;
+`routes/errors.rs` owns API error conversion; `routes/auth.rs` owns route-level
+auth and job/event visibility gates; `routes/db.rs` owns blocking DB query
+plumbing; `routes/sse.rs` owns SSE connection guarding; and
 `routes/{system,query,transactions,events}.rs` own endpoint declarations and
 handlers.

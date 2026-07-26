@@ -35,7 +35,6 @@ pub struct TakeoverInventory {
     pub not_tracked: Vec<String>,
     pub already_owned: Vec<String>,
     pub needs_pm_removal: Vec<String>,
-    pub blocked: Vec<String>,
     pub total_system_packages: usize,
 }
 

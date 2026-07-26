@@ -27,19 +27,6 @@ pub enum VerifyCommands {
         db: DbArgs,
     },
 
-    /// Rebuild a derivation and compare output hash
-    Rebuild {
-        /// Derivation ID or package name
-        derivation: String,
-
-        /// Working directory for rebuild
-        #[arg(long, default_value = ".conary/verify")]
-        work_dir: String,
-
-        #[command(flatten)]
-        db: DbArgs,
-    },
-
     /// Compare builds from two different seeds
     Diverse {
         /// Profile from first seed build

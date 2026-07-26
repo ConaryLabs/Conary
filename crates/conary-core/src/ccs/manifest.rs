@@ -4,18 +4,28 @@
 //! This module defines the structure of a CCS package manifest and provides
 //! parsing from TOML format.
 
+mod hooks;
+
+pub use hooks::*;
+
 use crate::capability::CapabilityDeclaration;
 use crate::ccs::hooks::{
-    is_denied_sysctl_key, is_safe_unit_name, validate_shell, validate_tmpfiles_entry_type,
+    is_denied_sysctl_key, is_safe_declarative_unit_name, validate_shell, validate_tmpfiles_fields,
     validate_username,
 };
-use crate::ccs::legacy_scriptlets::LegacyScriptletBundle;
 pub use crate::ccs::manifest_provenance::{
     ManifestProvenance, ProvenanceDep, ProvenancePatch, ProvenanceSignature,
 };
+use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::v2::PackageKindTagV2;
 use crate::filesystem::path::sanitize_path;
+use crate::repository::versioning::VersionScheme;
+use crate::repository::{
+    dependency_model::{DebianMultiArch, RepositoryRequirementGroup},
+    package_relation::validate_native_relation,
+    requirement::validate_requirement_group,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -38,14 +48,23 @@ pub enum ManifestError {
 
 /// Root structure of ccs.toml
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CcsManifest {
     pub package: Package,
 
     #[serde(default)]
     pub provides: Provides,
 
+    /// Exact positive requirement authority. Native conversions and CCS v2
+    /// use this field for Boolean expressions.
     #[serde(default)]
-    pub requires: Requires,
+    pub requirements: Vec<RepositoryRequirementGroup>,
+
+    /// Exact source-native conflict, break, replacement, and obsolescence
+    /// authority. These relations are deliberately separate from positive
+    /// dependencies and provides.
+    #[serde(default)]
+    pub relations: Vec<RepositoryRequirementGroup>,
 
     #[serde(default)]
     pub suggests: Suggests,
@@ -60,9 +79,9 @@ pub struct CcsManifest {
     #[serde(default)]
     pub scriptlets: ScriptletDeclarations,
 
-    /// Passive legacy scriptlet semantics bundle for converted packages.
+    /// Passive native lifecycle semantics bundle for converted packages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_scriptlets: Option<LegacyScriptletBundle>,
+    pub native_lifecycle: Option<NativeLifecycleBundle>,
 
     #[serde(default)]
     pub config: Config,
@@ -71,7 +90,7 @@ pub struct CcsManifest {
     pub build: Option<BuildInfo>,
 
     #[serde(default)]
-    pub legacy: Option<Legacy>,
+    pub native_export: Option<NativeExport>,
 
     /// Build policy configuration
     #[serde(default)]
@@ -118,6 +137,30 @@ impl CcsManifest {
         }
         if self.package.version.is_empty() {
             return Err(ManifestError::MissingField("package.version".to_string()));
+        }
+        crate::repository::versioning::validate_repo_version(
+            self.package.version_scheme,
+            &self.package.version,
+        )
+        .map_err(|error| {
+            ManifestError::Invalid(format!("invalid package.version contract: {error}"))
+        })?;
+        if self.package.release.is_empty() {
+            return Err(ManifestError::MissingField("package.release".to_string()));
+        }
+        match (self.package.version_scheme, self.package.debian_multi_arch) {
+            (VersionScheme::Debian, Some(_))
+            | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+            (VersionScheme::Debian, None) => {
+                return Err(ManifestError::MissingField(
+                    "package.debian_multi_arch".to_string(),
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(ManifestError::Invalid(
+                    "package.debian_multi_arch is valid only for Debian packages".to_string(),
+                ));
+            }
         }
 
         for user in &self.hooks.users {
@@ -184,15 +227,18 @@ impl CcsManifest {
         }
 
         for entry in &self.hooks.tmpfiles {
-            validate_tmpfiles_entry_type(&entry.entry_type).map_err(|error| {
+            validate_tmpfiles_fields(
+                &entry.entry_type,
+                &entry.path,
+                &entry.mode,
+                &entry.user,
+                &entry.group,
+                &entry.age,
+                &entry.argument,
+            )
+            .map_err(|error| {
                 ManifestError::Invalid(format!(
-                    "invalid hooks.tmpfiles entry type '{}': {}",
-                    entry.entry_type, error
-                ))
-            })?;
-            sanitize_path(&entry.path).map_err(|error| {
-                ManifestError::Invalid(format!(
-                    "invalid hooks.tmpfiles path '{}': {}",
+                    "invalid hooks.tmpfiles entry for '{}': {}",
                     entry.path, error
                 ))
             })?;
@@ -208,24 +254,74 @@ impl CcsManifest {
         }
 
         for unit in &self.hooks.systemd {
-            if !is_safe_unit_name(&unit.unit) {
+            if !is_safe_declarative_unit_name(&unit.unit) {
                 return Err(ManifestError::Invalid(format!(
-                    "hooks.systemd unit '{}' is unsafe",
+                    "hooks.systemd unit '{}' must be a pathless, nonempty declarative unit name without NUL bytes",
                     unit.unit
+                )));
+            }
+        }
+        for service in &self.hooks.services {
+            if !is_safe_declarative_unit_name(&service.name) {
+                return Err(ManifestError::Invalid(format!(
+                    "hooks.services name '{}' must be a pathless, nonempty declarative service name without NUL bytes",
+                    service.name
                 )));
             }
         }
 
         self.scriptlets.validate()?;
+        for requirement in &self.requirements {
+            if requirement.kind.is_negative_relation() {
+                return Err(ManifestError::Invalid(
+                    "negative package relation stored in positive requirements".to_string(),
+                ));
+            }
+            validate_requirement_group(requirement, self.package.version_scheme).map_err(
+                |error| {
+                    ManifestError::Invalid(format!(
+                        "invalid positive package requirement authority: {error}"
+                    ))
+                },
+            )?;
+        }
+        for relation in &self.relations {
+            validate_native_relation(relation, self.package.version_scheme).map_err(|error| {
+                ManifestError::Invalid(format!("invalid package relation authority: {error}"))
+            })?;
+        }
         for capability in &self.file_capabilities {
             capability.validate()?;
         }
-        if let Some(bundle) = &self.legacy_scriptlets {
+        if let Some(capabilities) = &self.capabilities {
+            capabilities
+                .validate_for_target_arch(
+                    self.package.version_scheme,
+                    self.package
+                        .platform
+                        .as_ref()
+                        .and_then(|platform| platform.arch.as_deref()),
+                )
+                .map_err(|error| {
+                    ManifestError::Invalid(format!(
+                        "capability declaration validation failed: {error}"
+                    ))
+                })?;
+        }
+        if let Some(bundle) = &self.native_lifecycle {
             bundle.validate().map_err(|error| {
                 ManifestError::Invalid(format!(
-                    "legacy scriptlet bundle validation failed: {error}"
+                    "native lifecycle bundle validation failed: {error}"
                 ))
             })?;
+            let bundle_scheme = bundle.version_scheme.repository_scheme();
+            if self.package.version_scheme != bundle_scheme {
+                return Err(ManifestError::Invalid(format!(
+                    "package version scheme '{}' disagrees with native lifecycle bundle scheme '{}'",
+                    self.package.version_scheme.as_str(),
+                    bundle_scheme.as_str()
+                )));
+            }
         }
 
         Ok(())
@@ -237,9 +333,11 @@ impl CcsManifest {
             package: Package {
                 name: name.to_string(),
                 version: version.to_string(),
+                version_scheme: VersionScheme::Conary,
                 description: format!("A new CCS package: {}", name),
-                release: None,
-                kind: None,
+                release: "1".to_string(),
+                kind: PackageKindTagV2::Package,
+                debian_multi_arch: None,
                 license: None,
                 homepage: None,
                 repository: None,
@@ -247,15 +345,16 @@ impl CcsManifest {
                 authors: None,
             },
             provides: Provides::default(),
-            requires: Requires::default(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
             suggests: Suggests::default(),
             components: Components::default(),
             hooks: Hooks::default(),
             scriptlets: ScriptletDeclarations::default(),
-            legacy_scriptlets: None,
+            native_lifecycle: None,
             config: Config::default(),
             build: None,
-            legacy: None,
+            native_export: None,
             policy: BuildPolicyConfig::default(),
             file_capabilities: Vec::new(),
             provenance: None,
@@ -272,16 +371,20 @@ impl CcsManifest {
 
 /// Package metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Package {
     pub name: String,
     pub version: String,
+    pub version_scheme: VersionScheme,
     pub description: String,
 
-    #[serde(default)]
-    pub release: Option<String>,
+    pub release: String,
 
+    pub kind: PackageKindTagV2,
+
+    /// Exact Debian `Multi-Arch` control-field behavior.
     #[serde(default)]
-    pub kind: Option<PackageKindTagV2>,
+    pub debian_multi_arch: Option<DebianMultiArch>,
 
     #[serde(default)]
     pub license: Option<String>,
@@ -335,65 +438,22 @@ pub struct Authors {
 
 /// What this package provides
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Provides {
     #[serde(default)]
     pub capabilities: Vec<String>,
 
-    /// Auto-detected shared library sonames
+    /// Exact shared-library capabilities declared by package metadata.
     #[serde(default)]
     pub sonames: Vec<String>,
 
-    /// Auto-detected executable paths
+    /// Exact executable capabilities declared by package metadata.
     #[serde(default)]
     pub binaries: Vec<String>,
 
-    /// Auto-detected pkg-config files
+    /// Exact pkg-config capabilities declared by package metadata.
     #[serde(default)]
     pub pkgconfig: Vec<String>,
-}
-
-/// What this package requires
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Requires {
-    #[serde(default)]
-    pub capabilities: Vec<Capability>,
-
-    /// Fallback package dependencies (name-based)
-    #[serde(default)]
-    pub packages: Vec<PackageDep>,
-}
-
-/// A capability requirement with optional version constraint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Capability {
-    Simple(String),
-    Versioned { name: String, version: String },
-}
-
-impl Capability {
-    pub fn name(&self) -> &str {
-        match self {
-            Capability::Simple(s) => s,
-            Capability::Versioned { name, .. } => name,
-        }
-    }
-
-    pub fn version(&self) -> Option<&str> {
-        match self {
-            Capability::Simple(_) => None,
-            Capability::Versioned { version, .. } => Some(version),
-        }
-    }
-}
-
-/// A package dependency with version constraint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageDep {
-    pub name: String,
-
-    #[serde(default)]
-    pub version: Option<String>,
 }
 
 /// Optional/suggested dependencies
@@ -404,13 +464,13 @@ pub struct Suggests {
 }
 
 /// Component configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Components {
-    /// Glob pattern overrides for component assignment
+    /// Exact author-declared glob rules for component assignment.
     #[serde(default)]
-    pub overrides: Vec<ComponentOverride>,
+    pub rules: Vec<ComponentRule>,
 
-    /// Exact file path overrides
+    /// Exact author-declared file path assignments.
     #[serde(default)]
     pub files: HashMap<String, String>,
 
@@ -420,493 +480,32 @@ pub struct Components {
 }
 
 fn default_components() -> Vec<String> {
-    vec![
-        "runtime".to_string(),
-        "lib".to_string(),
-        "config".to_string(),
-    ]
+    vec!["runtime".to_string()]
 }
 
-/// A component override rule
+impl Default for Components {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            files: HashMap::new(),
+            default: default_components(),
+        }
+    }
+}
+
+/// An exact glob-to-component assignment rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComponentOverride {
+pub struct ComponentRule {
     pub path: String,
     pub component: String,
 }
 
-/// Declarative hooks
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Hooks {
-    #[serde(default)]
-    pub users: Vec<UserHook>,
-
-    #[serde(default)]
-    pub groups: Vec<GroupHook>,
-
-    #[serde(default)]
-    pub directories: Vec<DirectoryHook>,
-
-    #[serde(default)]
-    pub services: Vec<Service>,
-
-    #[serde(default)]
-    pub systemd: Vec<SystemdHook>,
-
-    #[serde(default)]
-    pub tmpfiles: Vec<TmpfilesHook>,
-
-    #[serde(default)]
-    pub sysctl: Vec<SysctlHook>,
-
-    #[serde(default)]
-    pub alternatives: Vec<AlternativeHook>,
-
-    /// Post-install script hook (runs after files are deployed)
-    #[serde(default)]
-    pub post_install: Option<ScriptHook>,
-
-    /// Pre-remove script hook (runs before files are removed)
-    #[serde(default)]
-    pub pre_remove: Option<ScriptHook>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookExecutionRoot {
-    TryRoot,
-    GenerationRoot,
-    HostRoot,
-}
-
-impl Hooks {
-    pub fn has_script_hooks(&self) -> bool {
-        self.post_install.is_some() || self.pre_remove.is_some()
-    }
-
-    pub fn has_service_hooks(&self) -> bool {
-        !self.services.is_empty()
-    }
-
-    pub fn has_declarative_hooks(&self) -> bool {
-        !self.users.is_empty()
-            || !self.groups.is_empty()
-            || !self.directories.is_empty()
-            || !self.systemd.is_empty()
-            || !self.tmpfiles.is_empty()
-            || !self.sysctl.is_empty()
-            || !self.alternatives.is_empty()
-    }
-
-    pub fn has_irreversible_hooks_for_try_root(&self, execution_root: HookExecutionRoot) -> bool {
-        if matches!(execution_root, HookExecutionRoot::HostRoot) {
-            return self.has_script_hooks()
-                || self.has_service_hooks()
-                || self.has_declarative_hooks();
-        }
-
-        self.services
-            .iter()
-            .any(|hook| !hook.reversible.unwrap_or(false))
-            || self
-                .post_install
-                .as_ref()
-                .is_some_and(|hook| !hook.reversible.unwrap_or(false))
-            || self
-                .pre_remove
-                .as_ref()
-                .is_some_and(|hook| !hook.reversible.unwrap_or(false))
-            || self
-                .users
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-            || self
-                .groups
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-            || self
-                .directories
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-            || self
-                .systemd
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-            || self
-                .tmpfiles
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-            || self
-                .sysctl
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-            || self
-                .alternatives
-                .iter()
-                .any(|hook| !hook.reversible.unwrap_or(true))
-    }
-}
-
-/// Scriptlet-scoped declarations.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ScriptletDeclarations {
-    /// Narrow host-integration capabilities requested by scriptlets.
-    #[serde(default)]
-    pub capabilities: Vec<ScriptletCapabilityDeclaration>,
-}
-
-impl ScriptletDeclarations {
-    /// Whether any scriptlet capability declarations are present.
-    pub fn has_capability_declarations(&self) -> bool {
-        !self.capabilities.is_empty()
-    }
-
-    fn validate(&self) -> Result<(), ManifestError> {
-        for capability in &self.capabilities {
-            capability.validate()?;
-        }
-        Ok(())
-    }
-}
-
-/// A narrow host-integration capability requested by a package scriptlet.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScriptletCapabilityDeclaration {
-    pub name: String,
-    #[serde(default)]
-    pub paths: Vec<String>,
-}
-
-impl ScriptletCapabilityDeclaration {
-    fn validate(&self) -> Result<(), ManifestError> {
-        let Some(allowed_paths) = supported_scriptlet_capability_paths(&self.name) else {
-            return Err(ManifestError::Invalid(format!(
-                "unknown scriptlet capability '{}'; declare a supported capability or run in a VM until enforcement exists",
-                self.name
-            )));
-        };
-
-        for path in &self.paths {
-            if !path.starts_with('/') {
-                return Err(ManifestError::Invalid(format!(
-                    "relative path not allowed in scriptlets.capabilities '{}': {}",
-                    self.name, path
-                )));
-            }
-            if !allowed_paths.contains(&path.as_str()) {
-                return Err(ManifestError::Invalid(format!(
-                    "unsupported path '{}' for scriptlet capability '{}'; supported paths: {}",
-                    path,
-                    self.name,
-                    allowed_paths.join(", ")
-                )));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-fn supported_scriptlet_capability_paths(name: &str) -> Option<&'static [&'static str]> {
-    match name {
-        "systemd-service-registration" => Some(&["/etc/systemd/system"]),
-        "tmpfiles-registration" => Some(&["/usr/lib/tmpfiles.d", "/etc/tmpfiles.d"]),
-        "dbus-service-registration" => {
-            Some(&["/usr/share/dbus-1/system-services", "/etc/dbus-1/system.d"])
-        }
-        _ => None,
-    }
-}
-
-/// Linux file capabilities for an executable shipped by the package.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FileCapability {
-    pub path: String,
-    #[serde(default)]
-    pub capabilities: Vec<String>,
-    #[serde(default = "default_true")]
-    pub permitted: bool,
-    #[serde(default = "default_true")]
-    pub effective: bool,
-    #[serde(default)]
-    pub inheritable: bool,
-}
-
-impl FileCapability {
-    pub fn validate(&self) -> Result<(), ManifestError> {
-        if !self.path.starts_with('/') {
-            return Err(ManifestError::Invalid(format!(
-                "relative path not allowed in file_capabilities: {}",
-                self.path
-            )));
-        }
-        sanitize_path(&self.path).map_err(|error| {
-            ManifestError::Invalid(format!(
-                "invalid file_capabilities path '{}': {}",
-                self.path, error
-            ))
-        })?;
-        if self.capabilities.is_empty() {
-            return Err(ManifestError::Invalid(format!(
-                "file_capabilities '{}' must declare at least one Linux capability",
-                self.path
-            )));
-        }
-        for capability in &self.capabilities {
-            if !is_supported_linux_file_capability(capability) {
-                return Err(ManifestError::Invalid(format!(
-                    "unknown Linux file capability '{}' for {}",
-                    capability, self.path
-                )));
-            }
-        }
-        if self.effective && !self.permitted {
-            return Err(ManifestError::Invalid(format!(
-                "effective file capability requires permitted for {}",
-                self.path
-            )));
-        }
-        if self.inheritable {
-            return Err(ManifestError::Invalid(format!(
-                "inheritable file capabilities are not supported yet for {}",
-                self.path
-            )));
-        }
-        Ok(())
-    }
-
-    pub fn to_setcap_spec(&self) -> Result<String, ManifestError> {
-        self.validate()?;
-        let mut flags = String::new();
-        if self.effective {
-            flags.push('e');
-        }
-        if self.inheritable {
-            flags.push('i');
-        }
-        if self.permitted {
-            flags.push('p');
-        }
-        Ok(format!("{}=+{}", self.capabilities.join(","), flags))
-    }
-}
-
-pub fn is_supported_linux_file_capability(name: &str) -> bool {
-    LINUX_FILE_CAPABILITY_NAMES.contains(&name)
-}
-
-pub const LINUX_FILE_CAPABILITY_NAMES: &[&str] = &[
-    "cap_chown",
-    "cap_dac_override",
-    "cap_dac_read_search",
-    "cap_fowner",
-    "cap_fsetid",
-    "cap_kill",
-    "cap_setgid",
-    "cap_setuid",
-    "cap_setpcap",
-    "cap_linux_immutable",
-    "cap_net_bind_service",
-    "cap_net_broadcast",
-    "cap_net_admin",
-    "cap_net_raw",
-    "cap_ipc_lock",
-    "cap_ipc_owner",
-    "cap_sys_module",
-    "cap_sys_rawio",
-    "cap_sys_chroot",
-    "cap_sys_ptrace",
-    "cap_sys_pacct",
-    "cap_sys_admin",
-    "cap_sys_boot",
-    "cap_sys_nice",
-    "cap_sys_resource",
-    "cap_sys_time",
-    "cap_sys_tty_config",
-    "cap_mknod",
-    "cap_lease",
-    "cap_audit_write",
-    "cap_audit_control",
-    "cap_setfcap",
-    "cap_mac_override",
-    "cap_mac_admin",
-    "cap_syslog",
-    "cap_wake_alarm",
-    "cap_block_suspend",
-    "cap_audit_read",
-    "cap_perfmon",
-    "cap_bpf",
-    "cap_checkpoint_restore",
-];
-
-/// Script hook -- an arbitrary shell command run during install/remove
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScriptHook {
-    pub script: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-pub type User = UserHook;
-pub type Group = GroupHook;
-
-/// Generic service management hook
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Service {
-    pub name: String,
-    pub action: ServiceAction,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ServiceAction {
-    Enable,
-    Disable,
-    Start,
-    Stop,
-    Restart,
-}
-
-/// User creation hook (sysusers-style)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserHook {
-    pub name: String,
-
-    #[serde(default)]
-    pub system: bool,
-
-    #[serde(default)]
-    pub home: Option<String>,
-
-    #[serde(default)]
-    pub shell: Option<String>,
-
-    #[serde(default)]
-    pub group: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-/// Group creation hook
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GroupHook {
-    pub name: String,
-
-    #[serde(default)]
-    pub system: bool,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-/// Directory creation hook (tmpfiles-style)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirectoryHook {
-    pub path: String,
-
-    #[serde(default = "default_mode")]
-    pub mode: String,
-
-    #[serde(default = "default_owner")]
-    pub owner: String,
-
-    #[serde(default = "default_group")]
-    pub group: String,
-
-    #[serde(default)]
-    pub cleanup: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-fn default_mode() -> String {
-    "0755".to_string()
-}
-
-fn default_owner() -> String {
-    "root".to_string()
-}
-
-fn default_group() -> String {
-    "root".to_string()
-}
-
-/// Systemd unit hook
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemdHook {
-    pub unit: String,
-
-    #[serde(default)]
-    pub enable: bool,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-/// tmpfiles.d entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TmpfilesHook {
-    #[serde(rename = "type")]
-    pub entry_type: String,
-
-    pub path: String,
-
-    #[serde(default = "default_mode")]
-    pub mode: String,
-
-    #[serde(default = "default_owner")]
-    pub owner: String,
-
-    #[serde(default = "default_group")]
-    pub group: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-/// sysctl setting
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SysctlHook {
-    pub key: String,
-    pub value: String,
-
-    #[serde(default)]
-    pub only_if_lower: bool,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-/// Alternatives system hook
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlternativeHook {
-    pub name: String,
-    pub path: String,
-
-    #[serde(default = "default_priority")]
-    pub priority: i32,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reversible: Option<bool>,
-}
-
-fn default_priority() -> i32 {
-    50
-}
-
 /// Configuration file tracking
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
-    pub files: Vec<String>,
-
-    #[serde(default = "default_true")]
-    pub noreplace: bool,
+    pub files: Vec<crate::packages::traits::ConfigFileInfo>,
 }
 
 fn default_true() -> bool {
@@ -935,22 +534,24 @@ pub struct BuildInfo {
     pub reproducible: bool,
 }
 
-/// Legacy format generation settings
+/// Native package export settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Legacy {
+#[serde(deny_unknown_fields)]
+pub struct NativeExport {
     #[serde(default)]
-    pub rpm: Option<RpmLegacy>,
+    pub rpm: Option<RpmExport>,
 
     #[serde(default)]
-    pub deb: Option<DebLegacy>,
+    pub deb: Option<DebExport>,
 
     #[serde(default)]
-    pub arch: Option<ArchLegacy>,
+    pub arch: Option<ArchExport>,
 }
 
-/// RPM-specific overrides
+/// RPM-specific export overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RpmLegacy {
+#[serde(deny_unknown_fields)]
+pub struct RpmExport {
     #[serde(default)]
     pub group: Option<String>,
 
@@ -961,9 +562,10 @@ pub struct RpmLegacy {
     pub provides: Vec<String>,
 }
 
-/// DEB-specific overrides
+/// Debian-specific export overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DebLegacy {
+#[serde(deny_unknown_fields)]
+pub struct DebExport {
     #[serde(default)]
     pub section: Option<String>,
 
@@ -974,11 +576,16 @@ pub struct DebLegacy {
     pub depends: Vec<String>,
 }
 
-/// Arch-specific overrides
+/// Arch-specific export overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ArchLegacy {
+#[serde(deny_unknown_fields)]
+pub struct ArchExport {
     #[serde(default)]
     pub groups: Vec<String>,
+
+    /// Exact ALPM dependency strings for native export.
+    #[serde(default)]
+    pub depends: Vec<String>,
 }
 
 /// Package redirects / supersedes declarations
@@ -1119,798 +726,4 @@ pub fn parse_octal_mode(mode: &str) -> crate::Result<u32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_minimal_manifest() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "A test package"
-"#;
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert_eq!(manifest.package.name, "test");
-        assert_eq!(manifest.package.version, "1.0.0");
-    }
-
-    #[test]
-    fn test_full_manifest() {
-        let toml = r#"
-[package]
-name = "myapp"
-version = "1.2.3"
-description = "My application"
-license = "MIT"
-
-[package.platform]
-os = "linux"
-arch = "x86_64"
-libc = "gnu"
-
-[provides]
-capabilities = ["cli-tool", "json-parsing"]
-
-[requires]
-capabilities = [
-    "glibc",
-    { name = "tls", version = ">=1.2" },
-]
-packages = [
-    { name = "openssl", version = ">=3.0" },
-]
-
-[components]
-default = ["runtime", "lib"]
-
-[components.files]
-"/usr/bin/helper" = "lib"
-
-[[hooks.users]]
-name = "myapp"
-system = true
-home = "/var/lib/myapp"
-
-[[hooks.directories]]
-path = "/var/lib/myapp"
-mode = "0750"
-owner = "myapp"
-
-[[hooks.systemd]]
-unit = "myapp.service"
-enable = false
-
-[config]
-files = ["/etc/myapp/config.toml"]
-"#;
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert_eq!(manifest.package.name, "myapp");
-        assert_eq!(manifest.provides.capabilities.len(), 2);
-        assert_eq!(manifest.requires.capabilities.len(), 2);
-        assert_eq!(manifest.hooks.users.len(), 1);
-        assert_eq!(manifest.hooks.users[0].name, "myapp");
-        assert!(manifest.hooks.users[0].system);
-    }
-
-    #[test]
-    fn test_generate_minimal() {
-        let manifest = CcsManifest::new_minimal("test", "0.1.0");
-        let toml = manifest.to_toml().unwrap();
-        assert!(toml.contains("name = \"test\""));
-        assert!(toml.contains("version = \"0.1.0\""));
-    }
-
-    #[test]
-    fn parses_v2_authoring_identity_fields_without_guessing_release() {
-        let manifest = CcsManifest::parse(
-            r#"
-[package]
-name = "hello"
-version = "0.1.0"
-release = "1"
-kind = "package"
-description = "hello"
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(manifest.package.release.as_deref(), Some("1"));
-        assert_eq!(
-            manifest.package.kind,
-            Some(crate::ccs::v2::PackageKindTagV2::Package)
-        );
-
-        let legacy = CcsManifest::parse(
-            r#"
-[package]
-name = "legacy"
-version = "1.0.0-1"
-description = "legacy"
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(legacy.package.release, None);
-        assert_eq!(legacy.package.kind, None);
-    }
-
-    #[test]
-    fn manifest_provenance_serializes_m1a_origin_and_hardening() {
-        let provenance = ManifestProvenance {
-            origin_class: Some("native-built".to_string()),
-            hardening_level: Some("sandboxed".to_string()),
-            hermetic_evidence: None,
-            ..Default::default()
-        };
-        let toml = toml::to_string(&provenance).unwrap();
-        assert!(toml.contains("origin_class"));
-        assert!(toml.contains("hardening_level"));
-    }
-
-    #[test]
-    fn test_redirects_section_parsing() {
-        let toml = r#"
-[package]
-name = "nginx"
-version = "1.24.0"
-description = "High-performance HTTP server"
-
-[[redirects.renames]]
-old_name = "nginx-mainline"
-message = "Consolidated with mainline"
-
-[[redirects.obsoletes]]
-package = "nginx-legacy"
-version = "<1.20"
-message = "Legacy branch no longer supported"
-"#;
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert_eq!(manifest.redirects.renames.len(), 1);
-        assert_eq!(manifest.redirects.renames[0].old_name, "nginx-mainline");
-
-        assert_eq!(manifest.redirects.obsoletes.len(), 1);
-        assert_eq!(manifest.redirects.obsoletes[0].package, "nginx-legacy");
-        assert_eq!(
-            manifest.redirects.obsoletes[0].version,
-            Some("<1.20".to_string())
-        );
-    }
-
-    #[test]
-    fn test_redirects_merge_split() {
-        let toml = r#"
-[package]
-name = "foo-combined"
-version = "2.0.0"
-description = "Combined package"
-
-[[redirects.merges]]
-package = "foo-core"
-message = "Merged foo-core into main package"
-
-[[redirects.merges]]
-package = "foo-extras"
-message = "Merged foo-extras into main package"
-
-[[redirects.splits]]
-from_package = "monolithic-foo"
-component = "core"
-"#;
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert_eq!(manifest.redirects.merges.len(), 2);
-        assert_eq!(manifest.redirects.splits.len(), 1);
-        assert_eq!(manifest.redirects.splits[0].from_package, "monolithic-foo");
-        assert_eq!(
-            manifest.redirects.splits[0].component,
-            Some("core".to_string())
-        );
-    }
-
-    #[test]
-    fn test_redirects_is_empty() {
-        let redirects = Redirects::default();
-        assert!(redirects.is_empty());
-        assert_eq!(redirects.len(), 0);
-
-        let toml = r#"
-[package]
-name = "simple"
-version = "1.0.0"
-description = "No redirects"
-"#;
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert!(manifest.redirects.is_empty());
-    }
-
-    #[test]
-    fn test_manifest_rejects_non_system_user_hooks() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[hooks.users]]
-name = "daemon"
-system = false
-"#;
-
-        let err = CcsManifest::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("system user"));
-    }
-
-    #[test]
-    fn test_manifest_rejects_unsafe_tmpfiles_entries() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[hooks.tmpfiles]]
-entry_type = "L"
-path = "../etc/shadow"
-mode = "0755"
-owner = "root"
-group = "root"
-"#;
-
-        let err = CcsManifest::parse(toml).unwrap_err();
-        assert!(
-            err.to_string().contains("tmpfiles")
-                || err.to_string().contains("path")
-                || err.to_string().contains("entry")
-        );
-    }
-
-    #[test]
-    fn test_manifest_rejects_denied_sysctl_keys() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[hooks.sysctl]]
-key = "kernel.modules_disabled"
-value = "0"
-"#;
-
-        let err = CcsManifest::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("sysctl"));
-    }
-
-    #[test]
-    fn test_manifest_rejects_unsafe_systemd_unit_names() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[hooks.systemd]]
-unit = "../evil.service"
-enable = true
-"#;
-
-        let err = CcsManifest::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("systemd"));
-    }
-
-    #[test]
-    fn test_manifest_accepts_supported_scriptlet_capabilities() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[scriptlets.capabilities]]
-name = "systemd-service-registration"
-paths = ["/etc/systemd/system"]
-
-[[scriptlets.capabilities]]
-name = "tmpfiles-registration"
-paths = ["/usr/lib/tmpfiles.d", "/etc/tmpfiles.d"]
-"#;
-
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert_eq!(manifest.scriptlets.capabilities.len(), 2);
-        assert!(manifest.scriptlets.has_capability_declarations());
-    }
-
-    #[test]
-    fn test_manifest_rejects_unknown_scriptlet_capability() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[scriptlets.capabilities]]
-name = "pam-live-edit"
-paths = ["/etc/pam.d"]
-"#;
-
-        let err = CcsManifest::parse(toml).unwrap_err();
-        assert!(
-            err.to_string().contains(
-                "unknown scriptlet capability 'pam-live-edit'; declare a supported capability or run in a VM until enforcement exists"
-            ),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_manifest_accepts_supported_file_capabilities() {
-        let toml = r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[file_capabilities]]
-path = "/usr/bin/demo"
-capabilities = ["cap_net_bind_service"]
-permitted = true
-effective = true
-inheritable = false
-"#;
-
-        let manifest = CcsManifest::parse(toml).unwrap();
-        assert_eq!(manifest.file_capabilities.len(), 1);
-        assert_eq!(manifest.file_capabilities[0].path, "/usr/bin/demo");
-        assert_eq!(
-            manifest.file_capabilities[0].capabilities,
-            vec!["cap_net_bind_service".to_string()]
-        );
-        assert!(manifest.file_capabilities[0].permitted);
-        assert!(manifest.file_capabilities[0].effective);
-        assert!(!manifest.file_capabilities[0].inheritable);
-
-        let encoded = manifest.to_toml().expect("serialize manifest");
-        assert!(encoded.contains("[[file_capabilities]]"));
-        let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
-        assert_eq!(decoded.file_capabilities[0].path, "/usr/bin/demo");
-    }
-
-    #[test]
-    fn test_manifest_rejects_unsafe_file_capabilities() {
-        for (toml, expected) in [
-            (
-                r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[file_capabilities]]
-path = "usr/bin/demo"
-capabilities = ["cap_net_bind_service"]
-"#,
-                "relative path not allowed in file_capabilities",
-            ),
-            (
-                r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[file_capabilities]]
-path = "/usr/bin/demo"
-capabilities = ["cap_not_real"]
-"#,
-                "unknown Linux file capability",
-            ),
-            (
-                r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[file_capabilities]]
-path = "/usr/bin/demo"
-capabilities = ["cap_net_bind_service"]
-permitted = false
-effective = true
-"#,
-                "effective file capability requires permitted",
-            ),
-            (
-                r#"
-[package]
-name = "test"
-version = "1.0.0"
-description = "test"
-
-[[file_capabilities]]
-path = "/usr/bin/demo"
-capabilities = ["cap_net_bind_service"]
-inheritable = true
-"#,
-                "inheritable file capabilities are not supported yet",
-            ),
-        ] {
-            let err = CcsManifest::parse(toml).unwrap_err();
-            assert!(
-                err.to_string().contains(expected),
-                "expected {expected:?}, got {err}"
-            );
-        }
-    }
-
-    fn manifest_with_legacy_scriptlet_bundle(body: &str, body_sha256: &str) -> String {
-        format!(
-            r#"
-[package]
-name = "nginx"
-version = "1.28.0"
-description = "nginx converted from RPM"
-
-[legacy_scriptlets]
-schema = "conary.legacy-scriptlets.v1"
-schema_revision = 1
-source_format = "rpm"
-source_family = "fedora-rhel"
-source_distro = "fedora"
-source_release = "44"
-source_arch = "x86_64"
-source_package = "nginx"
-source_version = "1.28.0-1.fc44"
-source_checksum = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-version_scheme = "rpm"
-conversion_tool = "remi"
-conversion_tool_version = "0.8.0"
-conversion_policy = "safe-or-legacy"
-target_compatibility = "source-native"
-allowed_targets = ["rpm/fedora/44/x86_64"]
-foreign_replay_policy = "deny"
-publication_policy = "public-if-no-blocked"
-publication_status = "private-review"
-scriptlet_fidelity = "legacy-replay"
-
-[legacy_scriptlets.decision_counts]
-legacy = 1
-
-[[legacy_scriptlets.entries]]
-id = "rpm:%post"
-native_slot = "%post"
-phase = "post-install"
-lifecycle_paths = ["install:first"]
-interpreter = "/bin/sh"
-interpreter_args = ["-e"]
-body_sha256 = "{body_sha256}"
-body = "{body}"
-native_invocation = {{ args = ["1"], environment = ["RPM_INSTALL_PREFIX=/"], stdin = "none", chroot = "install-root" }}
-transaction_order = {{ position = "after-payload", after = ["payload"] }}
-timeout_ms = 30000
-decision = "legacy"
-reason_code = "protected-replay-required"
-
-[[legacy_scriptlets.entries.effects]]
-kind = "ldconfig"
-source = "static-signal"
-confidence = "declared"
-replacement = "complete"
-"#
-        )
-    }
-
-    #[test]
-    fn manifest_toml_round_trips_legacy_scriptlet_bundle() {
-        let body = "ldconfig";
-        let body_sha256 = crate::hash::sha256_prefixed(body.as_bytes());
-        let toml = manifest_with_legacy_scriptlet_bundle(body, &body_sha256);
-
-        let manifest = CcsManifest::parse(&toml).expect("parse manifest");
-        let bundle = manifest
-            .legacy_scriptlets
-            .as_ref()
-            .expect("legacy scriptlet bundle");
-
-        assert_eq!(bundle.source_package, "nginx");
-        assert_eq!(bundle.entries.len(), 1);
-        assert_eq!(bundle.entries[0].id, "rpm:%post");
-
-        let encoded = manifest.to_toml().expect("serialize manifest");
-        assert!(encoded.contains("[legacy_scriptlets]"));
-        let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
-        assert_eq!(
-            decoded
-                .legacy_scriptlets
-                .as_ref()
-                .expect("legacy bundle")
-                .entries[0]
-                .effects[0]
-                .kind,
-            "ldconfig"
-        );
-    }
-
-    #[test]
-    fn manifest_toml_round_trips_generic_security_policy_intent() {
-        let body_sha256 = crate::hash::sha256_prefixed(b"restorecon /usr/share/demo\n");
-        let toml = format!(
-            r#"
-[package]
-name = "demo-policy"
-version = "1.0.0"
-description = "policy fixture"
-
-[legacy_scriptlets]
-schema = "conary.legacy-scriptlets.v1"
-schema_revision = 1
-source_format = "rpm"
-source_family = "rpm"
-source_distro = "fedora"
-source_release = "44"
-source_arch = "x86_64"
-source_package = "demo-policy"
-source_version = "1.0.0-1.fc44"
-version_scheme = "rpm"
-conversion_tool = "remi"
-conversion_tool_version = "0.10.1"
-conversion_policy = "passive-scriptlet-bundle-goal4"
-target_compatibility = "conary-portable"
-foreign_replay_policy = "deny"
-publication_policy = "public-if-no-blocked"
-publication_status = "public"
-scriptlet_fidelity = "fully-replaced"
-
-[legacy_scriptlets.decision_counts]
-replaced = 1
-
-[[legacy_scriptlets.security_policy_intents]]
-schema = "conary.security-policy-intent.v1"
-id = "rpm:%post:selinux-label-refresh"
-provider = "selinux"
-operation = "label-refresh"
-fallback = "dormant"
-
-[legacy_scriptlets.security_policy_intents.source]
-source_format = "rpm"
-source_distro = "fedora"
-entry_id = "rpm:%post"
-command = "restorecon"
-argv = ["-R", "/usr/share/demo"]
-adapter_id = "selinux-policy/v1"
-
-[legacy_scriptlets.security_policy_intents.scope]
-kind = "path"
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.security_policy_intents.desired_state]
-recursive = true
-
-[legacy_scriptlets.security_policy_intents.requirements]
-required_on_active_provider = false
-tools = ["restorecon"]
-
-[legacy_scriptlets.security_policy_intents.payload_evidence]
-payload_backed = true
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.security_policy_intents.reconciliation]
-state = "pending"
-
-[[legacy_scriptlets.entries]]
-id = "rpm:%post"
-native_slot = "%post"
-phase = "post-install"
-lifecycle_paths = ["post-install"]
-interpreter = "/bin/sh"
-body_sha256 = "{body_sha256}"
-body = "restorecon /usr/share/demo\n"
-native_invocation = {{ args = [], environment = [] }}
-transaction_order = {{ position = "after-payload" }}
-timeout_ms = 30000
-decision = "replaced"
-reason_code = "helper-complete-selinux-policy"
-
-[[legacy_scriptlets.entries.security_policy_intents]]
-schema = "conary.security-policy-intent.v1"
-id = "rpm:%post:selinux-label-refresh"
-provider = "selinux"
-operation = "label-refresh"
-fallback = "dormant"
-
-[legacy_scriptlets.entries.security_policy_intents.source]
-source_format = "rpm"
-source_distro = "fedora"
-entry_id = "rpm:%post"
-command = "restorecon"
-argv = ["-R", "/usr/share/demo"]
-adapter_id = "selinux-policy/v1"
-
-[legacy_scriptlets.entries.security_policy_intents.scope]
-kind = "path"
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.entries.security_policy_intents.desired_state]
-recursive = true
-
-[legacy_scriptlets.entries.security_policy_intents.requirements]
-required_on_active_provider = false
-tools = ["restorecon"]
-
-[legacy_scriptlets.entries.security_policy_intents.payload_evidence]
-payload_backed = true
-paths = ["/usr/share/demo"]
-
-[legacy_scriptlets.entries.security_policy_intents.reconciliation]
-state = "pending"
-"#
-        );
-
-        let manifest = CcsManifest::parse(&toml).expect("parse manifest");
-        let bundle = manifest.legacy_scriptlets.as_ref().unwrap();
-
-        assert_eq!(bundle.security_policy_intents.len(), 1);
-        assert_eq!(
-            bundle.security_policy_intents[0].provider.as_str(),
-            "selinux"
-        );
-        assert_eq!(
-            bundle.security_policy_intents[0].fallback.as_str(),
-            "dormant"
-        );
-        assert_eq!(bundle.entries[0].security_policy_intents.len(), 1);
-
-        let encoded = manifest.to_toml().expect("serialize manifest");
-        assert!(encoded.contains("[[legacy_scriptlets.security_policy_intents]]"));
-        assert!(encoded.contains("[[legacy_scriptlets.entries.security_policy_intents]]"));
-
-        let decoded = CcsManifest::parse(&encoded).expect("parse serialized manifest");
-        let decoded_bundle = decoded.legacy_scriptlets.as_ref().unwrap();
-        assert_eq!(
-            decoded_bundle.security_policy_intents[0]
-                .reconciliation
-                .state
-                .as_str(),
-            "pending"
-        );
-    }
-
-    #[test]
-    fn manifest_validation_rejects_invalid_legacy_scriptlet_bundle() {
-        let body_sha256 = crate::hash::sha256_prefixed(b"ldconfig");
-        let toml = manifest_with_legacy_scriptlet_bundle("ldconfig && echo tampered", &body_sha256);
-
-        let err = CcsManifest::parse(&toml).expect_err("tampered bundle must fail");
-
-        assert!(err.to_string().contains("legacy scriptlet bundle"));
-        assert!(err.to_string().contains("body_sha256 mismatch"));
-    }
-
-    #[test]
-    fn manifest_rejects_unknown_hook_keys() {
-        let toml = r#"
-[package]
-name = "future-hook"
-version = "1.0.0"
-description = "future hook"
-
-[[hooks.some_new_hook]]
-name = "must-not-be-dropped"
-"#;
-
-        let err = CcsManifest::parse(toml).expect_err("unknown hook must be rejected");
-        assert!(
-            err.to_string().contains("some_new_hook") || err.to_string().contains("unknown field"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn hooks_classify_script_service_and_declarative_entries() {
-        let mut hooks = Hooks::default();
-        assert!(!hooks.has_script_hooks());
-        assert!(!hooks.has_service_hooks());
-        assert!(!hooks.has_declarative_hooks());
-        assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot));
-
-        hooks.directories.push(DirectoryHook {
-            path: "/var/lib/conary-test".to_string(),
-            mode: "0755".to_string(),
-            owner: "root".to_string(),
-            group: "root".to_string(),
-            cleanup: None,
-            reversible: None,
-        });
-        assert!(hooks.has_declarative_hooks());
-        assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot));
-        assert!(!hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot));
-        assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot));
-
-        hooks.services.push(Service {
-            name: "conary-test.service".to_string(),
-            action: ServiceAction::Restart,
-            reversible: None,
-        });
-        assert!(hooks.has_service_hooks());
-        assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot));
-
-        hooks.post_install = Some(ScriptHook {
-            script: "echo post-install".to_string(),
-            reversible: None,
-        });
-        assert!(hooks.has_script_hooks());
-        assert!(hooks.has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot));
-    }
-
-    #[test]
-    fn omitted_reversible_fields_keep_wire_compatibility_and_m1b_defaults() {
-        let toml = r#"
-[package]
-name = "hook-defaults"
-version = "1.0.0"
-description = "hook defaults"
-
-[[hooks.users]]
-name = "hookuser"
-system = true
-
-[[hooks.services]]
-name = "hook-defaults.service"
-action = "restart"
-
-[hooks.post_install]
-script = "echo post-install"
-"#;
-
-        let manifest = CcsManifest::parse(toml).expect("parse manifest without reversible fields");
-
-        assert_eq!(manifest.hooks.users[0].reversible, None);
-        assert_eq!(manifest.hooks.services[0].reversible, None);
-        assert_eq!(
-            manifest
-                .hooks
-                .post_install
-                .as_ref()
-                .expect("post-install hook")
-                .reversible,
-            None
-        );
-        assert!(
-            manifest
-                .hooks
-                .has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot)
-        );
-
-        let encoded = manifest.to_toml().expect("serialize manifest");
-        assert!(!encoded.contains("reversible"));
-
-        let declarative_only = CcsManifest::parse(
-            r#"
-[package]
-name = "declarative-defaults"
-version = "1.0.0"
-description = "declarative defaults"
-
-[[hooks.groups]]
-name = "hookgroup"
-system = true
-"#,
-        )
-        .expect("parse declarative manifest");
-
-        assert!(
-            !declarative_only
-                .hooks
-                .has_irreversible_hooks_for_try_root(HookExecutionRoot::TryRoot)
-        );
-        assert!(
-            !declarative_only
-                .hooks
-                .has_irreversible_hooks_for_try_root(HookExecutionRoot::GenerationRoot)
-        );
-        assert!(
-            declarative_only
-                .hooks
-                .has_irreversible_hooks_for_try_root(HookExecutionRoot::HostRoot)
-        );
-    }
-}
+mod tests;

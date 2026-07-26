@@ -93,7 +93,6 @@ pub(crate) fn publish_gate_code_to_diagnostic_code(
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::AbsentOrUnknownProvenanceClass
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::NonHermeticHardeningLevel
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::StaleOrUnknownPolicy
-        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::UncleanCommandRiskReport
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::ForeignConversionMissingBoundary
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::ForeignConversionBoundaryHashMismatch
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::RecordedDraftArtifact => {
@@ -111,7 +110,9 @@ pub(crate) fn ccs_v2_diagnostic_to_packaging(
     };
 
     let code = match diagnostic.code {
-        V2DiagnosticCode::LegacyV1Package => PackagingDiagnosticCode::CcsV2LegacyRejected,
+        V2DiagnosticCode::UnsupportedFormatVersion => {
+            PackagingDiagnosticCode::CcsFormatVersionRejected
+        }
         _ => PackagingDiagnosticCode::CcsV2ValidationFailed,
     };
     let mut rendered = PackagingDiagnostic::error(
@@ -434,7 +435,6 @@ mod tests {
             PublishGateFailureCode::AbsentOrUnknownProvenanceClass,
             PublishGateFailureCode::NonHermeticHardeningLevel,
             PublishGateFailureCode::StaleOrUnknownPolicy,
-            PublishGateFailureCode::UncleanCommandRiskReport,
             PublishGateFailureCode::ForeignConversionMissingBoundary,
             PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
             PublishGateFailureCode::RecordedDraftArtifact,
@@ -451,15 +451,15 @@ mod tests {
     #[test]
     fn ccs_v2_diagnostics_map_to_packaging_diagnostics() {
         let diagnostic = conary_core::ccs::v2::V2Diagnostic::error(
-            conary_core::ccs::v2::V2DiagnosticCode::LegacyV1Package,
-            "legacy package",
+            conary_core::ccs::v2::V2DiagnosticCode::UnsupportedFormatVersion,
+            "unsupported package format",
             Some("format_version".to_string()),
             "rebuild as v2",
         );
         let rendered = ccs_v2_diagnostic_to_packaging(&diagnostic);
         assert_eq!(
             rendered.code,
-            conary_core::diagnostics::PackagingDiagnosticCode::CcsV2LegacyRejected
+            conary_core::diagnostics::PackagingDiagnosticCode::CcsFormatVersionRejected
         );
         assert_eq!(rendered.suggestions[0].message, "rebuild as v2");
     }

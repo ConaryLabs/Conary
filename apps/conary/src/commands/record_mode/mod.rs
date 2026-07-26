@@ -96,8 +96,8 @@ fn validate_record_request(request: &RecordCliRequest) -> Result<()> {
     if request.command.is_empty() {
         bail!("record mode requires a command after `--`");
     }
-    if request.allow_network {
-        bail!("--record-allow-network is reserved for a later record-mode slice");
+    if request.validate && request.signing_key_path.is_none() {
+        bail!("--record-validate requires --key <private-key> for cooked CCS authority");
     }
     Ok(())
 }
@@ -139,11 +139,6 @@ fn run_record_operation(
     let mut trace_session = start_trace_session(backend, trace_scope, &fanotify, &inotify)
         .context("failed to start record trace backend")?;
 
-    if request.unsafe_host {
-        eprintln!("WARNING: executing record command directly on the host without sandboxing.");
-        push_limitation(&mut limitations, RecordingLimitation::UnsafeHost);
-    }
-
     push_record_event(
         &mut events,
         operation_id,
@@ -156,7 +151,6 @@ fn run_record_operation(
         work_root: workspace.work_root.clone(),
         install_root: workspace.install_root.clone(),
         command: request.command.clone(),
-        unsafe_host: request.unsafe_host,
     })?;
     push_record_event(
         &mut events,
@@ -257,7 +251,11 @@ fn run_record_operation(
             PackagingEventKind::RecordValidationStarted,
             "Recorded draft validation started",
         );
-        match validation::validate_recorded_draft(&workspace.output_dir, operation_id) {
+        match validation::validate_recorded_draft(
+            &workspace.output_dir,
+            operation_id,
+            request.signing_key_path.as_deref(),
+        ) {
             Ok(validation_output)
                 if validation_output.status == PackagingCommandStatus::Succeeded =>
             {
@@ -493,9 +491,8 @@ mod tests {
             backend: RequestedRecordBackend::Auto,
             validate: false,
             keep_raw_trace: false,
-            unsafe_host: false,
-            allow_network: false,
             json: false,
+            signing_key_path: None,
             command,
         }
     }
@@ -504,14 +501,6 @@ mod tests {
     fn record_request_rejects_missing_command() {
         let error = validate_record_request(&request(Vec::new())).unwrap_err();
         assert!(error.to_string().contains("requires a command"));
-    }
-
-    #[test]
-    fn record_request_rejects_reserved_network_flag() {
-        let mut request = request(vec!["make".to_string()]);
-        request.allow_network = true;
-        let error = validate_record_request(&request).unwrap_err();
-        assert!(error.to_string().contains("reserved"));
     }
 
     #[test]

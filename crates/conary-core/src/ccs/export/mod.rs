@@ -49,9 +49,9 @@ pub fn export(
     format: ExportFormat,
     packages: &[String],
     output: &Path,
-    db_path: Option<&Path>,
+    trust_policy: &crate::ccs::verify::TrustPolicy,
 ) -> Result<()> {
     match format {
-        ExportFormat::Oci => oci::export_oci(packages, output, db_path),
+        ExportFormat::Oci => oci::export_oci(packages, output, trust_policy),
     }
 }

@@ -14,16 +14,19 @@ pub enum NativeLookup<T> {
 
 pub fn active_native_publications(
     db_path: &Path,
-    distro: &str,
+    route_slug: &str,
     name: &str,
     version: Option<&str>,
     release: Option<&str>,
     architecture: Option<&str>,
 ) -> Result<Vec<NativePackagePublication>> {
     let conn = crate::server::open_runtime_db(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(route_slug)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{route_slug}'"))?;
     NativePackagePublication::find_active(
         &conn,
-        distro,
+        source_profile.id(),
         name,
         version,
         release,
@@ -36,13 +39,14 @@ pub fn active_native_publications(
 
 pub fn resolve_active_native_publication(
     db_path: &Path,
-    distro: &str,
+    route_slug: &str,
     name: &str,
     version: Option<&str>,
     release: Option<&str>,
     architecture: Option<&str>,
 ) -> Result<NativeLookup<NativePackagePublication>> {
-    let rows = active_native_publications(db_path, distro, name, version, release, architecture)?;
+    let rows =
+        active_native_publications(db_path, route_slug, name, version, release, architecture)?;
     match rows.len() {
         0 => Ok(NativeLookup::Missing),
         1 => Ok(NativeLookup::Ready(rows.into_iter().next().unwrap())),

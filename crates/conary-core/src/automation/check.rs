@@ -9,15 +9,15 @@
 //! - Integrity verification
 
 use super::action::{
-    integrity_repair_action, major_upgrade_action, orphan_cleanup_action, package_update_action,
-    security_update_action,
+    integrity_repair_action, orphan_cleanup_action, package_update_action, security_update_action,
 };
 use super::{InstalledPackageRef, PendingAction};
 use crate::error::Result;
 use crate::hash::verify_file_sha256;
 use crate::model::AutomationConfig;
-use crate::repository::distro::version_scheme_or_rpm;
-use crate::repository::versioning::{VersionScheme, compare_repo_versions};
+use crate::repository::versioning::{
+    VersionScheme, compare_mixed_repo_versions, compare_repo_versions,
+};
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -137,21 +137,19 @@ impl<'a> AutomationChecker<'a> {
 
     /// Find packages with available security updates
     fn find_security_updates(&self) -> Result<Vec<SecurityUpdateCandidate>> {
-        // Fetch candidates with version_scheme, filtering by provenance.
-        // Join on name AND match the installed package's source_distro to the
-        // repository's distro so we don't compare against rows from a different
-        // distro on mixed-repo databases. Fall back to name-only when
-        // source_distro is NULL (pre-provenance installs).
+        // Fetch candidates with version_scheme and exact profile provenance.
+        // SQLite `IS` gives null-safe equality: source-independent Conary
+        // packages match source-independent repositories, while foreign
+        // packages match only the exact persisted public profile.
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT t.name, t.version, rp.version,
-                    rp.security_cves, rp.security_severity, t.version_scheme
+                    rp.security_cves, rp.security_severity,
+                    t.version_scheme, rp.version_scheme
              FROM troves t
              JOIN repository_packages rp ON t.name = rp.name
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.is_security_update = 1
-               AND (t.source_distro IS NULL
-                    OR t.source_distro = r.name
-                    OR t.source_distro = r.default_strategy_distro)",
+               AND t.source_profile IS r.source_profile",
         )?;
 
         let mut updates = Vec::new();
@@ -161,24 +159,36 @@ impl<'a> AutomationChecker<'a> {
             let repo_ver: String = row.get(2)?;
             let cves_str: Option<String> = row.get(3)?;
             let severity: String = row.get(4)?;
-            let scheme_str: Option<String> = row.get(5)?;
+            let installed_scheme = crate::db::models::version_scheme_from_row(row, 5)?;
+            let repository_scheme = crate::db::models::version_scheme_from_row(row, 6)?;
             Ok((
                 name,
                 installed_ver,
                 repo_ver,
                 cves_str,
                 severity,
-                scheme_str,
+                installed_scheme,
+                repository_scheme,
             ))
         })?;
 
         for row in rows {
-            let (name, installed_ver, repo_ver, cves_str, severity, scheme_str) = row?;
-            let scheme = version_scheme_or_rpm(scheme_str.as_deref());
-
-            // Use the package's native version scheme for comparison
-            let cmp = compare_repo_versions(scheme, &installed_ver, &repo_ver);
-            if !matches!(cmp, Some(std::cmp::Ordering::Less)) {
+            let (
+                name,
+                installed_ver,
+                repo_ver,
+                cves_str,
+                severity,
+                installed_scheme,
+                repository_scheme,
+            ) = row?;
+            let cmp = compare_mixed_repo_versions(
+                installed_scheme,
+                &installed_ver,
+                repository_scheme,
+                &repo_ver,
+            )?;
+            if cmp != std::cmp::Ordering::Less {
                 continue;
             }
 
@@ -281,35 +291,14 @@ impl<'a> AutomationChecker<'a> {
 
     /// Find packages that are no longer required by anything
     fn find_orphan_packages(&self) -> Result<Vec<InstalledPackageRef>> {
-        // Find packages installed as dependencies that are no longer needed
-        let mut stmt = self.conn.prepare(
-            "SELECT t.name, t.version, t.architecture FROM troves t
-             WHERE t.install_reason = 'dependency'
-               AND NOT EXISTS (
-                 SELECT 1 FROM dependencies d
-                 JOIN troves t2 ON d.trove_id = t2.id
-                 WHERE d.depends_on_name = t.name
-               )",
-        )?;
-
-        let orphans: Vec<InstalledPackageRef> = stmt
-            .query_map([], |row| {
-                Ok(InstalledPackageRef {
-                    name: row.get(0)?,
-                    version: Some(row.get(1)?),
-                    architecture: row.get(2)?,
-                })
-            })?
-            .filter_map(|r| match r {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!("Failed to read file record from database: {}", e);
-                    None
-                }
+        Ok(crate::db::models::Trove::find_orphans(self.conn)?
+            .into_iter()
+            .map(|trove| InstalledPackageRef {
+                name: trove.name,
+                version: Some(trove.version),
+                architecture: trove.architecture,
             })
-            .collect();
-
-        Ok(orphans)
+            .collect())
     }
 
     /// Filter orphan packages by grace period
@@ -407,25 +396,25 @@ impl<'a> AutomationChecker<'a> {
 
     /// Check for available updates
     fn check_updates(&self, results: &mut CheckResults) -> Result<()> {
-        // Fetch candidates with version_scheme, filtering by provenance
-        // to avoid comparing against repository rows from the wrong distro.
+        // Fetch candidates with version_scheme and null-safe exact profile
+        // provenance so mixed-source repositories cannot cross-match.
         let mut stmt = self.conn.prepare(
-            "SELECT t.name, t.version, rp.version, t.version_scheme
+            "SELECT t.name, t.version, rp.version,
+                    t.version_scheme, rp.version_scheme
              FROM troves t
              JOIN repository_packages rp ON t.name = rp.name
              JOIN repositories r ON rp.repository_id = r.id
              WHERE (rp.is_security_update IS NULL OR rp.is_security_update = 0)
-               AND (t.source_distro IS NULL
-                    OR t.source_distro = r.name
-                    OR t.source_distro = r.default_strategy_distro)",
+               AND t.source_profile IS r.source_profile",
         )?;
 
         let rows = stmt.query_map([], |row| {
             let name: String = row.get(0)?;
             let current: String = row.get(1)?;
             let repo: String = row.get(2)?;
-            let scheme_str: Option<String> = row.get(3)?;
-            Ok((name, current, repo, scheme_str))
+            let installed_scheme = crate::db::models::version_scheme_from_row(row, 3)?;
+            let repository_scheme = crate::db::models::version_scheme_from_row(row, 4)?;
+            Ok((name, current, repo, installed_scheme, repository_scheme))
         })?;
 
         // Filter out excluded packages
@@ -437,23 +426,31 @@ impl<'a> AutomationChecker<'a> {
             std::collections::HashMap::new();
 
         for row in rows {
-            let (name, current, repo_ver, scheme_str) = row?;
+            let (name, current, repo_ver, installed_scheme, repository_scheme) = row?;
             if exclude_set.contains(&name) {
                 continue;
             }
 
-            let scheme = version_scheme_or_rpm(scheme_str.as_deref());
-            let cmp = compare_repo_versions(scheme, &current, &repo_ver);
-            if !matches!(cmp, Some(std::cmp::Ordering::Less)) {
+            let cmp = compare_mixed_repo_versions(
+                installed_scheme,
+                &current,
+                repository_scheme,
+                &repo_ver,
+            )?;
+            if cmp != std::cmp::Ordering::Less {
                 continue;
             }
 
-            let dominated = best.get(&name).is_none_or(|(_, existing, s)| {
-                compare_repo_versions(*s, existing, &repo_ver)
-                    .is_some_and(|o| o == std::cmp::Ordering::Less)
-            });
+            let dominated = match best.get(&name) {
+                None => true,
+                Some((_, existing, existing_scheme)) if *existing_scheme == repository_scheme => {
+                    compare_repo_versions(*existing_scheme, existing, &repo_ver)?
+                        == std::cmp::Ordering::Less
+                }
+                Some(_) => false,
+            };
             if dominated {
-                best.insert(name, (current, repo_ver, scheme));
+                best.insert(name, (current, repo_ver, repository_scheme));
             }
         }
 
@@ -462,17 +459,12 @@ impl<'a> AutomationChecker<'a> {
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, (current, new, _scheme)) in sorted {
-            // Surface major version upgrades separately so users can
-            // review them with more care than routine patch updates.
-            if is_major_upgrade(&current, &new) {
-                results
-                    .major_upgrades
-                    .push(major_upgrade_action(&name, &current, &new, None, &[]));
-            } else {
-                results
-                    .updates
-                    .push(package_update_action(&name, &current, &new, None));
-            }
+            // Native package versions establish ordering, not a universal
+            // semantic-major boundary. Only an explicit typed source may
+            // classify a candidate as a major upgrade.
+            results
+                .updates
+                .push(package_update_action(&name, &current, &new, None));
         }
 
         Ok(())
@@ -493,9 +485,10 @@ impl<'a> AutomationChecker<'a> {
 
     fn find_corrupted_files_by_package(&self) -> Result<Vec<(InstalledPackageRef, Vec<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT t.name, t.version, t.architecture, f.path, f.sha256_hash
+            "SELECT t.name, t.version, t.architecture, f.path, f.content_sha256
              FROM files f
              JOIN troves t ON f.trove_id = t.id
+             WHERE f.content_sha256 IS NOT NULL
              ORDER BY t.name, t.version, t.architecture, f.path",
         )?;
 
@@ -538,7 +531,7 @@ impl<'a> AutomationChecker<'a> {
 
     /// Find files that have been corrupted (hash mismatch)
     ///
-    /// Queries all managed files from the database and verifies each one:
+    /// Queries all managed regular-file content from the database and verifies each one:
     /// - File exists on disk
     /// - File hash matches expected SHA-256 hash
     ///
@@ -546,9 +539,12 @@ impl<'a> AutomationChecker<'a> {
     #[cfg(test)]
     fn find_corrupted_files(&self) -> Result<Vec<String>> {
         // Query all managed files with their expected hashes
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path, sha256_hash FROM files ORDER BY path")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT path, content_sha256
+                 FROM files
+                 WHERE content_sha256 IS NOT NULL
+                 ORDER BY path",
+        )?;
 
         let files: Vec<(String, String)> = stmt
             .query_map([], |row| {
@@ -606,37 +602,9 @@ impl<'a> AutomationChecker<'a> {
     }
 }
 
-/// Check if version change is a major upgrade
-fn is_major_upgrade(current: &str, new: &str) -> bool {
-    // Simple heuristic: compare first numeric component
-    let current_major = current
-        .split(|c: char| !c.is_ascii_digit())
-        .next()
-        .and_then(|s| s.parse::<u32>().ok());
-
-    let new_major = new
-        .split(|c: char| !c.is_ascii_digit())
-        .next()
-        .and_then(|s| s.parse::<u32>().ok());
-
-    match (current_major, new_major) {
-        (Some(c), Some(n)) => n > c,
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_major_upgrade() {
-        assert!(is_major_upgrade("1.0.0", "2.0.0"));
-        assert!(is_major_upgrade("1.5.3", "2.0.0"));
-        assert!(!is_major_upgrade("1.0.0", "1.1.0"));
-        assert!(!is_major_upgrade("1.0.0", "1.0.1"));
-        assert!(is_major_upgrade("20.04", "22.04"));
-    }
 
     #[test]
     fn test_check_results_total() {
@@ -661,9 +629,7 @@ mod tests {
             "CREATE TABLE files (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL,
-                sha256_hash TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                permissions INTEGER NOT NULL,
+                content_sha256 TEXT,
                 trove_id INTEGER NOT NULL
             );
             CREATE TABLE troves (
@@ -693,9 +659,7 @@ mod tests {
             "CREATE TABLE files (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL,
-                sha256_hash TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                permissions INTEGER NOT NULL,
+                content_sha256 TEXT,
                 trove_id INTEGER NOT NULL
             );",
         )
@@ -713,8 +677,8 @@ mod tests {
 
         // Insert file with WRONG hash - should be detected as corrupted
         conn.execute(
-            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
-             VALUES (?1, ?2, 11, 644, 1)",
+            "INSERT INTO files (path, content_sha256, trove_id)
+             VALUES (?1, ?2, 1)",
             [temp_path, wrong_hash],
         )
         .unwrap();
@@ -728,7 +692,7 @@ mod tests {
 
         // Now update with correct hash - should NOT be detected
         conn.execute(
-            "UPDATE files SET sha256_hash = ?1 WHERE path = ?2",
+            "UPDATE files SET content_sha256 = ?1 WHERE path = ?2",
             [correct_hash, temp_path],
         )
         .unwrap();
@@ -744,9 +708,7 @@ mod tests {
             "CREATE TABLE files (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL,
-                sha256_hash TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                permissions INTEGER NOT NULL,
+                content_sha256 TEXT,
                 trove_id INTEGER NOT NULL
             );",
         )
@@ -754,8 +716,8 @@ mod tests {
 
         // Insert a file that doesn't exist
         conn.execute(
-            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
-             VALUES ('/nonexistent/file/path/abc123.txt', 'abc123', 100, 644, 1)",
+            "INSERT INTO files (path, content_sha256, trove_id)
+             VALUES ('/nonexistent/file/path/abc123.txt', 'abc123', 1)",
             [],
         )
         .unwrap();
@@ -929,9 +891,7 @@ mod tests {
             CREATE TABLE files (
                 id INTEGER PRIMARY KEY,
                 path TEXT NOT NULL,
-                sha256_hash TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                permissions INTEGER NOT NULL,
+                content_sha256 TEXT,
                 trove_id INTEGER NOT NULL
             );",
         )
@@ -954,8 +914,8 @@ mod tests {
             (missing_b1, 2_i64),
         ] {
             conn.execute(
-                "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
-                 VALUES (?1, 'deadbeef', 1, 493, ?2)",
+                "INSERT INTO files (path, content_sha256, trove_id)
+                 VALUES (?1, 'deadbeef', ?2)",
                 rusqlite::params![path.to_string_lossy(), trove_id],
             )
             .unwrap();

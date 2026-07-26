@@ -40,18 +40,47 @@ fn assert_exact_root_postinstall(script: &str, expected_command: &str) {
     }
 }
 
+fn assert_generation_activation_is_staged(script: &str) {
+    assert!(
+        script.contains("packaging/systemd/")
+            && script.contains("generation-activation.service")
+            && script.contains("multi-user.target.wants"),
+        "package must install and statically enable the booted-generation activation service"
+    );
+}
+
 #[test]
-fn native_packages_initialize_with_their_exact_public_profile() {
+fn native_packages_initialize_the_source_independent_repository_set() {
     assert_exact_root_postinstall(
         &read_packaging_file("packaging/rpm/conary.spec"),
-        "system init --profile fedora-44",
+        "system init",
     );
     assert_exact_root_postinstall(
         &read_packaging_file("packaging/deb/debian/postinst"),
-        "system init --profile ubuntu-26.04",
+        "system init",
     );
     assert_exact_root_postinstall(
         &read_packaging_file("packaging/arch/conary.install"),
-        "system init --profile arch",
+        "system init",
     );
+}
+
+#[test]
+fn every_conary_package_format_activates_exact_booted_generation_work() {
+    for path in [
+        "packaging/rpm/conary.spec",
+        "packaging/deb/debian/rules",
+        "packaging/arch/PKGBUILD",
+        "packaging/ccs/build.sh",
+    ] {
+        assert_generation_activation_is_staged(&read_packaging_file(path));
+    }
+
+    let unit = read_packaging_file("packaging/systemd/conary-generation-activation.service");
+    assert!(unit.contains("Type=oneshot"));
+    assert!(unit.contains(
+        "ExecStart=/usr/bin/conary system generation activate --db-path /var/lib/conary/conary.db"
+    ));
+    assert!(unit.contains("Restart=on-failure"));
+    assert!(unit.contains("WantedBy=multi-user.target"));
 }

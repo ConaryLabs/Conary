@@ -21,7 +21,7 @@ pub(super) fn create_test_state() -> (SharedState, tempfile::TempDir) {
     // Initialize the database with the full schema
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    conary_core::db::schema::migrate(&conn).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
     drop(conn);
 
     let config = DaemonConfig {
@@ -34,7 +34,7 @@ pub(super) fn create_test_state() -> (SharedState, tempfile::TempDir) {
         .unwrap()
         .expect("Failed to acquire test lock");
 
-    let state = Arc::new(DaemonState::new(config, system_lock));
+    let state = Arc::new(DaemonState::new(config, system_lock).unwrap());
     (state, temp_dir)
 }
 
@@ -53,7 +53,7 @@ pub(super) fn create_test_state_with_db_path(
         .unwrap()
         .expect("Failed to acquire test lock");
 
-    let state = Arc::new(DaemonState::new(config, system_lock));
+    let state = Arc::new(DaemonState::new(config, system_lock).unwrap());
     (state, temp_dir)
 }
 

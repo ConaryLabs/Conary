@@ -4,7 +4,7 @@
 //! This module provides an HTTP server that:
 //! - Serves repository metadata (proxied through Cloudflare)
 //! - Serves CCS chunks (direct from origin)
-//! - Converts legacy packages (RPM/DEB/Arch) to CCS on-demand
+//! - Converts native package formats (RPM/DEB/Arch) to CCS on demand
 //! - Uses LRU cache eviction to manage disk space
 //!
 //! Phase 0 hardening features:
@@ -37,15 +37,15 @@ pub mod mcp;
 pub mod metrics;
 pub mod native_publish;
 mod negative_cache;
+mod package_metadata;
 pub mod popularity;
 mod prewarm;
 pub mod publication;
 pub mod r2;
 pub mod rate_limit;
 pub mod release_publish;
+pub mod repository_manifest;
 mod routes;
-pub mod scriptlet_corpus;
-pub mod scriptlet_evidence_queue;
 pub mod search;
 pub mod security;
 pub mod test_db;
@@ -142,10 +142,6 @@ pub struct ServerConfig {
     // === Web frontend ===
     /// Path to SvelteKit static build directory (None = disabled)
     pub web_root: Option<PathBuf>,
-
-    // === Non-public conversion test serving ===
-    /// Default-off admin/test access for non-public converted artifacts.
-    pub non_public_test_serving: crate::server::config::NonPublicTestServingSection,
 
     // === Release publication ===
     /// Trusted release signer and repository signing-key configuration.
@@ -255,7 +251,8 @@ impl ServerState {
             config.cache_dir.clone(),
             config.db_path.clone(),
             None, // R2 store set later after state initialization
-        );
+        )
+        .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
         // Initialize Bloom filter if enabled
         let bloom_filter = if config.enable_bloom_filter {
@@ -318,8 +315,8 @@ fn build_http_client(timeout: Duration, user_agent: &str) -> Result<reqwest::Cli
 /// Open a database connection for the already-initialized server runtime.
 ///
 /// Server startup calls [`ensure_database_ready`] before background tasks or
-/// hot request paths begin using SQLite, so those paths can skip re-running
-/// migrations on every connection open.
+/// hot request paths begin using SQLite, so those paths can skip repeating the
+/// current-schema validation on every connection open.
 pub(crate) fn open_runtime_db(
     path: impl AsRef<std::path::Path>,
 ) -> conary_core::Result<rusqlite::Connection> {
@@ -387,6 +384,18 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     // connections. This avoids startup races when multiple components touch an
     // older schema concurrently.
     ensure_database_ready(&server_config.db_path)?;
+    if let Some(manifest_path) = remi_config.repository_manifest.as_deref() {
+        let manifest = repository_manifest::RepositoryManifest::load(manifest_path)?;
+        let mut conn = open_runtime_db(&server_config.db_path)?;
+        let reconciled = manifest.reconcile(&mut conn)?;
+        tracing::info!(
+            "  Repository manifest: {} inserted, {} updated, {} removed, {} unchanged",
+            reconciled.inserted,
+            reconciled.updated,
+            reconciled.removed,
+            reconciled.unchanged
+        );
+    }
 
     let state = Arc::new(RwLock::new(ServerState::with_options(
         server_config.clone(),
@@ -519,15 +528,40 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     {
         let refresh_state = state.clone();
         let refresh_interval =
-            crate::server::config::parse_duration(&remi_config.prewarm.metadata_sync_interval)
-                .unwrap_or_else(|_| std::time::Duration::from_secs(6 * 3600));
+            crate::server::config::parse_duration(&remi_config.prewarm.metadata_sync_interval)?;
+        let prewarm_jobs = if remi_config.prewarm.enabled {
+            remi_config
+                .prewarm
+                .distros
+                .iter()
+                .map(|distro| PrewarmConfig {
+                    db_path: server_config.db_path.display().to_string(),
+                    chunk_dir: server_config.chunk_dir.display().to_string(),
+                    cache_dir: server_config.cache_dir.display().to_string(),
+                    repository_keys_dir: server_config.release_publish.repository_keys_dir.clone(),
+                    distro: distro.clone(),
+                    max_packages: remi_config.prewarm.convert_top_n,
+                    popularity_file: None,
+                    pattern: None,
+                    dry_run: false,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         tracing::info!(
             "  Metadata refresh: enabled every {}s",
             refresh_interval.as_secs()
         );
+        for job in &prewarm_jobs {
+            tracing::info!(
+                "  Pre-warm: enabled for {} after each metadata refresh (top {})",
+                job.distro,
+                job.max_packages
+            );
+        }
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(refresh_interval).await;
                 match crate::server::admin_service::refresh_repositories(&refresh_state, false)
                     .await
                 {
@@ -539,11 +573,28 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                             synced,
                             skipped
                         );
+                        for job in &prewarm_jobs {
+                            match prewarm::run_prewarm(job).await {
+                                Ok(result) => tracing::info!(
+                                    "Post-refresh pre-warm for {}: {} converted, {} skipped, {} failed",
+                                    job.distro,
+                                    result.packages_converted,
+                                    result.packages_skipped,
+                                    result.packages_failed
+                                ),
+                                Err(error) => tracing::warn!(
+                                    "Post-refresh pre-warm for {} failed: {}",
+                                    job.distro,
+                                    error
+                                ),
+                            }
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Background metadata refresh failed: {}", e);
                     }
                 }
+                tokio::time::sleep(refresh_interval).await;
             }
         });
     }
@@ -557,42 +608,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             canonical_config.fetch_interval_hours
         );
         canonical_fetch::spawn_canonical_fetch_loop(canonical_config, canonical_db);
-    }
-
-    // Start background pre-warming if enabled
-    if remi_config.prewarm.enabled && !remi_config.prewarm.distros.is_empty() {
-        let prewarm_interval =
-            crate::server::config::parse_duration(&remi_config.prewarm.metadata_sync_interval)
-                .map(|d| d.as_secs() / 3600)
-                .unwrap_or(6);
-        let max_per_run = remi_config.prewarm.convert_top_n;
-
-        for distro in &remi_config.prewarm.distros {
-            let db = server_config.db_path.display().to_string();
-            let chunks = server_config.chunk_dir.display().to_string();
-            let cache = server_config.cache_dir.display().to_string();
-            let d = distro.clone();
-
-            tracing::info!(
-                "  Pre-warm: enabled for {} (every {}h, top {} packages)",
-                d,
-                prewarm_interval,
-                max_per_run
-            );
-
-            tokio::spawn(async move {
-                prewarm::run_prewarm_background(
-                    db,
-                    chunks,
-                    cache,
-                    d,
-                    prewarm_interval,
-                    max_per_run,
-                    None,
-                )
-                .await;
-            });
-        }
     }
 
     // Admin rate limiters live outside ServerState to avoid per-request RwLock
@@ -689,114 +704,6 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     Ok(())
 }
 
-/// Start the Remi server (legacy single-port mode)
-pub async fn run_server(config: ServerConfig) -> Result<()> {
-    tracing::info!("Starting Conary Remi server on {}", config.bind_addr);
-    tracing::info!("Database: {:?}", config.db_path);
-    tracing::info!("Chunk store: {:?}", config.chunk_dir);
-    tracing::info!(
-        "Max concurrent conversions: {}",
-        config.max_concurrent_conversions
-    );
-
-    if config.enable_bloom_filter {
-        tracing::info!(
-            "Bloom filter: enabled ({} expected chunks)",
-            config.bloom_expected_chunks
-        );
-    }
-    if let Some(ref upstream) = config.upstream_url {
-        tracing::info!("Pull-through caching: enabled (upstream: {})", upstream);
-    }
-    if config.enable_rate_limit {
-        tracing::info!(
-            "Rate limiting: {} rps, {} burst",
-            config.rate_limit_rps,
-            config.rate_limit_burst
-        );
-    }
-
-    // Migrate the database before any background tasks start opening their own
-    // connections. This avoids startup races when multiple components touch an
-    // older schema concurrently.
-    ensure_database_ready(&config.db_path)?;
-
-    let state = Arc::new(RwLock::new(ServerState::new(config.clone())?));
-
-    // Initialize search engine if a search index dir is available
-    {
-        let index_dir = config
-            .db_path
-            .parent()
-            .unwrap_or(std::path::Path::new("/tmp"))
-            .join("search-index");
-        match SearchEngine::new(&index_dir) {
-            Ok(engine) => {
-                let engine = Arc::new(engine);
-                let rebuild_engine = Arc::clone(&engine);
-                let rebuild_db = config.db_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Err(e) = rebuild_engine.rebuild_from_db(&rebuild_db) {
-                        tracing::error!("Failed to rebuild search index: {}", e);
-                    }
-                });
-                state.write().await.search_engine = Some(engine);
-                tracing::info!("Search engine: enabled");
-            }
-            Err(e) => {
-                tracing::warn!("Search engine unavailable: {}", e);
-            }
-        }
-    }
-
-    // Initialize download analytics
-    {
-        let analytics_recorder = Arc::new(AnalyticsRecorder::new(config.db_path.clone()));
-        tokio::spawn(analytics::run_analytics_loop(Arc::clone(
-            &analytics_recorder,
-        )));
-        state.write().await.analytics = Some(analytics_recorder);
-    }
-
-    // Initialize Bloom filter from existing chunks
-    if config.enable_bloom_filter {
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            if let Err(e) = initialize_bloom_filter(state_clone).await {
-                tracing::error!("Failed to initialize Bloom filter: {}", e);
-            }
-        });
-    }
-
-    let app = create_router(state.clone()).await;
-
-    // Start background LRU eviction task
-    tokio::spawn(cache::run_eviction_loop(state.clone()));
-
-    // Start ban list cleanup task to prevent unbounded memory growth
-    {
-        let cleanup_state = state.clone();
-        tokio::spawn(async move {
-            let cleanup_interval = std::time::Duration::from_secs(300);
-            loop {
-                tokio::time::sleep(cleanup_interval).await;
-                let ban_list = cleanup_state.read().await.ban_list.clone();
-                ban_list.cleanup().await;
-            }
-        });
-    }
-
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    tracing::info!("Remi is ready to serve");
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
-    Ok(())
-}
-
 /// Initialize Bloom filter by scanning existing chunks
 async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> {
     let state_guard = state.read().await;
@@ -837,7 +744,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
             conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-            conary_core::db::schema::migrate(&conn).expect("migrate schema");
+            conary_core::db::schema::ensure_current(&conn).expect("ensure current schema");
         }
         std::mem::forget(tmp);
         db_path

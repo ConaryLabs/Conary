@@ -10,7 +10,7 @@
 FROM docker.io/library/ubuntu:26.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake pkg-config libssl-dev curl ca-certificates \
+    build-essential cmake pkg-config libssl-dev libseccomp-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust
@@ -35,7 +35,7 @@ FROM docker.io/library/ubuntu:26.04
 ARG INSTALL_MODE=binary
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl passwd python3 sqlite3 \
+    ca-certificates curl diffutils libseccomp2 passwd python3 sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy all conary* files from build context (package mode)
@@ -54,6 +54,11 @@ RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.deb 1>/dev/null 2>&1
     else \
         echo "No conary binary or package found in build context" >&2; exit 1; \
     fi && rm -rf /tmp/install
+
+RUN /usr/bin/conary --version \
+    && command -v cmp \
+    && command -v diff \
+    && test -e /lib64/ld-linux-x86-64.so.2
 
 COPY config.toml /opt/remi-tests/config.toml
 # Phase 2 test fixtures (recipes, PKGBUILD)

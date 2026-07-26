@@ -64,8 +64,11 @@ pub(super) fn require_auth(
     }
 }
 
-/// Require that a daemon API request comes from root or the daemon's own UID.
-pub(super) fn require_socket_identity(creds: &Option<PeerCredentials>) -> Result<(), ApiError> {
+/// Require that a daemon API request comes from an authorized local peer.
+pub(super) fn require_socket_identity(
+    checker: &AuthChecker,
+    creds: &Option<PeerCredentials>,
+) -> Result<(), ApiError> {
     let daemon_uid = nix::unistd::geteuid().as_raw();
 
     match creds {
@@ -81,17 +84,17 @@ pub(super) fn require_socket_identity(creds: &Option<PeerCredentials>) -> Result
                 "Daemon API requires live peer credentials from the current process",
             ))))
         }
-        Some(creds) if creds.matches_daemon_identity(daemon_uid) => Ok(()),
+        Some(creds) if checker.is_allowed(creds, Action::Query) => Ok(()),
         Some(creds) => {
             tracing::warn!(
                 uid = creds.uid,
                 gid = creds.gid,
                 pid = creds.pid,
                 daemon_uid,
-                "Daemon API request denied: peer does not match daemon identity"
+                "Daemon API request denied: peer is not in the configured authorization boundary"
             );
             Err(ApiError(Box::new(DaemonError::forbidden(&format!(
-                "Daemon API requires root or daemon uid {}; got uid={}",
+                "Daemon API requires root, daemon uid {}, or the configured socket group; got uid={}",
                 daemon_uid, creds.uid
             )))))
         }
@@ -106,22 +109,21 @@ pub(super) fn require_socket_identity(creds: &Option<PeerCredentials>) -> Result
 
 /// Auth gate middleware for defense-in-depth
 ///
-/// Rejects all `/v1` daemon API requests unless the Unix socket peer is root or
-/// the daemon's own service UID. Individual handlers still check their specific
-/// action permissions.
+/// Rejects all `/v1` daemon API requests unless the Unix socket peer is root,
+/// the daemon's own service UID, or a member of the exact configured socket
+/// group. Individual handlers still check their specific action permissions.
 pub(super) async fn auth_gate_middleware(
     State(state): State<SharedState>,
     Extension(creds): Extension<Option<PeerCredentials>>,
     request: Request,
     next: middleware::Next,
 ) -> Result<Response, ApiError> {
-    let _ = state;
     tracing::trace!(
         method = %request.method(),
         path = %request.uri().path(),
         "Checking daemon auth gate"
     );
-    require_socket_identity(&creds)?;
+    require_socket_identity(&state.auth_checker, &creds)?;
     Ok(next.run(request).await)
 }
 
@@ -201,8 +203,6 @@ mod tests {
         assert!(require_auth(&checker, &creds, Action::Install).is_ok());
         assert!(require_auth(&checker, &creds, Action::Remove).is_ok());
         assert!(require_auth(&checker, &creds, Action::Update).is_ok());
-        assert!(require_auth(&checker, &creds, Action::Rollback).is_ok());
-        assert!(require_auth(&checker, &creds, Action::GarbageCollect).is_ok());
         assert!(require_auth(&checker, &creds, Action::CancelJob).is_ok());
     }
 
@@ -217,7 +217,6 @@ mod tests {
         assert!(require_auth(&checker, &creds, Action::Install).is_err());
         assert!(require_auth(&checker, &creds, Action::Remove).is_err());
         assert!(require_auth(&checker, &creds, Action::Update).is_err());
-        assert!(require_auth(&checker, &creds, Action::Rollback).is_err());
     }
 
     #[test]

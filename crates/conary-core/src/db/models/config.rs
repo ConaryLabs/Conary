@@ -9,12 +9,16 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use strum_macros::{AsRefStr, Display, EnumString};
 
 /// Status of a configuration file
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString, Serialize, Deserialize,
+)]
 #[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum ConfigStatus {
     /// File is unchanged from package version
     Pristine,
@@ -35,8 +39,11 @@ impl ConfigStatus {
 }
 
 /// Source that declared a file as configuration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString, Serialize, Deserialize,
+)]
 #[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum ConfigSource {
     /// Automatically detected (e.g., file in /etc/)
     Auto,
@@ -67,13 +74,22 @@ pub struct ConfigFile {
     /// Filesystem path
     pub path: String,
     /// Owning package
-    pub trove_id: i64,
-    /// Hash of file as shipped by package
-    pub original_hash: String,
+    pub trove_id: Option<i64>,
+    /// Hash of file as shipped by package (`None` for RPM `%ghost` ownership)
+    pub original_hash: Option<String>,
+    /// Source-native shipped MD5 for Debian's `Conffiles` status field.
+    ///
+    /// MD5 is not integrity authority. It is retained only because dpkg
+    /// maintainer helpers compare this exact upstream compatibility value.
+    pub original_md5: Option<String>,
     /// Current hash on filesystem (None if not checked)
     pub current_hash: Option<String>,
     /// If true, preserve user's version on upgrade
     pub noreplace: bool,
+    /// If true, own the path without shipping or backing up content
+    pub ghost: bool,
+    /// Debian conffile declaration whose old path is removed on upgrade.
+    pub remove_on_upgrade: bool,
     /// Current status
     pub status: ConfigStatus,
     /// When modification was detected
@@ -84,8 +100,8 @@ pub struct ConfigFile {
 
 impl ConfigFile {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, file_id, path, trove_id, original_hash, current_hash, \
-         noreplace, status, modified_at, source";
+    const COLUMNS: &'static str = "id, file_id, path, trove_id, original_hash, original_md5, \
+         current_hash, noreplace, ghost, remove_on_upgrade, status, modified_at, source";
 
     /// Create a new config file entry
     pub fn new(path: String, trove_id: i64, original_hash: String) -> Self {
@@ -93,10 +109,13 @@ impl ConfigFile {
             id: None,
             file_id: None,
             path,
-            trove_id,
+            trove_id: Some(trove_id),
             current_hash: Some(original_hash.clone()),
-            original_hash,
+            original_hash: Some(original_hash),
+            original_md5: None,
             noreplace: false,
+            ghost: false,
+            remove_on_upgrade: false,
             status: ConfigStatus::Pristine,
             modified_at: None,
             source: ConfigSource::Auto,
@@ -110,18 +129,45 @@ impl ConfigFile {
         config
     }
 
+    /// Create an RPM `%ghost %config` path owner with no package payload.
+    pub fn new_ghost(path: String, trove_id: i64) -> Self {
+        Self {
+            id: None,
+            file_id: None,
+            path,
+            trove_id: Some(trove_id),
+            original_hash: None,
+            original_md5: None,
+            current_hash: None,
+            noreplace: false,
+            ghost: true,
+            remove_on_upgrade: false,
+            status: ConfigStatus::Missing,
+            modified_at: None,
+            source: ConfigSource::Rpm,
+        }
+    }
+
     /// Insert this config file into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO config_files (file_id, path, trove_id, original_hash, current_hash, noreplace, status, modified_at, source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO config_files (
+                file_id, path, trove_id, package_name, package_version,
+                package_architecture, original_hash, original_md5, current_hash,
+                noreplace, ghost, remove_on_upgrade, status, modified_at, source
+             )
+             SELECT ?1, ?2, ?3, name, version, architecture, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+             FROM troves WHERE id = ?3",
             params![
                 self.file_id,
                 &self.path,
                 self.trove_id,
                 &self.original_hash,
+                &self.original_md5,
                 &self.current_hash,
                 self.noreplace as i32,
+                self.ghost as i32,
+                self.remove_on_upgrade as i32,
                 self.status.as_str(),
                 &self.modified_at,
                 self.source.as_str(),
@@ -136,14 +182,25 @@ impl ConfigFile {
     /// Insert or update config file
     pub fn upsert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO config_files (file_id, path, trove_id, original_hash, current_hash, noreplace, status, modified_at, source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO config_files (
+                file_id, path, trove_id, package_name, package_version,
+                package_architecture, original_hash, original_md5, current_hash,
+                noreplace, ghost, remove_on_upgrade, status, modified_at, source
+             )
+             SELECT ?1, ?2, ?3, name, version, architecture, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+             FROM troves WHERE id = ?3
              ON CONFLICT(path) DO UPDATE SET
                 file_id = excluded.file_id,
                 trove_id = excluded.trove_id,
+                package_name = excluded.package_name,
+                package_version = excluded.package_version,
+                package_architecture = excluded.package_architecture,
                 original_hash = excluded.original_hash,
+                original_md5 = excluded.original_md5,
                 current_hash = excluded.current_hash,
                 noreplace = excluded.noreplace,
+                ghost = excluded.ghost,
+                remove_on_upgrade = excluded.remove_on_upgrade,
                 status = excluded.status,
                 modified_at = excluded.modified_at,
                 source = excluded.source",
@@ -152,8 +209,11 @@ impl ConfigFile {
                 &self.path,
                 self.trove_id,
                 &self.original_hash,
+                &self.original_md5,
                 &self.current_hash,
                 self.noreplace as i32,
+                self.ghost as i32,
+                self.remove_on_upgrade as i32,
                 self.status.as_str(),
                 &self.modified_at,
                 self.source.as_str(),
@@ -194,6 +254,20 @@ impl ConfigFile {
         let mut stmt = conn.prepare(&sql)?;
         let configs = stmt
             .query_map([trove_id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(configs)
+    }
+
+    /// Find config files by stable package identity, including residual Debian
+    /// conffiles whose installed trove has been removed.
+    pub fn find_by_package(conn: &Connection, package_name: &str) -> Result<Vec<Self>> {
+        let sql = format!(
+            "SELECT {} FROM config_files WHERE package_name = ?1 ORDER BY path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let configs = stmt
+            .query_map([package_name], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(configs)
     }
@@ -285,8 +359,22 @@ impl ConfigFile {
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let status_str: String = row.get(7)?;
-        let source_str: String = row.get(9)?;
+        let status_str: String = row.get(10)?;
+        let source_str: String = row.get(12)?;
+        let status = ConfigStatus::from_str(&status_str).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                10,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        let source = ConfigSource::from_str(&source_str).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                12,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
 
         Ok(Self {
             id: Some(row.get(0)?),
@@ -294,11 +382,14 @@ impl ConfigFile {
             path: row.get(2)?,
             trove_id: row.get(3)?,
             original_hash: row.get(4)?,
-            current_hash: row.get(5)?,
-            noreplace: row.get::<_, i32>(6)? != 0,
-            status: ConfigStatus::parse(&status_str).unwrap_or(ConfigStatus::Pristine),
-            modified_at: row.get(8)?,
-            source: ConfigSource::parse(&source_str).unwrap_or(ConfigSource::Auto),
+            original_md5: row.get(5)?,
+            current_hash: row.get(6)?,
+            noreplace: row.get::<_, i32>(7)? != 0,
+            ghost: row.get::<_, i32>(8)? != 0,
+            remove_on_upgrade: row.get::<_, i32>(9)? != 0,
+            status,
+            modified_at: row.get(11)?,
+            source,
         })
     }
 }
@@ -424,9 +515,13 @@ mod tests {
 
         conn.execute_batch(
             "
+            PRAGMA foreign_keys = ON;
+
             CREATE TABLE troves (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                version TEXT NOT NULL DEFAULT '1',
+                architecture TEXT
             );
 
             CREATE TABLE files (
@@ -441,12 +536,18 @@ mod tests {
 
             CREATE TABLE config_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+                file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
                 path TEXT NOT NULL,
-                trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
-                original_hash TEXT NOT NULL,
+                trove_id INTEGER REFERENCES troves(id) ON DELETE SET NULL,
+                package_name TEXT NOT NULL,
+                package_version TEXT NOT NULL,
+                package_architecture TEXT,
+                original_hash TEXT,
+                original_md5 TEXT,
                 current_hash TEXT,
                 noreplace INTEGER NOT NULL DEFAULT 0,
+                ghost INTEGER NOT NULL DEFAULT 0,
+                remove_on_upgrade INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'pristine',
                 modified_at TEXT,
                 source TEXT DEFAULT 'auto',
@@ -484,7 +585,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found.path, "/etc/nginx/nginx.conf");
-        assert_eq!(found.original_hash, "abc123");
+        assert_eq!(found.original_hash.as_deref(), Some("abc123"));
         assert_eq!(found.status, ConfigStatus::Pristine);
     }
 
@@ -533,6 +634,22 @@ mod tests {
     }
 
     #[test]
+    fn ghost_config_persists_path_ownership_without_payload_hash() {
+        let (_temp, conn) = create_test_db();
+
+        let mut config = ConfigFile::new_ghost("/run/nginx.pid".to_string(), 1);
+        config.insert(&conn).unwrap();
+
+        let found = ConfigFile::find_by_path(&conn, "/run/nginx.pid")
+            .unwrap()
+            .unwrap();
+        assert!(found.ghost);
+        assert!(found.file_id.is_none());
+        assert!(found.original_hash.is_none());
+        assert_eq!(found.status, ConfigStatus::Missing);
+    }
+
+    #[test]
     fn test_config_backup_crud() {
         let (_temp, conn) = create_test_db();
 
@@ -570,5 +687,21 @@ mod tests {
         let modified = ConfigFile::find_modified(&conn).unwrap();
         assert_eq!(modified.len(), 1);
         assert_eq!(modified[0].path, "/etc/nginx/proxy.conf");
+    }
+
+    #[test]
+    fn package_identity_survives_trove_deletion_for_residual_config() {
+        let (_temp, conn) = create_test_db();
+        let mut config =
+            ConfigFile::new("/etc/nginx/nginx.conf".to_string(), 1, "abc123".to_string());
+        config.source = ConfigSource::Deb;
+        config.insert(&conn).unwrap();
+
+        conn.execute("DELETE FROM troves WHERE id = 1", []).unwrap();
+
+        let residual = ConfigFile::find_by_package(&conn, "nginx").unwrap();
+        assert_eq!(residual.len(), 1);
+        assert_eq!(residual[0].trove_id, None);
+        assert_eq!(residual[0].source, ConfigSource::Deb);
     }
 }

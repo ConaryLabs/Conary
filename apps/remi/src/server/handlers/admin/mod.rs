@@ -5,10 +5,7 @@ mod artifacts;
 mod audit;
 mod events;
 mod federation;
-mod non_public_test_serving;
-mod packages;
 mod repos;
-mod scriptlet_evidence;
 pub mod test_data;
 mod tokens;
 
@@ -16,10 +13,7 @@ pub use artifacts::*;
 pub use audit::*;
 pub use events::*;
 pub use federation::*;
-pub use non_public_test_serving::*;
-pub use packages::*;
 pub use repos::*;
-pub use scriptlet_evidence::*;
 pub use tokens::*;
 
 use axum::{
@@ -126,13 +120,14 @@ pub(crate) mod test_helpers {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
                 .unwrap();
-            conary_core::db::schema::migrate(&conn).unwrap();
+            conary_core::db::schema::ensure_current(&conn).unwrap();
         }
 
         let config = crate::server::ServerConfig {
             db_path: db_path.clone(),
             chunk_dir: tmp.path().join("chunks"),
             cache_dir: tmp.path().join("cache"),
+            release_publish: test_release_publish(tmp.path()),
             ..Default::default()
         };
         std::fs::create_dir_all(&config.chunk_dir).unwrap();
@@ -169,11 +164,34 @@ pub(crate) mod test_helpers {
             db_path: db_path.to_path_buf(),
             chunk_dir: db_path.parent().unwrap().join("chunks"),
             cache_dir: db_path.parent().unwrap().join("cache"),
+            release_publish: test_release_publish(db_path.parent().unwrap()),
             ..Default::default()
         };
         let state = Arc::new(tokio::sync::RwLock::new(
             crate::server::ServerState::new(config).expect("test server state"),
         ));
         crate::server::routes::create_external_admin_router(state, None)
+    }
+
+    fn test_release_publish(
+        root: &std::path::Path,
+    ) -> crate::server::config::ReleasePublishSection {
+        let keys_dir = root.join("keys");
+        for distro in ["fedora", "ubuntu"] {
+            let distro_dir = keys_dir.join(distro);
+            std::fs::create_dir_all(&distro_dir).unwrap();
+            let private = distro_dir.join("targets.private");
+            let public = distro_dir.join("targets.public");
+            if !private.exists() {
+                conary_core::ccs::signing::SigningKeyPair::generate()
+                    .with_key_id("targets")
+                    .save_to_files(&private, &public)
+                    .unwrap();
+            }
+        }
+        crate::server::config::ReleasePublishSection {
+            repository_keys_dir: Some(keys_dir),
+            trusted_build_attestation_signers: Vec::new(),
+        }
     }
 }

@@ -1,6 +1,13 @@
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "dep-base", capability_kind = "PackageName", version_constraint = "=2.0.0", native_text = "dep-base =2.0.0" } }, alternatives = [{ name = "dep-base", capability_kind = "PackageName", version_constraint = "=2.0.0", native_text = "dep-base =2.0.0" }], native_text = "dep-base =2.0.0" },
+]
+
 [package]
 name = "dep-liba"
 version = "2.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Library A version 2"
 license = "MIT"
 
@@ -12,12 +19,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-liba", "dep-liba-abi-v2"]
 binaries = ["/usr/bin/dep-liba-v2"]
-
-[requires]
-capabilities = []
-packages = [
-    { name = "dep-base", version = ">=2.0, <3.0" },
-]
 
 [components]
 default = ["runtime"]

@@ -4,8 +4,10 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
+mod repository;
+
 pub async fn openapi_spec() -> Response {
-    let spec = serde_json::json!({
+    let mut spec = serde_json::json!({
         "openapi": "3.1.0",
         "info": {
             "title": "Remi Admin API",
@@ -34,10 +36,40 @@ pub async fn openapi_spec() -> Response {
                     },
                     "required": ["error", "code"]
                 },
-                "ScriptletEvidenceState": {
-                    "type": "string",
-                    "enum": ["needs-triage", "adapter-candidate", "in-design", "in-implementation", "covered-partial", "covered-public-ready", "wont-support"]
-                }
+                "ModelCollectionMember": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["name", "version_constraint", "is_optional"],
+                    "properties": {
+                        "name": { "type": "string", "minLength": 1 },
+                        "version_constraint": { "type": ["string", "null"] },
+                        "is_optional": { "type": "boolean" }
+                    }
+                },
+                "SignedModelCollection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["collection", "signature", "public_key"],
+                    "properties": {
+                        "collection": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["name", "version", "members", "includes", "pins", "exclude", "content_hash", "published_at"],
+                            "properties": {
+                                "name": { "type": "string", "minLength": 1 },
+                                "version": { "type": "string", "minLength": 1 },
+                                "members": { "type": "array", "items": { "$ref": "#/components/schemas/ModelCollectionMember" } },
+                                "includes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                                "pins": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+                                "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                                "content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                                "published_at": { "type": "string", "format": "date-time" }
+                            }
+                        },
+                        "signature": { "type": "string", "contentEncoding": "base64" },
+                        "public_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                    }
+                },
             }
         },
         "paths": {
@@ -108,21 +140,6 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Artifact uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
-            "/v1/admin/packages/{distro}": {
-                "post": {
-                    "operationId": "uploadPackage",
-                    "summary": "Upload a package artifact",
-                    "description": "Uploads a package artifact for the named distro so test harnesses and package workflows can publish inputs.",
-                    "tags": ["packages"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [{ "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key for the uploaded package" }],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
-                    },
-                    "responses": { "200": { "description": "Package uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
             "/v1/admin/releases/{distro}": {
                 "post": {
                     "operationId": "uploadReleasePackage",
@@ -145,163 +162,33 @@ pub async fn openapi_spec() -> Response {
                     }
                 }
             },
-            "/v1/admin/packages/{distro}/{package}/scriptlet-review": {
-                "get": {
-                    "operationId": "getScriptletReviewArtifact",
-                    "summary": "Fetch scriptlet review artifact",
-                    "description": "Returns the scriptlet review artifact for a package uploaded through the admin package surface.",
-                    "tags": ["packages"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [
-                        { "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key" },
-                        { "name": "package", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Package identifier" }
-                    ],
-                    "responses": { "200": { "description": "Scriptlet review artifact" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Artifact not found" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/backfill": {
-                "post": {
-                    "operationId": "backfillScriptletEvidence",
-                    "summary": "Backfill scriptlet evidence queue",
-                    "description": "Runs one admin-only batch over existing non-public or malformed converted-package scriptlet metadata and materializes adapter-planning queue samples. This does not publish packages or change publication authority.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "requestBody": {
-                        "required": false,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 } }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "Backfill batch result" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/reconcile-unknown-commands": {
-                "post": {
-                    "operationId": "reconcileScriptletEvidenceUnknownCommands",
-                    "summary": "Reconcile unknown-command queue noise",
-                    "description": "Classifies one bounded batch of legacy unknown-command clusters under the current queue-only normalization contract. Dry-run is the default. Applied batches retain real command signals and supersede provable shell or maintainer-dispatch noise without deleting samples, notes, state events, or changing converted-package publication state.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "requestBody": {
-                        "required": false,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "properties": {
-                                "dry_run": { "type": "boolean", "default": true },
-                                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 },
-                                "after_cluster_key": { "type": "string", "maxLength": 256 }
-                            }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "Unknown-command reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/reconcile-apparmor": {
-                "post": {
-                    "operationId": "reconcileScriptletEvidenceAppArmor",
-                    "summary": "Reconcile historical AppArmor queue identity",
-                    "description": "Rematerializes one bounded batch of historical AppArmor observations under the current approved-path normalization contract. Dry-run is the default. Applied batches move observations to current clusters, persist merge/split links, preserve source workflow history, and do not change converted-package publication state.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "requestBody": {
-                        "required": false,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "properties": {
-                                "dry_run": { "type": "boolean", "default": true },
-                                "limit": { "type": "integer", "minimum": 1, "maximum": 5000, "default": 500 },
-                                "after_cluster_key": { "type": "string", "maxLength": 256 }
-                            }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "AppArmor reconciliation batch result" }, "400": { "description": "Invalid cursor" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/clusters": {
-                "get": {
-                    "operationId": "listScriptletEvidenceClusters",
-                    "summary": "List scriptlet evidence clusters",
-                    "description": "Lists admin-only adapter-planning clusters created from blocked, review-required, or malformed scriptlet conversion evidence. Responses include counts and staleness summaries, not raw scriptlet bodies or private local review paths.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [
-                        { "name": "state", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ScriptletEvidenceState" } },
-                        { "name": "distro", "in": "query", "required": false, "schema": { "type": "string" } },
-                        { "name": "blocked_class", "in": "query", "required": false, "schema": { "type": "string" } },
-                        { "name": "command", "in": "query", "required": false, "schema": { "type": "string" } },
-                        { "name": "package", "in": "query", "required": false, "schema": { "type": "string" } },
-                        { "name": "include_superseded", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } },
-                        { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "maximum": 1000 } },
-                        { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } }
-                    ],
-                    "responses": { "200": { "description": "Scriptlet evidence cluster list" }, "400": { "description": "Invalid state filter" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}": {
-                "get": {
-                    "operationId": "getScriptletEvidenceCluster",
-                    "summary": "Get scriptlet evidence cluster detail",
-                    "description": "Returns admin-only cluster detail, sample summaries, state events, maintainer notes, and incoming/outgoing normalization reconciliation links. Sample data exposes review-artifact availability and staleness but never raw local artifact paths.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
-                    "responses": { "200": { "description": "Scriptlet evidence cluster detail" }, "400": { "description": "Invalid cluster key" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state": {
+            "/v1/admin/models/{name}": {
                 "put": {
-                    "operationId": "updateScriptletEvidenceClusterState",
-                    "summary": "Update scriptlet evidence cluster state",
-                    "description": "Moves an admin-only scriptlet evidence cluster through triage states and records a state-event audit row. This does not publish converted packages.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "required": ["state"],
-                            "properties": {
-                                "state": { "$ref": "#/components/schemas/ScriptletEvidenceState" },
-                                "reason": { "type": "string" }
-                            }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "Updated cluster detail" }, "400": { "description": "Invalid state or cluster key" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/notes": {
-                "post": {
-                    "operationId": "addScriptletEvidenceClusterNote",
-                    "summary": "Add scriptlet evidence cluster note",
-                    "description": "Adds an admin-only maintainer note to a scriptlet evidence cluster. Notes are private by default and are excluded from public-sanitized packets.",
-                    "tags": ["scriptlet-evidence"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [{ "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" }],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/json": { "schema": {
-                            "type": "object",
-                            "required": ["body"],
-                            "properties": { "body": { "type": "string", "maxLength": 4096 } }
-                        }}}
-                    },
-                    "responses": { "200": { "description": "Created note" }, "400": { "description": "Invalid note body or cluster key" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
-                }
-            },
-            "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/packet": {
-                "get": {
-                    "operationId": "getScriptletEvidencePacket",
-                    "summary": "Export scriptlet evidence packet",
-                    "description": "Builds a review packet for adapter planning. The default private packet includes maintainer notes and sanitized artifact references; visibility=public-sanitized omits private notes, raw paths, and review artifacts.",
-                    "tags": ["scriptlet-evidence"],
+                    "operationId": "publishSignedModelCollection",
+                    "summary": "Publish a signed system-model collection",
+                    "description": "Verifies the Ed25519 signature and canonical content hash, then atomically replaces the named collection when force=true. The public key travels with the signed envelope for identity derivation; clients establish trust independently through explicit model include trust roots.",
+                    "tags": ["models"],
                     "security": [{ "bearerAuth": [] }],
                     "parameters": [
-                        { "name": "cluster_key", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Stable s1-prefixed scriptlet evidence cluster key" },
-                        { "name": "visibility", "in": "query", "required": false, "schema": { "type": "string", "enum": ["private", "public-sanitized"], "default": "private" } }
+                        { "name": "name", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$" } },
+                        { "name": "force", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } }
                     ],
-                    "responses": { "200": { "description": "Scriptlet evidence packet" }, "400": { "description": "Invalid cluster key or visibility" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" }, "404": { "description": "Cluster not found" } }
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": { "$ref": "#/components/schemas/SignedModelCollection" }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": { "description": "Signed collection verified and published" },
+                        "400": { "description": "Malformed envelope, name/hash mismatch, or invalid signature" },
+                        "401": { "description": "Invalid or missing token" },
+                        "403": { "description": "Admin scope required" },
+                        "409": { "description": "Collection exists and force was not requested" },
+                        "413": { "description": "Request exceeds one MiB" }
+                    }
                 }
             },
             "/v1/admin/events": {
@@ -333,14 +220,15 @@ pub async fn openapi_spec() -> Response {
                         "required": true,
                         "content": { "application/json": { "schema": {
                             "type": "object",
-                            "required": ["name", "url"],
+                            "required": ["name", "url", "parser"],
                             "properties": {
                                 "name": { "type": "string", "description": "Unique repository identifier (e.g., 'fedora-41')" },
                                 "url": { "type": "string", "description": "Base URL for repository metadata" },
                                 "content_url": { "type": "string", "description": "Separate URL for package downloads, if different from metadata URL" },
                                 "enabled": { "type": "boolean", "description": "Whether the repo is active. Default: true" },
                                 "priority": { "type": "integer", "description": "Lower values are preferred when resolving. Default: 0" },
-                                "gpg_check": { "type": "boolean", "description": "Verify GPG signatures on metadata. Default: true" },
+                                "parser": { "$ref": "#/components/schemas/RepositoryParser" },
+                                "trust": { "$ref": "#/components/schemas/RepositoryTrustPolicy", "description": "Required for rpm, deb, and arch parsers; forbidden for json." },
                                 "metadata_expire": { "type": "integer", "description": "Metadata cache lifetime in seconds. Default: 3600" }
                             }
                         }}}
@@ -369,14 +257,14 @@ pub async fn openapi_spec() -> Response {
                         "required": true,
                         "content": { "application/json": { "schema": {
                             "type": "object",
-                            "required": ["url"],
+                            "required": ["url", "parser"],
                             "properties": {
-                                "name": { "type": "string", "description": "Ignored (renames not supported). Optional for backwards compatibility." },
                                 "url": { "type": "string", "description": "Base URL for repository metadata" },
                                 "content_url": { "type": "string", "description": "Separate URL for package downloads" },
                                 "enabled": { "type": "boolean", "description": "Whether the repo is active" },
                                 "priority": { "type": "integer", "description": "Lower values are preferred when resolving" },
-                                "gpg_check": { "type": "boolean", "description": "Verify GPG signatures on metadata" },
+                                "parser": { "$ref": "#/components/schemas/RepositoryParser" },
+                                "trust": { "$ref": "#/components/schemas/RepositoryTrustPolicy", "description": "Required for rpm, deb, and arch parsers; forbidden for json." },
                                 "metadata_expire": { "type": "integer", "description": "Metadata cache lifetime in seconds" }
                             }
                         }}}
@@ -702,6 +590,12 @@ pub async fn openapi_spec() -> Response {
         }
     });
 
+    let schemas = spec
+        .pointer_mut("/components/schemas")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("OpenAPI components.schemas must be an object");
+    schemas.extend(repository::schemas());
+
     (
         StatusCode::OK,
         [("content-type", "application/json")],
@@ -749,38 +643,7 @@ mod tests {
             ("/v1/admin/tokens/{id}", &["delete"][..]),
             ("/v1/admin/test-fixtures/{path}", &["put"][..]),
             ("/v1/admin/test-artifacts/{path}", &["put"][..]),
-            ("/v1/admin/packages/{distro}", &["post"][..]),
             ("/v1/admin/releases/{distro}", &["post"][..]),
-            (
-                "/v1/admin/packages/{distro}/{package}/scriptlet-review",
-                &["get"][..],
-            ),
-            ("/v1/admin/scriptlet-evidence/backfill", &["post"][..]),
-            (
-                "/v1/admin/scriptlet-evidence/reconcile-unknown-commands",
-                &["post"][..],
-            ),
-            (
-                "/v1/admin/scriptlet-evidence/reconcile-apparmor",
-                &["post"][..],
-            ),
-            ("/v1/admin/scriptlet-evidence/clusters", &["get"][..]),
-            (
-                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}",
-                &["get"][..],
-            ),
-            (
-                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state",
-                &["put"][..],
-            ),
-            (
-                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/notes",
-                &["post"][..],
-            ),
-            (
-                "/v1/admin/scriptlet-evidence/clusters/{cluster_key}/packet",
-                &["get"][..],
-            ),
             ("/v1/admin/repos", &["get", "post"][..]),
             ("/v1/admin/repos/{name}", &["get", "put", "delete"][..]),
             ("/v1/admin/repos/{name}/sync", &["post"][..]),
@@ -856,7 +719,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn openapi_spec_documents_scriptlet_evidence_body_and_state_contract() {
+    async fn openapi_spec_has_no_retired_admin_publication_or_review_workflow() {
         let resp = openapi_spec().await;
         assert_eq!(resp.status(), StatusCode::OK);
 
@@ -864,32 +727,22 @@ mod tests {
             .await
             .unwrap();
         let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let backfill = &spec["paths"]["/v1/admin/scriptlet-evidence/backfill"]["post"];
-        assert_eq!(backfill["requestBody"]["required"], false);
-
-        let list = &spec["paths"]["/v1/admin/scriptlet-evidence/clusters"]["get"];
+        let paths = spec["paths"].as_object().unwrap();
         assert!(
-            list["responses"].get("400").is_some(),
-            "list endpoint should document invalid state as a 400 response"
+            paths.get("/v1/admin/packages/{distro}").is_none(),
+            "retired package-upload publication bypass must not remain in OpenAPI"
         );
-        let list_state_schema = &list["parameters"][0]["schema"];
-        let state_path =
-            &spec["paths"]["/v1/admin/scriptlet-evidence/clusters/{cluster_key}/state"]["put"];
-        let update_state_schema = state_path
-            .pointer("/requestBody/content/application~1json/schema/properties/state")
-            .expect("state update schema should document the state property");
-        assert_eq!(list_state_schema, update_state_schema);
-        assert_eq!(
-            spec["components"]["schemas"]["ScriptletEvidenceState"]["enum"],
-            serde_json::json!([
-                "needs-triage",
-                "adapter-candidate",
-                "in-design",
-                "in-implementation",
-                "covered-partial",
-                "covered-public-ready",
-                "wont-support"
-            ])
+        assert!(
+            paths.keys().all(|path| {
+                !path.contains("scriptlet-evidence") && !path.contains("scriptlet-review")
+            }),
+            "retired review routes must not remain in OpenAPI"
+        );
+        assert!(
+            spec["components"]["schemas"]
+                .get("ScriptletEvidenceState")
+                .is_none(),
+            "retired review workflow schemas must not remain in OpenAPI"
         );
     }
 }

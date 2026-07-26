@@ -6,9 +6,10 @@
 
 use crate::server::conversion::ConversionService;
 use anyhow::{Context, Result};
-use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 /// Pre-warming configuration
@@ -20,6 +21,8 @@ pub struct PrewarmConfig {
     pub chunk_dir: String,
     /// Path to cache directory
     pub cache_dir: String,
+    /// Remi-owned per-distro TUF keys used to sign converted CCS packages.
+    pub repository_keys_dir: Option<PathBuf>,
     /// Distribution to pre-warm
     pub distro: String,
     /// Maximum number of packages to convert
@@ -62,6 +65,14 @@ pub struct PackagePopularity {
 
 /// Run pre-warming job
 pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(&config.distro)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "prewarm route '{}' does not map to exactly one public profile",
+                    config.distro
+                )
+            })?;
     info!(
         "Starting pre-warm for {} (max {} packages)",
         config.distro, config.max_packages
@@ -96,7 +107,8 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
         config.cache_dir.clone().into(),
         config.db_path.clone().into(),
         None, // R2 not available in prewarm context
-    );
+    )
+    .with_repository_keys_dir(config.repository_keys_dir.clone());
 
     let mut result = PrewarmResult {
         packages_processed: 0,
@@ -112,25 +124,17 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
     for pkg in packages.iter().take(config.max_packages) {
         result.packages_processed += 1;
 
-        // Check if already converted or terminal behind the publication gate.
+        // Skip current conversions; stale records are rebuilt.
         match existing_conversion_state_async(
             &config.db_path,
             &pkg.name,
             &pkg.version,
-            &config.distro,
+            source_profile.id(),
         )
         .await?
         {
-            ExistingConversionState::PublicReady => {
+            ExistingConversionState::Current => {
                 debug!("Skipping {} {} - already converted", pkg.name, pkg.version);
-                result.packages_skipped += 1;
-                continue;
-            }
-            ExistingConversionState::NonPublicTerminal => {
-                debug!(
-                    "Skipping {} {} - conversion requires scriptlet review",
-                    pkg.name, pkg.version
-                );
                 result.packages_skipped += 1;
                 continue;
             }
@@ -149,7 +153,7 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
             .await
         {
             Ok(outcome) => {
-                let conv_result = outcome.into_result();
+                let conv_result = outcome;
                 info!(
                     "Converted {} {}: {} chunks, {} bytes",
                     pkg.name,
@@ -241,48 +245,32 @@ fn get_packages_to_convert(
     conn: &rusqlite::Connection,
     config: &PrewarmConfig,
 ) -> Result<Vec<RepositoryPackage>> {
+    let profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(&config.distro)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "prewarm route '{}' does not map to exactly one public profile",
+                    config.distro
+                )
+            })?;
     // Merge upstream + local popularity
     let popularity = merge_popularity(conn, config.popularity_file.as_deref());
 
     // Query repository packages for this distro
-    let distro_pattern = format!("%{}%", config.distro);
-    let mut stmt = conn.prepare(
-        "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
-                rp.description, rp.size, rp.checksum, rp.download_url, rp.dependencies
+    let sql = format!(
+        "SELECT {}
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
-         WHERE (r.name LIKE ?1 OR r.url LIKE ?2)
+         WHERE r.source_profile = ?1
          AND rp.size > 0
          ORDER BY rp.name, rp.version DESC",
-    )?;
+        RepositoryPackage::COLUMNS_PREFIXED
+    );
+    let mut stmt = conn.prepare(&sql)?;
 
-    let rows = stmt.query_map([&distro_pattern, &distro_pattern], |row| {
-        Ok(RepositoryPackage {
-            id: row.get(0)?,
-            repository_id: row.get(1)?,
-            name: row.get(2)?,
-            version: row.get(3)?,
-            package_release: String::new(),
-            architecture: row.get(4)?,
-            description: row.get(5)?,
-            size: row.get(6)?,
-            checksum: row.get(7)?,
-            download_url: row.get(8)?,
-            dependencies: row.get(9)?,
-            metadata: None,
-            synced_at: None,
-            is_security_update: false,
-            severity: None,
-            cve_ids: None,
-            advisory_id: None,
-            advisory_url: None,
-            distro: None,
-            version_scheme: None,
-            canonical_id: None,
-        })
-    })?;
+    let rows = stmt.query_map([profile.id()], RepositoryPackage::from_row)?;
 
-    let mut packages: Vec<RepositoryPackage> = rows.filter_map(|r| r.ok()).collect();
+    let mut packages: Vec<RepositoryPackage> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
 
     // Filter by pattern if provided
     if let Some(pattern) = &config.pattern {
@@ -317,128 +305,55 @@ fn load_popularity_data(path: &str) -> Result<Vec<PackagePopularity>> {
 
 /// Check if a package is already converted.
 ///
-/// Checks the structured identity fields (distro, package_name, package_version)
-/// which are set by server-side conversions (trove_id may be None for those).
-/// Falls back to the trove join for client-side conversions that only have
-/// trove_id.
+/// Only repository conversion identity fields (`source_profile`,
+/// `package_name`, and `package_version`) are authoritative for Remi
+/// prewarming. Installed
+/// conversion records keyed by `trove_id` are a separate artifact class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExistingConversionState {
     MissingOrStale,
-    PublicReady,
-    NonPublicTerminal,
+    Current,
 }
 
 fn existing_conversion_state(
     conn: &rusqlite::Connection,
     name: &str,
     version: &str,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<ExistingConversionState> {
-    // First check by structured identity (covers server-side conversions
-    // where trove_id is NULL).
-    let mut saw_non_public = false;
-    for converted in ConvertedPackage::find_publication_candidates(conn, distro, Some(name))? {
-        if converted.package_version.as_deref() != Some(version) {
+    for converted in ConvertedPackage::find_current_conversions(conn, source_profile, Some(name))? {
+        if converted.repository_artifact()?.package_version != version {
             continue;
         }
-        if converted.is_scriptlet_public_ready() {
-            return Ok(ExistingConversionState::PublicReady);
-        }
-        saw_non_public = true;
+        converted.scriptlet_summary()?;
+        return Ok(ExistingConversionState::Current);
     }
 
-    if saw_non_public {
-        return Ok(ExistingConversionState::NonPublicTerminal);
-    }
-
-    // Fall back to trove join for client-side conversions.
-    let trove_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM converted_packages cp
-             JOIN troves t ON cp.trove_id = t.id
-             WHERE t.name = ?1
-               AND t.version = ?2
-               AND cp.conversion_version >= ?3",
-            rusqlite::params![name, version, CONVERSION_VERSION],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if trove_count > 0 {
-        Ok(ExistingConversionState::PublicReady)
-    } else {
-        Ok(ExistingConversionState::MissingOrStale)
-    }
+    Ok(ExistingConversionState::MissingOrStale)
 }
 
 async fn existing_conversion_state_async(
     db_path: &str,
     name: &str,
     version: &str,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<ExistingConversionState> {
     let db_path = db_path.to_string();
     let name = name.to_string();
     let version = version.to_string();
-    let distro = distro.to_string();
+    let source_profile = source_profile.to_string();
 
     tokio::task::spawn_blocking(move || {
         let conn = conary_core::db::open(&db_path)?;
-        existing_conversion_state(&conn, &name, &version, &distro)
+        existing_conversion_state(&conn, &name, &version, &source_profile)
     })
     .await
     .map_err(|e| anyhow::anyhow!("prewarm cache lookup task panicked: {e}"))?
 }
 
-/// Background pre-warming task
-///
-/// Runs periodically to convert popular packages that haven't been requested yet.
-/// Uses merged popularity from both upstream data and local download statistics.
-pub async fn run_prewarm_background(
-    db_path: String,
-    chunk_dir: String,
-    cache_dir: String,
-    distro: String,
-    interval_hours: u64,
-    max_packages_per_run: usize,
-    popularity_file: Option<String>,
-) {
-    use std::time::Duration;
-
-    let interval = Duration::from_secs(interval_hours * 3600);
-
-    loop {
-        tokio::time::sleep(interval).await;
-
-        let config = PrewarmConfig {
-            db_path: db_path.clone(),
-            chunk_dir: chunk_dir.clone(),
-            cache_dir: cache_dir.clone(),
-            distro: distro.clone(),
-            max_packages: max_packages_per_run,
-            popularity_file: popularity_file.clone(),
-            pattern: None,
-            dry_run: false,
-        };
-
-        match run_prewarm(&config).await {
-            Ok(result) => {
-                info!(
-                    "Background pre-warm complete: {} converted, {} failed",
-                    result.packages_converted, result.packages_failed
-                );
-            }
-            Err(e) => {
-                warn!("Background pre-warm failed: {}", e);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::convert::ScriptletBundleSummary;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
 
     #[test]
@@ -483,7 +398,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Write a temporary popularity file
         let pop_file = NamedTempFile::new().unwrap();
@@ -502,22 +417,22 @@ mod tests {
     }
 
     #[test]
-    fn prewarm_treats_non_public_current_rows_as_terminal_not_public_ready() {
+    fn prewarm_rebuilds_stale_rows_and_skips_current_rows() {
         use conary_core::db::schema;
         use tempfile::NamedTempFile;
 
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
-        let mut stale = ConvertedPackage::new_server(
-            "fedora".to_string(),
+        let mut stale = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
             "pkg".to_string(),
             "1.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:pkg-1.0-source".to_string(),
-            "high".to_string(),
             &[],
             3,
             "sha256:pkg-1.0-content".to_string(),
@@ -526,37 +441,69 @@ mod tests {
         stale.conversion_version = CONVERSION_VERSION - 1;
         stale.insert(&conn).unwrap();
 
-        let mut private = ConvertedPackage::new_server(
-            "fedora".to_string(),
+        let mut current = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
             "pkg".to_string(),
             "2.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:pkg-2.0-source".to_string(),
-            "high".to_string(),
             &[],
             3,
             "sha256:pkg-2.0-content".to_string(),
             "/tmp/pkg-2.0.ccs".to_string(),
         );
-        private
-            .set_scriptlet_metadata(&ScriptletBundleSummary {
-                publication_status: "private-review".to_string(),
-                scriptlet_fidelity: "review-required".to_string(),
-                target_compatibility: "review-required".to_string(),
-                review_reason_codes: vec!["review-class-debconf".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
-        private.insert(&conn).unwrap();
+        current.insert(&conn).unwrap();
 
         assert_eq!(
-            existing_conversion_state(&conn, "pkg", "1.0", "fedora").unwrap(),
+            existing_conversion_state(&conn, "pkg", "1.0", "fedora-44").unwrap(),
             ExistingConversionState::MissingOrStale
         );
         assert_eq!(
-            existing_conversion_state(&conn, "pkg", "2.0", "fedora").unwrap(),
-            ExistingConversionState::NonPublicTerminal
+            existing_conversion_state(&conn, "pkg", "2.0", "fedora-44").unwrap(),
+            ExistingConversionState::Current
         );
+    }
+
+    #[test]
+    fn installed_conversion_identity_is_not_a_prewarm_cache_key() {
+        use conary_core::db::models::{ConvertedPackage, Trove, TroveType};
+        use conary_core::db::schema;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        schema::ensure_current(&conn).unwrap();
+
+        let mut trove = Trove::new(
+            "pkg".to_string(),
+            "1.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let mut installed = ConvertedPackage::new_installed(
+            trove_id,
+            "rpm".to_string(),
+            "sha256:installed".to_string(),
+        );
+        installed.insert(&conn).unwrap();
+
+        assert_eq!(
+            existing_conversion_state(&conn, "pkg", "1.0", "fedora-44").unwrap(),
+            ExistingConversionState::MissingOrStale
+        );
+    }
+
+    #[test]
+    fn prewarm_conversion_lookup_propagates_database_errors() {
+        use conary_core::db::schema;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        schema::ensure_current(&conn).unwrap();
+        conn.execute("DROP TABLE converted_packages", []).unwrap();
+
+        let error = existing_conversion_state(&conn, "pkg", "1.0", "fedora-44").unwrap_err();
+        assert!(error.to_string().contains("converted_packages"), "{error}");
     }
 
     #[test]
@@ -568,14 +515,14 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Insert some download stats
         let events = vec![
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "git".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "git".into()),
         ];
         DownloadStat::insert_batch(&conn, &events).unwrap();
         DownloadCount::refresh_aggregates(&conn).unwrap();
@@ -598,7 +545,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         // Upstream: nginx=1000, curl=800
         let pop_file = NamedTempFile::new().unwrap();
@@ -610,13 +557,13 @@ mod tests {
 
         // Local: curl downloaded 5 times (5*10=50 boost), vim 2 times (2*10=20)
         let events = vec![
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
         ];
         DownloadStat::insert_batch(&conn, &events).unwrap();
         DownloadCount::refresh_aggregates(&conn).unwrap();
@@ -641,7 +588,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
 
         let result = merge_popularity(&conn, None);
         assert!(result.is_empty());

@@ -4,15 +4,12 @@ use std::borrow::Cow;
 
 use anyhow::Result;
 
-use super::context::{legacy_replay_options, require_live_mutation};
+use super::context::require_live_mutation;
 use crate::cli;
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
-pub(super) async fn dispatch_ccs_command(
-    ccs_cmd: cli::CcsCommands,
-    allow_live_system_mutation: bool,
-) -> Result<()> {
+pub(super) async fn dispatch_ccs_command(ccs_cmd: cli::CcsCommands) -> Result<()> {
     match ccs_cmd {
         cli::CcsCommands::Init {
             path,
@@ -27,35 +24,25 @@ pub(super) async fn dispatch_ccs_command(
             output,
             target,
             source,
-            no_classify,
             no_chunked,
             dry_run,
-            format,
             local_dev,
             key,
-            target_profile,
         } => {
             commands::ccs::cmd_ccs_build(commands::ccs::CcsBuildOptions {
                 path,
                 output,
                 target,
                 source,
-                no_classify,
                 chunked: !no_chunked,
                 dry_run,
-                format,
                 local_dev,
                 key,
-                target_profile,
             })
             .await
         }
 
-        cli::CcsCommands::Lint {
-            path,
-            format,
-            target_profile,
-        } => commands::ccs::cmd_ccs_lint(&path, format, target_profile).await,
+        cli::CcsCommands::Lint { path, format } => commands::ccs::cmd_ccs_lint(&path, format).await,
 
         cli::CcsCommands::Inspect {
             package,
@@ -65,22 +52,16 @@ pub(super) async fn dispatch_ccs_command(
             format,
         } => commands::ccs::cmd_ccs_inspect(&package, files, hooks, deps, &format).await,
 
-        cli::CcsCommands::Verify {
-            package,
-            policy,
-            allow_unsigned,
-        } => commands::ccs::cmd_ccs_verify(&package, policy, allow_unsigned).await,
+        cli::CcsCommands::Verify { package, policy } => {
+            commands::ccs::cmd_ccs_verify(&package, policy).await
+        }
 
         cli::CcsCommands::Test {
             package,
             dry_run,
             policy,
             keep_workspace,
-            target_profile,
-        } => {
-            commands::ccs::cmd_ccs_test(&package, dry_run, policy, keep_workspace, target_profile)
-                .await
-        }
+        } => commands::ccs::cmd_ccs_test(&package, dry_run, policy, keep_workspace).await,
 
         cli::CcsCommands::Sign {
             package,
@@ -98,42 +79,29 @@ pub(super) async fn dispatch_ccs_command(
             package,
             common,
             dry_run,
-            allow_unsigned,
             policy,
             components,
             sandbox,
             no_deps,
-            no_scripts,
             yes,
-            allow_legacy_replay,
-            allow_foreign_legacy_replay,
             reinstall,
-            allow_capabilities,
-            capability_policy,
         } => {
-            let legacy_replay =
-                legacy_replay_options(allow_legacy_replay, allow_foreign_legacy_replay);
             require_live_mutation(
-                MutationIntent::from_apply_intent(yes, allow_live_system_mutation),
+                MutationIntent::from_apply_intent(yes),
                 Cow::Borrowed("conary ccs install"),
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
             )?;
-            commands::ccs::cmd_ccs_install_with_replay_options(
+            commands::ccs::cmd_ccs_install(
                 &package,
                 &common.db.db_path,
                 &common.root,
                 dry_run,
-                allow_unsigned,
                 policy,
                 components,
                 sandbox.into(),
                 no_deps,
-                no_scripts,
                 reinstall,
-                allow_capabilities,
-                capability_policy,
-                legacy_replay,
             )
             .await
         }
@@ -142,25 +110,8 @@ pub(super) async fn dispatch_ccs_command(
             packages,
             output,
             format,
-            db,
-        } => commands::ccs::cmd_ccs_export(&packages, &output, &format, &db.db_path).await,
-
-        cli::CcsCommands::Shell {
-            packages,
-            db,
-            shell,
-            env,
-            keep,
-        } => {
-            commands::ccs::cmd_ccs_shell(&packages, &db.db_path, shell.as_deref(), &env, keep).await
-        }
-
-        cli::CcsCommands::Run {
-            package,
-            command,
-            db,
-            env,
-        } => commands::ccs::cmd_ccs_run(&package, &command, &db.db_path, &env).await,
+            policy,
+        } => commands::ccs::cmd_ccs_export(&packages, &output, &format, &policy).await,
 
         cli::CcsCommands::Enhance {
             db,
@@ -171,7 +122,6 @@ pub(super) async fn dispatch_ccs_command(
             force,
             stats,
             dry_run,
-            install_root,
         } => {
             commands::ccs::cmd_ccs_enhance(
                 &db.db_path,
@@ -182,7 +132,6 @@ pub(super) async fn dispatch_ccs_command(
                 force,
                 stats,
                 dry_run,
-                &install_root,
             )
             .await
         }

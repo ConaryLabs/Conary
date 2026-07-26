@@ -44,9 +44,9 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
     let mut count = 0;
 
     // Get all tracked files with their package info
-    let files: Vec<(String, String, String, String)> = {
+    let files: Vec<(String, String, String)> = {
         let mut stmt = conn.prepare(
-            "SELECT f.path, f.sha256_hash, t.name, t.install_source
+            "SELECT f.path, t.name, t.install_source
              FROM files f
              JOIN troves t ON f.trove_id = t.id
              ORDER BY f.path",
@@ -56,7 +56,6 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
             ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -79,7 +78,7 @@ fn check_overlapping_files(conn: &rusqlite::Connection, verbose: bool) -> Result
             files.len().min(1000)
         };
 
-        for (path, _hash, pkg_name, source) in files.iter().take(sample_size) {
+        for (path, pkg_name, source) in files.iter().take(sample_size) {
             if source.starts_with("adopted") {
                 // Check who RPM thinks owns this file
                 if let Ok(owners) = rpm_query::query_file_owner(path) {

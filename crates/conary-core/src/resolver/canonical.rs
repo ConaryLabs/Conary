@@ -3,19 +3,13 @@
 //! Canonical package resolver
 //!
 //! Expands canonical or distro-specific package names into resolver candidates,
-//! ranks them by pin/affinity, and enforces mixing policy.
+//! ranks them by exact pin authority, and enforces mixing policy.
 
-use crate::db::models::{
-    CanonicalPackage, DistroPin, PackageImplementation, PackageOverride, RepologyCacheEntry,
-    SystemAffinity,
-};
+use crate::db::models::{CanonicalPackage, DistroPin, PackageImplementation};
 use crate::error::{Error, Result};
-use crate::repository::LatestSignal;
-use crate::repository::distro::flavor_matches_distro_name;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
-use chrono::Utc;
 use rusqlite::Connection;
-use std::collections::HashSet;
+use std::cmp::Ordering;
 
 /// A candidate package from canonical expansion
 #[derive(Debug, Clone)]
@@ -27,17 +21,18 @@ pub struct ResolverCandidate {
     pub repository_name: Option<String>,
 }
 
-/// Result of a mixing policy check
-#[derive(Debug)]
-pub struct MixingResult {
-    pub allowed: bool,
-    pub warning: Option<String>,
+#[derive(Debug, Clone, Copy)]
+struct AuthorityRank {
+    pinned: bool,
 }
 
-impl MixingResult {
-    /// Returns true if this result carries a warning
-    pub fn has_warning(&self) -> bool {
-        self.warning.is_some()
+impl AuthorityRank {
+    fn compare_best_first(self, other: Self) -> Ordering {
+        other.pinned.cmp(&self.pinned)
+    }
+
+    fn is_tied_with(self, other: Self) -> bool {
+        self.pinned == other.pinned
     }
 }
 
@@ -52,26 +47,49 @@ impl<'db> CanonicalResolver<'db> {
         Self { conn }
     }
 
-    /// Look up repository name for a canonical package implementation.
-    /// Look up the best repository name for a canonical implementation.
-    ///
-    /// Returns the highest-priority enabled repo that carries this package.
-    /// NOTE: This is approximate -- if the same implementation exists in
-    /// multiple repos (e.g., fedora-base and fedora-updates), only the
-    /// highest-priority one is returned. Exact per-repo canonical scoping
-    /// would require expanding ResolverCandidate to carry per-repo variants.
-    fn lookup_repo_name(&self, canonical_id: i64, distro_name: &str) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT r.name FROM repository_packages rp
+    /// Look up every enabled repository that carries an exact canonical
+    /// implementation. Repository-scoped requests select from these concrete
+    /// variants rather than treating a distro name as a repository alias.
+    fn lookup_repo_names(&self, canonical_id: i64, distro_name: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT DISTINCT r.name FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.canonical_id = ?1 AND rp.name = ?2 AND r.enabled = 1
-                 ORDER BY r.priority DESC, r.id ASC
-                 LIMIT 1",
-                rusqlite::params![canonical_id, distro_name],
-                |row| row.get(0),
-            )
-            .ok()
+                 ORDER BY r.priority DESC, r.id ASC",
+        )?;
+        let rows = statement.query_map(rusqlite::params![canonical_id, distro_name], |row| {
+            row.get(0)
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn expand_implementations(
+        &self,
+        implementations: Vec<PackageImplementation>,
+    ) -> Result<Vec<ResolverCandidate>> {
+        let mut candidates = Vec::new();
+        for implementation in implementations {
+            let repository_names =
+                self.lookup_repo_names(implementation.canonical_id, &implementation.distro_name)?;
+            if repository_names.is_empty() {
+                candidates.push(ResolverCandidate {
+                    distro_name: implementation.distro_name,
+                    distro: implementation.distro,
+                    canonical_id: implementation.canonical_id,
+                    repository_name: None,
+                });
+                continue;
+            }
+            for repository_name in repository_names {
+                candidates.push(ResolverCandidate {
+                    distro_name: implementation.distro_name.clone(),
+                    distro: implementation.distro.clone(),
+                    canonical_id: implementation.canonical_id,
+                    repository_name: Some(repository_name),
+                });
+            }
+        }
+        Ok(candidates)
     }
 
     /// Expand a package name into all known implementation candidates.
@@ -85,254 +103,115 @@ impl<'db> CanonicalResolver<'db> {
                 return Ok(vec![]);
             };
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
-            return Ok(impls
-                .into_iter()
-                .map(|i| {
-                    let repo_name = self.lookup_repo_name(i.canonical_id, &i.distro_name);
-                    ResolverCandidate {
-                        distro_name: i.distro_name,
-                        distro: i.distro,
-                        canonical_id: i.canonical_id,
-                        repository_name: repo_name,
-                    }
-                })
-                .collect());
+            return self.expand_implementations(impls);
         }
 
         // Try as distro-specific name
         if let Some(impl_entry) = PackageImplementation::find_by_any_distro_name(self.conn, name)? {
             let canonical_id = impl_entry.canonical_id;
             let impls = PackageImplementation::find_by_canonical(self.conn, canonical_id)?;
-            return Ok(impls
-                .into_iter()
-                .map(|i| {
-                    let repo_name = self.lookup_repo_name(i.canonical_id, &i.distro_name);
-                    ResolverCandidate {
-                        distro_name: i.distro_name,
-                        distro: i.distro,
-                        canonical_id: i.canonical_id,
-                        repository_name: repo_name,
-                    }
-                })
-                .collect());
+            return self.expand_implementations(impls);
         }
 
         Ok(Vec::new())
     }
 
-    /// Rank candidates by pin preference, system affinity, then alphabetical distro.
+    /// Rank candidates by exact source pin.
+    ///
+    /// Stable ordering is presentation only. Call [`Self::select_candidate_with_policy`]
+    /// before mutation so an authority tie becomes an error.
     pub fn rank_candidates(
         &self,
         candidates: &[ResolverCandidate],
     ) -> Result<Vec<ResolverCandidate>> {
-        let mut ranked = candidates.to_vec();
-
-        let pin = DistroPin::get_current(self.conn)?;
-        let affinities = SystemAffinity::list(self.conn)?;
-
-        ranked.sort_by(|a, b| {
-            // 1. Pinned distro first
-            if let Some(ref p) = pin {
-                let a_pinned = a.distro == p.distro;
-                let b_pinned = b.distro == p.distro;
-                if a_pinned != b_pinned {
-                    return b_pinned.cmp(&a_pinned);
-                }
-            }
-
-            // 2. Highest affinity percentage
-            let a_affinity = affinities
-                .iter()
-                .find(|af| af.distro == a.distro)
-                .map_or(0.0, |af| af.percentage);
-            let b_affinity = affinities
-                .iter()
-                .find(|af| af.distro == b.distro)
-                .map_or(0.0, |af| af.percentage);
-            if (a_affinity - b_affinity).abs() > f64::EPSILON {
-                return b_affinity
-                    .partial_cmp(&a_affinity)
-                    .unwrap_or(std::cmp::Ordering::Equal);
-            }
-
-            // 3. Alphabetical distro as tiebreaker
-            a.distro.cmp(&b.distro)
-        });
-
-        Ok(ranked)
+        Ok(self
+            .rank_with_authority(candidates.to_vec())?
+            .into_iter()
+            .map(|(candidate, _)| candidate)
+            .collect())
     }
 
-    /// Check whether installing from a given distro is allowed under the current mixing policy.
+    /// Rank candidates after exact request-scope and allowlist filtering.
     ///
-    /// Returns `Err` if the policy is `strict` and the distro does not match the pin.
-    /// Returns `Ok(MixingResult)` with a warning for `guarded` policy mismatches.
-    pub fn check_mixing_policy(&self, candidate_distro: &str) -> Result<MixingResult> {
-        let pin = DistroPin::get_current(self.conn)?;
-
-        let Some(pin) = pin else {
-            return Ok(MixingResult {
-                allowed: true,
-                warning: None,
-            });
-        };
-
-        if candidate_distro == pin.distro {
-            return Ok(MixingResult {
-                allowed: true,
-                warning: None,
-            });
-        }
-
-        match pin.mixing_policy.as_str() {
-            "strict" => Err(Error::ResolutionError(format!(
-                "strict pin to '{}' forbids packages from '{candidate_distro}'",
-                pin.distro,
-            ))),
-            "guarded" => Ok(MixingResult {
-                allowed: true,
-                warning: Some(format!(
-                    "system is pinned to '{}'; installing from '{candidate_distro}' requires override",
-                    pin.distro,
-                )),
-            }),
-            _ => Ok(MixingResult {
-                allowed: true,
-                warning: None,
-            }),
-        }
-    }
-
-    /// Rank candidates with explicit request scope applied first.
-    ///
-    /// When `policy` carries a `RequestScope::Repository` or
-    /// `RequestScope::DistroFlavor`, candidates matching the scope sort before
-    /// all others.  The remaining tie-breaking follows the same
-    /// override > pin > affinity > alphabetical order as `rank_candidates`.
+    /// Discovery metadata and measured installed affinity never contribute a
+    /// mutation-authority rank.
     pub fn rank_candidates_with_policy(
         &self,
         candidates: &[ResolverCandidate],
         policy: &ResolutionPolicy,
     ) -> Result<Vec<ResolverCandidate>> {
-        let mut ranked = candidates.to_vec();
-
-        ranked.retain(|candidate| candidate_allowed_by_policy(candidate, policy));
-
-        let pin = DistroPin::get_current(self.conn)?;
-        let affinities = SystemAffinity::list(self.conn)?;
-        let latest_positive_distros = self.latest_positive_distros(&ranked, policy)?;
-
-        ranked.sort_by(|a, b| {
-            if policy.selection_mode == crate::repository::resolution_policy::SelectionMode::Latest
-            {
-                let a_latest = latest_positive_distros.contains(&a.distro);
-                let b_latest = latest_positive_distros.contains(&b.distro);
-                if a_latest != b_latest {
-                    return b_latest.cmp(&a_latest);
-                }
-            }
-
-            // 0. Explicit request scope first (root requests only)
-            match &policy.request_scope {
-                RequestScope::Repository(repo) => {
-                    // Use repository_name when available for exact repo scoping,
-                    // fall back to distro identity when repo name isn't known.
-                    let a_match = a
-                        .repository_name
-                        .as_deref()
-                        .map_or(a.distro == repo.as_str(), |rn| rn == repo.as_str());
-                    let b_match = b
-                        .repository_name
-                        .as_deref()
-                        .map_or(b.distro == repo.as_str(), |rn| rn == repo.as_str());
-                    if a_match != b_match {
-                        return b_match.cmp(&a_match);
-                    }
-                }
-                RequestScope::DistroFlavor(flavor) => {
-                    let a_match = flavor_matches_distro_name(&a.distro, *flavor);
-                    let b_match = flavor_matches_distro_name(&b.distro, *flavor);
-                    if a_match != b_match {
-                        return b_match.cmp(&a_match);
-                    }
-                }
-                RequestScope::Any => {}
-            }
-
-            // 1. Package override takes priority
-            let a_override = PackageOverride::get(self.conn, a.canonical_id)
-                .ok()
-                .flatten()
-                .is_some_and(|o| o.from_distro == a.distro);
-            let b_override = PackageOverride::get(self.conn, b.canonical_id)
-                .ok()
-                .flatten()
-                .is_some_and(|o| o.from_distro == b.distro);
-            if a_override != b_override {
-                return b_override.cmp(&a_override);
-            }
-
-            // 2. Pinned distro
-            if let Some(ref p) = pin {
-                let a_pinned = a.distro == p.distro;
-                let b_pinned = b.distro == p.distro;
-                if a_pinned != b_pinned {
-                    return b_pinned.cmp(&a_pinned);
-                }
-            }
-
-            // 3. Highest affinity percentage
-            let a_affinity = affinities
-                .iter()
-                .find(|af| af.distro == a.distro)
-                .map_or(0.0, |af| af.percentage);
-            let b_affinity = affinities
-                .iter()
-                .find(|af| af.distro == b.distro)
-                .map_or(0.0, |af| af.percentage);
-            if (a_affinity - b_affinity).abs() > f64::EPSILON {
-                return b_affinity
-                    .partial_cmp(&a_affinity)
-                    .unwrap_or(std::cmp::Ordering::Equal);
-            }
-
-            // 4. Alphabetical distro as tiebreaker
-            a.distro.cmp(&b.distro)
-        });
-
-        Ok(ranked)
+        let candidates = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate_allowed_by_policy(candidate, policy)
+                    && candidate_matches_request_scope(candidate, &policy.request_scope)
+            })
+            .cloned()
+            .collect();
+        Ok(self
+            .rank_with_authority(candidates)?
+            .into_iter()
+            .map(|(candidate, _)| candidate)
+            .collect())
     }
 
-    fn latest_positive_distros(
+    /// Select one candidate only when typed policy establishes a unique winner.
+    pub fn select_candidate_with_policy(
         &self,
         candidates: &[ResolverCandidate],
         policy: &ResolutionPolicy,
-    ) -> Result<HashSet<String>> {
-        if policy.selection_mode != crate::repository::resolution_policy::SelectionMode::Latest
-            || candidates.is_empty()
-        {
-            return Ok(HashSet::new());
-        }
-
-        let canonical_id = candidates[0].canonical_id;
-        let distros = candidates
+    ) -> Result<Option<ResolverCandidate>> {
+        let candidates = candidates
             .iter()
-            .map(|candidate| candidate.distro.clone())
-            .collect::<Vec<_>>();
-        let rows =
-            RepologyCacheEntry::find_for_canonical_and_distros(self.conn, canonical_id, &distros)?;
-        let now = Utc::now();
-        let mut positive = HashSet::new();
-
-        for row in rows {
-            let status = row.status.as_deref().unwrap_or("");
-            let signal =
-                LatestSignal::from_repology(status, row.version.as_deref(), &row.fetched_at, now)?;
-            if signal.is_positive() {
-                positive.insert(row.distro);
-            }
+            .filter(|candidate| {
+                candidate_allowed_by_policy(candidate, policy)
+                    && candidate_matches_request_scope(candidate, &policy.request_scope)
+            })
+            .cloned()
+            .collect();
+        let ranked = self.rank_with_authority(candidates)?;
+        let Some((winner, winner_rank)) = ranked.first() else {
+            return Ok(None);
+        };
+        if let Some((_, runner_up_rank)) = ranked.get(1)
+            && winner_rank.is_tied_with(*runner_up_rank)
+        {
+            return Err(Error::AmbiguousPackageSelection {
+                package: winner.distro_name.clone(),
+                candidates: ranked
+                    .iter()
+                    .take_while(|(_, rank)| winner_rank.is_tied_with(*rank))
+                    .map(|(candidate, _)| {
+                        format!(
+                            "{}:{}:{}",
+                            candidate.distro,
+                            candidate
+                                .repository_name
+                                .as_deref()
+                                .unwrap_or("<no-repository>"),
+                            candidate.distro_name
+                        )
+                    })
+                    .collect(),
+            });
         }
+        Ok(Some(winner.clone()))
+    }
 
-        Ok(positive)
+    fn rank_with_authority(
+        &self,
+        candidates: Vec<ResolverCandidate>,
+    ) -> Result<Vec<(ResolverCandidate, AuthorityRank)>> {
+        let pin = DistroPin::get_current(self.conn)?;
+        let mut ranked = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let pinned = pin
+                .as_ref()
+                .is_some_and(|value| value.distro == candidate.distro);
+            ranked.push((candidate, AuthorityRank { pinned }));
+        }
+        ranked.sort_by(|(_, left), (_, right)| left.compare_best_first(*right));
+        Ok(ranked)
     }
 
     /// Get packages that conflict with the given package (canonical equivalents).
@@ -354,12 +233,6 @@ impl<'db> CanonicalResolver<'db> {
             .filter(|name| name != package_name)
             .collect())
     }
-
-    /// Get the distro override for a canonical package, if one exists.
-    pub fn get_override(&self, canonical_id: i64) -> Result<Option<String>> {
-        let ovr = PackageOverride::get(self.conn, canonical_id)?;
-        Ok(ovr.map(|o| o.from_distro))
-    }
 }
 
 fn candidate_allowed_by_policy(candidate: &ResolverCandidate, policy: &ResolutionPolicy) -> bool {
@@ -376,31 +249,46 @@ fn candidate_allowed_by_policy(candidate: &ResolverCandidate, policy: &Resolutio
     })
 }
 
+fn candidate_matches_request_scope(candidate: &ResolverCandidate, scope: &RequestScope) -> bool {
+    match scope {
+        RequestScope::Any => true,
+        RequestScope::Repository(repository) => {
+            candidate.repository_name.as_deref() == Some(repository)
+        }
+        RequestScope::DistroProfile(profile) => &candidate.distro == profile,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::models::{
-        CanonicalPackage, DistroPin, PackageImplementation, PackageOverride, RepologyCacheEntry,
+        CanonicalMappingAuthority, CanonicalPackage, DistroPin, PackageImplementation,
     };
     use crate::db::testing::create_test_db;
-    use crate::repository::dependency_model::RepositoryDependencyFlavor;
-    use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy, SelectionMode};
+    use crate::repository::resolution_policy::{
+        DependencyMixingPolicy, RequestScope, ResolutionPolicy,
+    };
 
     #[test]
     fn test_expand_canonical_name() {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "curated".into());
-        i1.insert_or_ignore(&conn).unwrap();
+        let mut i1 = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "httpd".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        i1.insert_or_verify(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
             "ubuntu-26.04".into(),
             "apache2".into(),
-            "curated".into(),
+            CanonicalMappingAuthority::Contract,
         );
-        i2.insert_or_ignore(&conn).unwrap();
+        i2.insert_or_verify(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("apache-httpd").unwrap();
@@ -414,16 +302,20 @@ mod tests {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "curated".into());
-        i1.insert_or_ignore(&conn).unwrap();
+        let mut i1 = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "httpd".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        i1.insert_or_verify(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
             "ubuntu-26.04".into(),
             "apache2".into(),
-            "curated".into(),
+            CanonicalMappingAuthority::Contract,
         );
-        i2.insert_or_ignore(&conn).unwrap();
+        i2.insert_or_verify(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("httpd").unwrap();
@@ -433,7 +325,7 @@ mod tests {
     #[test]
     fn test_rank_pinned() {
         let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-26.04", "guarded").unwrap();
+        DistroPin::set(&conn, "ubuntu-26.04", DependencyMixingPolicy::Guarded).unwrap();
 
         let candidates = vec![
             ResolverCandidate {
@@ -456,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rank_affinity() {
+    fn measured_affinity_cannot_break_a_mutation_authority_tie() {
         let (_t, conn) = create_test_db();
         conn.execute(
             "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) VALUES ('ubuntu-26.04', 80, 80.0, '2026-03-05')",
@@ -480,39 +372,10 @@ mod tests {
         ];
 
         let resolver = CanonicalResolver::new(&conn);
-        let ranked = resolver.rank_candidates(&candidates).unwrap();
-        assert_eq!(ranked[0].distro, "ubuntu-26.04");
-    }
-
-    #[test]
-    fn test_strict_rejects() {
-        let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-26.04", "strict").unwrap();
-        let resolver = CanonicalResolver::new(&conn);
-        let result = resolver.check_mixing_policy("fedora-44");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_guarded_warns() {
-        let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-26.04", "guarded").unwrap();
-        let resolver = CanonicalResolver::new(&conn);
-        let result = resolver.check_mixing_policy("fedora-44").unwrap();
-        assert!(result.has_warning());
-    }
-
-    #[test]
-    fn test_override() {
-        let (_t, conn) = create_test_db();
-        let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
-        let cid = pkg.insert(&conn).unwrap();
-        PackageOverride::set(&conn, cid, "fedora-44", None).unwrap();
-        let resolver = CanonicalResolver::new(&conn);
-        assert_eq!(
-            resolver.get_override(cid).unwrap().as_deref(),
-            Some("fedora-44")
-        );
+        let error = resolver
+            .select_candidate_with_policy(&candidates, &ResolutionPolicy::new())
+            .unwrap_err();
+        assert!(matches!(error, Error::AmbiguousPackageSelection { .. }));
     }
 
     #[test]
@@ -520,16 +383,20 @@ mod tests {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "curated".into());
-        i1.insert_or_ignore(&conn).unwrap();
+        let mut i1 = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "httpd".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        i1.insert_or_verify(&conn).unwrap();
         let mut i2 = PackageImplementation::new(
             cid,
             "ubuntu-26.04".into(),
             "apache2".into(),
-            "curated".into(),
+            CanonicalMappingAuthority::Contract,
         );
-        i2.insert_or_ignore(&conn).unwrap();
+        i2.insert_or_verify(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let conflicts = resolver.get_conflicts("httpd").unwrap();
@@ -560,47 +427,63 @@ mod tests {
     #[test]
     fn test_rank_with_policy_scope_repo() {
         let (_t, conn) = create_test_db();
-
-        let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
-        let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "curl".into(), "auto".into());
-        i1.insert_or_ignore(&conn).unwrap();
-        let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-26.04".into(), "curl".into(), "auto".into());
-        i2.insert_or_ignore(&conn).unwrap();
-
         let resolver = CanonicalResolver::new(&conn);
-        let candidates = resolver.expand("curl").unwrap();
+        let candidates = vec![
+            ResolverCandidate {
+                distro_name: "curl".into(),
+                distro: "fedora-44".into(),
+                canonical_id: 1,
+                repository_name: Some("fedora-base".into()),
+            },
+            ResolverCandidate {
+                distro_name: "curl".into(),
+                distro: "ubuntu-26.04".into(),
+                canonical_id: 1,
+                repository_name: Some("ubuntu-main".into()),
+            },
+            ResolverCandidate {
+                distro_name: "curl".into(),
+                distro: "ubuntu-main".into(),
+                canonical_id: 1,
+                repository_name: None,
+            },
+        ];
 
-        // Policy scope: prefer ubuntu-26.04
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-26.04".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("ubuntu-main".into()));
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
+        assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
     #[test]
-    fn test_rank_with_policy_scope_flavor() {
+    fn test_rank_with_exact_profile_scope() {
         let (_t, conn) = create_test_db();
 
         let mut pkg = CanonicalPackage::new("curl".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "curl".into(), "auto".into());
-        i1.insert_or_ignore(&conn).unwrap();
-        let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-26.04".into(), "curl".into(), "auto".into());
-        i2.insert_or_ignore(&conn).unwrap();
+        let mut i1 = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "curl".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        i1.insert_or_verify(&conn).unwrap();
+        let mut i2 = PackageImplementation::new(
+            cid,
+            "ubuntu-26.04".into(),
+            "curl".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        i2.insert_or_verify(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("curl").unwrap();
 
-        // Policy scope: prefer Deb flavor
-        let policy = ResolutionPolicy::new()
-            .with_scope(RequestScope::DistroFlavor(RepositoryDependencyFlavor::Deb));
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::DistroProfile("ubuntu-26.04".into()));
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
@@ -608,64 +491,42 @@ mod tests {
     }
 
     #[test]
-    fn test_rank_override_beats_pin() {
-        let (_t, conn) = create_test_db();
-
-        // Pin to ubuntu-26.04
-        DistroPin::set(&conn, "ubuntu-26.04", "guarded").unwrap();
-
-        let mut pkg = CanonicalPackage::new("mesa".into(), "package".into());
-        let cid = pkg.insert(&conn).unwrap();
-        let mut i1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "mesa".into(), "auto".into());
-        i1.insert_or_ignore(&conn).unwrap();
-        let mut i2 =
-            PackageImplementation::new(cid, "ubuntu-26.04".into(), "mesa".into(), "auto".into());
-        i2.insert_or_ignore(&conn).unwrap();
-
-        // Override mesa to fedora
-        PackageOverride::set(&conn, cid, "fedora-44", None).unwrap();
-
-        let resolver = CanonicalResolver::new(&conn);
-        let candidates = resolver.expand("mesa").unwrap();
-
-        let policy = ResolutionPolicy::new();
-        let ranked = resolver
-            .rank_candidates_with_policy(&candidates, &policy)
-            .unwrap();
-        // Override should beat pin
-        assert_eq!(ranked[0].distro, "fedora-44");
-    }
-
-    #[test]
-    fn latest_mode_prefers_newest_repology_candidate_before_pin_affinity_tiebreakers() {
+    fn repology_status_cannot_break_a_mutation_authority_tie() {
         let (_t, conn) = create_test_db();
         let fresh = chrono::Utc::now().to_rfc3339();
 
         let mut pkg = CanonicalPackage::new("python".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut fedora_impl =
-            PackageImplementation::new(cid, "fedora".into(), "python".into(), "auto".into());
-        fedora_impl.insert_or_ignore(&conn).unwrap();
-        let mut arch_impl =
-            PackageImplementation::new(cid, "arch".into(), "python".into(), "auto".into());
-        arch_impl.insert_or_ignore(&conn).unwrap();
+        let mut fedora_impl = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "python3".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        fedora_impl.insert_or_verify(&conn).unwrap();
+        let mut arch_impl = PackageImplementation::new(
+            cid,
+            "arch".into(),
+            "python".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        arch_impl.insert_or_verify(&conn).unwrap();
 
-        RepologyCacheEntry::insert_or_replace(
+        crate::db::models::RepologyCacheEntry::insert_or_replace(
             &conn,
-            &RepologyCacheEntry {
+            &crate::db::models::RepologyCacheEntry {
                 project_name: "python".into(),
-                distro: "fedora".into(),
-                distro_name: "python".into(),
+                distro: "fedora-44".into(),
+                distro_name: "python3".into(),
                 version: Some("3.12.0".into()),
                 status: Some("outdated".into()),
                 fetched_at: fresh.clone(),
             },
         )
         .unwrap();
-        RepologyCacheEntry::insert_or_replace(
+        crate::db::models::RepologyCacheEntry::insert_or_replace(
             &conn,
-            &RepologyCacheEntry {
+            &crate::db::models::RepologyCacheEntry {
                 project_name: "python".into(),
                 distro: "arch".into(),
                 distro_name: "python".into(),
@@ -678,85 +539,46 @@ mod tests {
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("python").unwrap();
-        let policy = ResolutionPolicy::new().with_selection_mode(SelectionMode::Latest);
-        let ranked = resolver
-            .rank_candidates_with_policy(&candidates, &policy)
-            .unwrap();
-        assert_eq!(ranked[0].distro, "arch");
+        let error = resolver
+            .select_candidate_with_policy(&candidates, &ResolutionPolicy::new())
+            .unwrap_err();
+        assert!(matches!(error, Error::AmbiguousPackageSelection { .. }));
     }
 
     #[test]
-    fn latest_mode_does_not_choose_ineligible_newest_candidate() {
+    fn exact_allowlist_can_resolve_otherwise_ambiguous_candidates() {
         let (_t, conn) = create_test_db();
-        let fresh = chrono::Utc::now().to_rfc3339();
-
         let mut pkg = CanonicalPackage::new("python".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
-        let mut fedora_impl =
-            PackageImplementation::new(cid, "fedora".into(), "python".into(), "auto".into());
-        fedora_impl.insert_or_ignore(&conn).unwrap();
-        let mut arch_impl =
-            PackageImplementation::new(cid, "arch".into(), "python".into(), "auto".into());
-        arch_impl.insert_or_ignore(&conn).unwrap();
-
-        RepologyCacheEntry::insert_or_replace(
-            &conn,
-            &RepologyCacheEntry {
-                project_name: "python".into(),
-                distro: "fedora".into(),
-                distro_name: "python".into(),
-                version: Some("3.12.0".into()),
-                status: Some("outdated".into()),
-                fetched_at: fresh.clone(),
-            },
-        )
-        .unwrap();
-        RepologyCacheEntry::insert_or_replace(
-            &conn,
-            &RepologyCacheEntry {
-                project_name: "python".into(),
-                distro: "arch".into(),
-                distro_name: "python".into(),
-                version: Some("3.13.0".into()),
-                status: Some("newest".into()),
-                fetched_at: fresh,
-            },
-        )
-        .unwrap();
+        let mut fedora_impl = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "python3".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        fedora_impl.insert_or_verify(&conn).unwrap();
+        let mut arch_impl = PackageImplementation::new(
+            cid,
+            "arch".into(),
+            "python".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        arch_impl.insert_or_verify(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("python").unwrap();
-        let policy = ResolutionPolicy::new()
-            .with_selection_mode(SelectionMode::Latest)
-            .with_allowed_distros(vec!["fedora".to_string()]);
-        let ranked = resolver
-            .rank_candidates_with_policy(&candidates, &policy)
+        let policy = ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]);
+        let selected = resolver
+            .select_candidate_with_policy(&candidates, &policy)
             .unwrap();
-        assert_eq!(ranked[0].distro, "fedora");
+        assert_eq!(
+            selected.map(|candidate| candidate.distro),
+            Some("fedora-44".into())
+        );
     }
 
     #[test]
-    fn test_distro_matches_flavor() {
-        assert!(flavor_matches_distro_name(
-            "fedora-44",
-            RepositoryDependencyFlavor::Rpm
-        ));
-        assert!(flavor_matches_distro_name(
-            "ubuntu-26.04",
-            RepositoryDependencyFlavor::Deb
-        ));
-        assert!(flavor_matches_distro_name(
-            "arch",
-            RepositoryDependencyFlavor::Arch
-        ));
-        assert!(!flavor_matches_distro_name(
-            "fedora-44",
-            RepositoryDependencyFlavor::Deb
-        ));
-    }
-
-    #[test]
-    fn test_lookup_repo_name_picks_highest_priority() {
+    fn expansion_preserves_exact_repository_variants() {
         let (_t, conn) = create_test_db();
 
         let mut pkg = CanonicalPackage::new("httpd-web".into(), "package".into());
@@ -764,7 +586,7 @@ mod tests {
 
         // Two repos for the same distro, different priorities
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+            "INSERT INTO repositories (name, url, enabled, priority, source_profile)
              VALUES ('fedora-base', 'https://base.com', 1, 10, 'fedora-44')",
             [],
         )
@@ -772,7 +594,7 @@ mod tests {
         let base_repo = conn.last_insert_rowid();
 
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+            "INSERT INTO repositories (name, url, enabled, priority, source_profile)
              VALUES ('fedora-updates', 'https://updates.com', 1, 20, 'fedora-44')",
             [],
         )
@@ -781,30 +603,45 @@ mod tests {
 
         // Same package in both repos, both linked to same canonical
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
-             VALUES (?1, 'httpd', '2.4.58', 'sha256:a', 100, 'https://base.com/httpd', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'httpd', '2.4.58', 'sha256:a', 100, 'https://base.com/httpd', 'rpm', ?2)",
             rusqlite::params![base_repo, cid],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id)
-             VALUES (?1, 'httpd', '2.4.59', 'sha256:b', 100, 'https://updates.com/httpd', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'httpd', '2.4.59', 'sha256:b', 100, 'https://updates.com/httpd', 'rpm', ?2)",
             rusqlite::params![updates_repo, cid],
         )
         .unwrap();
 
         // Create the implementation so expand() finds it
-        let mut impl1 =
-            PackageImplementation::new(cid, "fedora-44".into(), "httpd".into(), "auto".into());
-        impl1.insert_or_ignore(&conn).unwrap();
+        let mut impl1 = PackageImplementation::new(
+            cid,
+            "fedora-44".into(),
+            "httpd".into(),
+            CanonicalMappingAuthority::Contract,
+        );
+        impl1.insert_or_verify(&conn).unwrap();
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("httpd").unwrap();
-        assert_eq!(candidates.len(), 1);
-        // Should pick fedora-updates (priority 20 > 10)
+        assert_eq!(candidates.len(), 2);
         assert_eq!(
             candidates[0].repository_name.as_deref(),
             Some("fedora-updates")
         );
+        assert_eq!(
+            candidates[1].repository_name.as_deref(),
+            Some("fedora-base")
+        );
+
+        let policy =
+            ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-base".into()));
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].repository_name.as_deref(), Some("fedora-base"));
     }
 }

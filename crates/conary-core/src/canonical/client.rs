@@ -2,36 +2,17 @@
 
 //! Client-side canonical map fetching from Remi.
 
-use crate::db::models::{
-    CanonicalPackage, MetadataTable, PackageImplementation, get_metadata, set_metadata,
-};
+use crate::canonical::exchange::{expected_checksum, parse_snapshot, replace_remi_snapshot};
+use crate::db::models::{MetadataTable, get_metadata, set_metadata};
 use crate::error::{Error, Result};
+use crate::repository::{MAX_BYTES_RESPONSE_SIZE, read_response_bytes_with_limit};
 use rusqlite::Connection;
-use serde::Deserialize;
-use std::collections::BTreeMap;
-
-const CANONICAL_MAP_SHA256_HEADER: &str = "x-conary-canonical-sha256";
-
-#[derive(Debug, Deserialize)]
-struct CanonicalMapResponse {
-    #[allow(dead_code)]
-    version: u32,
-    #[allow(dead_code)]
-    generated_at: String,
-    entries: Vec<CanonicalMapEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CanonicalMapEntry {
-    canonical: String,
-    implementations: BTreeMap<String, String>,
-}
 
 /// Fetch the canonical map from a Remi endpoint.
 /// Returns Ok(Some(count)) if new data was fetched, Ok(None) if 304, Err on failure.
 pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Option<usize>> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
-    let etag = get_metadata(conn, MetadataTable::Client, "canonical_etag").unwrap_or(None);
+    let etag = get_metadata(conn, MetadataTable::Client, "canonical_etag")?;
 
     let client = reqwest::Client::builder()
         .user_agent(concat!(
@@ -69,19 +50,14 @@ pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Op
         .get("etag")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
-    let expected_checksum = extract_expected_checksum(response.headers())?;
+    let expected_checksum = expected_checksum(response.headers())?;
 
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| Error::DownloadError(e.to_string()))?;
+    let body = read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, &url).await?;
     crate::hash::verify_sha256(&body, &expected_checksum).map_err(|e| Error::ChecksumMismatch {
         expected: e.expected,
         actual: e.actual,
     })?;
-    let body = String::from_utf8(body.to_vec())
-        .map_err(|e| Error::ParseError(format!("canonical map is not valid UTF-8: {e}")))?;
-    let count = ingest_canonical_map_json(conn, &body)?;
+    let count = ingest_canonical_map_bytes(conn, &body)?;
 
     if let Some(etag_val) = new_etag {
         let _ = set_metadata(conn, MetadataTable::Client, "canonical_etag", &etag_val);
@@ -90,81 +66,44 @@ pub async fn fetch_canonical_map(conn: &Connection, endpoint: &str) -> Result<Op
     Ok(Some(count))
 }
 
-fn extract_expected_checksum(headers: &reqwest::header::HeaderMap) -> Result<String> {
-    headers
-        .get(CANONICAL_MAP_SHA256_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
-        .map(str::to_string)
-        .ok_or_else(|| {
-            Error::TrustError(
-                "Canonical map response missing valid X-Conary-Canonical-Sha256 checksum"
-                    .to_string(),
-            )
-        })
-}
-
 /// Parse a canonical map JSON response and replace the local canonical DB.
 pub fn ingest_canonical_map_json(conn: &Connection, json: &str) -> Result<usize> {
-    let map: CanonicalMapResponse =
-        serde_json::from_str(json).map_err(|e| Error::ParseError(e.to_string()))?;
+    ingest_canonical_map_bytes(conn, json.as_bytes())
+}
 
-    let tx = conn.unchecked_transaction()?;
-
-    // Full replace -- clear existing data
-    tx.execute("DELETE FROM package_implementations", [])?;
-    tx.execute("DELETE FROM canonical_packages", [])?;
-
-    let mut count = 0;
-    for entry in &map.entries {
-        super::sync::validate_canonical_mapping(
-            &entry.canonical,
-            entry.implementations.values().map(String::as_str),
-        )?;
-
-        let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
-        let id = canonical.insert_or_ignore(&tx)?;
-        let canonical_id = match id {
-            Some(cid) => cid,
-            None => continue,
-        };
-
-        for (distro, distro_name) in &entry.implementations {
-            let mut imp = PackageImplementation::new(
-                canonical_id,
-                distro.clone(),
-                distro_name.clone(),
-                "server".to_string(),
-            );
-            imp.insert_or_ignore(&tx)?;
-        }
-        count += 1;
-    }
-
-    tx.commit()?;
-    Ok(count)
+fn ingest_canonical_map_bytes(conn: &Connection, bytes: &[u8]) -> Result<usize> {
+    let map = parse_snapshot(bytes)?;
+    replace_remi_snapshot(conn, &map)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
 
     #[test]
     fn test_ingest_canonical_map_response() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let json = r#"{
-            "version": 5,
+            "schema_version": 1,
+            "revision": 5,
             "generated_at": "2026-03-19T00:00:00Z",
             "entries": [
                 {
                     "canonical": "python",
-                    "implementations": {"fedora": "python3", "arch": "python"}
+                    "kind": "package",
+                    "implementations": {"fedora-44": "python3", "arch": "python"}
                 },
                 {
                     "canonical": "curl",
-                    "implementations": {"fedora": "curl", "arch": "curl", "ubuntu": "curl"}
+                    "kind": "package",
+                    "implementations": {
+                        "fedora-44": "curl",
+                        "arch": "curl",
+                        "ubuntu-26.04": "curl"
+                    }
                 }
             ]
         }"#;
@@ -185,10 +124,10 @@ mod tests {
     #[test]
     fn test_ingest_replaces_existing_data() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
-        let json1 = r#"{"version": 1, "generated_at": "2026-03-19", "entries": [{"canonical": "old-pkg", "implementations": {"fedora": "old"}}]}"#;
-        let json2 = r#"{"version": 2, "generated_at": "2026-03-19", "entries": [{"canonical": "new-pkg", "implementations": {"arch": "new"}}]}"#;
+        let json1 = r#"{"schema_version": 1, "revision": 1, "generated_at": "2026-03-19T00:00:00Z", "entries": [{"canonical": "old-pkg", "kind": "package", "implementations": {"fedora-44": "old"}}]}"#;
+        let json2 = r#"{"schema_version": 1, "revision": 2, "generated_at": "2026-03-19T00:00:00Z", "entries": [{"canonical": "new-pkg", "kind": "package", "implementations": {"arch": "new"}}]}"#;
 
         ingest_canonical_map_json(&conn, json1).unwrap();
         let count = ingest_canonical_map_json(&conn, json2).unwrap();
@@ -204,11 +143,35 @@ mod tests {
     }
 
     #[test]
+    fn remote_snapshot_preserves_exact_kind_and_category() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let json = r#"{
+            "schema_version": 1,
+            "revision": 1,
+            "generated_at": "2026-07-26T00:00:00Z",
+            "entries": [{
+                "canonical": "development-tools",
+                "kind": "group",
+                "category": "development",
+                "implementations": {"fedora-44": "@development-tools"}
+            }]
+        }"#;
+
+        ingest_canonical_map_json(&conn, json).unwrap();
+        let group = CanonicalPackage::find_by_name(&conn, "development-tools")
+            .unwrap()
+            .unwrap();
+        assert_eq!(group.kind, "group");
+        assert_eq!(group.category.as_deref(), Some("development"));
+    }
+
+    #[test]
     fn test_ingest_empty_map() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
-        let json = r#"{"version": 1, "generated_at": "2026-03-19", "entries": []}"#;
+        let json = r#"{"schema_version": 1, "revision": 1, "generated_at": "2026-03-19T00:00:00Z", "entries": []}"#;
         let count = ingest_canonical_map_json(&conn, json).unwrap();
         assert_eq!(count, 0);
     }
@@ -216,33 +179,95 @@ mod tests {
     #[test]
     fn test_ingest_invalid_json() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let result = ingest_canonical_map_json(&conn, "not json");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_ingest_rejects_suspicious_remote_mapping() {
+    fn explicit_remote_contract_does_not_use_name_similarity_as_authority() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::db::schema::migrate(&conn).unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
 
         let json = r#"{
-            "version": 1,
-            "generated_at": "2026-03-19",
+            "schema_version": 1,
+            "revision": 1,
+            "generated_at": "2026-03-19T00:00:00Z",
             "entries": [
                 {
                     "canonical": "openssl",
-                    "implementations": {"fedora": "totally-malicious-package"}
+                    "kind": "package",
+                    "implementations": {"fedora-44": "totally-malicious-package"}
+                }
+            ]
+        }"#;
+
+        assert_eq!(ingest_canonical_map_json(&conn, json).unwrap(), 1);
+        let canonical = CanonicalPackage::find_by_name(&conn, "openssl")
+            .unwrap()
+            .unwrap();
+        let implementations =
+            PackageImplementation::find_by_canonical(&conn, canonical.id.unwrap()).unwrap();
+        assert_eq!(implementations[0].distro_name, "totally-malicious-package");
+        assert_eq!(implementations[0].source, CanonicalMappingAuthority::Remi);
+    }
+
+    #[test]
+    fn test_ingest_rejects_structurally_invalid_remote_mapping() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+
+        let json = r#"{
+            "schema_version": 1,
+            "revision": 1,
+            "generated_at": "2026-03-19T00:00:00Z",
+            "entries": [
+                {
+                    "canonical": "openssl",
+                    "kind": "package",
+                    "implementations": {"": "libssl3"}
                 }
             ]
         }"#;
 
         let err = ingest_canonical_map_json(&conn, json).unwrap_err();
-        assert!(
-            err.to_string().contains("Suspicious canonical mapping"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("unsupported public profile"));
+    }
+
+    #[test]
+    fn remote_snapshot_cannot_replace_local_contract_mapping() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let mut canonical = CanonicalPackage::new("openssl".into(), "package".into());
+        let canonical_id = canonical.insert(&conn).unwrap();
+        PackageImplementation::new(
+            canonical_id,
+            "fedora-44".into(),
+            "openssl".into(),
+            CanonicalMappingAuthority::Contract,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let json = r#"{
+            "schema_version": 1,
+            "revision": 1,
+            "generated_at": "2026-03-19T00:00:00Z",
+            "entries": [{
+                "canonical": "openssl",
+                "kind": "package",
+                "implementations": {"fedora-44": "openssl-libs"}
+            }]
+        }"#;
+        let error = ingest_canonical_map_json(&conn, json).unwrap_err();
+        assert!(error.to_string().contains("not incoming 'openssl-libs'"));
+
+        let stored = PackageImplementation::find_for_distro(&conn, canonical_id, "fedora-44")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.distro_name, "openssl");
+        assert_eq!(stored.source, CanonicalMappingAuthority::Contract);
     }
 
     #[test]
@@ -255,7 +280,7 @@ mod tests {
             ),
         );
 
-        let checksum = extract_expected_checksum(&headers).unwrap();
+        let checksum = expected_checksum(&headers).unwrap();
         assert_eq!(
             checksum,
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

@@ -1,324 +1,346 @@
 // conary-core/src/ccs/archive_reader.rs
 
-//! Shared CCS archive reader
+//! Explicitly untrusted CCS v2 archive inspection.
 //!
-//! Extracts metadata, components, signature, and content blobs from a CCS
-//! `.tar.gz` archive in a single pass.  Used by `package.rs`, `verify.rs`,
-//! and `inspector.rs` to avoid duplicating the tar iteration logic.
+//! This module decodes the current archive grammar and applies structural
+//! bounds. It does not establish package trust. Mutation and publication
+//! callers must pass the result through `ccs::verify::verify_package`.
 
-use crate::ccs::binary_manifest::{BinaryManifest, Hash};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
-use crate::ccs::package::convert_binary_to_ccs_manifest;
 use crate::ccs::v2::AuthorityDocumentV2;
+use anyhow::Context;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use tar::Archive;
-use tracing::warn;
 
-/// Maximum size for a single archive entry (512 MB).
 const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024;
-
-/// Maximum cumulative extraction size (4 GB).
 const MAX_TOTAL_EXTRACTION_SIZE: u64 = 4 * 1024 * 1024 * 1024;
-
-/// Maximum size for manifest entries — MANIFEST or MANIFEST.toml (16 MiB).
 const MAX_MANIFEST_SIZE: u64 = 16 * 1024 * 1024;
-
-/// Maximum size for component JSON entries (64 MiB).
 const MAX_COMPONENT_SIZE: u64 = 64 * 1024 * 1024;
 
-/// Everything that can be extracted from a CCS archive in a single pass.
-#[derive(Debug)]
-pub struct CcsArchiveContents {
-    /// Parsed `CcsManifest` (converted from CBOR or parsed from TOML).
+/// Structurally decoded CCS v2 data that has not been authenticated.
+///
+/// The name is deliberate: possession of this value never authorizes install,
+/// update, restore, conversion intake, self-update, or publication.
+#[derive(Debug, Clone)]
+pub struct UntrustedCcsArchive {
+    /// Untrusted compatibility projection for diagnostics and display only.
     pub manifest: CcsManifest,
-
-    /// Raw manifest bytes (CBOR or TOML) — needed for signature verification.
-    pub manifest_raw: Vec<u8>,
-
-    /// The CBOR `BinaryManifest`, if the archive contained one.
-    pub binary_manifest: Option<BinaryManifest>,
-
-    /// Parsed CCS v2 authority, if the archive contained a v2 MANIFEST.
-    ///
-    /// This value is decoded for routing only. It is not trusted until
-    /// `ccs::v2::read_authority_document` verifies the raw bytes and signature.
-    pub v2_authority: Option<AuthorityDocumentV2>,
-
-    /// Raw v2 MANIFEST bytes retained for exact-byte signature verification.
-    pub v2_manifest_raw: Option<Vec<u8>>,
-
-    /// Raw v2 build attestation JSON, if present.
+    /// Parsed current authority. It remains untrusted in this type.
+    pub v2_authority: AuthorityDocumentV2,
+    /// Exact archived authority bytes used by signature verification.
+    pub v2_manifest_raw: Vec<u8>,
+    /// Raw build-attestation JSON, when present.
     pub v2_build_attestation_raw: Option<String>,
-
-    /// Raw v2 foreign conversion boundary JSON, if present.
+    /// Raw foreign-conversion-boundary JSON, when present.
     pub v2_foreign_conversion_boundary_raw: Option<String>,
-
-    /// Parsed v2 build attestation JSON, if present.
+    /// Parsed build attestation, when present.
     pub v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
-
-    /// Parsed v2 foreign conversion boundary JSON, if present.
+    /// Parsed foreign conversion boundary, when present.
     pub v2_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
-
-    /// Raw MANIFEST.toml bytes, if the archive contained one.
-    /// Used by the verifier to check the TOML integrity hash.
+    /// Raw diagnostic TOML projection, when present.
     pub toml_raw: Option<Vec<u8>>,
-
-    /// Parsed `MANIFEST.sig` JSON, if present.
+    /// Raw package signature JSON. Verification requires this field.
     pub signature_raw: Option<String>,
-
-    /// Component data keyed by component name.
+    /// Untrusted component projections keyed by exact component name.
     pub components: HashMap<String, ComponentData>,
-
-    /// Content blobs keyed by their reconstructed SHA-256 hash
-    /// (`objects/{prefix}/{suffix}` → `{prefix}{suffix}`).
+    /// Content objects keyed by their exact lowercase SHA-256 digest.
     pub blobs: HashMap<String, Vec<u8>>,
 }
 
-/// Read and parse a CCS archive from any `Read` source.
-///
-/// The reader should supply the raw `.tar.gz` bytes (the function applies
-/// gzip decompression internally).  All recognised entries are extracted in a
-/// single pass, with per-entry and cumulative size guards.
-///
-/// # Errors
-///
-/// Returns an error if the archive is malformed, exceeds size limits, or
-/// contains neither a CBOR `MANIFEST` nor a `MANIFEST.toml`.
-pub fn read_ccs_archive<R: Read>(reader: R) -> anyhow::Result<CcsArchiveContents> {
-    read_ccs_archive_with_limits(reader, MAX_TOTAL_EXTRACTION_SIZE)
+/// Structurally inspect a CCS v2 archive without granting trust.
+pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<UntrustedCcsArchive> {
+    inspect_untrusted_ccs_archive_with_limits(reader, MAX_TOTAL_EXTRACTION_SIZE)
 }
 
-fn cbor_format_version(raw: &[u8]) -> Option<u64> {
+/// Identify the exact current CCS v2 archive contract independently of name.
+pub fn has_current_ccs_archive_contract(path: impl AsRef<Path>) -> anyhow::Result<bool> {
+    let path = path.as_ref();
+    let mut file = File::open(path)?;
+    let mut magic = [0_u8; 2];
+    if file.read(&mut magic)? != magic.len() || magic != [0x1f, 0x8b] {
+        return Ok(false);
+    }
+
+    let decoder = GzDecoder::new(File::open(path)?).take(MAX_TOTAL_EXTRACTION_SIZE + 1);
+    let mut archive = Archive::new(decoder);
+    let mut entries_seen = 0_usize;
+    for entry in archive.entries()? {
+        entries_seen += 1;
+        crate::compression::check_archive_entry_limit(entries_seen, "CCS package")?;
+        let mut entry = entry?;
+        let path = entry.path()?;
+        if path != Path::new("MANIFEST") && path != Path::new("./MANIFEST") {
+            continue;
+        }
+        if !entry.header().entry_type().is_file() || entry.size() > MAX_MANIFEST_SIZE {
+            return Ok(false);
+        }
+        let raw = read_entry(&mut entry, MAX_MANIFEST_SIZE, "MANIFEST")?;
+        return match cbor_format_version(&raw)? {
+            2 => Ok(true),
+            1 => anyhow::bail!(
+                "CCS v1 archive authority is unsupported; rebuild the package as signed CCS v2"
+            ),
+            version => {
+                anyhow::bail!("unsupported CCS MANIFEST format_version {version}; expected 2")
+            }
+        };
+    }
+    Ok(false)
+}
+
+fn cbor_format_version(raw: &[u8]) -> anyhow::Result<u64> {
     #[derive(Deserialize)]
     struct Header {
         format_version: u64,
     }
 
     ciborium::from_reader::<Header, _>(raw)
-        .ok()
         .map(|header| header.format_version)
+        .map_err(|error| anyhow::anyhow!("invalid CCS CBOR MANIFEST header: {error}"))
 }
 
-fn compatibility_manifest_from_v2(authority: &AuthorityDocumentV2) -> CcsManifest {
-    // This is a routing compatibility projection only. Install, publish, and
-    // verification callers must use signed v2 authority instead of this legacy
-    // manifest shape for package truth.
+fn install_manifest_projection(authority: &AuthorityDocumentV2) -> CcsManifest {
     let mut manifest =
         CcsManifest::new_minimal(&authority.identity.name, &authority.identity.version);
+    manifest.package.version_scheme = authority.identity.version_scheme;
+    manifest.package.release = authority.identity.release.clone();
+    manifest.package.kind = authority.identity.kind;
+    manifest.requirements = authority.requirements.clone();
+    manifest.relations = authority.relations.clone();
+    manifest.native_lifecycle = authority.lifecycle.native_lifecycle.clone();
     manifest.package.description = format!(
-        "Compatibility projection for CCS v2 {:?} authority",
+        "Untrusted inspection projection for CCS v2 {:?}",
         authority.identity.kind
     );
     manifest
 }
 
-fn read_ccs_archive_with_limits<R: Read>(
+fn read_entry<R: Read>(entry: &mut R, declared_limit: u64, label: &str) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    entry
+        .take(declared_limit + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read CCS {label}"))?;
+    if bytes.len() as u64 > declared_limit {
+        anyhow::bail!("CCS {label} exceeds maximum size {declared_limit}");
+    }
+    Ok(bytes)
+}
+
+fn require_regular(entry: &tar::Entry<'_, impl Read>, label: &str) -> anyhow::Result<()> {
+    if !entry.header().entry_type().is_file() {
+        anyhow::bail!("CCS {label} must be a regular file");
+    }
+    Ok(())
+}
+
+fn canonical_entry_path(entry: &tar::Entry<'_, impl Read>) -> anyhow::Result<String> {
+    let path = entry.path()?;
+    let path = path
+        .to_str()
+        .context("CCS archive entry path is not valid UTF-8")?;
+    Ok(path.strip_prefix("./").unwrap_or(path).to_string())
+}
+
+fn is_lower_hex(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn inspect_untrusted_ccs_archive_with_limits<R: Read>(
     reader: R,
     total_extraction_limit: u64,
-) -> anyhow::Result<CcsArchiveContents> {
-    let decoder = GzDecoder::new(reader).take(total_extraction_limit);
+) -> anyhow::Result<UntrustedCcsArchive> {
+    let decoder = GzDecoder::new(reader).take(total_extraction_limit + 1);
     let mut archive = Archive::new(decoder);
-
-    let mut binary_manifest: Option<BinaryManifest> = None;
-    let mut v2_authority: Option<AuthorityDocumentV2> = None;
-    let mut unsupported_cbor_format: Option<u64> = None;
-    let mut toml_manifest: Option<CcsManifest> = None;
-    let mut toml_manifest_raw: Option<Vec<u8>> = None;
-    let mut cbor_manifest_raw: Option<Vec<u8>> = None;
-    let mut signature_raw: Option<String> = None;
-    let mut v2_build_attestation_raw: Option<String> = None;
-    let mut v2_foreign_conversion_boundary_raw: Option<String> = None;
-    let mut v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope> = None;
-    let mut v2_foreign_conversion_boundary: Option<
-        crate::ccs::attestation::ForeignConversionBoundary,
-    > = None;
-    let mut components: HashMap<String, ComponentData> = HashMap::new();
-    // Raw bytes of each component JSON, keyed by component name (for hash verification)
-    let mut component_raw: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
-
-    let mut total_bytes: u64 = 0;
+    let mut manifest_raw = None;
+    let mut authority = None;
+    let mut toml_raw = None;
+    let mut signature_raw = None;
+    let mut attestation_raw = None;
+    let mut boundary_raw = None;
+    let mut attestation = None;
+    let mut boundary = None;
+    let mut components = HashMap::new();
+    let mut blobs = HashMap::new();
+    let mut total_bytes = 0_u64;
+    let mut entries_seen = 0_usize;
 
     for entry in archive.entries()? {
+        entries_seen += 1;
+        crate::compression::check_archive_entry_limit(entries_seen, "CCS package")?;
         let mut entry = entry?;
         let entry_size = entry.header().size()?;
-
-        // Per-entry size guard
         if entry_size > MAX_ENTRY_SIZE {
-            anyhow::bail!("CCS archive entry exceeds maximum size limit: {entry_size} bytes");
+            anyhow::bail!("CCS archive entry exceeds maximum size: {entry_size} bytes");
         }
-        total_bytes += entry_size;
+        total_bytes = total_bytes
+            .checked_add(entry_size)
+            .context("CCS archive total extraction size overflow")?;
         if total_bytes > total_extraction_limit {
             anyhow::bail!("CCS archive total extraction size exceeds limit");
         }
 
-        let entry_path = entry.path()?;
-        let entry_path_str = entry_path.to_string_lossy().to_string();
+        let path = canonical_entry_path(&entry)?;
+        if entry.header().entry_type().is_dir() {
+            if path.is_empty()
+                || path == "."
+                || path == "components"
+                || path == "objects"
+                || path.starts_with("objects/")
+            {
+                continue;
+            }
+            anyhow::bail!("unknown CCS archive directory {path:?}");
+        }
 
-        // ── MANIFEST (CBOR binary manifest) ──────────────────────────
-        if entry_path_str == "MANIFEST" || entry_path_str == "./MANIFEST" {
-            if entry_size > MAX_MANIFEST_SIZE {
-                anyhow::bail!(
-                    "MANIFEST entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
+        match path.as_str() {
+            "MANIFEST" => {
+                require_regular(&entry, "MANIFEST")?;
+                if manifest_raw.is_some() {
+                    anyhow::bail!("CCS archive contains duplicate MANIFEST entries");
+                }
+                let raw = read_entry(&mut entry, MAX_MANIFEST_SIZE, "MANIFEST")?;
+                let version = cbor_format_version(&raw)?;
+                if version != 2 {
+                    if version == 1 {
+                        anyhow::bail!(
+                            "CCS v1 archive authority is unsupported; rebuild the package as signed CCS v2"
+                        );
+                    }
+                    anyhow::bail!("unsupported CCS MANIFEST format_version {version}; expected 2");
+                }
+                authority = Some(
+                    AuthorityDocumentV2::from_cbor(&raw)
+                        .map_err(|error| anyhow::anyhow!("invalid CCS v2 MANIFEST: {error}"))?,
+                );
+                manifest_raw = Some(raw);
+            }
+            "MANIFEST.toml" => {
+                require_regular(&entry, "MANIFEST.toml")?;
+                if toml_raw.is_some() {
+                    anyhow::bail!("CCS archive contains duplicate MANIFEST.toml entries");
+                }
+                toml_raw = Some(read_entry(&mut entry, MAX_MANIFEST_SIZE, "MANIFEST.toml")?);
+            }
+            "MANIFEST.sig" => {
+                require_regular(&entry, "MANIFEST.sig")?;
+                if signature_raw.is_some() {
+                    anyhow::bail!("CCS archive contains duplicate MANIFEST.sig entries");
+                }
+                signature_raw = Some(
+                    String::from_utf8(read_entry(&mut entry, MAX_MANIFEST_SIZE, "MANIFEST.sig")?)
+                        .context("CCS MANIFEST.sig is not valid UTF-8")?,
                 );
             }
-            let mut content = Vec::new();
-            entry.read_to_end(&mut content)?;
-            cbor_manifest_raw = Some(content.clone());
-            match cbor_format_version(&content) {
-                Some(2) => {
-                    v2_authority =
-                        Some(AuthorityDocumentV2::from_cbor(&content).map_err(|error| {
-                            anyhow::anyhow!("Invalid CCS v2 MANIFEST: {error}")
-                        })?);
-                }
-                Some(1) => {
-                    binary_manifest =
-                        Some(BinaryManifest::from_cbor(&content).map_err(|error| {
-                            anyhow::anyhow!("Invalid CCS v1 binary MANIFEST: {error}")
-                        })?);
-                }
-                Some(version) => {
-                    unsupported_cbor_format = Some(version);
-                }
-                None => {
-                    warn!(
-                        "Failed to parse CBOR MANIFEST entry; falling back to MANIFEST.toml if present"
+            "MANIFEST.attestation.json" => {
+                require_regular(&entry, "MANIFEST.attestation.json")?;
+                if attestation_raw.is_some() {
+                    anyhow::bail!(
+                        "CCS archive contains duplicate MANIFEST.attestation.json entries"
                     );
                 }
-            }
-        }
-        // ── MANIFEST.toml ────────────────────────────────────────────
-        else if entry_path_str == "MANIFEST.toml" || entry_path_str == "./MANIFEST.toml" {
-            if entry_size > MAX_MANIFEST_SIZE {
-                anyhow::bail!(
-                    "MANIFEST.toml entry too large: {entry_size} bytes (limit {MAX_MANIFEST_SIZE})"
+                let raw = String::from_utf8(read_entry(
+                    &mut entry,
+                    MAX_MANIFEST_SIZE,
+                    "MANIFEST.attestation.json",
+                )?)
+                .context("CCS MANIFEST.attestation.json is not valid UTF-8")?;
+                attestation = Some(
+                    serde_json::from_str(&raw).context("invalid CCS MANIFEST.attestation.json")?,
                 );
+                attestation_raw = Some(raw);
             }
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            toml_manifest_raw = Some(content.as_bytes().to_vec());
-            toml_manifest = Some(CcsManifest::parse(&content)?);
-        }
-        // ── MANIFEST.sig — optional signature ────────────────────────
-        else if entry_path_str == "MANIFEST.sig" || entry_path_str == "./MANIFEST.sig" {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            signature_raw = Some(content);
-        }
-        // ── v2 attestation metadata ─────────────────────────────────
-        else if entry_path_str == "MANIFEST.attestation.json"
-            || entry_path_str == "./MANIFEST.attestation.json"
-        {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            v2_build_attestation =
-                Some(serde_json::from_str(&content).map_err(|error| {
-                    anyhow::anyhow!("Invalid MANIFEST.attestation.json: {error}")
-                })?);
-            v2_build_attestation_raw = Some(content);
-        }
-        // ── v2 foreign conversion boundary metadata ─────────────────
-        else if entry_path_str == "MANIFEST.conversion-boundary.json"
-            || entry_path_str == "./MANIFEST.conversion-boundary.json"
-        {
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            v2_foreign_conversion_boundary =
-                Some(serde_json::from_str(&content).map_err(|error| {
-                    anyhow::anyhow!("Invalid MANIFEST.conversion-boundary.json: {error}")
-                })?);
-            v2_foreign_conversion_boundary_raw = Some(content);
-        }
-        // ── components/*.json ────────────────────────────────────────
-        else if (entry_path_str.starts_with("components/")
-            || entry_path_str.starts_with("./components/"))
-            && entry_path_str.ends_with(".json")
-        {
-            if entry_size > MAX_COMPONENT_SIZE {
-                anyhow::bail!(
-                    "Component JSON entry too large: {entry_size} bytes (limit {MAX_COMPONENT_SIZE})"
-                );
-            }
-            let mut content_bytes = Vec::new();
-            entry.read_to_end(&mut content_bytes)?;
-            let content = String::from_utf8(content_bytes.clone())
-                .map_err(|e| anyhow::anyhow!("Component JSON is not valid UTF-8: {e}"))?;
-            let comp: ComponentData = serde_json::from_str(&content)
-                .map_err(|e| anyhow::anyhow!("Invalid component JSON: {e}"))?;
-            let comp_name = comp.name.clone();
-            components.insert(comp_name.clone(), comp);
-            component_raw.insert(comp_name, content_bytes);
-        }
-        // ── objects/{prefix}/{suffix} — content blobs ────────────────
-        else if entry_path_str.starts_with("objects/") || entry_path_str.starts_with("./objects/")
-        {
-            let stripped = entry_path_str
-                .strip_prefix("./")
-                .unwrap_or(&entry_path_str)
-                .strip_prefix("objects/")
-                .unwrap_or("");
-
-            if let Some((prefix, suffix)) = stripped.split_once('/') {
-                if !prefix.chars().all(|c| c.is_ascii_hexdigit())
-                    || !suffix.chars().all(|c| c.is_ascii_hexdigit())
-                {
-                    warn!("Skipping non-hex object path: {stripped}");
-                    continue;
+            "MANIFEST.conversion-boundary.json" => {
+                require_regular(&entry, "MANIFEST.conversion-boundary.json")?;
+                if boundary_raw.is_some() {
+                    anyhow::bail!(
+                        "CCS archive contains duplicate MANIFEST.conversion-boundary.json entries"
+                    );
                 }
-                let content_hash = format!("{prefix}{suffix}");
-                let mut content = Vec::new();
-                entry.read_to_end(&mut content)?;
-                blobs.insert(content_hash, content);
+                let raw = String::from_utf8(read_entry(
+                    &mut entry,
+                    MAX_MANIFEST_SIZE,
+                    "MANIFEST.conversion-boundary.json",
+                )?)
+                .context("CCS MANIFEST.conversion-boundary.json is not valid UTF-8")?;
+                boundary = Some(
+                    serde_json::from_str(&raw)
+                        .context("invalid CCS MANIFEST.conversion-boundary.json")?,
+                );
+                boundary_raw = Some(raw);
             }
+            _ if path.starts_with("components/") && path.ends_with(".json") => {
+                require_regular(&entry, "component")?;
+                let name = path
+                    .strip_prefix("components/")
+                    .and_then(|path| path.strip_suffix(".json"))
+                    .context("invalid CCS component path")?;
+                if name.is_empty() || name.contains('/') {
+                    anyhow::bail!("invalid CCS component path {path:?}");
+                }
+                let raw = read_entry(&mut entry, MAX_COMPONENT_SIZE, "component")?;
+                let component: ComponentData =
+                    serde_json::from_slice(&raw).context("invalid CCS component JSON")?;
+                if component.name != name {
+                    anyhow::bail!(
+                        "CCS component path {path:?} disagrees with component name {:?}",
+                        component.name
+                    );
+                }
+                if components
+                    .insert(component.name.clone(), component)
+                    .is_some()
+                {
+                    anyhow::bail!("CCS archive contains duplicate component {name:?}");
+                }
+            }
+            _ if path.starts_with("objects/") => {
+                require_regular(&entry, "object")?;
+                let object = path
+                    .strip_prefix("objects/")
+                    .context("invalid CCS object path")?;
+                let Some((prefix, suffix)) = object.split_once('/') else {
+                    anyhow::bail!("invalid CCS object path {object:?}");
+                };
+                if prefix.len() != 2
+                    || suffix.len() != 62
+                    || !is_lower_hex(prefix)
+                    || !is_lower_hex(suffix)
+                {
+                    anyhow::bail!("invalid canonical CCS SHA-256 object path {object:?}");
+                }
+                let hash = format!("{prefix}{suffix}");
+                let bytes = read_entry(&mut entry, MAX_ENTRY_SIZE, "object")?;
+                let actual = crate::hash::sha256(&bytes);
+                if actual != hash {
+                    anyhow::bail!("CCS object path hash mismatch: expected {hash}, got {actual}");
+                }
+                if blobs.insert(hash.clone(), bytes).is_some() {
+                    anyhow::bail!("CCS archive contains duplicate object {hash}");
+                }
+            }
+            _ => anyhow::bail!("unknown CCS archive entry {path:?}"),
         }
     }
 
-    // ── Verify component JSON hashes against the signed binary manifest ──
-    if let Some(ref bin) = binary_manifest {
-        // Reject extra components not listed in the signed manifest
-        for name in components.keys() {
-            if !bin.components.contains_key(name) {
-                anyhow::bail!(
-                    "Component '{}' found in archive but not in signed manifest",
-                    name
-                );
-            }
-        }
+    let authority =
+        authority.context("CCS package is missing required current v2 MANIFEST authority")?;
+    let manifest_raw =
+        manifest_raw.context("CCS package is missing required current v2 MANIFEST bytes")?;
 
-        // Verify each component listed in the signed manifest
-        for (name, comp_ref) in &bin.components {
-            let raw = component_raw.get(name).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Component '{}' listed in signed manifest but missing from archive",
-                    name
-                )
-            })?;
-
-            let actual = Hash::sha256(raw);
-            if actual != comp_ref.hash {
-                anyhow::bail!(
-                    "Component '{}' hash mismatch: expected {}, got {}",
-                    name,
-                    comp_ref.hash.value,
-                    actual.value
-                );
-            }
-        }
-    }
-
-    if let Some(authority) = &v2_authority
-        && let Some(expected) = &authority.provenance.foreign_conversion_boundary_hash
-    {
-        let boundary = v2_foreign_conversion_boundary.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "v2 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing"
-            )
-        })?;
+    if let Some(expected) = &authority.provenance.foreign_conversion_boundary_hash {
+        let boundary = boundary.as_ref().context(
+            "v2 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing",
+        )?;
         let actual = crate::ccs::attestation::canonical_json_hash(boundary)?;
         if &actual != expected {
             anyhow::bail!(
@@ -327,90 +349,15 @@ fn read_ccs_archive_with_limits<R: Read>(
         }
     }
 
-    // Save a copy of the raw TOML bytes for integrity verification.
-    // The resolution logic below consumes `toml_manifest_raw` in the
-    // TOML-only path, so we must clone before that happens.
-    let toml_raw_copy = toml_manifest_raw.clone();
-
-    // ── Resolve manifest ─────────────────────────────────────────────
-    // When both CBOR and TOML manifests are present, use TOML as primary
-    // (it carries fields like config, redirects, policy, provenance that
-    // CBOR omits) and verify consistency with the signed CBOR manifest
-    // for the fields it does carry.
-    let v2_manifest_raw = if v2_authority.is_some() {
-        cbor_manifest_raw.clone()
-    } else {
-        None
-    };
-
-    let (manifest, manifest_raw) = if let Some(ref authority) = v2_authority {
-        let raw = cbor_manifest_raw
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("CCS v2 authority present but raw bytes missing"))?;
-        (compatibility_manifest_from_v2(authority), raw)
-    } else if let Some(ref bin) = binary_manifest {
-        if let Some(toml) = toml_manifest {
-            // CBOR is signed and authoritative for all fields it carries.
-            // Start from the CBOR-converted manifest, then merge in
-            // TOML-only fields that CBOR does not represent.
-            let mut merged = convert_binary_to_ccs_manifest(bin);
-
-            // Overlay TOML-only fields (not carried in CBOR)
-            merged.package.homepage = toml.package.homepage;
-            merged.package.repository = toml.package.repository;
-            merged.package.authors = toml.package.authors;
-            merged.suggests = toml.suggests;
-            merged.components = toml.components;
-            merged.scriptlets = toml.scriptlets;
-            merged.legacy_scriptlets = toml.legacy_scriptlets;
-            merged.config = toml.config;
-            merged.policy = toml.policy;
-            merged.file_capabilities = toml.file_capabilities;
-            merged.provenance = toml.provenance;
-            merged.redirects = toml.redirects;
-            merged.legacy = toml.legacy;
-            // Overlay build sub-fields that CBOR doesn't carry
-            if let Some(ref toml_build) = toml.build {
-                if let Some(ref mut merged_build) = merged.build {
-                    merged_build.environment = toml_build.environment.clone();
-                    merged_build.commands = toml_build.commands.clone();
-                } else {
-                    merged.build = Some(toml_build.clone());
-                }
-            }
-
-            let raw = cbor_manifest_raw.ok_or_else(|| {
-                anyhow::anyhow!("CBOR binary manifest present but raw bytes missing")
-            })?;
-            (merged, raw)
-        } else {
-            // CBOR only -- convert to CcsManifest (TOML-only fields get defaults)
-            let raw = cbor_manifest_raw.ok_or_else(|| {
-                anyhow::anyhow!("CBOR binary manifest present but raw bytes missing")
-            })?;
-            (convert_binary_to_ccs_manifest(bin), raw)
-        }
-    } else if let Some(version) = unsupported_cbor_format {
-        anyhow::bail!("unsupported CCS MANIFEST format_version {version}");
-    } else if let Some(toml) = toml_manifest {
-        let raw = toml_manifest_raw
-            .ok_or_else(|| anyhow::anyhow!("TOML manifest present but raw bytes missing"))?;
-        (toml, raw)
-    } else {
-        anyhow::bail!("CCS package missing both MANIFEST and MANIFEST.toml");
-    };
-
-    Ok(CcsArchiveContents {
-        manifest,
-        manifest_raw,
-        binary_manifest,
-        v2_authority,
-        v2_manifest_raw,
-        v2_build_attestation_raw,
-        v2_foreign_conversion_boundary_raw,
-        v2_build_attestation,
-        v2_foreign_conversion_boundary,
-        toml_raw: toml_raw_copy,
+    Ok(UntrustedCcsArchive {
+        manifest: install_manifest_projection(&authority),
+        v2_authority: authority,
+        v2_manifest_raw: manifest_raw,
+        v2_build_attestation_raw: attestation_raw,
+        v2_foreign_conversion_boundary_raw: boundary_raw,
+        v2_build_attestation: attestation,
+        v2_foreign_conversion_boundary: boundary,
+        toml_raw,
         signature_raw,
         components,
         blobs,
@@ -420,369 +367,129 @@ fn read_ccs_archive_with_limits<R: Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::{CcsBuilder, write_ccs_package};
-    use crate::ccs::legacy_scriptlets::{
-        DecisionCounts, EffectConfidence, EffectReplacement, EffectSource, ForeignReplayPolicy,
-        LEGACY_SCRIPTLET_SCHEMA_V1, LegacyScriptletBundle, LegacyScriptletEntry, LifecyclePath,
-        NativeInvocation, PublicationPolicy, PublicationStatus, RpmTriggerMetadata,
-        RpmTriggerTargetConstraint, ScriptletDecision, ScriptletEffect, ScriptletFidelity,
-        SourceFormat, TargetCompatibility, TransactionOrder, VersionScheme,
-    };
-    use crate::ccs::manifest::CcsManifest;
-    use std::collections::BTreeMap;
-    use std::fs;
-    use tempfile::TempDir;
+    use crate::ccs::builder::write_v2_ccs_package;
+    use crate::ccs::signing::SigningKeyPair;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+    use tar::Builder;
 
-    fn build_test_package_with_manifest(manifest: CcsManifest) -> (TempDir, std::path::PathBuf) {
+    fn current_package() -> (tempfile::TempDir, std::path::PathBuf) {
         let temp = tempfile::tempdir().unwrap();
-        let source_dir = temp.path().join("src");
-        fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
-        fs::write(source_dir.join("usr/bin/hello"), b"hello world\n").unwrap();
-
-        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
-        let package_path = temp.path().join("test-reader.ccs");
-        write_ccs_package(&result, &package_path).unwrap();
-        (temp, package_path)
-    }
-
-    fn build_test_package() -> (TempDir, std::path::PathBuf) {
-        build_test_package_with_manifest(
-            CcsManifest::parse(
-                r#"
-[package]
-name = "test-reader"
-version = "1.0.0"
-description = "archive reader test"
-license = "MIT"
-"#,
-            )
-            .unwrap(),
-        )
-    }
-
-    fn legacy_bundle_fixture() -> LegacyScriptletBundle {
-        let body = "ldconfig\n";
-        LegacyScriptletBundle {
-            schema: LEGACY_SCRIPTLET_SCHEMA_V1.to_string(),
-            schema_revision: 1,
-            source_format: SourceFormat::Rpm,
-            source_family: "fedora-rhel".to_string(),
-            source_distro: Some("fedora".to_string()),
-            source_release: Some("44".to_string()),
-            source_arch: Some("x86_64".to_string()),
-            source_package: "nginx".to_string(),
-            source_version: "1.28.0-1.fc44".to_string(),
-            source_checksum: Some(
-                "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-                    .to_string(),
-            ),
-            version_scheme: VersionScheme::Rpm,
-            conversion_tool: "remi".to_string(),
-            conversion_tool_version: "0.8.0".to_string(),
-            conversion_policy: "safe-or-legacy".to_string(),
-            adapter_registry_digest: None,
-            target_policy_digest: None,
-            evidence_digest: None,
-            target_compatibility: TargetCompatibility::SourceNative,
-            allowed_targets: vec!["rpm/fedora/44/x86_64".to_string()],
-            foreign_replay_policy: ForeignReplayPolicy::Deny,
-            publication_policy: PublicationPolicy::PublicIfNoBlocked,
-            publication_status: PublicationStatus::PrivateReview,
-            scriptlet_fidelity: ScriptletFidelity::LegacyReplay,
-            decision_counts: DecisionCounts {
-                replaced: 0,
-                legacy: 1,
-                blocked: 0,
-                review: 0,
-                extra: BTreeMap::new(),
-            },
-            unsupported_class_counts: BTreeMap::new(),
-            security_policy_intents: Vec::new(),
-            entries: vec![LegacyScriptletEntry {
-                id: "rpm:%post".to_string(),
-                native_slot: "%post".to_string(),
-                phase: LifecyclePath::PostInstall,
-                lifecycle_paths: vec!["install:first".to_string()],
-                interpreter: "/bin/sh".to_string(),
-                interpreter_args: vec!["-e".to_string()],
-                body_sha256: crate::hash::sha256_prefixed(body.as_bytes()),
-                body: body.to_string(),
-                body_encoding: None,
-                native_invocation: NativeInvocation {
-                    args: vec!["1".to_string()],
-                    environment: vec!["RPM_INSTALL_PREFIX=/".to_string()],
-                    stdin: Some("none".to_string()),
-                    chroot: Some("install-root".to_string()),
-                    extra: BTreeMap::new(),
-                },
-                transaction_order: TransactionOrder {
-                    position: "after-payload".to_string(),
-                    before: vec![],
-                    after: vec!["payload".to_string()],
-                    extra: BTreeMap::new(),
-                },
-                timeout_ms: 30_000,
-                sandbox: None,
-                capabilities: vec!["ldconfig".to_string()],
-                decision: ScriptletDecision::Legacy,
-                reason_code: "protected-replay-required".to_string(),
-                human_reason: None,
-                evidence_digest: None,
-                source_evidence_refs: vec![],
-                effects: vec![ScriptletEffect {
-                    kind: "ldconfig".to_string(),
-                    source: EffectSource::StaticSignal,
-                    confidence: EffectConfidence::Declared,
-                    replacement: EffectReplacement::Complete,
-                    adapter_id: Some("ldconfig/v1".to_string()),
-                    adapter_digest: None,
-                    command: Some("ldconfig".to_string()),
-                    args: vec![],
-                    path: None,
-                    reason_code: Some("ldconfig-cache-refresh".to_string()),
-                    extra: BTreeMap::new(),
-                }],
-                unknown_commands: vec![],
-                blocked_classes: vec![],
-                boot_security_intents: Vec::new(),
-                security_policy_intents: Vec::new(),
-                rpm_trigger: Some(RpmTriggerMetadata {
-                    kind: "file-trigger".to_string(),
-                    condition: Some("in".to_string()),
-                    target_constraints: vec![RpmTriggerTargetConstraint {
-                        package: "systemd".to_string(),
-                        operator: Some(">=".to_string()),
-                        version: Some("255".to_string()),
-                        extra: BTreeMap::new(),
-                    }],
-                    priority: Some(100),
-                    file_globs: vec!["/usr/lib/systemd/system/*.service".to_string()],
-                    stdin_contract: Some("paths".to_string()),
-                    transaction_order: Some("post-transaction".to_string()),
-                    extra: BTreeMap::new(),
-                }),
-                deb_maintainer: None,
-                arch_install: None,
-                residual_replay: None,
-                extra: BTreeMap::new(),
-            }],
-            extra: BTreeMap::new(),
-        }
-    }
-
-    fn build_test_package_with_legacy_bundle() -> (TempDir, std::path::PathBuf) {
-        let mut manifest = CcsManifest::parse(
-            r#"
-[package]
-name = "test-reader"
-version = "1.0.0"
-description = "archive reader test"
-license = "MIT"
-"#,
+        let path = temp.path().join("current.ccs");
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("current");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        write_v2_ccs_package(
+            &authority,
+            &payloads,
+            &path,
+            &SigningKeyPair::generate(),
+            None,
+            None,
+            None,
         )
         .unwrap();
-        manifest.legacy_scriptlets = Some(legacy_bundle_fixture());
+        (temp, path)
+    }
 
-        build_test_package_with_manifest(manifest)
+    fn append<W: Write>(builder: &mut Builder<W>, path: &str, bytes: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, path, bytes).unwrap();
     }
 
     #[test]
-    fn test_read_ccs_archive_extracts_manifest_and_components() {
-        let (_temp, path) = build_test_package();
-        let file = std::fs::File::open(&path).unwrap();
-        let contents = read_ccs_archive(file).unwrap();
+    fn inspection_is_explicitly_untrusted_and_v2_only() {
+        let (_temp, path) = current_package();
+        let archive = inspect_untrusted_ccs_archive(File::open(&path).unwrap()).unwrap();
 
-        assert_eq!(contents.manifest.package.name, "test-reader");
-        assert_eq!(contents.manifest.package.version, "1.0.0");
-        assert!(!contents.components.is_empty());
-        assert!(!contents.blobs.is_empty());
-        assert!(!contents.manifest_raw.is_empty());
+        assert_eq!(archive.v2_authority.identity.name, "current");
+        assert_eq!(archive.manifest.package.name, "current");
+        assert!(archive.signature_raw.is_some());
+        assert!(!archive.blobs.is_empty());
+        assert!(has_current_ccs_archive_contract(path).unwrap());
     }
 
     #[test]
-    fn archive_reader_preserves_legacy_scriptlet_bundle_from_toml_overlay() {
-        let (_temp, path) = build_test_package_with_legacy_bundle();
-        let file = std::fs::File::open(&path).unwrap();
-
-        let contents = read_ccs_archive(file).unwrap();
-        let bundle = contents
-            .manifest
-            .legacy_scriptlets
-            .as_ref()
-            .expect("legacy scriptlet bundle from TOML overlay");
-
-        assert_eq!(bundle.source_package, "nginx");
-        assert_eq!(
-            bundle.entries[0]
-                .rpm_trigger
-                .as_ref()
-                .expect("rpm trigger metadata")
-                .file_globs,
-            vec!["/usr/lib/systemd/system/*.service"]
-        );
-    }
-
-    #[test]
-    fn builder_package_writer_preserves_legacy_scriptlet_bundle() {
-        let (_temp, path) = build_test_package_with_legacy_bundle();
-        let file = std::fs::File::open(&path).unwrap();
-
-        let contents = read_ccs_archive(file).unwrap();
-        let toml_raw = String::from_utf8(contents.toml_raw.expect("MANIFEST.toml raw")).unwrap();
-
-        assert!(toml_raw.contains("[legacy_scriptlets]"));
-        assert!(contents.manifest.legacy_scriptlets.is_some());
-    }
-
-    #[test]
-    fn archive_reader_preserves_file_capabilities_from_toml_overlay() {
-        let manifest = CcsManifest::parse(
-            r#"
-[package]
-name = "test-reader"
-version = "1.0.0"
-description = "archive reader test"
-license = "MIT"
-
-[[file_capabilities]]
-path = "/usr/bin/hello"
-capabilities = ["cap_net_bind_service"]
-permitted = true
-effective = true
-inheritable = false
-"#,
+    fn current_contract_detection_rejects_v1() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v1.ccs");
+        let mut manifest = Vec::new();
+        ciborium::into_writer(
+            &serde_json::json!({
+                "format_version": 1,
+                "name": "retired-v1-fixture",
+            }),
+            &mut manifest,
         )
         .unwrap();
-        manifest.validate().unwrap();
-        let (_temp, path) = build_test_package_with_manifest(manifest);
-        let file = std::fs::File::open(&path).unwrap();
-
-        let contents = read_ccs_archive(file).unwrap();
-
-        assert_eq!(contents.manifest.file_capabilities.len(), 1);
-        assert_eq!(
-            contents.manifest.file_capabilities[0].path,
-            "/usr/bin/hello"
-        );
-        assert_eq!(
-            contents.manifest.file_capabilities[0].capabilities,
-            vec!["cap_net_bind_service"]
-        );
-    }
-
-    #[test]
-    fn archive_reader_routes_v2_manifest_without_legacy_binary_defaulting() {
-        use crate::ccs::builder::{ComponentData, FileEntry, FileType};
-        use crate::ccs::signing::SigningKeyPair;
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
-        use tar::Builder;
-
-        fn append_bytes<W: std::io::Write>(builder: &mut Builder<W>, path: &str, bytes: &[u8]) {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(bytes.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, path, bytes).unwrap();
-        }
-
-        let authority =
-            crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("archive-v2");
-        let raw = authority.to_cbor().unwrap();
-        let key = SigningKeyPair::generate();
-        let signature = serde_json::to_vec(&key.sign(&raw)).unwrap();
-        let component = ComponentData {
-            name: "main".to_string(),
-            files: vec![FileEntry {
-                path: "/usr/bin/hello".to_string(),
-                hash: crate::hash::sha256(b"hello world\n"),
-                size: 12,
-                mode: 0o755,
-                component: "main".to_string(),
-                file_type: FileType::Regular,
-                target: None,
-                chunks: None,
-            }],
-            hash: "component-hash-unused-by-v2-routing-test".to_string(),
-            size: 12,
-        };
-        let component_json = serde_json::to_vec(&component).unwrap();
-        let blob_hash = crate::hash::sha256(b"hello world\n");
-        let object_path = format!("objects/{}/{}", &blob_hash[..2], &blob_hash[2..]);
-
-        let mut archive_bytes = Vec::new();
         {
-            let encoder = GzEncoder::new(&mut archive_bytes, Compression::default());
+            let output = std::fs::File::create(&path).unwrap();
+            let encoder = GzEncoder::new(output, Compression::default());
             let mut builder = Builder::new(encoder);
-            append_bytes(&mut builder, "MANIFEST", &raw);
-            append_bytes(&mut builder, "MANIFEST.sig", &signature);
-            append_bytes(&mut builder, "components/main.json", &component_json);
-            append_bytes(&mut builder, &object_path, b"hello world\n");
+            append(&mut builder, "MANIFEST", &manifest);
             builder.into_inner().unwrap().finish().unwrap();
         }
 
-        let contents = read_ccs_archive(std::io::Cursor::new(archive_bytes)).unwrap();
-        assert_eq!(
-            contents.v2_authority.as_ref().unwrap().identity.name,
-            "archive-v2"
+        let error = inspect_untrusted_ccs_archive(File::open(&path).unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("CCS v1 archive authority is unsupported")
         );
-        assert!(contents.binary_manifest.is_none());
-        assert_eq!(contents.manifest.package.name, "archive-v2");
-        assert_eq!(contents.components["main"].files.len(), 1);
+        let error = has_current_ccs_archive_contract(path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("CCS v1 archive authority is unsupported")
+        );
     }
 
     #[test]
-    fn v1_manifest_is_legacy_not_v2_authority() {
-        let (_temp, path) = build_test_package();
-        let file = std::fs::File::open(&path).unwrap();
-        let contents = read_ccs_archive(file).unwrap();
-        assert!(contents.binary_manifest.is_some());
-        assert!(contents.v2_authority.is_none());
-    }
-
-    #[test]
-    fn test_read_ccs_archive_missing_manifest() {
-        // Build a tar.gz with no MANIFEST
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
-        use tar::Builder;
-
-        let mut buf = Vec::new();
+    fn inspection_rejects_noncanonical_object_paths() {
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("bad-object");
+        let raw = authority.to_cbor().unwrap();
+        let mut bytes = Vec::new();
         {
-            let encoder = GzEncoder::new(&mut buf, Compression::default());
+            let encoder = GzEncoder::new(&mut bytes, Compression::default());
             let mut builder = Builder::new(encoder);
-            // Add a dummy file so the archive isn't empty
-            let data = b"hello";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(data.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, "dummy.txt", &data[..])
-                .unwrap();
-            let encoder = builder.into_inner().unwrap();
-            encoder.finish().unwrap();
+            append(&mut builder, "MANIFEST", &raw);
+            append(&mut builder, "objects/not-a-digest", b"payload");
+            builder.into_inner().unwrap().finish().unwrap();
         }
 
-        let cursor = std::io::Cursor::new(buf);
-        let err = read_ccs_archive(cursor).unwrap_err();
-        assert!(
-            err.to_string().contains("missing both MANIFEST"),
-            "unexpected error: {err}"
-        );
+        let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+        assert!(error.to_string().contains("invalid CCS object path"));
     }
 
     #[test]
-    fn test_read_ccs_archive_respects_total_extraction_limit() {
-        let (_temp, path) = build_test_package();
-        let file = std::fs::File::open(&path).unwrap();
-        let err = read_ccs_archive_with_limits(file, 32).unwrap_err();
+    fn inspection_rejects_duplicate_manifest_authority() {
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("duplicate");
+        let raw = authority.to_cbor().unwrap();
+        let mut bytes = Vec::new();
+        {
+            let encoder = GzEncoder::new(&mut bytes, Compression::default());
+            let mut builder = Builder::new(encoder);
+            append(&mut builder, "MANIFEST", &raw);
+            append(&mut builder, "./MANIFEST", &raw);
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+        assert!(error.to_string().contains("duplicate MANIFEST"));
+    }
+
+    #[test]
+    fn inspection_enforces_cumulative_extraction_limit() {
+        let (_temp, path) = current_package();
+        let error =
+            inspect_untrusted_ccs_archive_with_limits(File::open(path).unwrap(), 32).unwrap_err();
         assert!(
-            err.to_string().contains("missing both MANIFEST")
-                || err.to_string().contains("failed to iterate over archive")
-                || err.to_string().contains("failed to read entire block")
-                || err.to_string().contains("unexpected end of file"),
-            "unexpected error: {err}"
+            error.to_string().contains("extraction size")
+                || error.to_string().contains("unexpected end of file")
+                || error.to_string().contains("failed to read")
         );
     }
 }

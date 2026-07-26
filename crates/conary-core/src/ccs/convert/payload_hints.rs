@@ -1,11 +1,17 @@
 // conary-core/src/ccs/convert/payload_hints.rs
 
+use crate::packages::common::PackageMetadata;
 use crate::packages::traits::ExtractedFile;
+use crate::payload::PayloadNodeKind;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PayloadHints {
+    pub package_name: Option<String>,
     pub payload_paths: BTreeSet<String>,
+    pub config_files: BTreeSet<String>,
+    pub symlink_targets: BTreeMap<String, String>,
+    pub directory_paths: BTreeSet<String>,
     pub file_modes: BTreeMap<String, u32>,
     pub executable_paths: BTreeSet<String>,
     pub systemd_units: BTreeSet<String>,
@@ -16,16 +22,38 @@ pub struct PayloadHints {
 }
 
 impl PayloadHints {
+    pub fn from_package(metadata: &PackageMetadata, files: &[ExtractedFile]) -> Self {
+        let mut hints = Self::from_files(files);
+        hints.package_name = Some(metadata.name.clone());
+        hints.config_files = metadata
+            .config_files
+            .iter()
+            .map(|config| config.path.clone())
+            .collect();
+        hints
+    }
+
     pub fn from_files(files: &[ExtractedFile]) -> Self {
         let mut hints = Self::default();
 
         for file in files {
             let path = file.path.as_str();
             hints.payload_paths.insert(path.to_string());
-            let mode = file.mode as u32;
+            for parent in payload_parent_paths(path) {
+                hints.directory_paths.insert(parent);
+            }
+            if let PayloadNodeKind::Symlink { target } = &file.node.kind {
+                hints
+                    .symlink_targets
+                    .insert(path.to_string(), target.clone());
+            }
+            let mode = file.node.mode;
             hints.file_modes.insert(path.to_string(), mode);
-            if file.symlink_target.is_none() && mode & 0o111 != 0 {
+            if file.node.kind.is_regular() && mode & 0o111 != 0 {
                 hints.executable_paths.insert(path.to_string());
+            }
+            if file.node.kind.is_directory() {
+                hints.directory_paths.insert(path.to_string());
             }
             if let Some(unit) = systemd_unit_name(path) {
                 hints.systemd_units.insert(unit.to_string());
@@ -56,6 +84,20 @@ impl PayloadHints {
             .get(kind)
             .is_some_and(|paths| !paths.is_empty())
     }
+}
+
+fn payload_parent_paths(path: &str) -> impl Iterator<Item = String> + '_ {
+    let mut parents = Vec::new();
+    let mut current = std::path::Path::new(path);
+    while let Some(parent) = current.parent() {
+        let value = parent.to_string_lossy();
+        if value.is_empty() || value == "/" {
+            break;
+        }
+        parents.push(value.into_owned());
+        current = parent;
+    }
+    parents.into_iter()
 }
 
 fn systemd_unit_name(path: &str) -> Option<&str> {
@@ -127,11 +169,12 @@ mod tests {
     fn file(path: &str) -> ExtractedFile {
         ExtractedFile {
             path: path.to_string(),
+            node: crate::payload::PayloadNode::regular(0o644),
             content: Vec::new(),
-            size: 0,
-            mode: 0o644,
-            sha256: None,
-            symlink_target: None,
+            content_authority: Some(crate::payload::PayloadContentAuthority {
+                sha256: crate::hash::sha256(&[]),
+                size: 0,
+            }),
         }
     }
 

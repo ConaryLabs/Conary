@@ -3,7 +3,7 @@
 //! Command implementations for automation system.
 
 use super::open_db;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::automation::{
     AutomationManager, AutomationSummary,
     action::{ActionExecutor, PlannedOp},
@@ -96,12 +96,7 @@ fn format_planned_op(op: &PlannedOp) -> String {
     }
 }
 
-async fn execute_planned_op(
-    op: &PlannedOp,
-    db_path: &str,
-    root: &str,
-    no_scripts: bool,
-) -> Result<()> {
+async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result<()> {
     match op {
         PlannedOp::Install {
             package,
@@ -114,23 +109,19 @@ async fn execute_planned_op(
                     db_path,
                     root,
                     version: version.clone(),
+                    package_release: None,
                     repo: None,
                     architecture: architecture.clone(),
                     dry_run: false,
                     no_deps: false,
-                    no_scripts,
                     selection_reason: None,
                     sandbox_mode: super::SandboxMode::Always,
                     allow_downgrade: false,
-                    allow_capabilities: false,
                     convert_to_ccs: false,
-                    no_capture: false,
-                    force: false,
-                    dep_mode: None,
+                    ownership: None,
                     yes: true,
-                    from_distro: None,
+                    from_profile: None,
                     repository_provenance: None,
-                    legacy_replay: super::LegacyReplayOptions::default(),
                 },
             )
             .await
@@ -143,13 +134,10 @@ async fn execute_planned_op(
             super::cmd_remove(
                 package,
                 db_path,
-                root,
                 version.clone(),
                 architecture.clone(),
-                no_scripts,
                 super::SandboxMode::Always,
                 false,
-                super::LegacyReplayOptions::default(),
             )
             .await
         }
@@ -198,7 +186,6 @@ async fn execute_actions(
     actions: &[conary_core::automation::PendingAction],
     db_path: &str,
     root: &str,
-    no_scripts: bool,
 ) -> Result<(usize, usize, usize)> {
     let planner = ActionExecutor::new();
     let mut applied = 0;
@@ -222,7 +209,7 @@ async fn execute_actions(
         let mut succeeded_ops = 0usize;
         let mut errors = Vec::new();
         for op in &plan.ops {
-            if let Err(e) = execute_planned_op(op, db_path, root, no_scripts).await {
+            if let Err(e) = execute_planned_op(op, db_path, root).await {
                 errors.push(format!("{}: {}", format_planned_op(op), e));
             } else {
                 succeeded_ops += 1;
@@ -298,22 +285,33 @@ fn query_automation_history(
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
-        let packages_json: Option<String> = row.get(2)?;
-        let packages = packages_json
-            .as_deref()
-            .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
-            .unwrap_or_default();
-        Ok(AutomationHistoryRow {
-            action_id: row.get(0)?,
-            category: row.get(1)?,
-            packages,
-            status: row.get(3)?,
-            error_message: row.get(4)?,
-            applied_at: row.get(5)?,
-        })
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+        ))
     })?;
 
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    rows.map(|row| {
+        let (action_id, category, packages_json, status, error_message, applied_at) = row?;
+        let packages = match packages_json {
+            Some(raw) => serde_json::from_str::<Vec<String>>(&raw)
+                .with_context(|| format!("automation history {action_id} has corrupt packages"))?,
+            None => Vec::new(),
+        };
+        Ok(AutomationHistoryRow {
+            action_id,
+            category,
+            packages,
+            status,
+            error_message,
+            applied_at,
+        })
+    })
+    .collect()
 }
 
 fn load_automation_config_from_path(path: &Path) -> Result<AutomationConfig> {
@@ -586,7 +584,6 @@ pub async fn cmd_automation_apply(
     yes: bool,
     categories: Option<Vec<String>>,
     dry_run: bool,
-    no_scripts: bool,
 ) -> Result<()> {
     let conn = open_db(db_path)?;
 
@@ -641,7 +638,7 @@ pub async fn cmd_automation_apply(
     if yes {
         println!("Applying {} action(s)...", all_actions.len());
         let (applied, failed, partial) =
-            execute_actions(&conn, &all_actions, db_path, root, no_scripts).await?;
+            execute_actions(&conn, &all_actions, db_path, root).await?;
 
         println!();
         println!(
@@ -666,7 +663,7 @@ pub async fn cmd_automation_apply(
         SummaryResponse::ApplyAll => {
             println!("Applying all actions...");
             let (applied, failed, partial) =
-                execute_actions(&conn, &all_actions, db_path, root, no_scripts).await?;
+                execute_actions(&conn, &all_actions, db_path, root).await?;
             println!();
             println!(
                 "Complete: {} applied, {} failed, {} partial",
@@ -685,7 +682,7 @@ pub async fn cmd_automation_apply(
             println!("Reviewing {} action(s)...", actions.len());
             let actions: Vec<_> = actions.into_iter().cloned().collect();
             let (applied, failed, partial) =
-                execute_actions(&conn, &actions, db_path, root, no_scripts).await?;
+                execute_actions(&conn, &actions, db_path, root).await?;
             println!();
             println!(
                 "Complete: {} applied, {} failed, {} partial",
@@ -937,260 +934,4 @@ pub async fn cmd_automation_history(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::composefs_ops::test_mount_skip_guard;
-    use crate::commands::test_helpers::setup_command_test_db;
-    use conary_core::db::models::{Repository, RepositoryPackage, Trove};
-    use tempfile::tempdir;
-
-    #[test]
-    fn status_json_includes_major_upgrades() {
-        let summary = AutomationSummary {
-            total: 2,
-            security_updates: 0,
-            available_updates: 0,
-            orphaned_packages: 0,
-            major_upgrades: 2,
-            integrity_issues: 0,
-        };
-        let config = AutomationConfig::default();
-
-        let json = build_status_json(&summary, &config);
-        assert_eq!(json["major_upgrades"], 2);
-    }
-
-    #[test]
-    fn automation_install_leaves_dependency_mode_model_derived() {
-        let source = include_str!("automation.rs");
-        let model_derived_dep_mode = ["dep_mode: ", "None,"].concat();
-        let hard_coded_default = ["dep_mode: Some(super::DepMode", "::default()),"].concat();
-
-        assert!(
-            source.contains(&model_derived_dep_mode),
-            "automation installs must leave dep_mode unset so install derives it from the model"
-        );
-        assert!(
-            !source.contains(&hard_coded_default),
-            "automation installs must not force the legacy satisfy default"
-        );
-    }
-
-    #[tokio::test]
-    async fn cmd_automation_apply_yes_removes_orphans_and_records_history() {
-        let (_tmp, db_path) = setup_command_test_db();
-        let root = tempdir().unwrap();
-        let _guard = test_mount_skip_guard();
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        crate::commands::composefs_ops::rebuild_and_mount(
-            &conn,
-            &db_path,
-            "Initial automation cleanup generation",
-            None,
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE troves
-             SET name = 'orphan-cleanup-fixture',
-                 install_reason = 'dependency',
-                 selection_reason = 'Required by nginx',
-                 orphan_since = '2020-01-01T00:00:00Z'
-             WHERE name = 'openssl'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE provides
-             SET capability = 'orphan-cleanup-fixture'
-             WHERE capability = 'openssl'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "DELETE FROM dependencies
-             WHERE trove_id = (SELECT id FROM troves WHERE name = 'nginx' LIMIT 1)
-               AND depends_on_name = 'openssl'",
-            [],
-        )
-        .unwrap();
-        drop(conn);
-
-        cmd_automation_apply(
-            &db_path,
-            root.path().to_str().unwrap(),
-            true,
-            Some(vec!["orphans".to_string()]),
-            false,
-            true,
-        )
-        .await
-        .expect("orphan cleanup should succeed");
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        assert!(
-            Trove::find_one_by_name(&conn, "orphan-cleanup-fixture")
-                .unwrap()
-                .is_none()
-        );
-
-        let history: (String, String, String) = conn
-            .query_row(
-                "SELECT category, status, packages FROM automation_history LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(history.0, "orphans");
-        assert_eq!(history.1, "applied");
-        assert!(history.2.contains("orphan-cleanup-fixture"));
-    }
-
-    #[tokio::test]
-    async fn cmd_automation_apply_records_failed_history_for_unreachable_update() {
-        let (_tmp, db_path) = setup_command_test_db();
-        let root = tempdir().unwrap();
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        let mut repo = Repository::new(
-            "test-updates".to_string(),
-            "http://127.0.0.1:9/repo".to_string(),
-        );
-        let repo_id = repo.insert(&conn).unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            "nginx".to_string(),
-            "1.24.1".to_string(),
-            "sha256:test-nginx".to_string(),
-            1234,
-            "http://127.0.0.1:9/nginx-1.24.1.ccs".to_string(),
-        );
-        pkg.architecture = Some("x86_64".to_string());
-        pkg.insert(&conn).unwrap();
-        drop(conn);
-
-        let err = cmd_automation_apply(
-            &db_path,
-            root.path().to_str().unwrap(),
-            true,
-            Some(vec!["updates".to_string()]),
-            false,
-            true,
-        )
-        .await
-        .expect_err("unreachable update should fail");
-
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("failed") || message.contains("Failed"),
-            "expected failure summary, got: {message}"
-        );
-
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        let history: (String, String, Option<String>) = conn
-            .query_row(
-                "SELECT category, status, error_message
-                 FROM automation_history
-                 ORDER BY id DESC
-                 LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(history.0, "updates");
-        assert_eq!(history.1, "failed");
-        assert!(history.2.is_some());
-    }
-
-    #[test]
-    fn query_automation_history_returns_latest_first() {
-        let (_tmp, db_path) = setup_command_test_db();
-        let conn = crate::commands::open_db(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO automation_history (action_id, category, packages, status, applied_at)
-             VALUES ('older', 'updates', '[\"nginx\"]', 'applied', '2026-04-08 10:00:00')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO automation_history (action_id, category, packages, status, applied_at)
-             VALUES ('newer', 'orphans', '[\"openssl\"]', 'failed', '2026-04-08 11:00:00')",
-            [],
-        )
-        .unwrap();
-
-        let rows = query_automation_history(&conn, 10, None, None, None).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].action_id, "newer");
-        assert_eq!(rows[1].action_id, "older");
-    }
-
-    #[test]
-    fn load_automation_config_from_path_reads_real_values() {
-        let dir = tempdir().unwrap();
-        let model_path = dir.path().join("system.toml");
-        std::fs::write(
-            &model_path,
-            r#"
-[model]
-version = 1
-
-[automation]
-mode = "auto"
-check_interval = "12h"
-
-[automation.security]
-mode = "disabled"
-"#,
-        )
-        .unwrap();
-
-        let config = load_automation_config_from_path(&model_path).unwrap();
-        assert!(matches!(
-            config.mode,
-            conary_core::model::AutomationMode::Auto
-        ));
-        assert_eq!(config.check_interval, "12h");
-        assert!(matches!(
-            config.security.mode,
-            Some(conary_core::model::AutomationMode::Disabled)
-        ));
-    }
-
-    #[test]
-    fn update_automation_config_file_preserves_comments() {
-        let dir = tempdir().unwrap();
-        let model_path = dir.path().join("system.toml");
-        std::fs::write(
-            &model_path,
-            r#"# keep me
-[model]
-version = 1
-
-[system]
-hostname = "demo"
-"#,
-        )
-        .unwrap();
-
-        update_automation_config_file(
-            &model_path,
-            None,
-            Some("auto"),
-            None,
-            None,
-            Some("8h"),
-            false,
-            false,
-        )
-        .unwrap();
-
-        let updated = std::fs::read_to_string(&model_path).unwrap();
-        assert!(updated.contains("# keep me"));
-        assert!(updated.contains("[automation]"));
-        assert!(updated.contains("mode = \"auto\""));
-        assert!(updated.contains("check_interval = \"8h\""));
-        assert!(updated.contains("[system]"));
-    }
-}
+mod tests;

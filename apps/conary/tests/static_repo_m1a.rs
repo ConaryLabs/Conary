@@ -8,13 +8,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use conary_core::ccs::builder::{
-    BuildResult, ComponentData, FileEntry, FileType, write_ccs_package,
+    BuildResult, ComponentData, FileEntry as CcsFileEntry, write_signed_current_ccs_package,
 };
-use conary_core::ccs::manifest::CcsManifest;
+use conary_core::ccs::manifest::{CcsManifest, Platform};
 use conary_core::ccs::signing::SigningKeyPair;
+use conary_core::db::models::{FileEntry as DatabaseFileEntry, InstallSource, Trove, TroveType};
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+};
 use conary_core::repository::StaticIndex;
 use conary_core::repository::static_repo::RepoLocation;
 use conary_core::repository::static_repo::publish::{StaticPublishOptions, publish_static_repo};
+use conary_core::repository::versioning::VersionScheme;
+use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::trust::generate::{generate_snapshot, generate_targets, generate_timestamp};
 use conary_core::trust::metadata::{
     RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
@@ -31,6 +37,7 @@ struct StaticRepoFixture {
     db_path: PathBuf,
     key_dir: PathBuf,
     fingerprint: String,
+    initial_generation: i64,
 }
 
 impl StaticRepoFixture {
@@ -44,8 +51,17 @@ impl StaticRepoFixture {
         let package_path = work.path().join("dist").join("test-hello.ccs");
 
         conary_core::db::init(&db_path).unwrap();
+        let initial_generation = seed_selected_root(&db_path);
         fs::create_dir_all(&root).unwrap();
-        write_single_payload_ccs(&package_path);
+        fs::create_dir_all(&key_dir).unwrap();
+        let publish_key = SigningKeyPair::generate().with_key_id("publish");
+        publish_key
+            .save_to_files(
+                &key_dir.join("publish.private"),
+                &key_dir.join("publish.public"),
+            )
+            .unwrap();
+        write_single_payload_ccs(&package_path, &publish_key);
 
         let outcome = publish_static_repo(StaticPublishOptions {
             repo_name: REPO_NAME.to_string(),
@@ -57,8 +73,6 @@ impl StaticRepoFixture {
             state_file,
             package_paths: vec![package_path],
             refresh: false,
-            force_reinit: false,
-            accept_destination_state: false,
             rotate_publish_key: false,
             rotate_root_key: false,
             artifact_gate_context: None,
@@ -74,6 +88,7 @@ impl StaticRepoFixture {
             db_path,
             key_dir,
             fingerprint,
+            initial_generation,
         }
     }
 
@@ -98,8 +113,128 @@ fn m1a_publish_add_sync_install_from_local_static_repo() {
     assert_success(&fixture.sync());
     assert_success(&fixture.install());
 
-    let installed = fixture.root.join("usr/share/test-hello/hello.txt");
-    assert_eq!(fs::read_to_string(installed).unwrap(), "hello from m1a\n");
+    let conn = conary_core::db::open(&fixture.db_path).unwrap();
+    let installed = DatabaseFileEntry::find_by_path(&conn, "/usr/share/test-hello/hello.txt")
+        .unwrap()
+        .expect("installed payload authority");
+    let content = installed.content.expect("installed content authority");
+    assert_eq!(
+        content.sha256,
+        conary_core::hash::sha256(b"hello from m1a\n")
+    );
+
+    let runtime_root = ConaryRuntimeRoot::from_db_path(fixture.db_path.clone());
+    let generation = conary_core::generation::mount::current_generation(runtime_root.root())
+        .unwrap()
+        .expect("static CCS install should publish a generation");
+    assert_ne!(generation, fixture.initial_generation);
+    let artifact = conary_core::generation::artifact::load_generation_artifact(
+        &runtime_root.generation_path(generation),
+    )
+    .unwrap();
+    let generation_entry = artifact
+        .generation_root
+        .entries
+        .iter()
+        .find(|entry| entry.path == "/usr/share/test-hello/hello.txt")
+        .expect("selected generation should contain installed payload");
+    assert_eq!(generation_entry.content.as_ref(), Some(&content));
+    assert_eq!(
+        conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+            .unwrap()
+            .retrieve(&content.sha256)
+            .unwrap(),
+        b"hello from m1a\n"
+    );
+}
+
+fn resolved_test_node(mut node: PayloadNode) -> ResolvedPayloadNode {
+    node.user = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::geteuid() }),
+    };
+    node.group = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::getegid() }),
+    };
+    ResolvedPayloadNode::from_numeric_source(node).unwrap()
+}
+
+fn seed_selected_root(db_path: &Path) -> i64 {
+    let runtime_root = ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
+    stage_test_boot_assets(runtime_root.root());
+    let conn = conary_core::db::open(db_path).unwrap();
+    let mut base = Trove::new_with_source(
+        "static-repo-base".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        VersionScheme::Conary,
+    );
+    let base_id = base.insert(&conn).unwrap();
+    for path in ["/sbin", "/usr", "/usr/share"] {
+        let mut node = PayloadNode::regular(0o755);
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        DatabaseFileEntry::new(path.to_string(), resolved_test_node(node), None, base_id)
+            .insert(&conn)
+            .unwrap();
+    }
+    let init = b"#!/bin/sh\nexec true\n";
+    let init_hash = conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        .unwrap()
+        .store(init)
+        .unwrap();
+    DatabaseFileEntry::new(
+        "/sbin/init".to_string(),
+        resolved_test_node(PayloadNode::regular(0o755)),
+        Some(PayloadContentAuthority {
+            sha256: init_hash,
+            size: init.len() as u64,
+        }),
+        base_id,
+    )
+    .insert(&conn)
+    .unwrap();
+    conary_core::ccs::HostCapabilityInventory::discover()
+        .persist(&conn)
+        .unwrap();
+
+    let selected_root = tempfile::tempdir().unwrap();
+    conary_core::generation::builder::materialize_selected_root_from_db(
+        &conn,
+        &runtime_root.objects_dir(),
+        selected_root.path(),
+    )
+    .unwrap();
+    let captured = conary_core::generation::root_manifest::scan_selected_root(
+        selected_root.path(),
+        &conary_core::filesystem::CasStore::new(runtime_root.objects_dir()).unwrap(),
+    )
+    .unwrap();
+    let (generation, _) =
+        conary_core::generation::builder::build_generation_from_captured_root_with_boot_root_and_activation(
+            &conn,
+            &runtime_root.generations_dir(),
+            "static repository selected-root base",
+            &runtime_root.root().join("boot"),
+            conary_core::generation::builder::GenerationActivation::Active,
+            captured,
+        )
+        .unwrap();
+    conary_core::generation::mount::update_current_symlink(runtime_root.root(), generation)
+        .unwrap();
+    generation
+}
+
+fn stage_test_boot_assets(runtime_root: &Path) {
+    let boot_root = runtime_root.join("boot");
+    fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
+    fs::write(boot_root.join("vmlinuz-test-kernel"), b"test-kernel").unwrap();
+    fs::write(
+        boot_root.join("initramfs-test-kernel.img"),
+        b"test-initramfs",
+    )
+    .unwrap();
+    fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
 }
 
 #[test]
@@ -135,7 +270,7 @@ fn m1a_unsigned_static_package_fails_install() {
     let output = fixture.install();
     assert_failure_contains(
         &output,
-        &["Static repository package signature", "not signed"],
+        &["CCS package authority verification", "not signed"],
     );
 }
 
@@ -168,6 +303,7 @@ fn m1a_non_interactive_add_without_fingerprint_fails() {
 
 fn run_conary_owned(args: &[String]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .args(args)
         .output()
         .expect("failed to run conary")
@@ -236,43 +372,58 @@ fn install_test_hello(db_path: &Path, root: &Path) -> Output {
         "--root".into(),
         path_arg(root),
         "--sandbox".into(),
-        "never".into(),
+        "always".into(),
         "--yes".into(),
     ])
 }
 
-fn write_single_payload_ccs(package_path: &Path) {
+fn write_single_payload_ccs(package_path: &Path, signing_key: &SigningKeyPair) {
     fs::create_dir_all(package_path.parent().expect("package parent")).unwrap();
     let content = b"hello from m1a\n".to_vec();
+    let content_size = content.len() as u64;
     let hash = conary_core::hash::sha256(&content);
-    let file = FileEntry {
+    let mut node = PayloadNode::regular(0o644);
+    node.user = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::geteuid() }),
+    };
+    node.group = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::getegid() }),
+    };
+    let file = CcsFileEntry {
         path: "/usr/share/test-hello/hello.txt".to_string(),
-        hash: hash.clone(),
-        size: content.len() as u64,
-        mode: 0o100644,
+        node,
+        content: Some(PayloadContentAuthority {
+            sha256: hash.clone(),
+            size: content_size,
+        }),
         component: "runtime".to_string(),
-        file_type: FileType::Regular,
-        target: None,
         chunks: None,
     };
+    let mut manifest = CcsManifest::new_minimal(PACKAGE_NAME, "1.0.0");
+    manifest.package.platform = Some(Platform {
+        os: "linux".to_string(),
+        arch: Some(std::env::consts::ARCH.to_string()),
+        libc: "gnu".to_string(),
+        abi: None,
+    });
     let result = BuildResult {
-        manifest: CcsManifest::new_minimal(PACKAGE_NAME, "1.0.0"),
+        manifest,
         components: HashMap::from([(
             "runtime".to_string(),
             ComponentData {
                 name: "runtime".to_string(),
                 files: vec![file.clone()],
                 hash: "runtime".to_string(),
-                size: file.size,
+                size: content_size,
             },
         )]),
         files: vec![file],
         blobs: HashMap::from([(hash, content)]),
-        total_size: b"hello from m1a\n".len() as u64,
+        total_size: content_size,
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, package_path).unwrap();
+    write_signed_current_ccs_package(&result, package_path, signing_key, false).unwrap();
 }
 
 fn replace_published_package_with_unsigned_package(fixture: &StaticRepoFixture) {

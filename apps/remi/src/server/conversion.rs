@@ -1,7 +1,7 @@
 // apps/remi/src/server/conversion.rs
 //! Package conversion service for the Remi server
 //!
-//! Downloads legacy packages from upstream repositories and converts them
+//! Downloads native packages from upstream repositories and converts them
 //! to CCS format, storing chunks in the CAS.
 
 mod benchmark;
@@ -9,7 +9,6 @@ mod lookup;
 mod metadata;
 mod persistence;
 mod recipe;
-mod safety;
 mod storage;
 #[cfg(test)]
 mod test_support;
@@ -32,6 +31,8 @@ pub struct ConversionService {
     db_path: PathBuf,
     /// Optional R2 store for write-through
     r2_store: Option<Arc<R2Store>>,
+    /// Remi-owned per-distro TUF keys used to authenticate converted CCS.
+    repository_keys_dir: Option<PathBuf>,
 }
 
 impl ConversionService {
@@ -46,7 +47,13 @@ impl ConversionService {
             cache_dir,
             db_path,
             r2_store,
+            repository_keys_dir: None,
         }
+    }
+
+    pub fn with_repository_keys_dir(mut self, keys_dir: Option<PathBuf>) -> Self {
+        self.repository_keys_dir = keys_dir;
+        self
     }
 }
 
@@ -68,5 +75,6 @@ mod tests {
         assert_eq!(service.cache_dir, PathBuf::from("/cache"));
         assert_eq!(service.db_path, PathBuf::from("/db.sqlite"));
         assert!(service.r2_store.is_none());
+        assert!(service.repository_keys_dir.is_none());
     }
 }

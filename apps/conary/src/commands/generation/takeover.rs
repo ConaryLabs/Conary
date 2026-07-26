@@ -8,6 +8,7 @@
 //! * **owned**      -- Internal/debug checkpoint: CAS + remove from system PM
 //! * **generation** -- CAS + PM removal + build generation + boot entry + ready to activate
 
+use self::ownership::{OwnershipTransferReport, take_ownership, upgrade_to_cas_backed};
 use super::super::open_db;
 use super::boot::{detect_bootloader, write_boot_entry};
 use super::builder::build_generation;
@@ -16,19 +17,18 @@ use super::takeover_state::{
     BootEntryOutcome, TakeoverInventory, TakeoverPhase, TakeoverRecord, TakeoverStatus,
 };
 use crate::cli::TakeoverLevel;
-use crate::commands::adopt::{FileInfoTuple, cas_capture::prepare_cas_backed_package_files};
-use crate::commands::install::is_package_blocked;
+use crate::commands::adopt::BulkAdoptionOutcome;
 use anyhow::{Context, Result, anyhow};
-use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, InstallSource, Trove};
-use conary_core::db::paths::objects_dir;
-use conary_core::filesystem::CasStore;
+use conary_core::db::models::{InstallSource, Trove};
 use conary_core::model;
-use conary_core::packages::{SystemPackageManager, dpkg_query, pacman_query, rpm_query};
-use rusqlite::params;
+use conary_core::packages::{
+    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+};
 use std::collections::HashMap;
 use std::io::Write;
-use std::process::Command;
 use tracing::{info, warn};
+
+mod ownership;
 
 // ---------------------------------------------------------------------------
 // TakeoverPlan
@@ -46,28 +46,8 @@ pub struct TakeoverPlan {
     pub already_owned: Vec<String>,
     /// Packages that need PM removal (AdoptedTrack or AdoptedFull after CAS)
     pub needs_pm_removal: Vec<String>,
-    /// Blocked packages (adopt + CAS but never remove from PM)
-    pub blocked: Vec<String>,
     /// Total packages the system PM reports
     pub total_system_packages: usize,
-}
-
-#[derive(Debug, Default)]
-struct OwnershipTransferReport {
-    query_failures: Vec<String>,
-    pm_removal_failures: Vec<String>,
-}
-
-#[derive(Debug)]
-struct CasUpgradeEntry {
-    name: String,
-    files_with_hashes: Vec<(FileInfoTuple, String)>,
-}
-
-#[derive(Debug)]
-struct OwnershipEntry {
-    name: String,
-    files_with_hashes: Vec<(FileInfoTuple, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,8 +55,10 @@ struct OwnershipEntry {
 // ---------------------------------------------------------------------------
 
 /// Analyse the system and produce a takeover plan without making changes.
-pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
-    let pm = SystemPackageManager::detect();
+pub fn plan_takeover(
+    conn: &rusqlite::Connection,
+    pm: SystemPackageManager,
+) -> Result<TakeoverPlan> {
     if !pm.is_available() {
         return Err(anyhow!(
             "No supported system package manager detected. \
@@ -85,63 +67,66 @@ pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
     }
 
     let system_packages = query_all_system_packages(&pm)?;
-    let total_system_packages = system_packages.len();
-
-    // Build map of name -> InstallSource for tracked packages
+    // Match exact installed variants; name-only matching collapses multilib and
+    // parallel native versions.
     let tracked: HashMap<String, InstallSource> = Trove::list_all(conn)?
         .into_iter()
-        .map(|t| (t.name, t.install_source))
+        .filter_map(|trove| {
+            Some((
+                trove.native_package_identity?.selector().to_string(),
+                trove.install_source,
+            ))
+        })
         .collect();
 
+    Ok(classify_takeover_inventory(system_packages, &tracked))
+}
+
+fn classify_takeover_inventory(
+    system_packages: Vec<InstalledPackageIdentity>,
+    tracked: &HashMap<String, InstallSource>,
+) -> TakeoverPlan {
+    let total_system_packages = system_packages.len();
     let mut already_cas_backed = Vec::new();
     let mut needs_cas_upgrade = Vec::new();
     let mut not_tracked = Vec::new();
     let mut already_owned = Vec::new();
     let mut needs_pm_removal = Vec::new();
-    let mut blocked = Vec::new();
 
-    for pkg in system_packages {
-        let is_blocked = is_package_blocked(&pkg);
-
-        match tracked.get(&pkg) {
+    for identity in system_packages {
+        let selector = identity.selector().to_string();
+        match tracked.get(&selector) {
             None => {
-                not_tracked.push(pkg.clone());
-                if is_blocked {
-                    blocked.push(pkg);
-                }
+                not_tracked.push(selector);
             }
             Some(InstallSource::AdoptedTrack) => {
-                needs_cas_upgrade.push(pkg.clone());
-                if is_blocked {
-                    blocked.push(pkg);
-                } else {
-                    needs_pm_removal.push(pkg);
-                }
+                needs_cas_upgrade.push(selector.clone());
+                needs_pm_removal.push(selector);
             }
             Some(InstallSource::AdoptedFull) => {
-                already_cas_backed.push(pkg.clone());
-                if is_blocked {
-                    blocked.push(pkg);
-                } else {
-                    needs_pm_removal.push(pkg);
-                }
+                already_cas_backed.push(selector.clone());
+                needs_pm_removal.push(selector);
             }
-            Some(InstallSource::Taken | InstallSource::File | InstallSource::Repository) => {
-                already_cas_backed.push(pkg.clone());
-                already_owned.push(pkg);
+            Some(
+                InstallSource::Taken
+                | InstallSource::File
+                | InstallSource::Repository
+                | InstallSource::CapturedRoot,
+            ) => {
+                already_cas_backed.push(selector.clone());
+                already_owned.push(selector);
             }
         }
     }
 
-    Ok(TakeoverPlan {
+    TakeoverPlan {
         already_cas_backed,
         needs_cas_upgrade,
         not_tracked,
         already_owned,
         needs_pm_removal,
-        blocked,
         total_system_packages,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +139,7 @@ pub fn plan_takeover(conn: &rusqlite::Connection) -> Result<TakeoverPlan> {
 ///
 /// 1. **Cas**        -- Adopt every un-tracked package and CAS-back every
 ///    `AdoptedTrack` package. The system PM is left untouched.
-/// 2. **Owned**      -- Everything in Cas, then remove non-blocked packages
+/// 2. **Owned**      -- Everything in Cas, then remove packages from the native database
 ///    from the system PM database (files stay on disk, Conary owns them).
 /// 3. **Generation** -- Everything in Owned, then build an EROFS generation,
 ///    write a boot entry, and stop ready to activate.
@@ -163,6 +148,7 @@ pub async fn cmd_system_takeover(
     level: TakeoverLevel,
     yes: bool,
     dry_run: bool,
+    requested_manager: Option<SystemPackageManager>,
 ) -> Result<()> {
     // -- Header ---------------------------------------------------------------
     println!("Conary System Takeover");
@@ -196,11 +182,11 @@ pub async fn cmd_system_takeover(
     preflight_checks(matches!(level, TakeoverLevel::Generation))?;
 
     // -- Plan -----------------------------------------------------------------
-    let pm = SystemPackageManager::detect();
+    let pm = SystemPackageManager::resolve(requested_manager)?;
     let bootloader = detect_bootloader();
     let mut plan = {
         let conn = open_db(db_path)?;
-        plan_takeover(&conn)?
+        plan_takeover(&conn, pm)?
     };
     let mut record = TakeoverRecord::load_latest_incomplete(db_path)?.unwrap_or_else(|| {
         TakeoverRecord::planned(
@@ -243,16 +229,7 @@ pub async fn cmd_system_takeover(
         "  Need PM removal              : {}",
         plan.needs_pm_removal.len()
     );
-    println!("  Blocked (adopt, skip removal) : {}", plan.blocked.len());
     println!();
-
-    if !plan.blocked.is_empty() {
-        println!("Blocked packages (will be adopted and CAS-backed but never removed from PM):");
-        for name in &plan.blocked {
-            println!("  - {name}");
-        }
-        println!();
-    }
 
     // -- Dry-run output -------------------------------------------------------
     if dry_run {
@@ -290,49 +267,37 @@ pub async fn cmd_system_takeover(
             "  Adopting {} un-tracked packages ...",
             plan.not_tracked.len()
         );
-        if let Err(error) =
-            crate::commands::cmd_adopt_system(db_path, true, false, None, None, false).await
+        let adoption_outcome = match crate::commands::cmd_adopt_system(
+            db_path,
+            true,
+            false,
+            None,
+            None,
+            false,
+            Some(pm),
+        )
+        .await
         {
-            record.mark_failed(format!("CAS adoption phase failed: {error}"));
+            Ok(outcome) => outcome,
+            Err(error) => {
+                record.mark_failed(format!("CAS adoption phase failed: {error}"));
+                record.save(db_path)?;
+                return Err(error);
+            }
+        };
+        info!("Bulk adoption complete");
+
+        if let Err(error) = require_complete_adoption_for_pm_removal(&adoption_outcome) {
+            let failure_count = adoption_outcome.failures.len();
+            record.record_adoption_failures(adoption_outcome.failure_records());
+            record.mark_failed(format!(
+                "CAS adoption was incomplete for {failure_count} package(s); native package-manager removal did not start"
+            ));
             record.save(db_path)?;
             return Err(error);
         }
-        info!("Bulk adoption complete");
-
-        // Only add packages to Phase 2 removal if they were actually adopted.
-        // cmd_adopt_system is best-effort -- individual packages can fail silently.
-        // Re-query the DB to see what's actually tracked now.
-        let conn = open_db(db_path)?;
-        let now_tracked: std::collections::HashSet<String> = Trove::list_all(&conn)?
-            .into_iter()
-            .map(|t| t.name)
-            .collect();
-        // Count only the untracked packages that were eligible (not blocked).
-        let eligible: Vec<&String> = plan
-            .not_tracked
-            .iter()
-            .filter(|p| !plan.blocked.contains(p))
-            .collect();
-        let newly_adopted: Vec<String> = eligible
-            .iter()
-            .filter(|p| now_tracked.contains(p.as_str()))
-            .cloned()
-            .cloned()
-            .collect();
-        let failed_adoptions: Vec<String> = eligible
-            .iter()
-            .filter(|p| !now_tracked.contains(p.as_str()))
-            .cloned()
-            .cloned()
-            .collect();
-        if !failed_adoptions.is_empty() {
-            crate::ui::warn(&format!(
-                "{} packages failed adoption and will not be removed from system PM",
-                failed_adoptions.len()
-            ));
-            record.record_adoption_failures(failed_adoptions);
-        }
-        plan.needs_pm_removal.extend(newly_adopted);
+        plan.needs_pm_removal
+            .extend(adoption_outcome.adopted_packages);
     }
 
     // 1b. Upgrade AdoptedTrack -> AdoptedFull (CAS-back)
@@ -345,7 +310,15 @@ pub async fn cmd_system_takeover(
         );
         let cas_upgrade_failures = upgrade_to_cas_backed(db_path, &plan.needs_cas_upgrade, &pm)?;
         if !cas_upgrade_failures.is_empty() {
+            let failure_count = cas_upgrade_failures.len();
             record.record_cas_upgrade_failures(cas_upgrade_failures);
+            record.mark_failed(format!(
+                "CAS upgrade was incomplete for {failure_count} package(s); native package-manager removal did not start"
+            ));
+            record.save(db_path)?;
+            anyhow::bail!(
+                "CAS upgrade was incomplete for {failure_count} package(s); inspect the takeover record and rerun after correcting the exact query or capture failure"
+            );
         }
         info!("CAS upgrade complete");
     }
@@ -376,12 +349,28 @@ pub async fn cmd_system_takeover(
     if plan.needs_pm_removal.is_empty() {
         info!("No packages need PM removal");
     } else {
-        let ownership_report = take_ownership(db_path, &plan.needs_pm_removal, pm)?;
-        if !ownership_report.query_failures.is_empty() {
-            record.record_ownership_query_failures(ownership_report.query_failures);
-        }
-        if !ownership_report.pm_removal_failures.is_empty() {
-            record.record_pm_removal_failures(ownership_report.pm_removal_failures);
+        let ownership_report = match take_ownership(db_path, &plan.needs_pm_removal, pm) {
+            Ok(report) => report,
+            Err(error) => {
+                record.mark_failed(format!("Ownership transfer failed: {error}"));
+                record.save(db_path)?;
+                return Err(error);
+            }
+        };
+        if let Err(error) = require_complete_ownership_for_later_phases(&ownership_report) {
+            let failure_count =
+                ownership_report.query_failures.len() + ownership_report.pm_removal_failures.len();
+            if !ownership_report.query_failures.is_empty() {
+                record.record_ownership_query_failures(ownership_report.query_failures);
+            }
+            if !ownership_report.pm_removal_failures.is_empty() {
+                record.record_pm_removal_failures(ownership_report.pm_removal_failures);
+            }
+            record.mark_failed(format!(
+                "Ownership transfer was incomplete for {failure_count} package(s); generation construction did not start"
+            ));
+            record.save(db_path)?;
+            return Err(error);
         }
         info!("Ownership transfer complete");
     }
@@ -393,7 +382,7 @@ pub async fn cmd_system_takeover(
         record.save(db_path)?;
         println!();
         crate::ui::status("Finished", "Phase 2 (Owned).");
-        println!("Conary now owns all non-blocked packages. System PM records removed.");
+        println!("Conary now owns all adopted packages. System PM records removed.");
         println!();
         println!("Owned is an internal/debug stop-point, not the supported release path.");
         println!("Run generation-level takeover to publish a bootable generation artifact.");
@@ -479,214 +468,24 @@ pub async fn cmd_system_takeover(
 // Phase helpers
 // ---------------------------------------------------------------------------
 
-fn prepare_cas_upgrade_entry(
-    name: &str,
-    files: Vec<FileInfoTuple>,
-    cas: &CasStore,
-) -> Result<CasUpgradeEntry> {
-    let files_with_hashes = prepare_cas_backed_package_files(name, &files, cas)?;
-    Ok(CasUpgradeEntry {
-        name: name.to_string(),
-        files_with_hashes,
-    })
+fn require_complete_adoption_for_pm_removal(outcome: &BulkAdoptionOutcome) -> Result<()> {
+    if outcome.is_complete() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "CAS adoption was incomplete for {} package(s); native package-manager removal did not start; inspect the takeover record and rerun after correcting the exact query, capture, or metadata failure",
+        outcome.failures.len()
+    )
 }
 
-fn prepare_ownership_entry(
-    name: &str,
-    files: Vec<FileInfoTuple>,
-    cas: &CasStore,
-) -> Result<OwnershipEntry> {
-    let files_with_hashes = prepare_cas_backed_package_files(name, &files, cas)?;
-    Ok(OwnershipEntry {
-        name: name.to_string(),
-        files_with_hashes,
-    })
-}
-
-/// Upgrade `AdoptedTrack` packages to `AdoptedFull` by hardlinking their
-/// files into the CAS and updating the DB.
-fn upgrade_to_cas_backed(
-    db_path: &str,
-    packages: &[String],
-    pm: &SystemPackageManager,
-) -> Result<Vec<String>> {
-    let cas = CasStore::new(objects_dir(db_path))?;
-
-    let mut entries: Vec<CasUpgradeEntry> = Vec::with_capacity(packages.len());
-    let mut skipped = Vec::new();
-    for name in packages {
-        let files = match query_package_files(*pm, name) {
-            Ok(f) => f,
-            Err(e) => {
-                warn!("Skipping CAS upgrade for '{name}': {e}");
-                skipped.push(name.clone());
-                continue;
-            }
-        };
-
-        match prepare_cas_upgrade_entry(name, files, &cas) {
-            Ok(entry) => entries.push(entry),
-            Err(e) => {
-                warn!("Skipping CAS upgrade for '{name}': {e}");
-                skipped.push(name.clone());
-            }
-        }
+fn require_complete_ownership_for_later_phases(report: &OwnershipTransferReport) -> Result<()> {
+    if report.is_complete() {
+        return Ok(());
     }
-
-    // DB-only transaction: all PM queries and CAS writes are already done.
-    let mut conn = open_db(db_path)?;
-    conary_core::db::transaction(&mut conn, |tx| {
-        let mut cs = Changeset::new("Takeover: CAS-upgrade track-only packages".into());
-        cs.insert(tx)?;
-        let cs_id = cs.id.ok_or_else(|| {
-            conary_core::Error::MissingId("changeset insert did not return an ID".into())
-        })?;
-
-        for entry in &entries {
-            let Some(trove) = Trove::find_one_by_name(tx, &entry.name)? else {
-                warn!(
-                    "Trove '{}' not found during CAS upgrade, skipping",
-                    entry.name
-                );
-                continue;
-            };
-            let trove_id = trove.id.ok_or_else(|| {
-                conary_core::Error::MissingId(format!("trove '{}' from DB has no ID", entry.name))
-            })?;
-
-            // Update file entry hashes with the pre-computed CAS hashes.
-            for ((path, _size, _mode, _digest, _user, _group, _link_target), hash) in
-                &entry.files_with_hashes
-            {
-                if let Some(fe) = FileEntry::find_by_path(tx, path)?
-                    && fe.trove_id == trove_id
-                    && fe.sha256_hash != *hash
-                {
-                    tx.execute(
-                        "UPDATE files SET sha256_hash = ?1 WHERE id = ?2",
-                        params![hash, fe.id],
-                    )?;
-                }
-            }
-
-            // Mark as AdoptedFull
-            tx.execute(
-                "UPDATE troves SET install_source = ?1, installed_by_changeset_id = ?2 \
-                 WHERE id = ?3",
-                params![InstallSource::AdoptedFull.as_str(), cs_id, trove_id],
-            )?;
-        }
-
-        cs.update_status(tx, ChangesetStatus::Applied)?;
-        Ok(())
-    })?;
-
-    Ok(skipped)
-}
-
-/// Take ownership of packages: mark as `Taken` in the DB, then remove from
-/// the system PM database. DB commit happens BEFORE PM removal for safety.
-fn take_ownership(
-    db_path: &str,
-    packages: &[String],
-    pm: SystemPackageManager,
-) -> Result<OwnershipTransferReport> {
-    let cas = CasStore::new(objects_dir(db_path))?;
-
-    let mut entries: Vec<OwnershipEntry> = Vec::with_capacity(packages.len());
-    let mut report = OwnershipTransferReport::default();
-    for name in packages {
-        match query_package_files(pm, name) {
-            Ok(files) => match prepare_ownership_entry(name, files, &cas) {
-                Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    warn!("Skipping ownership transfer for '{name}': {e}");
-                    report.query_failures.push(name.clone());
-                }
-            },
-            Err(e) => {
-                warn!("Skipping ownership transfer for '{name}': {e}");
-                report.query_failures.push(name.clone());
-            }
-        }
-    }
-
-    // DB-only transaction: all PM queries and CAS writes are already done.
-    {
-        let mut conn = open_db(db_path)?;
-        conary_core::db::transaction(&mut conn, |tx| {
-            let mut cs = Changeset::new("Takeover: take ownership from system PM".into());
-            cs.insert(tx)?;
-            let cs_id = cs
-                .id
-                .ok_or_else(|| conary_core::Error::MissingId("changeset".into()))?;
-
-            for entry in &entries {
-                let Some(trove) = Trove::find_one_by_name(tx, &entry.name)? else {
-                    warn!(
-                        "Trove '{}' not found during ownership transfer, skipping",
-                        entry.name
-                    );
-                    continue;
-                };
-                let trove_id = trove.id.ok_or_else(|| {
-                    conary_core::Error::MissingId(format!("trove '{}'", entry.name))
-                })?;
-
-                // If still AdoptedTrack, update file hashes with pre-computed CAS hashes.
-                if trove.install_source == InstallSource::AdoptedTrack {
-                    for ((path, _size, _mode, _digest, _user, _group, _link_target), hash) in
-                        &entry.files_with_hashes
-                    {
-                        if let Some(fe) = FileEntry::find_by_path(tx, path)?
-                            && fe.trove_id == trove_id
-                            && fe.sha256_hash != *hash
-                        {
-                            tx.execute(
-                                "UPDATE files SET sha256_hash = ?1 WHERE id = ?2",
-                                params![hash, fe.id],
-                            )?;
-                        }
-                    }
-                }
-
-                // Mark as Taken
-                tx.execute(
-                    "UPDATE troves SET install_source = ?1, installed_by_changeset_id = ?2 \
-                     WHERE id = ?3",
-                    params![InstallSource::Taken.as_str(), cs_id, trove_id],
-                )?;
-            }
-
-            cs.update_status(tx, ChangesetStatus::Applied)?;
-            Ok(())
-        })?;
-    }
-
-    // Post-commit: remove from system PM database
-    let mut failed = Vec::new();
-    for entry in &entries {
-        let name = &entry.name;
-        println!("  Removing {name} from {} database ...", pm.display_name());
-        if let Err(e) = remove_from_system_pm(pm, name) {
-            warn!("Failed to remove {name} from PM: {e}");
-            failed.push(name.clone());
-        }
-    }
-
-    if !failed.is_empty() {
-        crate::ui::warn(&format!(
-            "{} packages could not be removed from {} (Conary owns files; PM has ghost records):",
-            failed.len(),
-            pm.display_name()
-        ));
-        for name in &failed {
-            println!("  - {name}");
-        }
-    }
-
-    report.pm_removal_failures = failed;
-    Ok(report)
+    anyhow::bail!(
+        "ownership transfer was incomplete for {} package(s); no later takeover phase may start until every exact query, capture, and native package-manager removal succeeds",
+        report.query_failures.len() + report.pm_removal_failures.len()
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -716,11 +515,6 @@ fn print_dry_run(plan: &TakeoverPlan, pm: &SystemPackageManager, level: Takeover
         "  To upgrade (track -> CAS)       : {}",
         plan.needs_cas_upgrade.len()
     );
-    println!(
-        "  Blocked (adopt, skip PM removal) : {}",
-        plan.blocked.len()
-    );
-
     if matches!(level, TakeoverLevel::Owned | TakeoverLevel::Generation) {
         println!();
         println!("Level: owned (internal/debug checkpoint)");
@@ -750,7 +544,6 @@ fn takeover_inventory_from_plan(plan: &TakeoverPlan) -> TakeoverInventory {
         not_tracked: plan.not_tracked.clone(),
         already_owned: plan.already_owned.clone(),
         needs_pm_removal: plan.needs_pm_removal.clone(),
-        blocked: plan.blocked.clone(),
         total_system_packages: plan.total_system_packages,
     }
 }
@@ -768,56 +561,6 @@ fn bootloader_name(bootloader: super::boot::BootLoader) -> &'static str {
         super::boot::BootLoader::Bls => "bls",
         super::boot::BootLoader::Grub => "grub",
         super::boot::BootLoader::None => "none",
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PM helpers
-// ---------------------------------------------------------------------------
-
-/// Query files for a package from the active package manager.
-///
-/// Returns an error if the PM query fails -- callers must not promote
-/// a package to `AdoptedFull`/`Taken` without successfully querying its files.
-fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileInfoTuple>> {
-    let raw_files = match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-            .map_err(|e| anyhow!("RPM file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-            .map_err(|e| anyhow!("DPKG file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-            .map_err(|e| anyhow!("Pacman file query failed for '{name}': {e}"))?,
-        _ => return Ok(Vec::new()),
-    };
-    Ok(raw_files
-        .into_iter()
-        .map(|f| {
-            (
-                f.path,
-                f.size,
-                f.mode,
-                f.digest,
-                f.user,
-                f.group,
-                f.link_target,
-            )
-        })
-        .collect())
-}
-
-/// Remove a package from the system package manager's database only.
-fn remove_from_system_pm(pkg_mgr: SystemPackageManager, name: &str) -> Result<()> {
-    match pkg_mgr {
-        SystemPackageManager::Rpm => {
-            rpm_query::remove_from_db_only(name).map_err(|e| anyhow!("{e}"))
-        }
-        SystemPackageManager::Dpkg => {
-            dpkg_query::remove_from_db_only(name).map_err(|e| anyhow!("{e}"))
-        }
-        SystemPackageManager::Pacman => {
-            pacman_query::remove_from_db_only(name).map_err(|e| anyhow!("{e}"))
-        }
-        SystemPackageManager::Unknown => Err(anyhow!("No supported package manager")),
     }
 }
 
@@ -852,45 +595,31 @@ fn preflight_checks(check_composefs: bool) -> Result<()> {
 // System PM query
 // ---------------------------------------------------------------------------
 
-/// Query every installed package name from the system package manager.
-fn query_all_system_packages(pm: &SystemPackageManager) -> Result<Vec<String>> {
-    let output = match pm {
-        SystemPackageManager::Rpm => Command::new("rpm")
-            .args(["-qa", "--qf", "%{NAME}\n"])
-            .output()
-            .context("Failed to run rpm")?,
-        SystemPackageManager::Dpkg => Command::new("dpkg-query")
-            .args(["-W", "-f", "${Package}\n"])
-            .output()
-            .context("Failed to run dpkg-query")?,
-        SystemPackageManager::Pacman => Command::new("pacman")
-            .args(["-Qq"])
-            .output()
-            .context("Failed to run pacman")?,
+/// Query every exact installed package-manager database identity.
+fn query_all_system_packages(pm: &SystemPackageManager) -> Result<Vec<InstalledPackageIdentity>> {
+    match pm {
+        SystemPackageManager::Rpm => Ok(rpm_query::query_all_packages()?
+            .into_iter()
+            .map(|record| record.identity)
+            .collect()),
+        SystemPackageManager::Dpkg => Ok(dpkg_query::query_all_packages()?
+            .into_iter()
+            .map(|record| record.identity)
+            .collect()),
+        SystemPackageManager::Pacman => Ok(pacman_query::query_all_packages()?
+            .into_iter()
+            .map(|record| record.identity)
+            .collect()),
         SystemPackageManager::Unknown => {
-            return Err(anyhow!("No supported system package manager detected"));
+            Err(anyhow!("No supported system package manager detected"))
         }
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("System package query failed: {}", stderr.trim()));
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let packages: Vec<String> = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(String::from)
-        .collect();
-
-    Ok(packages)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::adopt::{BulkAdoptionFailure, BulkAdoptionFailureStage};
 
     #[test]
     fn test_takeover_plan_empty() {
@@ -900,7 +629,6 @@ mod tests {
             not_tracked: vec!["vim".into(), "git".into()],
             already_owned: vec![],
             needs_pm_removal: vec!["vim".into(), "git".into()],
-            blocked: vec![],
             total_system_packages: 2,
         };
         assert_eq!(plan.total_system_packages, 2);
@@ -909,19 +637,17 @@ mod tests {
     }
 
     #[test]
-    fn test_takeover_plan_blocked_excluded_from_pm_removal() {
+    fn test_takeover_plan_has_no_package_name_exceptions() {
         let plan = TakeoverPlan {
             already_cas_backed: vec![],
             needs_cas_upgrade: vec![],
             not_tracked: vec!["vim".into(), "glibc".into()],
             already_owned: vec![],
-            needs_pm_removal: vec!["vim".into()],
-            blocked: vec!["glibc".into()],
+            needs_pm_removal: vec!["vim".into(), "glibc".into()],
             total_system_packages: 2,
         };
-        assert_eq!(plan.needs_pm_removal.len(), 1);
-        assert_eq!(plan.blocked.len(), 1);
-        assert!(!plan.needs_pm_removal.contains(&"glibc".into()));
+        assert_eq!(plan.needs_pm_removal.len(), 2);
+        assert!(plan.needs_pm_removal.contains(&"glibc".into()));
     }
 
     #[test]
@@ -932,7 +658,6 @@ mod tests {
             not_tracked: vec!["git".into()],
             already_owned: vec![],
             needs_pm_removal: vec!["bash".into(), "vim".into(), "git".into()],
-            blocked: vec![],
             total_system_packages: 3,
         };
         assert_eq!(plan.already_cas_backed.len(), 1);
@@ -946,83 +671,47 @@ mod tests {
         assert!(matches!(level, TakeoverLevel::Generation));
     }
 
-    fn file_tuple(
-        path: &str,
-        size: i64,
-        mode: i32,
-        digest: Option<&str>,
-        link_target: Option<&str>,
-    ) -> FileInfoTuple {
-        (
-            path.to_string(),
-            size,
-            mode,
-            digest.map(str::to_string),
-            Some("root".to_string()),
-            Some("root".to_string()),
-            link_target.map(str::to_string),
-        )
+    #[test]
+    fn incomplete_bulk_adoption_cannot_cross_pm_removal_boundary() {
+        let outcome = BulkAdoptionOutcome {
+            failures: vec![BulkAdoptionFailure::new(
+                "broken",
+                BulkAdoptionFailureStage::PayloadCapture,
+                "exact capture failed",
+            )],
+            ..Default::default()
+        };
+
+        let error = require_complete_adoption_for_pm_removal(&outcome).unwrap_err();
+        assert!(error.to_string().contains("native package-manager"));
     }
 
     #[test]
-    fn cas_upgrade_entry_rejects_missing_regular_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
-        let files = vec![file_tuple(
-            "/usr/bin/missing",
-            7,
-            0o100755,
-            Some("package-manager-digest"),
-            None,
-        )];
+    fn incomplete_ownership_cannot_cross_generation_boundary() {
+        let report = OwnershipTransferReport {
+            query_failures: vec!["broken: exact query failed".into()],
+            pm_removal_failures: Vec::new(),
+        };
 
-        let error = prepare_cas_upgrade_entry("broken", files, &cas)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("package broken"));
-        assert!(error.contains("/usr/bin/missing"));
-        assert!(error.contains("regular file must be readable"));
+        let error = require_complete_ownership_for_later_phases(&report).unwrap_err();
+        assert!(error.to_string().contains("no later takeover phase"));
     }
 
     #[test]
-    fn ownership_entry_rejects_missing_regular_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
-        let files = vec![file_tuple(
-            "/usr/bin/missing",
-            7,
-            0o100755,
-            Some("package-manager-digest"),
-            None,
-        )];
+    fn takeover_inventory_preserves_both_multiarch_variants() {
+        let amd64 =
+            InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64").unwrap();
+        let i386 = InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.42-1", "i386").unwrap();
+        let tracked = HashMap::from([
+            (amd64.selector().to_string(), InstallSource::AdoptedFull),
+            (i386.selector().to_string(), InstallSource::AdoptedTrack),
+        ]);
 
-        let error = prepare_ownership_entry("broken", files, &cas)
-            .unwrap_err()
-            .to_string();
+        let plan = classify_takeover_inventory(vec![amd64, i386], &tracked);
 
-        assert!(error.contains("package broken"));
-        assert!(error.contains("/usr/bin/missing"));
-        assert!(error.contains("regular file must be readable"));
-    }
-
-    #[test]
-    fn takeover_cas_capture_uses_canonical_symlink_hash() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
-        let files = vec![file_tuple(
-            "/usr/lib/libfoo.so",
-            0,
-            0o120777,
-            Some("package-manager-digest"),
-            Some("libfoo.so.1"),
-        )];
-
-        let entry = prepare_cas_upgrade_entry("glibc", files, &cas).unwrap();
-
-        assert_eq!(
-            entry.files_with_hashes[0].1,
-            CasStore::compute_symlink_hash("libfoo.so.1")
-        );
+        assert_eq!(plan.total_system_packages, 2);
+        assert_eq!(plan.already_cas_backed, vec!["libc6:amd64"]);
+        assert_eq!(plan.needs_cas_upgrade, vec!["libc6:i386"]);
+        assert_eq!(plan.needs_pm_removal, vec!["libc6:amd64", "libc6:i386"]);
     }
 }

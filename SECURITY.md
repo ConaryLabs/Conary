@@ -79,7 +79,8 @@ The following are generally out of scope:
 - Vulnerabilities in upstream dependencies (report these to the relevant project, but let us know so we can update)
 - Issues requiring physical access to the machine
 - Social engineering attacks
-- Vulnerabilities in configurations explicitly documented as unsafe (e.g., `--no-isolation`)
+- Vulnerabilities that require explicitly selecting a documented
+  development-only no-sandbox mode
 
 ## Acknowledgments
 

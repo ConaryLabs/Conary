@@ -1,0 +1,3 @@
+algorithm = "ed25519"
+key = "PZ2qga4CSlScWlSMgOrCpYfcZC8VTkJvK15Om4oFgCE="
+key_id = "conary-integration-fixtures"

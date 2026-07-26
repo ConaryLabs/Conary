@@ -38,7 +38,6 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 chrono.workspace = true
-rayon.workspace = true
 indicatif.workspace = true
 console = "0.16"
 tempfile.workspace = true
@@ -50,6 +49,7 @@ hex.workspace = true
 pem.workspace = true
 reqwest.workspace = true
 url.workspace = true
+semver.workspace = true
 walkdir.workspace = true
 glob.workspace = true
 libc.workspace = true
@@ -82,4 +82,5 @@ conary-core = { path = "../../crates/conary-core" }
 axum.workspace = true
 ed25519-dalek.workspace = true
 remi = { path = "../remi" }
+rpm.workspace = true
 tower.workspace = true

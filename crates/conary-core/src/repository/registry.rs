@@ -1,12 +1,13 @@
 // conary-core/src/repository/registry.rs
 
-//! Repository format registry and detection
+//! Repository format registry
 //!
-//! Provides centralized detection and creation of repository parsers.
+//! Provides typed format identity and creation of repository parsers.
 
 use crate::error::{Error, Result};
-use crate::repository::gpg::MetadataSignatureVerifier;
 use crate::repository::parsers::{self, PackageMetadata, RepositoryParser};
+use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
+use serde::{Deserialize, Serialize};
 
 /// Enum wrapper for concrete parser types to avoid dyn dispatch (async-incompatible).
 pub enum AnyParser {
@@ -48,118 +49,167 @@ pub fn arch_to_debian(arch: &str) -> String {
     }
 }
 
-/// Detected repository format
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Explicit package-metadata format for a repository.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepositoryFormat {
+    #[serde(rename = "arch")]
     Arch,
+    #[serde(rename = "deb")]
     Debian,
+    #[serde(rename = "rpm")]
     Fedora,
+    #[serde(rename = "json")]
+    Json,
+    #[default]
+    #[serde(rename = "unspecified")]
+    Unspecified,
+}
+
+/// Exact parser construction data for one repository source.
+///
+/// This is persisted alongside the repository. Human-readable names and URLs
+/// are never interpreted as parser configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "package_format", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RepositoryParserConfig {
+    Arch {
+        database: String,
+    },
+    Deb {
+        distribution: String,
+        component: String,
+        architecture: String,
+    },
+    Rpm {
+        architecture: String,
+    },
     Json,
 }
 
-/// Detect repository format based on name and URL.
-///
-/// Checks for known distro indicators in the repository name and URL.
-/// RPM-based repos include Fedora, EPEL, CentOS, RHEL, Rocky, Alma, and
-/// any URL containing RPM-specific path patterns (`/repodata/`, `/Packages/`,
-/// `/Everything/`, `repomd`).
-pub fn detect_repository_format(name: &str, url: &str) -> RepositoryFormat {
-    let name_lower = name.to_lowercase();
-    let url_lower = url.to_lowercase();
-
-    // Check for Arch Linux indicators
-    if name_lower.contains("arch")
-        || url_lower.contains("archlinux")
-        || url_lower.contains("pkgbuild")
-        || url_lower.contains(".db.tar")
-    {
-        return RepositoryFormat::Arch;
+impl RepositoryParserConfig {
+    #[must_use]
+    pub const fn format(&self) -> RepositoryFormat {
+        match self {
+            Self::Arch { .. } => RepositoryFormat::Arch,
+            Self::Deb { .. } => RepositoryFormat::Debian,
+            Self::Rpm { .. } => RepositoryFormat::Fedora,
+            Self::Json => RepositoryFormat::Json,
+        }
     }
 
-    // Check for RPM-based indicators (Fedora, EPEL, CentOS, RHEL, Rocky, Alma, SUSE)
-    if name_lower.contains("fedora")
-        || name_lower.contains("epel")
-        || name_lower.contains("centos")
-        || name_lower.contains("rhel")
-        || name_lower.contains("rocky")
-        || name_lower.contains("alma")
-        || name_lower.contains("suse")
-        || url_lower.contains("fedora")
-        || url_lower.contains("epel")
-        || url_lower.contains("centos")
-        || url_lower.contains("rhel")
-        || url_lower.contains("rocky")
-        || url_lower.contains("alma")
-        || url_lower.contains("suse")
-        || url_lower.contains("/repodata/")
-        || url_lower.contains("repomd")
-        || url_lower.contains("/packages/")
-        || url_lower.contains("/everything/")
-        || url_lower.ends_with(".rpm")
-    {
-        return RepositoryFormat::Fedora;
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Arch { database } => validate_source_identifier(database, "Arch database"),
+            Self::Deb {
+                distribution,
+                component,
+                architecture,
+            } => {
+                validate_source_identifier(distribution, "Debian distribution")?;
+                validate_source_identifier(component, "Debian component")?;
+                validate_source_identifier(architecture, "Debian architecture")
+            }
+            Self::Rpm { architecture } => {
+                validate_source_identifier(architecture, "RPM architecture")
+            }
+            Self::Json => Ok(()),
+        }
     }
 
-    // Check for Debian/Ubuntu indicators
-    if name_lower.contains("debian")
-        || name_lower.contains("ubuntu")
-        || name_lower.contains("mint")
-        || url_lower.contains("debian")
-        || url_lower.contains("ubuntu")
-        || url_lower.contains("/dists/")
-    {
-        return RepositoryFormat::Debian;
+    pub fn to_json(&self) -> Result<String> {
+        self.validate()?;
+        serde_json::to_string(self).map_err(|error| {
+            Error::ParseError(format!(
+                "failed to serialize repository parser configuration: {error}"
+            ))
+        })
     }
 
-    // Default to JSON format
-    RepositoryFormat::Json
+    pub fn from_json(value: &str) -> Result<Self> {
+        let parsed = serde_json::from_str::<Self>(value).map_err(|error| {
+            Error::ParseError(format!(
+                "invalid persisted repository parser configuration: {error}"
+            ))
+        })?;
+        parsed.validate()?;
+        Ok(parsed)
+    }
+}
+
+fn validate_source_identifier(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
+    {
+        return Err(Error::ParseError(format!(
+            "{label} must contain 1 to 128 ASCII letters, digits, '.', '_', '+', or '-'"
+        )));
+    }
+    Ok(())
+}
+
+impl RepositoryFormat {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Arch => "arch",
+            Self::Debian => "deb",
+            Self::Fedora => "rpm",
+            Self::Json => "json",
+            Self::Unspecified => "unspecified",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "arch" => Ok(Self::Arch),
+            "deb" => Ok(Self::Debian),
+            "rpm" => Ok(Self::Fedora),
+            "json" => Ok(Self::Json),
+            "unspecified" => Ok(Self::Unspecified),
+            other => Err(Error::ParseError(format!(
+                "unknown persisted repository format '{other}'"
+            ))),
+        }
+    }
+
+    pub fn require_explicit(self, repository_name: &str) -> Result<Self> {
+        if self == Self::Unspecified {
+            return Err(Error::InitError(format!(
+                "repository '{repository_name}' has no package metadata format; configure an exact \
+                 format instead of relying on name or URL inference"
+            )));
+        }
+        Ok(self)
+    }
 }
 
 /// Create a parser for the given format and repository info
 pub fn create_parser(
-    format: RepositoryFormat,
-    repo_name: &str,
-    _repo_url: &str,
-    metadata_signature_verifier: Option<MetadataSignatureVerifier>,
+    config: &RepositoryParserConfig,
+    trust: PreparedOpenPgpTrust,
 ) -> Result<AnyParser> {
-    match format {
-        RepositoryFormat::Arch => {
-            let name = if let Some(suffix) = repo_name.strip_prefix("arch-") {
-                suffix.to_string()
-            } else {
-                "core".to_string()
-            };
-            Ok(AnyParser::Arch(
-                parsers::arch::ArchParser::new(name)
-                    .with_metadata_signature_verifier(metadata_signature_verifier),
-            ))
-        }
-        RepositoryFormat::Debian => {
-            let distribution = if let Some(suffix) = repo_name.strip_prefix("ubuntu-") {
-                match suffix {
-                    "26.04" => "resolute".to_string(),
-                    _ => suffix.to_string(),
-                }
-            } else if let Some(suffix) = repo_name.strip_prefix("debian-") {
-                suffix.to_string()
-            } else {
-                "resolute".to_string()
-            };
-
-            let arch = arch_to_debian(&detect_system_arch());
-            Ok(AnyParser::Debian(
-                parsers::debian::DebianParser::new(distribution, "main".to_string(), arch)
-                    .with_metadata_signature_verifier(metadata_signature_verifier),
-            ))
-        }
-        RepositoryFormat::Fedora => {
-            let arch = detect_system_arch();
-            Ok(AnyParser::Fedora(
-                parsers::fedora::FedoraParser::new(arch)
-                    .with_metadata_signature_verifier(metadata_signature_verifier),
-            ))
-        }
-        RepositoryFormat::Json => Err(Error::ParseError(
+    config.validate()?;
+    match config {
+        RepositoryParserConfig::Arch { database } => Ok(AnyParser::Arch(
+            parsers::arch::ArchParser::new(database.clone(), trust)?,
+        )),
+        RepositoryParserConfig::Deb {
+            distribution,
+            component,
+            architecture,
+        } => Ok(AnyParser::Debian(parsers::debian::DebianParser::new(
+            distribution.clone(),
+            component.clone(),
+            architecture.clone(),
+            trust,
+        )?)),
+        RepositoryParserConfig::Rpm { architecture } => Ok(AnyParser::Fedora(
+            parsers::fedora::FedoraParser::new(architecture.clone(), trust)?,
+        )),
+        RepositoryParserConfig::Json => Err(Error::ParseError(
             "JSON format has no native parser".to_string(),
         )),
     }
@@ -210,70 +260,54 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_repository_format() {
-        assert_eq!(
-            detect_repository_format("fedora", "https://example.com/"),
-            RepositoryFormat::Fedora
-        );
-        assert_eq!(
-            detect_repository_format("myrepo", "https://mirror.fedoraproject.org/"),
-            RepositoryFormat::Fedora
-        );
-        assert_eq!(
-            detect_repository_format("arch-core", "https://example.com/"),
-            RepositoryFormat::Arch
-        );
-        assert_eq!(
-            detect_repository_format("debian-bookworm", "https://example.com/"),
-            RepositoryFormat::Debian
-        );
-        assert_eq!(
-            detect_repository_format("custom", "https://example.com/"),
-            RepositoryFormat::Json
+    fn repository_format_round_trips_exact_persisted_values() {
+        for format in [
+            RepositoryFormat::Arch,
+            RepositoryFormat::Debian,
+            RepositoryFormat::Fedora,
+            RepositoryFormat::Json,
+            RepositoryFormat::Unspecified,
+        ] {
+            assert_eq!(RepositoryFormat::from_db(format.as_str()).unwrap(), format);
+        }
+        assert!(RepositoryFormat::from_db("rpm-ish").is_err());
+        assert!(
+            RepositoryFormat::Unspecified
+                .require_explicit("example")
+                .is_err()
         );
     }
 
     #[test]
-    fn test_detect_rpm_repo_formats() {
-        // EPEL
-        assert_eq!(
-            detect_repository_format("epel-9", "https://dl.fedoraproject.org/pub/epel/"),
-            RepositoryFormat::Fedora
-        );
-        // CentOS
-        assert_eq!(
-            detect_repository_format("centos-stream", "https://mirror.centos.org/"),
-            RepositoryFormat::Fedora
-        );
-        // RHEL
-        assert_eq!(
-            detect_repository_format("rhel-9", "https://cdn.redhat.com/"),
-            RepositoryFormat::Fedora
-        );
-        // Rocky
-        assert_eq!(
-            detect_repository_format("rocky-9", "https://dl.rockylinux.org/"),
-            RepositoryFormat::Fedora
-        );
-        // Alma
-        assert_eq!(
-            detect_repository_format("alma-9", "https://repo.almalinux.org/"),
-            RepositoryFormat::Fedora
-        );
-        // URL with repomd
-        assert_eq!(
-            detect_repository_format("custom-rpm", "https://example.com/repomd.xml"),
-            RepositoryFormat::Fedora
-        );
-        // URL with /Packages/
-        assert_eq!(
-            detect_repository_format("custom-rpm", "https://example.com/Packages/foo.rpm"),
-            RepositoryFormat::Fedora
-        );
-        // Mint detected as Debian
-        assert_eq!(
-            detect_repository_format("mint-21", "https://packages.linuxmint.com/"),
-            RepositoryFormat::Debian
+    fn parser_configuration_is_typed_and_round_trips_without_name_inference() {
+        for config in [
+            RepositoryParserConfig::Arch {
+                database: "core".to_string(),
+            },
+            RepositoryParserConfig::Deb {
+                distribution: "resolute".to_string(),
+                component: "main".to_string(),
+                architecture: "amd64".to_string(),
+            },
+            RepositoryParserConfig::Rpm {
+                architecture: "x86_64".to_string(),
+            },
+            RepositoryParserConfig::Json,
+        ] {
+            let json = config.to_json().unwrap();
+            assert_eq!(RepositoryParserConfig::from_json(&json).unwrap(), config);
+            assert_eq!(
+                RepositoryParserConfig::from_json(&json).unwrap().format(),
+                config.format()
+            );
+        }
+
+        assert!(
+            RepositoryParserConfig::Arch {
+                database: "../core".to_string()
+            }
+            .validate()
+            .is_err()
         );
     }
 }

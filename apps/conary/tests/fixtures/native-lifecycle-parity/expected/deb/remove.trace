@@ -1,0 +1,2 @@
+v1-post|argc=2|argv=[configure][]|stdin=none|payload=v1
+v1-pre-remove|argc=1|argv=[remove]|stdin=none|payload=v1

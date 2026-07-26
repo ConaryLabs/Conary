@@ -27,7 +27,7 @@ fatal = true
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile ${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0
@@ -39,7 +39,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --yes"
+conary = "install ${TEST_PACKAGE_1} --no-deps --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -56,7 +56,7 @@ timeout = 60
 depends_on = ["T10a"]
 
 [[test.step]]
-conary = "remove ${TEST_PACKAGE_1} --no-scripts --yes"
+conary = "remove ${TEST_PACKAGE_1} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -111,7 +111,7 @@ timeout = 300
 depends_on = ["T11"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --no-deps --sandbox never --yes"
+conary = "install ${TEST_PACKAGE_1} --no-deps --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -182,7 +182,7 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_2} --no-scripts --no-deps --sandbox never --yes"
+conary = "install ${TEST_PACKAGE_2} --no-deps --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -410,7 +410,7 @@ timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_3} --no-scripts --no-deps --sandbox never --yes"
+conary = "install ${TEST_PACKAGE_3} --no-deps --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -448,97 +448,51 @@ exit_code = 0
 stdout_contains_all = ["${TEST_PACKAGE_1}", "${TEST_PACKAGE_2}", "${TEST_PACKAGE_3}"]
 
 # --------------------------------------------------------------------------
-# T28: Dep Mode Satisfy
+# T28: Preserve Recorded Ownership
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T28"
-name = "dep_mode_satisfy"
-description = "Install with --dep-mode satisfy succeeds"
+name = "ownership_mode_preserve"
+description = "Install with --ownership preserve succeeds"
 timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --sandbox always --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_1} --no-scripts --dep-mode satisfy --yes --sandbox never"
+conary = "install ${TEST_PACKAGE_1} --ownership preserve --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 
 # Cleanup: remove the package for later tests
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_1} --sandbox always --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 # --------------------------------------------------------------------------
-# T29: Dep Mode Adopt
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T29"
-name = "dep_mode_adopt"
-description = "Install with --dep-mode adopt succeeds"
-timeout = 300
-depends_on = ["T04"]
-
-[[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_2} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
-
-[[test.step]]
-conary = "install ${TEST_PACKAGE_2} --no-scripts --dep-mode adopt --yes --sandbox never"
-
-[test.step.assert]
-exit_code = 0
-
-[[test.step]]
-file_exists = "${TEST_BINARY_2}"
-
-# --------------------------------------------------------------------------
-# T30: Dep Mode Takeover
+# T30: Ownership Takeover
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T30"
-name = "dep_mode_takeover"
-description = "Install with --dep-mode takeover succeeds"
+name = "ownership_takeover"
+description = "Install with --ownership takeover succeeds"
 timeout = 300
 depends_on = ["T04"]
 
 [[test.step]]
-run = "${CONARY_BIN} remove ${TEST_PACKAGE_3} --no-scripts --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+run = "${CONARY_BIN} remove ${TEST_PACKAGE_3} --sandbox always --yes --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "install ${TEST_PACKAGE_3} --no-scripts --dep-mode takeover --yes --sandbox never"
+conary = "install ${TEST_PACKAGE_3} --ownership takeover --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
 file_exists = "${TEST_BINARY_3}"
-
-# --------------------------------------------------------------------------
-# T31: Blocklist Enforced
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T31"
-name = "blocklist_enforced"
-description = "Verify glibc is blocked from installation"
-timeout = 60
-depends_on = ["T04"]
-
-# Attempt to install glibc (should fail or be blocked)
-[[test.step]]
-conary = "install glibc --no-scripts --dep-mode takeover --yes --sandbox never"
-
-# Verify glibc does NOT appear in installed list
-[[test.step]]
-conary = "list"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "glibc"
 
 # --------------------------------------------------------------------------
 # T32: Update With Adopted
@@ -555,9 +509,9 @@ depends_on = ["T04"]
 [[test.step]]
 conary = "system adopt curl"
 
-# Run update with dep-mode satisfy
+# Preserve recorded external ownership during update
 [[test.step]]
-conary = "update --dep-mode satisfy --yes"
+conary = "update --ownership preserve --yes"
 
 [test.step.assert]
 exit_code = 0

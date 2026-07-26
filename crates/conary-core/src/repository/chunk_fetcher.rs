@@ -170,18 +170,6 @@ impl HttpChunkFetcher {
         HttpChunkFetcherBuilder::new(base_url).build()
     }
 
-    /// Create with custom options (legacy API)
-    pub fn with_options(
-        base_url: &str,
-        max_concurrent: usize,
-        verify_hashes: bool,
-    ) -> Result<Self> {
-        HttpChunkFetcherBuilder::new(base_url)
-            .max_concurrent(max_concurrent)
-            .verify_hashes(verify_hashes)
-            .build()
-    }
-
     /// Create a builder for more configuration options
     pub fn builder(base_url: &str) -> HttpChunkFetcherBuilder {
         HttpChunkFetcherBuilder::new(base_url)
@@ -669,7 +657,10 @@ impl ChunkFetcherBuilder {
 
     /// Add an HTTP fetcher with custom concurrency
     pub fn with_http_concurrent(mut self, base_url: &str, max_concurrent: usize) -> Result<Self> {
-        let fetcher = HttpChunkFetcher::with_options(base_url, max_concurrent, true)?;
+        let fetcher = HttpChunkFetcher::builder(base_url)
+            .max_concurrent(max_concurrent)
+            .verify_hashes(true)
+            .build()?;
         self.fetchers.push(Arc::new(fetcher));
         Ok(self)
     }

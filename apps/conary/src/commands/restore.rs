@@ -1,4 +1,4 @@
-// src/commands/restore.rs
+// apps/conary/src/commands/restore.rs
 
 //! Restore command - redeploy files from CAS to filesystem
 //!
@@ -12,7 +12,7 @@
 
 use super::open_db;
 use anyhow::Result;
-use conary_core::db::models::{FileEntry, Trove};
+use conary_core::db::models::{PackagePayloadEntry, PackagePayloadOwnership, Trove};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
 use tracing::info;
@@ -80,8 +80,11 @@ pub async fn cmd_restore(
 
     println!("Package: {} {}", trove.name, trove.version);
 
-    // Get all files for this package
-    let files = FileEntry::find_by_trove(&conn, trove_id)?;
+    // Package-facing restore uses claim-aware payload ownership. A package
+    // whose directories are materialized by a peer anchor still owns those
+    // nodes and must not disappear from restore reporting.
+    let payload = PackagePayloadOwnership::load(&conn, trove_id)?;
+    let files = payload.entries();
     if files.is_empty() {
         println!("No files tracked for this package.");
         return Ok(());
@@ -94,29 +97,34 @@ pub async fn cmd_restore(
     let cas = CasStore::new(&objects_dir)?;
 
     // Categorize files by CAS availability
-    let mut in_cas_count = 0;
+    let mut content_in_cas_count = 0;
     let mut not_in_cas = Vec::new();
 
-    for file in &files {
-        if cas.exists(&file.sha256_hash) {
-            in_cas_count += 1;
-        } else {
-            not_in_cas.push(file);
+    for file in files {
+        if file.content.is_some() {
+            if file_content_available(&cas, file) {
+                content_in_cas_count += 1;
+            } else {
+                not_in_cas.push(file);
+            }
         }
     }
 
-    println!("\nFile status:");
-    println!("  Available in CAS:  {}", in_cas_count);
+    println!("\nContent status:");
+    println!("  Available CAS objects:  {}", content_in_cas_count);
     if !not_in_cas.is_empty() {
-        println!("  Missing from CAS:  {} (cannot restore)", not_in_cas.len());
+        println!(
+            "  Missing CAS objects:    {} (cannot restore)",
+            not_in_cas.len()
+        );
     }
 
     // Determine what to restore.
     // In composefs-native, all files come from the EROFS image.
     // "Restore" means rebuild the image from DB state.
-    let files_to_restore: Vec<&FileEntry> = files
+    let files_to_restore: Vec<&PackagePayloadEntry> = files
         .iter()
-        .filter(|f| cas.exists(&f.sha256_hash))
+        .filter(|file| file_content_available(&cas, file))
         .collect();
 
     if files_to_restore.is_empty() {
@@ -129,7 +137,7 @@ pub async fn cmd_restore(
     if dry_run {
         println!("\nDry run - would restore:");
         for file in &files_to_restore {
-            println!("  {} (mode: {:o})", file.path, file.permissions);
+            println!("  {} (mode: {:o})", file.path, file.node.source.mode);
         }
         return Ok(());
     }
@@ -137,11 +145,10 @@ pub async fn cmd_restore(
     // Composefs-native: rebuild EROFS image from DB state and remount.
     // This restores all files atomically via the new generation.
     let restored = files_to_restore.len();
-    let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+    let gen_num = crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
         &conn,
         db_path,
         &format!("Restore {}", package_name),
-        None,
     )?;
 
     println!("\nRestore complete (generation {}):", gen_num);
@@ -196,19 +203,27 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
             None => continue,
         };
 
-        let files = FileEntry::find_by_trove(&conn, trove_id)?;
-
-        // Find files missing from CAS
-        let missing: Vec<&FileEntry> = files
+        let payload = PackagePayloadOwnership::load(&conn, trove_id)?;
+        let content_entries = payload
+            .entries()
             .iter()
-            .filter(|f| !cas.exists(&f.sha256_hash))
+            .filter(|file| file.content.is_some())
+            .collect::<Vec<_>>();
+
+        // Only regular payload content has CAS authority. Directories,
+        // symlinks, hardlinks, and special nodes remain exact payload entries
+        // but are not counted as missing objects.
+        let missing: Vec<&PackagePayloadEntry> = content_entries
+            .iter()
+            .copied()
+            .filter(|file| !file_content_available(&cas, file))
             .collect();
 
         if missing.is_empty() {
             continue;
         }
 
-        let available = files.len() - missing.len();
+        let available = content_entries.len() - missing.len();
         println!(
             "{}: {} available, {} missing from CAS",
             trove.name,
@@ -236,11 +251,10 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
         );
     } else {
         // Composefs-native: rebuild EROFS from DB state
-        let gen_num = crate::commands::composefs_ops::rebuild_and_mount(
+        let gen_num = crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
             &conn,
             db_path,
             "Restore all packages",
-            None,
         )?;
         println!("\nComposefs-native restore (generation {}):", gen_num);
         println!("  Packages checked: {}", packages_checked);
@@ -249,4 +263,10 @@ pub async fn cmd_restore_all(db_path: &str, _root: &str, dry_run: bool) -> Resul
     }
 
     Ok(())
+}
+
+fn file_content_available(cas: &CasStore, file: &PackagePayloadEntry) -> bool {
+    file.content
+        .as_ref()
+        .is_none_or(|content| cas.exists(&content.sha256))
 }

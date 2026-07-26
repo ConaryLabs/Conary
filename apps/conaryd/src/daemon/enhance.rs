@@ -182,10 +182,7 @@ pub async fn execute_enhance_job(
         let options = EnhancementOptions {
             types,
             force: spec.force,
-            install_root: state_for_loop.config.root.clone(),
             fail_fast: false,
-            parallel: true,
-            parallel_workers: 0,
             cancel_token: Some(cancel_for_loop.clone()),
         };
 
@@ -233,9 +230,6 @@ pub async fn execute_enhance_job(
                         state_for_loop.emit(DaemonEvent::EnhancementCompleted {
                             trove_id: *trove_id,
                             package_name: package_name.clone(),
-                            capabilities_inferred: enhancement_result
-                                .applied
-                                .contains(&EnhancementType::Capabilities),
                         });
                         None
                     } else {
@@ -384,7 +378,7 @@ mod tests {
             batch_size: 5,
             min_priority: EnhancementPriority::High,
             trove_ids: vec![1, 2, 3],
-            types: vec![EnhancementType::Capabilities],
+            types: vec![EnhancementType::Provenance],
             force: true,
         };
 

@@ -5,29 +5,17 @@ use std::path::Path;
 use anyhow::Result;
 use conary_core::bootstrap::{Bootstrap, BootstrapConfig};
 
-fn skip_verify_warning_message() -> &'static str {
-    "WARNING: UNSAFE bootstrap mode enabled via --skip-verify. placeholder source checksums will be accepted, so only use this during an authenticated bootstrap flow where you independently trust the source tarballs."
-}
-fn print_skip_verify_warning(skip_verify: bool) {
-    if skip_verify {
-        eprintln!("{}", skip_verify_warning_message());
-    }
-}
 /// Build Phase 1: Cross-toolchain (LFS Chapter 5)
 pub async fn cmd_bootstrap_cross_tools(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
-    skip_verify: bool,
     lfs_root: Option<&str>,
 ) -> Result<()> {
     println!("Building Phase 1: Cross-Toolchain (LFS Ch5)...");
     println!("  Work directory: {}", work_dir);
-    print_skip_verify_warning(skip_verify);
 
-    let mut config = BootstrapConfig::new()
-        .with_verbose(verbose)
-        .with_skip_verify(skip_verify);
+    let mut config = BootstrapConfig::new().with_verbose(verbose);
     if let Some(j) = jobs {
         config = config.with_jobs(j);
     }
@@ -59,16 +47,12 @@ pub async fn cmd_bootstrap_temp_tools(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
-    skip_verify: bool,
     lfs_root: Option<&str>,
 ) -> Result<()> {
     println!("Building Phase 2: Temporary Tools (LFS Ch6-7)...");
     println!("  Work directory: {}", work_dir);
-    print_skip_verify_warning(skip_verify);
 
-    let mut config = BootstrapConfig::new()
-        .with_verbose(verbose)
-        .with_skip_verify(skip_verify);
+    let mut config = BootstrapConfig::new().with_verbose(verbose);
     if let Some(j) = jobs {
         config = config.with_jobs(j);
     }
@@ -97,16 +81,12 @@ pub async fn cmd_bootstrap_system(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
-    skip_verify: bool,
     lfs_root: Option<&str>,
 ) -> Result<()> {
     println!("Building Phase 3: Final System (LFS Ch8)...");
     println!("  Work directory: {}", work_dir);
-    print_skip_verify_warning(skip_verify);
 
-    let mut config = BootstrapConfig::new()
-        .with_verbose(verbose)
-        .with_skip_verify(skip_verify);
+    let mut config = BootstrapConfig::new().with_verbose(verbose);
     if let Some(j) = jobs {
         config = config.with_jobs(j);
     }
@@ -192,16 +172,12 @@ pub async fn cmd_bootstrap_tier2(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
-    skip_verify: bool,
     lfs_root: Option<&str>,
 ) -> Result<()> {
     println!("Building Phase 6: Tier-2 Packages (BLFS + Conary)...");
     println!("  Work directory: {}", work_dir);
-    print_skip_verify_warning(skip_verify);
 
-    let mut config = BootstrapConfig::new()
-        .with_verbose(verbose)
-        .with_skip_verify(skip_verify);
+    let mut config = BootstrapConfig::new().with_verbose(verbose);
     if let Some(j) = jobs {
         config = config.with_jobs(j);
     }
@@ -223,17 +199,4 @@ pub async fn cmd_bootstrap_tier2(
     println!("  The system is now self-hosting.");
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::skip_verify_warning_message;
-
-    #[test]
-    fn skip_verify_warning_message_is_prominent() {
-        let warning = skip_verify_warning_message();
-        assert!(warning.contains("UNSAFE"));
-        assert!(warning.contains("--skip-verify"));
-        assert!(warning.contains("placeholder"));
-    }
 }

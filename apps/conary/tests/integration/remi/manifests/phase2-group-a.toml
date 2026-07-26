@@ -26,7 +26,7 @@ group = "A"
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -92,7 +92,7 @@ group = "A"
 depends_on = ["T38"]
 
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --sandbox never --yes"
+conary = "remove ${FIXTURE_PKG_NAME} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -117,7 +117,7 @@ depends_on = ["T42"]
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -136,7 +136,7 @@ depends_on = ["T43"]
 fatal = true
 
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V2_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
@@ -267,7 +267,7 @@ depends_on = ["T43"]
 
 # Remove the package (may already be removed, check=False equivalent)
 [[test.step]]
-conary = "remove ${FIXTURE_PKG_NAME} --no-scripts --yes"
+conary = "remove ${FIXTURE_PKG_NAME} --sandbox always --yes"
 
 # List orphans -- just verify no crash
 [[test.step]]

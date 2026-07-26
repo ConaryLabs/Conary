@@ -21,8 +21,9 @@ const CONNECTION_PRAGMAS: &str = "\
     PRAGMA foreign_keys = ON;\
     PRAGMA busy_timeout = 5000;\
 ";
+const TEST_DATA_SCHEMA_VERSION: u32 = 1;
 
-/// Open (or create) the test data database and run migrations.
+/// Open the test data database and create or validate its current schema.
 ///
 /// This is the primary entry point. The database is entirely separate from
 /// conary-core's package database.
@@ -31,23 +32,34 @@ pub fn init(path: &str) -> Result<Connection> {
         .with_context(|| format!("failed to open test data database at {path}"))?;
     conn.execute_batch(CONNECTION_PRAGMAS)
         .context("failed to set connection pragmas")?;
-    migrate(&conn)?;
+    ensure_current_schema(&conn)?;
     Ok(conn)
 }
 
 // ---------------------------------------------------------------------------
-// Schema migration
+// Current schema
 // ---------------------------------------------------------------------------
 
-fn migrate(conn: &Connection) -> Result<()> {
+fn ensure_current_schema(conn: &Connection) -> Result<()> {
     let version: u32 = conn
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .unwrap_or(0);
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .context("read test data schema version")?;
 
-    if version < 1 {
-        conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS test_runs (
+    match version {
+        TEST_DATA_SCHEMA_VERSION => return Ok(()),
+        0 if test_data_database_is_fresh(conn)? => {}
+        0 => anyhow::bail!(
+            "unversioned non-empty test data database; rebuild it for schema version {TEST_DATA_SCHEMA_VERSION}"
+        ),
+        other => anyhow::bail!(
+            "test data database uses schema version {other}; rebuild it for schema version {TEST_DATA_SCHEMA_VERSION}"
+        ),
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "
+            CREATE TABLE test_runs (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 suite        TEXT    NOT NULL,
                 distro       TEXT    NOT NULL,
@@ -63,7 +75,7 @@ fn migrate(conn: &Connection) -> Result<()> {
                 skipped      INTEGER NOT NULL DEFAULT 0
             );
 
-            CREATE TABLE IF NOT EXISTS test_results (
+            CREATE TABLE test_results (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id      INTEGER NOT NULL REFERENCES test_runs(id) ON DELETE CASCADE,
                 test_id     TEXT    NOT NULL,
@@ -74,7 +86,7 @@ fn migrate(conn: &Connection) -> Result<()> {
                 attempt     INTEGER NOT NULL DEFAULT 1
             );
 
-            CREATE TABLE IF NOT EXISTS test_steps (
+            CREATE TABLE test_steps (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 result_id   INTEGER NOT NULL REFERENCES test_results(id) ON DELETE CASCADE,
                 step_index  INTEGER NOT NULL,
@@ -84,7 +96,7 @@ fn migrate(conn: &Connection) -> Result<()> {
                 duration_ms INTEGER
             );
 
-            CREATE TABLE IF NOT EXISTS test_logs (
+            CREATE TABLE test_logs (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 step_id     INTEGER NOT NULL REFERENCES test_steps(id) ON DELETE CASCADE,
                 stream      TEXT    NOT NULL,
@@ -92,7 +104,7 @@ fn migrate(conn: &Connection) -> Result<()> {
                 raw_content TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS test_events (
+            CREATE TABLE test_events (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 step_id    INTEGER NOT NULL REFERENCES test_steps(id) ON DELETE CASCADE,
                 event_type TEXT    NOT NULL,
@@ -101,24 +113,40 @@ fn migrate(conn: &Connection) -> Result<()> {
             );
 
             -- Foreign key indexes for efficient CASCADE deletes and joins
-            CREATE INDEX IF NOT EXISTS idx_test_results_run    ON test_results(run_id);
-            CREATE INDEX IF NOT EXISTS idx_test_steps_result   ON test_steps(result_id);
-            CREATE INDEX IF NOT EXISTS idx_test_logs_step      ON test_logs(step_id);
-            CREATE INDEX IF NOT EXISTS idx_test_events_step    ON test_events(step_id);
+            CREATE INDEX idx_test_results_run    ON test_results(run_id);
+            CREATE INDEX idx_test_steps_result   ON test_steps(result_id);
+            CREATE INDEX idx_test_logs_step      ON test_logs(step_id);
+            CREATE INDEX idx_test_events_step    ON test_events(step_id);
 
             -- Query indexes
-            CREATE INDEX IF NOT EXISTS idx_test_runs_status    ON test_runs(status);
-            CREATE INDEX IF NOT EXISTS idx_test_runs_distro    ON test_runs(distro);
-            CREATE INDEX IF NOT EXISTS idx_test_results_test   ON test_results(run_id, test_id);
-
-            PRAGMA user_version = 1;
+            CREATE INDEX idx_test_runs_status    ON test_runs(status);
+            CREATE INDEX idx_test_runs_distro    ON test_runs(distro);
+            CREATE INDEX idx_test_results_test   ON test_results(run_id, test_id);
             ",
-        )
-        .context("failed to apply test data schema v1")?;
-        info!("Test data schema v1 applied");
-    }
+    )
+    .context("failed to create current test data schema")?;
+    tx.pragma_update(None, "user_version", TEST_DATA_SCHEMA_VERSION)
+        .context("record current test data schema version")?;
+    tx.commit()?;
+    info!(
+        "Initialized current test data schema version {}",
+        TEST_DATA_SCHEMA_VERSION
+    );
 
     Ok(())
+}
+
+fn test_data_database_is_fresh(conn: &Connection) -> Result<bool> {
+    conn.query_row(
+        "SELECT NOT EXISTS(
+            SELECT 1
+            FROM sqlite_schema
+            WHERE name NOT LIKE 'sqlite_%'
+        )",
+        [],
+        |row| row.get(0),
+    )
+    .context("inspect test data database")
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +635,49 @@ mod tests {
     /// Helper: create an in-memory test data database.
     fn mem_db() -> Connection {
         init(":memory:").expect("init in-memory test db")
+    }
+
+    #[test]
+    fn current_schema_validation_is_idempotent() {
+        let conn = mem_db();
+        ensure_current_schema(&conn).unwrap();
+
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, TEST_DATA_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn noncurrent_schema_version_requires_rebuild() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+
+        let error = ensure_current_schema(&conn).unwrap_err().to_string();
+        assert!(error.contains("schema version 2"), "{error}");
+        assert!(error.contains("rebuild it"), "{error}");
+    }
+
+    #[test]
+    fn unversioned_schema_objects_require_rebuild() {
+        for ddl in [
+            "CREATE VIEW stale AS SELECT 1 AS id;",
+            "CREATE TABLE stale (id INTEGER PRIMARY KEY);",
+            "CREATE TABLE stale (id INTEGER PRIMARY KEY);
+             CREATE INDEX stale_index ON stale(id);",
+            "CREATE TABLE stale (id INTEGER PRIMARY KEY);
+             CREATE TRIGGER stale_trigger AFTER INSERT ON stale
+             BEGIN
+                 SELECT NEW.id;
+             END;",
+        ] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(ddl).unwrap();
+
+            let error = ensure_current_schema(&conn).unwrap_err().to_string();
+            assert!(error.contains("unversioned non-empty"), "{error}");
+            assert!(error.contains("rebuild it"), "{error}");
+        }
     }
 
     #[test]

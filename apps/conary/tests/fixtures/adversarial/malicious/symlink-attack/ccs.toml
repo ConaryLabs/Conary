@@ -1,6 +1,9 @@
 [package]
 name = "adversarial-symlink-attack"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Base fixture for symlink overwrite attack tests"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["adversarial-symlink-attack"]
 binaries = []
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

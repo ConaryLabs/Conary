@@ -1,427 +1,265 @@
 ---
-last_updated: 2026-07-16
-revision: 14
-summary: Record file-capability policy and the green public Group O shipping proof
+last_updated: 2026-07-26
+revision: 23
+summary: Define exact source-ABI lifecycle authority, selected-root execution, and generation-scoped activation
 ---
 
 # Scriptlet Security Model
 
-This document describes Conary's security model for executing package scriptlets (install/remove hooks).
+Conary executes package lifecycle programs because RPM, dpkg, libalpm, and
+signed CCS packages define them as part of the package transaction. It does
+not decide lifecycle behavior from shell text, distro names, risk scores, or a
+human-review queue.
 
-Code owners for this model live under `crates/conary-core/src/scriptlet/`:
-`sandbox.rs` owns sandbox mode and protected live-root policy, `process.rs`
-owns direct/target-root/chroot execution, `legacy.rs` owns legacy replay
-invocation contracts, `arguments.rs` owns distro argument mapping, and
-`runtime.rs` owns subprocess/seccomp helper plumbing.
+The normative source-format contracts are in
+[`foreign-package-lifecycle-contracts.md`](specs/foreign-package-lifecycle-contracts.md).
+This document owns the execution and security boundary around those contracts.
 
-## Threat Model
+## Non-Negotiable Invariants
 
-Package scriptlets execute arbitrary code with the privileges of the package manager (typically root). Threats include:
+1. The source package format owns lifecycle stage, order, arguments, stdin,
+   interpreter, trigger matching, payload visibility, and error recovery.
+2. Conary verifies and parses that authority before planning a transaction.
+3. Every executable entry is preflighted before package payload or database
+   mutation.
+4. Lifecycle programs run only inside a materialized selected or explicit
+   target root. The host root `/` is rejected.
+5. The child enters private mount, network, IPC, UTS, and cgroup namespaces,
+   chroots into that root, drops every capability except the selected-root
+   filesystem mutation set, and installs `scriptlet-boundary-v2` before
+   `exec`.
+6. A missing interpreter, helper, namespace, privilege, syscall filter, exact
+   semantic, or persisted-state contract fails the transaction. There is no
+   direct-host, warning-only, skip-script, or permissive sandbox path.
+7. Successful lifecycle work and its package/database state commit together.
+   Failure rolls back the isolated selected root and SQLite transaction.
+8. Runtime service-manager and security-policy actions are generation work.
+   They are captured as exact typed intents and are not sent to the currently
+   running host during package installation.
 
-1. **Malicious packages**: Intentionally harmful scripts from compromised or malicious repositories
-2. **Supply chain attacks**: Legitimate packages with injected malicious code
-3. **Buggy scripts**: Well-intentioned scripts that cause unintended damage
-4. **Resource exhaustion**: Scripts that hang, loop infinitely, or consume excessive resources
-
-## Defense Layers
-
-Conary implements multiple defense layers:
-
-### 1. Script Risk Analysis
-
-Before execution, scripts are analyzed for dangerous patterns:
-
-| Risk Level | Patterns | Action |
-|------------|----------|--------|
-| Critical | `curl\|sh`, `wget\|sh`, `eval $` | Remote code execution |
-| High | `rm -rf /`, `mkfs`, `dd if=* of=/dev/`, fork bombs | System destruction |
-| Medium | `chmod u+s`, `crontab`, `/etc/shadow`, `/etc/sudoers` | Privilege escalation |
-| Low | `nc`, `/dev/tcp/`, `base64 -d` | Network backdoors, obfuscation |
-
-Risk analysis is performed by `analyze_script()` in
-`crates/conary-core/src/container/mod.rs`.
-
-### 2. Sandbox Modes
-
-Scriptlet execution supports three sandbox modes:
-
-```rust
-pub enum SandboxMode {
-    None,    // Direct execution, no sandboxing
-    Auto,    // Sandbox based on script risk analysis
-    #[default]
-    Always,  // Always sandbox all scripts
-}
-```
-
-Configure via CLI or environment:
-- `--sandbox=always` - Protected mode, sandbox all scripts (default)
-- `--sandbox=auto` - Risk-based sandboxing; scripts at medium risk or higher
-  use the same protected mode as `always`
-- `--sandbox=never` - Legacy direct execution; scriptlets can mutate the live
-  host with the package manager's privileges
-
-### 3. Container Isolation
-
-Protected mode, target-root execution, and direct legacy execution are distinct
-boundaries. Changeset metadata records both the requested sandbox mode
-(`always`, `auto`, or `never`) and the effective sandbox (`protected-live-root`,
-`target-root`, or `direct`), so `--sandbox=auto` direct execution cannot be
-confused with protected sandboxing.
-
-### Protected Live-Root Execution
-
-When protected sandboxing is enabled for the live root (`/`), scripts run in a
-lightweight Linux container with:
-
-#### Namespace Isolation
-- **PID namespace**: Isolated process tree, script cannot see/signal host processes
-- **UTS namespace**: Isolated hostname (`conary-sandbox`)
-- **IPC namespace**: Isolated System V IPC and POSIX message queues
-- **Mount namespace**: Isolated filesystem view
-- **Network namespace**: Hermetic execution blocks outbound network access
-- **User namespace**: Privilege isolation is used when the host/kernel supports it
-
-#### Filesystem Isolation
-- **Root transition**: Root/no-userns execution requires `pivot_root`; `chroot`
-  fallback is fatal in enforce mode. When an unprivileged user namespace is
-  available, setup may enter the prepared root with `chroot` only after sandbox
-  root maps to a non-host UID/GID.
-- **composefs mount**: On composefs-native systems, `/usr` is a read-only EROFS
-  mount, providing an additional layer of protection -- scriptlets cannot modify
-  system binaries even if they escape the sandbox
-- **Bind mounts**: Controlled access to host paths:
-  - Read-only host tooling: `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`
-  - Read-only host identity files layered into the private `/etc`:
-    `/etc/passwd`, `/etc/group`, `/etc/hosts`, `/etc/shadow`, `/etc/sudoers`
-  - Private writable live-root layers: `/etc` and `/var` are backed by owned
-    temporary directories, so protected scriptlet writes are discarded with the
-    sandbox instead of mutating the host
-- **Seccomp profile**: Protected live-root scriptlets install the `scriptlet`
-  seccomp profile in enforce mode. That profile excludes `chroot`, `mount`,
-  `umount2`, `pivot_root`, kernel module loading, reboot, BPF, and other
-  privileged escape primitives from the scriptlet process.
-
-Protected live-root scriptlets are preflighted before package file/DB mutation.
-If namespace, private writable layer, or enforcement setup is unavailable, the
-operation aborts before mutation with an operator-facing diagnostic.
-
-### Target-Root Execution
-
-Target-root installs (`--root=/path`) use the alternate-root execution path for
-building or modifying another filesystem. That path can use chroot-style
-execution for the target root and is separate from the protected live-root
-sandbox boundary.
-
-### Direct Legacy Execution
-
-`--sandbox=never` runs scriptlets directly on the live host after stdin
-nullification and environment filtering. This is an explicit legacy escape
-hatch, not a filesystem sandbox. `--sandbox=auto` may also choose direct
-execution for low-risk live-root scripts; those runs record
-`effective_sandbox=direct`.
-
-#### Resource Limits (setrlimit)
-| Resource | Default Limit | Purpose |
-|----------|--------------|---------|
-| Memory (RLIMIT_AS) | 512 MB | Prevent memory exhaustion |
-| CPU time (RLIMIT_CPU) | 60 seconds | Prevent CPU exhaustion |
-| File size (RLIMIT_FSIZE) | 100 MB | Prevent disk filling |
-| Processes (RLIMIT_NPROC) | 1024 | Prevent fork bombs |
-
-#### Timeout Protection
-- Wall-clock timeout: 60 seconds (configurable)
-- Scripts exceeding timeout are killed with SIGKILL
-
-### 4. Scriptlet Capture Mode
-
-When adopting legacy packages (RPM/DEB), Conary can **capture** the intent of imperative scriptlets instead of running them on the user's system.
-
-This mode runs the scriptlet in a strict, ephemeral sandbox with **mocked system tools** (`useradd`, `systemctl`, etc.).
-
-#### How Capture Works
-1.  **Mock Environment:** A temporary root is created with fake binaries that log their arguments instead of modifying the system.
-2.  **Execution:** The script runs in a network-isolated sandbox.
-3.  **Diff:** Files created by the script (e.g., config generation) are captured and added to the package payload.
-4.  **Intent Parsing:** Calls to mock tools are parsed and converted to declarative CCS Hooks (e.g., `useradd nginx` -> `[[hooks.users]] name="nginx"`).
-5.  **Discard:** The original imperative script is discarded.
-
-This transforms unsafe runtime scripts into safe, atomic build-time declarations.
-
-### Boot And Security Scriptlet Evidence
-
-Kernel-module, initramfs, bootloader, and unsupported SELinux scriptlet effects
-are boot/security critical. Conary classifies these commands and preserves
-sanitized command evidence in legacy scriptlet summaries. Public Remi serving
-remains blocked for kernel, initramfs, bootloader, and unsupported SELinux
-classes until native adapter and target-profile evidence proves complete
-replacement. Raw replay, `--no-scripts`, or malformed summary metadata must not
-make these packages public-ready.
-
-PAM stack helpers such as `authselect`, `authconfig`, `pam-auth-update`, and
-`pam-config` are also blocked for public serving. Public-ready PAM conversion
-requires a future native PAM adapter with target-profile PAM stack facts,
-rollback semantics, and operator-visible review.
-
-Live network fetches and nested package-manager calls are also blocked for
-public serving. Commands such as `curl`, `wget`, `scp`, `ssh`, `git clone`,
-`dnf`, `apt`, `dpkg`, `rpm`, `pacman`, `apk`, `microdnf`, and `zypper` may be
-preserved as sanitized refusal evidence, but they are not native authority.
-Future support must model dependency intent or curated offline artifacts; it
-must not run a foreign package manager or fetch live network content during
-conversion or install.
-
-Supported SELinux forms are different: `selinux-policy/v1` records
-payload-scoped label refresh, payload-backed file-context rules, persistent boolean
-declarations, and payload-backed policy-module installs as optional policy
-intent. That evidence is safe on Arch or Debian because it is dormant when
-SELinux is absent and applies only through native policy handling when SELinux
-is present. Conversion never runs `restorecon`, `semanage`, `setsebool`, or
-`semodule` against the host policy store.
-
-Supported AppArmor forms are narrow. `apparmor-policy/v1` records
-payload-backed `apparmor_parser -r|--replace /etc/apparmor.d/<profile>` as
-optional policy intent. That evidence is dormant when AppArmor is absent and is
-eligible for native policy handling only when AppArmor is present. Conversion
-never runs `apparmor_parser` against the host policy store. Mode changes such
-as `aa-enforce` and `aa-complain`, profile disable/status helpers, broad
-directory reloads, and non-payload profile paths remain blocked/private and use
-`block-on-enforcing-target` fallback when captured as review intent.
-Promoting any broader SELinux or AppArmor form requires target-provider facts
-for availability, mode, policy store behavior, profile or module content
-validation where applicable, and an operator-visible absent-provider fallback.
-
-Sysctl handling has a narrow native-authority bridge. Conversion may replace a
-simple `sysctl -w <key>=<value>` scriptlet with a validated native
-`hooks.sysctl` declaration when the key and value pass the same CCS sysctl
-validators used at install time, and one validated write still counts as
-complete native replacement evidence for `sysctl/v1`. Public-ready serving is
-narrower: the converted package is public only when the target profile accepts
-that exact sysctl key. Missing target-profile context or keys the profile does
-not allow stay `private-review`, even when the native hook projection is
-otherwise complete. Today the public catalog proof key is `kernel.example`;
-`net.ipv4.ip_forward` remains valid private-review evidence unless a future
-target profile explicitly allows it. Broad loads such as `sysctl -p`, multiple
-assignment batches, and denied security-sensitive keys remain blocked and can
-only be fetched through the non-public admin/test lane.
-
-Setuid handling has a similarly narrow file-mode bridge. Conversion may replace
-`chmod u+s <payload-executable>` or `chmod 4xxx <payload-executable>` only when
-the target is an executable shipped by the package payload. The converter moves
-that authority into the CCS file mode and adds the exact path to
-`policy.allow_setuid_paths`, so the normal build policy can preserve that one
-setuid bit while still stripping unapproved setuid and all setgid bits.
-
-File-capability handling is separate manifest authority, not package dependency
-capabilities. `file-capability/v1` still recognizes known Linux
-`setcap cap_*=+ep <payload-executable>` grants as complete replacement
-evidence, but only `cap_net_bind_service` is public-ready by default. High-risk
-known capabilities such as `cap_sys_admin`, `cap_sys_module`, `cap_sys_rawio`,
-`cap_sys_boot`, `cap_sys_ptrace`, `cap_bpf`, `cap_net_admin`, `cap_setpcap`,
-and `cap_setfcap` remain private-review until a future target-profile policy
-explicitly allows them. The converter records recognized authority in
-`[[file_capabilities]]`, and mutable live-root CCS installs apply it through a
-controlled `setcap` invocation after file deployment and before DB commit.
-Generation-aware CCS installs now support the same manifest authority only when
-the install persists file-capability rows, publishes a generation immediately
-instead of using `--defer-generation`, attaches `security.capability` during
-generation runtime-input collection, and writes the generation image through an
-xattr-preserving format. `conary system generation info` reports the resulting
-capability-xattr count for published generations. Group O includes a QEMU
-export proof for both capability-present and capability-absent exported
-artifacts as rollback-equivalent evidence. The 2026-07-16 W1 Fedora 44 local
-KVM run passed all five Group O cases against `minimal-boot-v4`. TGE05 booted
-both exported generations, observed no file capability in the baseline, and
-reported `cap_net_bind_service=ep` in the enabled artifact. That closes the
-local generation file-capability shipping proof. The versioned v4 image and
-disposable test-key artifacts are publicly available from Remi; an isolated
-cache downloaded them with matching hashes and passed TGE01 under KVM in
-63,320 ms. That closes the fixture-publication side of the shipping proof.
-Capability removal, inheritable/process/ambient capability forms, `setpriv`,
-setgid modes, broad `chmod +s`, unknown capability names, and non-payload
-targets remain blocked/private.
-
-This evidence is harvested from package-authored metadata and static command
-signals during conversion. It is an advisory trace for refusal diagnostics, not
-runtime execution and not permission to mutate the host boot or security state.
-Environment values are not surfaced in public boot/security evidence.
-
-Maintainers may use Remi's non-public admin/test serving lane to fetch blocked,
-private-review, or local-only converted CCS files for inspection. That lane is
-disabled by default, requires admin access, and preserves the original
-scriptlet publication status. It is not public publication authority and does
-not permit raw legacy scriptlet replay.
-
-Publication refusal reports and Remi non-public test-serving manifests expose
-boot/security and generic LSM `security_policy_intents` only after Remi's
-shared scriptlet-evidence sanitizer runs. Raw review artifact paths, private
-local paths, and secret-bearing environment assignments stay private server
-state; responses expose only `review_artifact_available` and normalized intent
-metadata. Private scriptlet review artifact JSON remains an operator diagnostic
-surface and may retain raw path evidence under admin-only artifact access.
-
-### 5. Basic Protections (Always Active)
-
-Even without sandboxing, these protections are always enforced:
-
-#### stdin Nullification
-```rust
-cmd.stdin(Stdio::null())  // CRITICAL: Prevent stdin hangs
-```
-Scripts cannot read from stdin, preventing interactive prompts that would hang the package manager.
-
-#### Environment Filtering
-Direct execution paths clear the inherited environment and repopulate only the minimal variables Conary needs (`PATH`, `HOME`, `LANG`, scriptlet context variables). This reduces ambient secret leakage and makes direct execution closer to the sandboxed environment.
-
-#### Target-Root Execution
-```rust
-if self.is_live_root() {
-    self.execute_sandbox_live(...)
-} else {
-    self.execute_in_target(...)
-}
-```
-Installing into an alternate root (for example `--root=/mnt/target`) uses the
-target-root execution path instead of mutating the host `/`. That path chroots
-into the target root and requires the privileges needed to enter that target
-environment safely.
-
-#### Interpreter Validation
-```rust
-if !Path::new(&interpreter_path).exists() {
-    return Err(Error::ScriptletError(format!(
-        "Interpreter not found: {}",
-        interpreter_path
-    )));
-}
-```
-No fallback interpreters - if the specified interpreter doesn't exist, the scriptlet fails rather than using a potentially incompatible alternative.
-
-## Cross-Distro Argument Handling
-
-Conary supports packages from multiple distributions, each with different scriptlet conventions:
-
-### RPM (Red Hat, Fedora, SUSE)
-Arguments are integer counts of package versions remaining:
-- `$1 = 1`: Fresh install
-- `$1 = 2`: Upgrade (new package scripts)
-- `$1 = 1`: Upgrade removal (old package scripts) - NOT 0!
-- `$1 = 0`: Complete removal
-
-### DEB-family packages
-Arguments are action words per Debian Policy; Ubuntu packages use these DEB
-scriptlet semantics in the current public support matrix:
-- preinst: `install` or `upgrade <old-version>`
-- postinst: `configure [<old-version>]`
-- prerm: `remove` or `upgrade <new-version>`
-- postrm: `remove` or `upgrade <new-version>`
-
-### Arch Linux
-Arguments are version strings:
-- Install: `$1 = <new-version>`
-- Remove: `$1 = <old-version>`
-- Upgrade: `$1 = <new-version>`, `$2 = <old-version>`
-
-Arch `.INSTALL` files define functions rather than executable scripts, so Conary generates wrapper scripts that source the file and call the appropriate function.
-
-## Namespace Availability
-
-Protected modes require namespace isolation. When the kernel cannot provide the
-needed mount/network/user namespace guarantees, Conary fails before running the
-scriptlet rather than silently falling back to direct host mutation.
-
-The diagnostic names the missing protected-sandbox requirement:
+## Authority Flow
 
 ```text
-Protected scriptlet sandboxing requires mount and user namespace support.
-Enable the required kernel/container namespace support or run inside a VM.
-Dangerous legacy direct execution is available only with --sandbox=never plus
-the live-host mutation acknowledgement, and it records effective_sandbox=direct.
+signed repository/package authority
+              |
+              v
+exact source-format parser
+              |
+              v
+typed transaction graph + recovery edges
+              |
+              v
+transaction-wide target capability preflight
+              |
+              v
+selected-root payload/lifecycle execution
+              |
+              v
+atomic package state + generation activation requests
 ```
 
-Direct execution via `--sandbox=never` still uses stdin nullification,
-environment filtering, timeouts, and resource limits where available, but it is
-not a filesystem sandbox.
+RPM header tags, Debian control members and trigger declarations, Arch
+`.INSTALL` functions and ALPM hooks, and signed CCS hook fields are authority.
+Conary preserves executable bytes and validates their hashes rather than
+regenerating programs from diagnostics.
 
-## Post-Scriptlet Degradation
+The target provides typed capabilities: interpreters, exact helper paths,
+embedded runtimes, package-manager compatibility projections, and the closed
+execution boundary. A source package manager and its database are not invoked
+at install, update, remove, or rollback time.
 
-Post-install and post-remove scriptlets from legacy packages can fail after
-package file state has changed only when the sandbox setup succeeded and the
-script process itself exited nonzero. Conary records those failures in changeset
-metadata as `scriptlet_warning` entries with `phase`, `failure_kind`,
-`requested_sandbox_mode`, and `effective_sandbox`, and `conary history` marks
-the changeset with `[scriptlet-warning]`.
+## Selected-Root Execution Boundary
 
-Sandbox setup, namespace preflight, interpreter setup, timeout, and enforcement
-failures do not degrade to warning-only scriptlet side effects. They fail the
-command instead of being recorded as successful package operations.
+`SandboxMode` has one value, `Always`, and `EffectiveSandbox` has one value,
+`TargetRoot`. Removed values such as `auto`, `never`, and `none` do not parse.
 
-## Assurance Notes
+Before spawning a lifecycle child, Conary:
 
-Protected live-root scriptlets do not receive the `chroot` syscall in the
-enforced live-root seccomp profile. When unprivileged user namespaces are used,
-setup may enter the prepared root with chroot after root maps to a non-host
-UID/GID; that is distinct from allowing the scriptlet process to call `chroot`.
-Target-root build/install flows may still use chroot-style execution for
-alternate roots; that is not the protected live-root sandbox boundary.
+- requires an absolute root other than `/`;
+- validates the event's projected payload view and interpreter availability;
+- validates every source-format helper and persisted-state dependency;
+- stages the exact program beneath a no-follow, descriptor-owned temporary
+  directory inside the target root;
+- supplies source-ABI stdin bytes, or an empty non-interactive file when the
+  ABI defines no stdin;
+- clears the inherited environment and installs only the closed lifecycle
+  environment;
+- builds the mandatory host-escape deny filter and capability plan before
+  mutation.
 
-## Security Recommendations
+The child then:
 
-### For Package Maintainers
-1. Keep scriptlets minimal - prefer triggers for common operations
-2. Avoid network access in scriptlets
-3. Use absolute paths for all commands
-4. Handle errors gracefully (set -e)
+- enters private mount, network, IPC, UTS, and cgroup namespaces with
+  recursive-private mount propagation;
+- installs only Conary-owned bind mounts used by exact runtime capture;
+- chroots and changes directory to `/`;
+- becomes a private process-group leader;
+- drops the capability bounding, effective, permitted, inheritable, and
+  ambient sets to the exact selected-root filesystem mutation capabilities;
+- enables `no_new_privs` and applies the `scriptlet-boundary-v2` host-escape
+  deny filter;
+- executes the declared interpreter, interpreter arguments, staged program,
+  and typed lifecycle arguments;
+- has stdout and stderr captured, and its entire process group is killed when
+  the leader exits or its exact timeout expires.
 
-### For System Administrators
-1. Keep the default `--sandbox=always` for packages from untrusted sources
-2. Review scriptlets before installing unknown packages:
-   `conary query scripts ./package.rpm`
-3. Monitor `/var/log/conary.log` for scriptlet warnings
-4. Consider `--sandbox=always` for high-security environments
+The seccomp contract is a default-allow deny boundary, not a target-libc
+allowlist. Ordinary helper ABI evolution such as `vfork`, `clone`, `mkdir`,
+`mkdirat`, `statx`, `io_uring`, and `userfaultfd` does not require Conary
+changes. The denied classes are host escape, cross-process control and
+inspection, kernel/module control, mount-namespace escape, host keyring
+access, and host time/accounting mutation. Packages cannot select, widen, or
+suppress this boundary.
 
-### For Repository Operators
-1. Scan packages for dangerous patterns before publishing
-2. Sign packages and repository metadata with the configured trust roots
-3. Use separate repositories for trusted vs. community packages
+Root privilege is currently required for this boundary. Lack of privilege or
+kernel support is a preflight failure, not a request to run less safely.
 
-## Implementation Files
+## Exact Runtime Activation
 
-| File | Purpose |
-|------|---------|
-| `crates/conary-core/src/scriptlet/mod.rs` | Public scriptlet API hub and re-exports |
-| `crates/conary-core/src/scriptlet/types.rs` | Package format and execution mode value types |
-| `crates/conary-core/src/scriptlet/outcome.rs` | Typed scriptlet outcomes and failure classification |
-| `crates/conary-core/src/scriptlet/phases.rs` | Scriptlet phase string conversions |
-| `crates/conary-core/src/scriptlet/executor.rs` | Public `ScriptletExecutor` orchestration |
-| `crates/conary-core/src/scriptlet/arguments.rs` | RPM, Debian, and Arch argument mapping |
-| `crates/conary-core/src/scriptlet/sandbox.rs` | Sandbox mode and protected live-root policy |
-| `crates/conary-core/src/scriptlet/process.rs` | Direct, target-root, chroot, and sandboxed process execution |
-| `crates/conary-core/src/scriptlet/legacy.rs` | Legacy replay invocation contracts |
-| `crates/conary-core/src/scriptlet/runtime.rs` | Subprocess, seccomp, and chroot helper plumbing |
-| `crates/conary-core/src/container/mod.rs` | Container isolation, risk analysis |
-| `crates/conary-core/src/trigger/mod.rs` | Post-install triggers (preferred over scriptlets) |
-| `crates/conary-core/src/db/models/scriptlet_entry.rs` | Scriptlet database storage |
+Package lifecycle programs commonly call service-manager and security-policy
+helpers while operating on an offline root. Treating those calls as either
+harmless strings, metadata projections, or immediate host actions is
+incorrect.
 
-## Implemented Since Initial Design
+Conary bind-mounts a private proxy over every resolved target-root
+`systemctl`, `restorecon`, `semanage`, `setsebool`, `semodule`,
+`apparmor_parser`, `aa-enforce`, `aa-complain`, and `aa-disable` executable.
+Each proxy:
 
-The following features, originally planned as future enhancements, are now implemented:
+- records NUL-delimited argv without reparsing shell source;
+- identifies the exact invoked and canonical provider paths plus executable
+  SHA-256;
+- delegates only provider-documented selected-root work: systemd offline work
+  with `SYSTEMD_OFFLINE=1`, SELinux policy-store work with `-N`, AppArmor
+  parser work with `-Q`, and AppArmor mode-file work with `--no-reload`;
+- suppresses the live-manager/kernel half before it can escape the selected
+  root;
+- returns the source-compatible result for the delegated and deferred halves.
 
-- **seccomp-BPF syscall filtering** -- See `crates/conary-core/src/capability/enforcement/seccomp_enforce.rs`
-- **Network namespace isolation** -- `CLONE_NEWNET` blocks all network access in hermetic builds
-- **Landlock filesystem enforcement** -- Kernel-enforced path restrictions via `crates/conary-core/src/capability/enforcement/landlock_enforce.rs`
-- **Capability declarations** -- Packages declare network, filesystem, and syscall requirements
-- **Protected live-root writable layers** -- `/etc` and `/var` writes in
-  protected scriptlet modes go to private sandbox directories instead of the
-  live host
-- **Structured scriptlet warning metadata** -- warning-only legacy
-  post-scriptlet failures are stored on changesets and surfaced in history
-- **Scriptlet-scoped host integration declarations** -- CCS manifests can
-  declare the narrow `systemd-service-registration`, `tmpfiles-registration`,
-  and `dbus-service-registration` scriptlet capabilities; install fails closed
-  until enforcement exists unless the operator chooses direct legacy execution
+The parent parses every captured argv through the typed activation grammar.
+The systemctl proxy scan is generated from the same typed verb/option tables,
+so shell token lists cannot drift from parser authority. Ambiguous pre-verb
+options, malformed invocations, unsafe paths, unsupported compound actions,
+and unmodeled provider operations fail before commit.
 
-## Future Enhancements
+Selected-root-only SELinux label/file-context work creates no runtime request.
+SELinux module install, persistent boolean assignment, AppArmor profile reload,
+and AppArmor mode changes become exact generation requests after their
+documented no-live selected-root half succeeds. Non-persistent setsebool is a
+typed unsupported live operation because it cannot survive a same-generation
+reboot after one-shot completion.
 
-- cgroups v2 for finer resource control
-- Script signing and verification
+Accepted requests are stored against the source changeset with exact source and
+provider identity, projected into generated systems, and consumed only when
+that generation is proven active at boot. The consumer verifies the booted
+provider path and SHA-256 before running the exact captured argv. A missing,
+changed, or failing provider leaves a durable retryable failure; it is never a
+silent no-op, distro fallback, or manual reconciliation item. Skipped
+generations carry unapplied requests forward; completed requests are not
+replayed into later generations.
+
+## Source-Format Failure Semantics
+
+The typed transaction graph owns failure behavior:
+
+- RPM stage order, instance counts, triggers, embedded Lua, and macro expansion
+  follow RPM's documented ABI.
+- Debian maintainer scripts, trigger state, conffiles, alternatives, dpkg
+  compatibility projection, deconfiguration, and error-unwind edges follow
+  dpkg's documented ABI.
+- Arch `.INSTALL` functions, ALPM hook ordering, stdin/argv, and implicit
+  transaction finalizers follow libalpm's documented ABI.
+
+An upstream ABI may intentionally ignore a particular helper result; for
+example, libalpm ignores its implicit `ldconfig` return value. That behavior is
+encoded in the typed source-format adapter. It is not a generic warning policy
+and cannot be selected by message text or a flag.
+
+Every other lifecycle failure aborts the transaction. Conary has no
+`post_hooks_failed` changeset state and does not record a failed authoritative
+hook as a successful install with a warning.
+
+## Signed CCS Hooks
+
+CCS hook declarations are covered by signed CCS v2 authority. Package-scoped
+pre-install, post-install, and persisted pre-remove hooks are preflighted
+against the selected root.
+
+Post-install hooks run after the typed native graph but before the changeset
+and selected-root input commit. Their filesystem effects, captured activation
+requests, and package state therefore succeed or roll back as one operation.
+Pre-remove hook identity is bound to the exact installed Conary trove; upgrade,
+replacement, conflict removal, and explicit removal load that persisted
+authority rather than trusting a new archive.
+
+## Diagnostic Analysis Is Not Authority
+
+`security/command_risk.rs` parses shell with tree-sitter and produces typed
+diagnostic evidence for destructive filesystem operations, network access,
+dynamic execution, persistence, credential paths, and similar risks.
+
+That evidence is useful for explanation, corpus measurement, and prioritizing
+native models. It cannot:
+
+- create or suppress a lifecycle event;
+- select a source or target ABI;
+- change ordering, argv, stdin, payload visibility, or recovery;
+- approve compatibility, execution, serving, or publication;
+- weaken the selected-root boundary;
+- replace exact source metadata or runtime capture.
+
+Malformed or dynamic shell produces unresolved diagnostic findings. Literal
+words in comments and data do not become commands. Remi may expose
+privacy-normalized diagnostic aggregates, but raw program artifacts,
+credentials, environment values, and host-local paths remain private.
+
+## Unsupported Semantics
+
+An unsupported interpreter, expansion flag, helper contract, recovery edge, or
+runtime action is an implementation gap in a supported source format. Conary
+returns a typed preflight error naming the missing contract. It does not place
+the package into indefinite human review, silently discard the behavior, or
+turn a diagnostic pattern into a substitute implementation.
+
+Closing such a gap requires one of:
+
+- an exact source-ABI implementation;
+- a Conary-owned typed compatibility service with equivalent persisted state
+  and failure behavior;
+- a complete lowering whose grammar, payload effects, state transitions, and
+  unwind paths are proven by focused tests.
+
+## Implementation Map
+
+| Ownership | Start here |
+|---|---|
+| Source lifecycle schemas | `crates/conary-core/src/ccs/native_lifecycle.rs` |
+| Source transaction graphs | `crates/conary-core/src/ccs/native_transaction/` |
+| Exact lifecycle executor | `crates/conary-core/src/scriptlet/native_lifecycle.rs` |
+| Selected-root process boundary | `crates/conary-core/src/scriptlet/process.rs` |
+| Namespace, capability, and seccomp contract | `crates/conary-core/src/scriptlet/boundary.rs` |
+| Closed sandbox types | `crates/conary-core/src/scriptlet/sandbox.rs` |
+| Output and subprocess runtime | `crates/conary-core/src/scriptlet/runtime.rs`, `crates/conary-core/src/child_wait.rs` |
+| Exact activation capture | `crates/conary-core/src/scriptlet/activation_capture.rs` |
+| Shared systemctl parser/proxy grammar | `crates/conary-core/src/activation/systemd/grammar.rs` |
+| SELinux/AppArmor argv grammars | `crates/conary-core/src/activation/security_policy/` |
+| Generation activation model | `crates/conary-core/src/activation/` |
+| Transaction planning and preflight | `apps/conary/src/commands/install/native_events/` |
+| Debian target-state projection | `apps/conary/src/commands/install/native_events/debian_runtime/` |
+| CCS hook transaction boundary | `apps/conary/src/commands/install/ccs_transaction.rs` |
+| Persisted CCS remove authority | `crates/conary-core/src/db/models/installed_ccs_remove_hook.rs` |
+| Generation intent persistence | `crates/conary-core/src/db/models/generation_activation.rs` |
+
+## Proof Floor
+
+Run the `ccs`, `install`, and `generation` ownership-card proofs after changing
+this model. At minimum, changes to lifecycle execution owe:
+
+```bash
+cargo test -p conary-core --lib scriptlet
+cargo test -p conary-core --lib native_lifecycle
+cargo test -p conary-core --lib native_transaction
+cargo test -p conary-core --lib activation
+cargo test -p conary --lib commands::install::native_events
+cargo test -p conary --lib commands::ccs::install
+```

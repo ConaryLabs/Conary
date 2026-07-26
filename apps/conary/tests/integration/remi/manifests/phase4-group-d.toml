@@ -28,18 +28,18 @@ fatal = true
 
 # Setup: init DB
 [[test.step]]
-conary = "system init --profile ${REMI_DISTRO}"
+conary = "system init"
 
 [test.step.assert]
 exit_code = 0
 
 # Setup: remove default repos to avoid slow syncs
 [[test.step]]
-run = "${CONARY_BIN} repo remove remi --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-core --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-extra --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove arch-multilib --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove fedora-44 --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} repo remove ubuntu-26.04 --db-path ${DB_PATH} 2>/dev/null; true"
 
 # Setup: add Remi repo (needed for trust and federation tests that reference REPO_NAME)
 [[test.step]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO} --no-gpg-check"
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile ${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0
@@ -52,7 +52,7 @@ exit_code = 0
 
 # Setup: install fixture CCS (always available, no distro repo needed)
 [[test.step]]
-conary = "ccs install ${FIXTURE_V1_CCS} --yes --allow-unsigned --sandbox never --reinstall"
+conary = "ccs install ${FIXTURE_V1_CCS} --yes --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -179,7 +179,7 @@ timeout = 120
 group = "D"
 
 [[test.step]]
-conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --yes --allow-unsigned --allow-capabilities --sandbox never --reinstall"
+conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs --yes --policy ${FIXTURE_CCS_POLICY} --sandbox always --reinstall"
 
 [test.step.assert]
 exit_code = 0
@@ -297,16 +297,23 @@ stdout_not_contains = "panic"
 [[test]]
 id = "T230a"
 name = "system_trigger_disable"
-description = "Disable the built-in ldconfig trigger"
+description = "Disable an explicitly configured custom trigger"
 timeout = 30
 group = "D"
 
 [[test.step]]
-conary = "system trigger disable ldconfig"
+conary = "system trigger add phase4-toggle-trigger --pattern /etc/phase4-toggle/*.conf --handler /bin/true --description phase4-toggle"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Disabled trigger: ldconfig"
+stdout_contains = "Created trigger: phase4-toggle-trigger"
+
+[[test.step]]
+conary = "system trigger disable phase4-toggle-trigger"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Disabled trigger: phase4-toggle-trigger"
 
 # --------------------------------------------------------------------------
 # T230b: system trigger enable
@@ -315,17 +322,24 @@ stdout_contains = "Disabled trigger: ldconfig"
 [[test]]
 id = "T230b"
 name = "system_trigger_enable"
-description = "Re-enable the built-in ldconfig trigger"
+description = "Re-enable and clean up an explicitly configured custom trigger"
 timeout = 30
 group = "D"
 depends_on = ["T230a"]
 
 [[test.step]]
-conary = "system trigger enable ldconfig"
+conary = "system trigger enable phase4-toggle-trigger"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Enabled trigger: ldconfig"
+stdout_contains = "Enabled trigger: phase4-toggle-trigger"
+
+[[test.step]]
+conary = "system trigger remove phase4-toggle-trigger"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "Removed trigger: phase4-toggle-trigger"
 
 # --------------------------------------------------------------------------
 # T230c: system trigger add
@@ -439,65 +453,27 @@ exit_code = 0
 stdout_contains_all = ["TUF enabled: yes", "Trusted keys: 1"]
 stdout_not_contains = "panic"
 
-# --------------------------------------------------------------------------
-# T234: Trust disable --force
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T234"
-name = "trust_disable"
-description = "Disable TUF for the repository with an explicit force flag"
-timeout = 30
-group = "D"
-depends_on = ["T233"]
-
-[[test.step]]
-conary = "trust disable ${REPO_NAME} --force"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "TUF verification disabled for: ${REPO_NAME}"
-
-# --------------------------------------------------------------------------
-# T235: Trust enable
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T235"
-name = "trust_enable"
-description = "Re-enable TUF verification after bootstrap metadata is stored"
-timeout = 30
-group = "D"
-depends_on = ["T234"]
-
-[[test.step]]
-conary = "trust enable ${REPO_NAME}"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "TUF verification enabled for: ${REPO_NAME}"
-
 # ==========================================================================
 # SYSTEM OPERATIONS (T236-T245)
 # ==========================================================================
 
 # --------------------------------------------------------------------------
-# T236: System gc --dry-run
+# T236: Removed duplicate system gc surface
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T236"
-name = "system_gc_dry_run"
-description = "CAS garbage collection dry run"
+name = "removed_system_gc_surface_rejected"
+description = "The removed duplicate system gc surface must stay unavailable"
 timeout = 60
 group = "D"
 
 [[test.step]]
-conary = "system gc --dry-run"
+conary = "system gc"
 
 [test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
+exit_code_not = 0
+stderr_contains = "unrecognized subcommand 'gc'"
 
 # --------------------------------------------------------------------------
 # T237: System sbom (CycloneDX default)
@@ -597,24 +573,6 @@ group = "D"
 
 [[test.step]]
 conary = "system trigger list"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
-
-# --------------------------------------------------------------------------
-# T241: System trigger list --builtin
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T241"
-name = "system_trigger_list_builtin"
-description = "List built-in triggers only"
-timeout = 30
-group = "D"
-
-[[test.step]]
-conary = "system trigger list --builtin"
 
 [test.step.assert]
 exit_code = 0

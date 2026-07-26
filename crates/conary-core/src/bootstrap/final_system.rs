@@ -202,7 +202,7 @@ impl FinalSystemBuilder {
         let sources_dir = work_dir.join("sources");
         std::fs::create_dir_all(&sources_dir)?;
 
-        let runner = PackageBuildRunner::new(&sources_dir, &config);
+        let runner = PackageBuildRunner::new(&sources_dir);
 
         Ok(Self {
             work_dir: work_dir.to_path_buf(),

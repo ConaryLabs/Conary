@@ -2,50 +2,78 @@
 //! Inner install helper for callers that own the transaction lifecycle.
 //!
 //! `install_inner()` performs CAS storage and the DB operations (trove insert,
-//! file entries, dependencies, scriptlets) using a caller-provided DB
+//! file entries, typed requirements, native lifecycle state, and CCS hooks)
+//! using a caller-provided DB
 //! transaction and changeset. It does NOT: create/commit a DB transaction,
-//! create a changeset, or call `rebuild_and_mount()`.
+//! create a changeset, or rebuild a generation from explicit installed state.
 //! The caller handles all of those.
 
 use anyhow::{Context, Result, anyhow};
 use conary_core::components::ComponentType;
+use conary_core::config_transaction::{is_config_artifact_kind, is_etc_config_payload};
 use conary_core::db::models::{
-    Component, ConfigFile, ConfigSource, DependencyEntry, FileEntry, InstallSource,
-    InstalledFileCapability, InstalledLegacyScriptletBundle, ProvideEntry, ScriptletEntry, Trove,
+    Component, ConfigFile, ConfigSource, ExistingDirectoryMaterialization, FileEntry,
+    InstallSource, InstalledCcsRemoveHook, InstalledFileCapability, InstalledNativeLifecycleBundle,
+    InstalledRequirementGroup, Trove,
 };
-use conary_core::dependencies::DependencyClass;
+use conary_core::filesystem::CasStore;
+use conary_core::hash::HashAlgorithm;
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+};
+use conary_core::transaction::PackageRelationRemoval;
+#[cfg(test)]
 use conary_core::transaction::TransactionEngine;
 use rusqlite::{OptionalExtension, Transaction};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use tracing::{info, warn};
 
 use super::file_capabilities::is_regular_file_capability_payload;
 use super::{
-    ExtractionResult, InstallPhase, InstallProgress, TransactionContext,
-    mark_upgraded_parent_deriveds_stale, scheme_to_string,
+    ExtractionResult, InstallSemantics, TransactionContext, mark_upgraded_parent_deriveds_stale,
 };
-
-const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
+#[cfg(test)]
+use super::{InstallPhase, InstallProgress};
 
 /// Result from `install_inner` -- the trove ID of the installed package.
 pub struct InnerInstallResult {
     pub trove_id: i64,
+    pub retained_upgrade_trove_id: Option<i64>,
+    pub retained_relation_trove_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StoredInstallFile {
     pub path: String,
-    pub hash: String,
-    pub size: i64,
-    pub mode: i32,
-    pub symlink_target: Option<String>,
+    pub node: PayloadNode,
+    pub content: Option<PayloadContentAuthority>,
+    /// CAS identity for regular content or an exact symlink-target artifact.
+    ///
+    /// Non-content filesystem nodes do not receive a fabricated content
+    /// identity.
+    pub cas_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ResolvedInstallFile {
+    pub path: String,
+    pub node: ResolvedPayloadNode,
+    pub content: Option<PayloadContentAuthority>,
+    pub cas_hash: Option<String>,
+}
+
+pub(super) struct InsertedFileAuthority {
+    pub(super) file_id: i64,
+    pub(super) materialized: bool,
 }
 
 /// Execute the install DB operations using a caller-owned DB transaction.
 ///
 /// Stores files in CAS via the provided engine, then inserts the trove,
-/// components, files, dependencies, and scriptlets into the caller-provided
-/// transaction under the provided `changeset_id`.
+/// components, files, requirements, lifecycle state, and CCS hooks into the
+/// caller-provided transaction under the provided `changeset_id`.
+#[cfg(test)]
 pub fn install_inner(
     tx: &Transaction<'_>,
     engine: &mut TransactionEngine,
@@ -56,43 +84,121 @@ pub fn install_inner(
     progress: &InstallProgress,
 ) -> Result<InnerInstallResult> {
     progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let stored_files = store_install_files_in_cas(engine, extraction)?;
+    let stored_files = store_install_files_in_cas(engine.cas(), extraction)?;
     info!(
         "Stored {} files in CAS for {}",
         stored_files.len(),
         pkg.name()
     );
-    install_inner_with_stored_files(tx, changeset_id, pkg, extraction, ctx, &stored_files)
+    let resolved_files = resolve_stored_install_files(Path::new(ctx.root), &stored_files)?;
+    let directory_plan = preflight_resolved_file_ownership(
+        tx,
+        Path::new(ctx.root),
+        &resolved_files,
+        pkg.name(),
+        ctx.relation_removals,
+        ctx.semantics,
+    )?;
+    install_inner_with_stored_files(
+        tx,
+        changeset_id,
+        pkg,
+        extraction,
+        ctx,
+        &resolved_files,
+        &directory_plan,
+    )
 }
 
 pub(super) fn store_install_files_in_cas(
-    engine: &TransactionEngine,
+    cas: &CasStore,
     extraction: &ExtractionResult,
 ) -> Result<Vec<StoredInstallFile>> {
-    let mut stored_files: Vec<StoredInstallFile> =
-        Vec::with_capacity(extraction.extracted_files.len());
-    for file in &extraction.extracted_files {
-        let hash = if let Some(target) = file.symlink_target.as_deref() {
-            engine
-                .cas()
-                .store_symlink(target)
-                .with_context(|| format!("Failed to store symlink {} in CAS", file.path))?
-        } else {
-            engine
-                .cas()
-                .store(&file.content)
-                .with_context(|| format!("Failed to store {} in CAS", file.path))?
+    store_extracted_files_in_cas(cas, &extraction.extracted_files)
+}
+
+pub(super) fn store_extracted_files_in_cas(
+    cas: &CasStore,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
+) -> Result<Vec<StoredInstallFile>> {
+    if cas.algorithm() != HashAlgorithm::Sha256 {
+        anyhow::bail!(
+            "installed payload authority requires a SHA-256 CAS, found {}",
+            cas.algorithm()
+        );
+    }
+    let mut stored_files: Vec<StoredInstallFile> = Vec::with_capacity(extracted_files.len());
+    for file in extracted_files {
+        file.node
+            .validate_content(file.content_authority.as_ref())
+            .with_context(|| format!("Invalid payload authority for {}", file.path))?;
+        let cas_hash = match &file.node.kind {
+            PayloadNodeKind::Regular { .. } => {
+                let authority = file.content_authority.as_ref().ok_or_else(|| {
+                    anyhow!("regular payload {} has no content authority", file.path)
+                })?;
+                let mut reader = file
+                    .open_content()
+                    .with_context(|| format!("Failed to open payload source for {}", file.path))?;
+                let stored = cas
+                    .store_reader_expected(reader.as_mut(), authority.size, &authority.sha256)
+                    .with_context(|| format!("Failed to store {} in CAS", file.path))?;
+                if stored != authority.sha256 {
+                    anyhow::bail!(
+                        "CAS returned {} for {}, expected authoritative digest {}",
+                        stored,
+                        file.path,
+                        authority.sha256
+                    );
+                }
+                Some(stored)
+            }
+            PayloadNodeKind::Symlink { target } => Some(
+                cas.store_symlink(target)
+                    .with_context(|| format!("Failed to store symlink {} in CAS", file.path))?,
+            ),
+            PayloadNodeKind::Directory
+            | PayloadNodeKind::Hardlink { .. }
+            | PayloadNodeKind::BlockDevice { .. }
+            | PayloadNodeKind::CharacterDevice { .. }
+            | PayloadNodeKind::Fifo
+            | PayloadNodeKind::Socket => None,
         };
         stored_files.push(StoredInstallFile {
             path: file.path.clone(),
-            hash,
-            size: file.size,
-            mode: file.mode,
-            symlink_target: file.symlink_target.clone(),
+            node: file.node.clone(),
+            content: file.content_authority.clone(),
+            cas_hash,
         });
     }
 
     Ok(stored_files)
+}
+
+pub(super) fn resolve_stored_install_files(
+    root: &Path,
+    stored_files: &[StoredInstallFile],
+) -> Result<Vec<ResolvedInstallFile>> {
+    let mut paths = HashSet::with_capacity(stored_files.len());
+    for file in stored_files {
+        if !paths.insert(file.path.as_str()) {
+            anyhow::bail!("payload path {} is declared more than once", file.path);
+        }
+    }
+    let resolved_nodes = super::payload_identity::resolve_payload_nodes(
+        root,
+        stored_files.iter().map(|file| file.node.clone()),
+    )?;
+    Ok(stored_files
+        .iter()
+        .zip(resolved_nodes)
+        .map(|(file, node)| ResolvedInstallFile {
+            path: file.path.clone(),
+            node,
+            content: file.content.clone(),
+            cas_hash: file.cas_hash.clone(),
+        })
+        .collect())
 }
 
 pub(super) fn install_inner_with_stored_files(
@@ -101,18 +207,36 @@ pub(super) fn install_inner_with_stored_files(
     pkg: &dyn conary_core::packages::PackageFormat,
     extraction: &ExtractionResult,
     ctx: &TransactionContext<'_>,
-    stored_files: &[StoredInstallFile],
+    stored_files: &[ResolvedInstallFile],
+    directory_plan: &super::shared_directory::DirectoryInstallPlan,
 ) -> Result<InnerInstallResult> {
+    let package_scheme = pkg.version_scheme();
+    if package_scheme != ctx.semantics.version_scheme {
+        anyhow::bail!(
+            "install semantics for {} declare {} versioning, but the parsed package owns {} versioning",
+            pkg.name(),
+            ctx.semantics.version_scheme.as_str(),
+            package_scheme.as_str()
+        );
+    }
+    if let Some(provenance) = ctx.repository_provenance.as_ref()
+        && provenance.version_scheme != package_scheme
+    {
+        anyhow::bail!(
+            "repository provenance for {} declares {} versioning, but the parsed package owns {} versioning",
+            pkg.name(),
+            provenance.version_scheme.as_str(),
+            package_scheme.as_str()
+        );
+    }
     let is_upgrade = ctx.old_trove_to_upgrade.is_some();
 
     let selection_reason = ctx.selection_reason;
     let classified = &extraction.classified;
-    let language_provides = &extraction.language_provides;
-    let scriptlets = pkg.scriptlets();
-
     let trove_id = {
         if let Some(old_trove) = ctx.old_trove_to_upgrade
             && let Some(old_id) = old_trove.id
+            && !ctx.retain_replaced_payload_until_lifecycle
         {
             info!("Removing old version {} before upgrade", old_trove.version);
             conary_core::db::models::Trove::delete(tx, old_id)?;
@@ -120,15 +244,11 @@ pub(super) fn install_inner_with_stored_files(
 
         let mut trove = pkg.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
-        trove.version_scheme = Some(scheme_to_string(ctx.semantics.version_scheme));
 
         if let Some(provenance) = ctx.repository_provenance.as_ref() {
             trove.install_source = InstallSource::Repository;
             trove.installed_from_repository_id = Some(provenance.repository_id);
-            trove.source_distro = provenance.source_distro.clone();
-            if let Some(version_scheme) = provenance.version_scheme.as_ref() {
-                trove.version_scheme = Some(version_scheme.clone());
-            }
+            trove.source_profile = provenance.source_profile.clone();
         }
 
         if let Some(reason) = selection_reason {
@@ -144,7 +264,7 @@ pub(super) fn install_inner_with_stored_files(
                      WHERE rp.name = ?1 AND rp.version = ?2
                        AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)
                      ORDER BY
-                         (r.default_strategy_distro = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
+                         (r.source_profile = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
                          r.priority DESC, r.id ASC
                      LIMIT 1",
                     rusqlite::params![pkg.name(), pkg.version(), pkg.architecture()],
@@ -156,16 +276,29 @@ pub(super) fn install_inner_with_stored_files(
         }
 
         let trove_id = trove.insert(tx)?;
+        InstalledRequirementGroup::insert_groups(
+            tx,
+            trove_id,
+            ctx.semantics.version_scheme,
+            pkg.requirements(),
+        )?;
+        InstalledRequirementGroup::insert_groups(
+            tx,
+            trove_id,
+            ctx.semantics.version_scheme,
+            pkg.relations(),
+        )?;
 
-        if let Some(bundle) = ctx.accepted_legacy_bundle {
-            let mut installed_bundle = InstalledLegacyScriptletBundle::new(
-                trove_id,
-                Some(changeset_id),
-                bundle.target_id.clone(),
-                bundle.replay_policy.clone(),
-                bundle.replay_enabled,
-                &bundle.bundle,
-            )?;
+        if let Some(bundle) = ctx.native_lifecycle_bundle {
+            let mut installed_bundle =
+                InstalledNativeLifecycleBundle::new(trove_id, Some(changeset_id), bundle)?;
+            if bundle.source_format == conary_core::ccs::native_lifecycle::SourceFormat::Deb {
+                // The bundle row is committed atomically with the unpacked
+                // payload. Configuration happens after this transaction.
+                installed_bundle.set_lifecycle_state(
+                    conary_core::ccs::native_transaction::DebPackageState::Unpacked,
+                );
+            }
             installed_bundle.insert_or_replace(tx)?;
         }
 
@@ -204,37 +337,65 @@ pub(super) fn install_inner_with_stored_files(
             }
         }
 
-        let mut installed_file_metadata: HashMap<String, (i64, String)> =
+        let mut installed_file_metadata: HashMap<String, (i64, Option<String>)> =
             HashMap::with_capacity(stored_files.len());
         for file in stored_files {
             let path = &file.path;
-            let hash = &file.hash;
-            if hash.len() < 3 {
-                warn!("Skipping file with short hash: {} (hash={})", path, hash);
-                continue;
+            if let Some(content) = file.content.as_ref() {
+                tx.execute(
+                    "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![
+                        &content.sha256,
+                        format!("objects/{}/{}", &content.sha256[0..2], &content.sha256[2..]),
+                        i64::try_from(content.size)
+                            .context("payload content size exceeds SQLite range")?,
+                    ],
+                )?;
             }
-            tx.execute(
-                "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size) VALUES (?1, ?2, ?3)",
-                [hash, &format!("objects/{}/{}", &hash[0..2], &hash[2..]), &file.size.to_string()],
-            )?;
 
             let component_id = path_to_component.get(path.as_str()).copied();
-            let mut file_entry =
-                FileEntry::new(path.clone(), hash.clone(), file.size, file.mode, trove_id);
+            let mut file_entry = FileEntry::new(
+                path.clone(),
+                file.node.clone(),
+                file.content.clone(),
+                trove_id,
+            );
             file_entry.component_id = component_id;
-            file_entry.symlink_target = file.symlink_target.clone();
-            let file_id =
-                insert_file_entry_claiming_live_root_overlap(tx, &mut file_entry, pkg.name())?;
-            installed_file_metadata.insert(path.clone(), (file_id, hash.clone()));
-
-            let action = if is_upgrade { "modify" } else { "add" };
-            tx.execute(
-                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                [&changeset_id.to_string(), path, hash, action],
+            directory_plan.reconcile_through_symlink_target(tx, file)?;
+            let inserted = insert_file_entry_claiming_live_root_overlap(
+                tx,
+                &mut file_entry,
+                pkg.name(),
+                ctx.relation_removals,
+                directory_plan.materialization_for_path(path),
+                directory_plan.leaf_before(path),
             )?;
+            directory_plan.persist_through_symlink_target(tx, file, trove_id)?;
+            installed_file_metadata.insert(path.clone(), (inserted.file_id, file.cas_hash.clone()));
+
+            if inserted.materialized {
+                let action = if is_upgrade { "modify" } else { "add" };
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        changeset_id,
+                        path,
+                        file.content.as_ref().map(|content| &content.sha256),
+                        action
+                    ],
+                )?;
+            }
         }
 
-        persist_declared_config_files(tx, trove_id, pkg, ctx, &installed_file_metadata)?;
+        persist_config_files(
+            tx,
+            trove_id,
+            pkg,
+            ctx,
+            &installed_file_metadata,
+            stored_files,
+            &extraction.extracted_files,
+        )?;
         persist_declared_file_capabilities(
             tx,
             trove_id,
@@ -244,68 +405,12 @@ pub(super) fn install_inner_with_stored_files(
             stored_files,
         )?;
 
-        for dep in pkg.dependencies() {
-            let mut dep_entry = DependencyEntry::new(
-                trove_id,
-                dep.name.clone(),
-                None,
-                dep.dep_type.as_str().to_string(),
-                dep.version.clone(),
-            );
-            dep_entry.insert(tx)?;
+        if let Some(hook) = extraction.ccs_remove_hook.as_ref() {
+            InstalledCcsRemoveHook::new(trove_id, hook.script.clone(), hook.reversible)
+                .insert_or_replace(tx)?;
         }
 
-        // Bundle-carrying CCS installs use installed_legacy_scriptlet_bundles
-        // as the remove/upgrade authority instead of the flattened scriptlets table.
-        let persist_flattened_scriptlets = ctx.accepted_legacy_bundle.is_none();
-        if persist_flattened_scriptlets {
-            for scriptlet in scriptlets {
-                let mut entry = ScriptletEntry::with_flags(
-                    trove_id,
-                    scriptlet.phase.to_string(),
-                    scriptlet.interpreter.clone(),
-                    scriptlet.content.clone(),
-                    scriptlet.flags.clone(),
-                    match ctx.semantics.source {
-                        super::PreparedSourceKind::Legacy { format } => format.as_str(),
-                        super::PreparedSourceKind::Ccs => "ccs",
-                    },
-                );
-                entry.insert(tx)?;
-            }
-
-            if let Some(script) = extraction.ccs_pre_remove_script.as_deref() {
-                let mut entry = ScriptletEntry::new(
-                    trove_id,
-                    "pre-remove".to_string(),
-                    "/bin/sh".to_string(),
-                    script.to_string(),
-                    "ccs",
-                );
-                entry.insert(tx)?;
-            }
-        }
-
-        for lang_dep in language_provides {
-            let kind = match lang_dep.class {
-                DependencyClass::Package => "package",
-                _ => lang_dep.class.prefix(),
-            };
-            let mut provide = ProvideEntry::new_typed(
-                trove_id,
-                kind,
-                lang_dep.name.clone(),
-                lang_dep.version_constraint.clone(),
-            );
-            provide.insert_or_ignore(tx)?;
-        }
-
-        let mut pkg_provide = ProvideEntry::new(
-            trove_id,
-            pkg.name().to_string(),
-            Some(pkg.version().to_string()),
-        );
-        pkg_provide.insert_or_ignore(tx)?;
+        super::transaction::persist_package_provides(tx, trove_id, pkg)?;
 
         trove_id
     };
@@ -316,37 +421,147 @@ pub(super) fn install_inner_with_stored_files(
             pkg.name(),
             Some(&old_trove.version),
             pkg.version(),
-        );
+        )?;
     }
 
-    Ok(InnerInstallResult { trove_id })
+    let mut retained_relation_trove_ids = ctx
+        .relation_removals
+        .iter()
+        .map(|removal| removal.trove_id)
+        .collect::<Vec<_>>();
+    retained_relation_trove_ids.sort_unstable();
+    retained_relation_trove_ids.dedup();
+    Ok(InnerInstallResult {
+        trove_id,
+        retained_upgrade_trove_id: ctx
+            .retain_replaced_payload_until_lifecycle
+            .then(|| ctx.old_trove_to_upgrade.and_then(|trove| trove.id))
+            .flatten(),
+        retained_relation_trove_ids,
+    })
 }
 
-fn persist_declared_config_files(
+fn persist_config_files(
     tx: &Transaction<'_>,
     trove_id: i64,
     pkg: &dyn conary_core::packages::PackageFormat,
     ctx: &TransactionContext<'_>,
-    installed_file_metadata: &HashMap<String, (i64, String)>,
+    installed_file_metadata: &HashMap<String, (i64, Option<String>)>,
+    stored_files: &[ResolvedInstallFile],
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
-    let source = config_source_for_context(ctx);
+    let declared_source = config_source_for_context(ctx);
+    let mut declarations = HashMap::new();
     for config_info in pkg.config_files() {
-        let Some((file_id, hash)) = installed_file_metadata.get(&config_info.path) else {
-            warn!(
-                "Skipping declared config file {} for {} because it was not installed",
+        if declarations
+            .insert(config_info.path.as_str(), config_info)
+            .is_some()
+        {
+            anyhow::bail!(
+                "package {} declares config path {} more than once",
+                pkg.name(),
+                config_info.path
+            );
+        }
+        if config_info.remove_on_upgrade {
+            if declared_source != ConfigSource::Deb || config_info.ghost {
+                anyhow::bail!(
+                    "remove-on-upgrade declaration {} from {} is not a Debian conffile",
+                    config_info.path,
+                    pkg.name()
+                );
+            }
+            super::config_files::persist_debian_remove_on_upgrade(tx, &config_info.path, trove_id)?;
+            continue;
+        }
+        if config_info.ghost {
+            let mut config = ConfigFile::new_ghost(config_info.path.clone(), trove_id);
+            config.noreplace = config_info.noreplace;
+            config.source = declared_source;
+            config.upsert(tx)?;
+        }
+    }
+
+    let mut persisted = HashSet::new();
+    for file in stored_files {
+        let declaration = declarations.get(file.path.as_str()).copied();
+        if declaration.is_none() && !is_etc_config_payload(&file.path, &file.node.source.kind) {
+            continue;
+        }
+        if declaration.is_some_and(|config| config.ghost) {
+            anyhow::bail!(
+                "ghost config {} from {} unexpectedly has a payload entry",
+                file.path,
+                pkg.name()
+            );
+        }
+        if declaration.is_some_and(|config| config.remove_on_upgrade) {
+            anyhow::bail!(
+                "Debian remove-on-upgrade conffile {} from {} unexpectedly has a payload entry",
+                file.path,
+                pkg.name()
+            );
+        }
+        if !is_config_artifact_kind(&file.node.source.kind) {
+            anyhow::bail!(
+                "declared config {} from {} is not a regular file or symlink",
+                file.path,
+                pkg.name()
+            );
+        }
+        let (file_id, hash) = installed_file_metadata.get(&file.path).ok_or_else(|| {
+            anyhow!(
+                "config payload {} from {} has no installed file identity",
+                file.path,
+                pkg.name()
+            )
+        })?;
+        let hash = hash.as_ref().ok_or_else(|| {
+            anyhow!(
+                "config payload {} from {} has no exact content identity",
+                file.path,
+                pkg.name()
+            )
+        })?;
+        let noreplace = declaration.is_some_and(|config| config.noreplace);
+        let mut config = if noreplace {
+            ConfigFile::new_noreplace(file.path.clone(), trove_id, hash.clone())
+        } else {
+            ConfigFile::new(file.path.clone(), trove_id, hash.clone())
+        };
+        let extracted = extracted_files
+            .iter()
+            .find(|extracted| extracted.path == file.path)
+            .with_context(|| {
+                format!(
+                    "config payload {} from {} has no extracted content",
+                    file.path,
+                    pkg.name()
+                )
+            })?;
+        config.original_md5 = super::config_files::debian_original_md5_payload(
+            declared_source,
+            declaration.is_some(),
+            extracted,
+        )?;
+        config.file_id = Some(*file_id);
+        config.source = declaration.map_or(ConfigSource::Auto, |_| declared_source);
+        config.upsert(tx)?;
+        persisted.insert(file.path.as_str());
+    }
+
+    for config_info in pkg
+        .config_files()
+        .iter()
+        .filter(|config| !config.ghost && !config.remove_on_upgrade)
+    {
+        if !persisted.contains(config_info.path.as_str()) {
+            anyhow::bail!(
+                "declared config {} from {} is missing from the installed payload",
                 config_info.path,
                 pkg.name()
             );
-            continue;
-        };
-        let mut config = if config_info.noreplace {
-            ConfigFile::new_noreplace(config_info.path.clone(), trove_id, hash.clone())
-        } else {
-            ConfigFile::new(config_info.path.clone(), trove_id, hash.clone())
-        };
-        config.file_id = Some(*file_id);
-        config.source = source;
-        config.upsert(tx)?;
+        }
     }
 
     Ok(())
@@ -357,8 +572,8 @@ fn persist_declared_file_capabilities(
     trove_id: i64,
     pkg: &dyn conary_core::packages::PackageFormat,
     ctx: &TransactionContext<'_>,
-    installed_file_metadata: &HashMap<String, (i64, String)>,
-    stored_files: &[StoredInstallFile],
+    installed_file_metadata: &HashMap<String, (i64, Option<String>)>,
+    stored_files: &[ResolvedInstallFile],
 ) -> Result<()> {
     let Some(file_capabilities) = ctx.ccs_file_capabilities else {
         return Ok(());
@@ -391,10 +606,7 @@ fn persist_declared_file_capabilities(
                         pkg.name()
                     )
                 })?;
-            if !is_regular_file_capability_payload(
-                stored_file.mode,
-                stored_file.symlink_target.as_deref(),
-            ) {
+            if !is_regular_file_capability_payload(&stored_file.node.source.kind) {
                 anyhow::bail!(
                     "file capability target {} for {} is not a regular installed file",
                     capability.path,
@@ -413,7 +625,7 @@ fn persist_declared_file_capabilities(
 
 fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
     match ctx.semantics.source {
-        super::PreparedSourceKind::Legacy { format } => match format {
+        super::PreparedSourceKind::NativePackage { format } => match format {
             crate::commands::PackageFormatType::Rpm => ConfigSource::Rpm,
             crate::commands::PackageFormatType::Deb => ConfigSource::Deb,
             crate::commands::PackageFormatType::Arch => ConfigSource::Arch,
@@ -422,16 +634,31 @@ fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
     }
 }
 
-pub(super) fn preflight_live_root_file_ownership(
+pub(super) fn preflight_file_ownership(
     conn: &rusqlite::Connection,
     paths: impl IntoIterator<Item = impl AsRef<str>>,
     package_name: &str,
+    relation_removals: &[PackageRelationRemoval],
 ) -> Result<()> {
     for path in paths {
         let path = path.as_ref();
         let Some(existing) = FileEntry::find_by_path(conn, path)? else {
             continue;
         };
+
+        // Raw package identities are not authoritative until they have been
+        // resolved against the selected root. Defer existing directories to
+        // the definitive resolved-node preflight before root mutation.
+        if matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+            || super::shared_directory::owner_allows_replacement(
+                conn,
+                &existing,
+                package_name,
+                relation_removals,
+            )?
+        {
+            continue;
+        }
 
         let owner = Trove::find_by_id(conn, existing.trove_id)?.ok_or_else(|| {
             anyhow!(
@@ -440,11 +667,6 @@ pub(super) fn preflight_live_root_file_ownership(
                 existing.trove_id
             )
         })?;
-
-        if owner.name == LIVE_ROOT_PACKAGE_NAME || owner.name == package_name {
-            continue;
-        }
-
         return Err(anyhow!(
             "Path {} is already tracked by package {}",
             path,
@@ -455,14 +677,97 @@ pub(super) fn preflight_live_root_file_ownership(
     Ok(())
 }
 
+pub(super) fn preflight_resolved_file_ownership(
+    conn: &rusqlite::Connection,
+    selected_root: &Path,
+    files: &[ResolvedInstallFile],
+    package_name: &str,
+    relation_removals: &[PackageRelationRemoval],
+    semantics: InstallSemantics,
+) -> Result<super::shared_directory::DirectoryInstallPlan> {
+    super::shared_directory::preflight_resolved_file_ownership(
+        conn,
+        selected_root,
+        files,
+        package_name,
+        relation_removals,
+        semantics,
+    )
+}
+
 pub(super) fn insert_file_entry_claiming_live_root_overlap(
     tx: &Transaction<'_>,
     file_entry: &mut FileEntry,
     package_name: &str,
-) -> Result<i64> {
+    relation_removals: &[PackageRelationRemoval],
+    directory_materialization: ExistingDirectoryMaterialization,
+    selected_root_leaf_before: Option<&ResolvedPayloadNode>,
+) -> Result<InsertedFileAuthority> {
+    if let Some(leaf_before) = selected_root_leaf_before {
+        if let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? {
+            let shared_directory_anchor =
+                matches!(file_entry.node.source.kind, PayloadNodeKind::Directory)
+                    && (matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+                        || directory_materialization
+                            .accepts_anchor_kind(&existing.node.source.kind));
+            if !shared_directory_anchor
+                && !super::shared_directory::owner_allows_replacement(
+                    tx,
+                    &existing,
+                    package_name,
+                    relation_removals,
+                )?
+            {
+                let owner = Trove::find_by_id(tx, existing.trove_id)?.ok_or_else(|| {
+                    anyhow!(
+                        "Path {} is already tracked by missing trove {}",
+                        file_entry.path,
+                        existing.trove_id
+                    )
+                })?;
+                return Err(anyhow!(
+                    "Path {} is already tracked by package {}",
+                    file_entry.path,
+                    owner.name
+                ));
+            }
+            FileEntry::reconcile_directory_materialization(
+                tx,
+                &file_entry.path,
+                leaf_before,
+                directory_materialization,
+            )?;
+        } else {
+            let mut anchor = FileEntry::new(
+                file_entry.path.clone(),
+                leaf_before.clone(),
+                None,
+                file_entry.trove_id,
+            );
+            anchor.component_id = file_entry.component_id;
+            anchor.insert(tx)?;
+        }
+    }
     let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? else {
-        return Ok(file_entry.insert(tx)?);
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert(tx)?,
+            materialized: true,
+        });
     };
+
+    if matches!(file_entry.node.source.kind, PayloadNodeKind::Directory)
+        && (matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+            || directory_materialization.accepts_anchor_kind(&existing.node.source.kind))
+    {
+        info!(
+            "Recording shared directory claim {} for {}",
+            file_entry.path, package_name
+        );
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            materialized: directory_materialization.applies_incoming(),
+        });
+    }
 
     let owner = Trove::find_by_id(tx, existing.trove_id)?.ok_or_else(|| {
         anyhow!(
@@ -472,12 +777,20 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
         )
     })?;
 
-    if owner.name == LIVE_ROOT_PACKAGE_NAME || owner.name == package_name {
+    if super::shared_directory::owner_allows_replacement(
+        tx,
+        &existing,
+        package_name,
+        relation_removals,
+    )? {
         info!(
             "Claiming {} from tracked package {} for {}",
             file_entry.path, owner.name, package_name
         );
-        return Ok(file_entry.insert_or_replace(tx)?);
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            materialized: true,
+        });
     }
 
     Err(anyhow!(
@@ -488,713 +801,5 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::PackageFormatType;
-    use crate::commands::install::{
-        ExtractionResult, InstallSemantics, LegacyReplayOptions, PackageExecutionPath,
-        RepositoryInstallProvenance, TransactionContext,
-    };
-    use conary_core::db::models::{
-        Changeset, ConfigFile, ConfigSource, FileEntry, InstalledFileCapability, Repository, Trove,
-        TroveType,
-    };
-    use conary_core::packages::traits::{
-        ConfigFileInfo, Dependency, ExtractedFile, PackageFile, PackageFormat, Scriptlet,
-    };
-    use conary_core::transaction::{TransactionConfig, TransactionEngine};
-    use std::collections::HashMap;
-
-    struct FakePackage {
-        name: String,
-        version: String,
-        files: Vec<PackageFile>,
-        extracted_files: Vec<ExtractedFile>,
-        dependencies: Vec<Dependency>,
-        scriptlets: Vec<Scriptlet>,
-        config_files: Vec<ConfigFileInfo>,
-    }
-
-    impl FakePackage {
-        fn with_file(name: &str, path: &str, content: &[u8]) -> Self {
-            let size = content.len() as i64;
-            Self {
-                name: name.to_string(),
-                version: "1.0.0".to_string(),
-                files: vec![PackageFile {
-                    path: path.to_string(),
-                    size,
-                    mode: 0o100644,
-                    sha256: None,
-                    symlink_target: None,
-                }],
-                extracted_files: vec![ExtractedFile {
-                    path: path.to_string(),
-                    content: content.to_vec(),
-                    size,
-                    mode: 0o100644,
-                    sha256: None,
-                    symlink_target: None,
-                }],
-                dependencies: Vec::new(),
-                scriptlets: Vec::new(),
-                config_files: Vec::new(),
-            }
-        }
-    }
-
-    fn file_capability(path: &str) -> conary_core::ccs::manifest::FileCapability {
-        conary_core::ccs::manifest::FileCapability {
-            path: path.to_string(),
-            capabilities: vec!["cap_net_bind_service".to_string()],
-            permitted: true,
-            effective: true,
-            inheritable: false,
-        }
-    }
-
-    impl PackageFormat for FakePackage {
-        fn parse(_path: &str) -> conary_core::Result<Self> {
-            unimplemented!("test package is constructed directly")
-        }
-
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn version(&self) -> &str {
-            &self.version
-        }
-
-        fn architecture(&self) -> Option<&str> {
-            Some("x86_64")
-        }
-
-        fn description(&self) -> Option<&str> {
-            None
-        }
-
-        fn files(&self) -> &[PackageFile] {
-            &self.files
-        }
-
-        fn dependencies(&self) -> &[Dependency] {
-            &self.dependencies
-        }
-
-        fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
-            Ok(self.extracted_files.clone())
-        }
-
-        fn scriptlets(&self) -> &[Scriptlet] {
-            &self.scriptlets
-        }
-
-        fn config_files(&self) -> &[ConfigFileInfo] {
-            &self.config_files
-        }
-
-        fn to_trove(&self) -> Trove {
-            Trove::new(self.name.clone(), self.version.clone(), TroveType::Package)
-        }
-    }
-
-    #[test]
-    fn install_inner_replaces_live_root_owned_overlapping_path() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let mut live_root = Trove::new(
-            "conary-live-root".to_string(),
-            "2026.05.14".to_string(),
-            TroveType::Package,
-        );
-        let live_root_id = live_root.insert(&conn).unwrap();
-        let mut live_file = FileEntry::new(
-            "/boot/grub2/grub.cfg".to_string(),
-            "old-live-root-hash".to_string(),
-            4,
-            0o100644,
-            live_root_id,
-        );
-        live_file.insert(&conn).unwrap();
-
-        let package = FakePackage::with_file("grub2", "/boot/grub2/grub.cfg", b"new-grub");
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/boot/grub2/grub.cfg".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::ccs(),
-            selection_reason: None,
-            old_trove_to_upgrade: None,
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: None,
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install grub2-1.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        let owner = FileEntry::find_by_path(&conn, "/boot/grub2/grub.cfg")
-            .unwrap()
-            .and_then(|file| Trove::find_by_id(&conn, file.trove_id).unwrap())
-            .unwrap();
-        assert_eq!(owner.name, "grub2");
-    }
-
-    #[test]
-    fn store_install_files_in_cas_preserves_symlink_targets() {
-        let temp = tempfile::tempdir().unwrap();
-        let config = TransactionConfig::new(temp.path());
-        let engine = TransactionEngine::new(config).unwrap();
-        let package = FakePackage {
-            name: "fixture".to_string(),
-            version: "1.0.0".to_string(),
-            files: vec![],
-            extracted_files: vec![ExtractedFile {
-                path: "/usr/bin/fixture-link".to_string(),
-                content: Vec::new(),
-                size: 7,
-                mode: 0o120777,
-                sha256: None,
-                symlink_target: Some("fixture".to_string()),
-            }],
-            dependencies: Vec::new(),
-            scriptlets: Vec::new(),
-            config_files: Vec::new(),
-        };
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/usr/bin/fixture-link".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-
-        let stored = store_install_files_in_cas(&engine, &extraction).unwrap();
-
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].path, "/usr/bin/fixture-link");
-        assert_eq!(stored[0].symlink_target.as_deref(), Some("fixture"));
-        assert!(!stored[0].hash.is_empty());
-    }
-
-    #[test]
-    fn install_inner_persists_declared_config_metadata() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let mut package = FakePackage::with_file(
-            "phase4-runtime-fixture",
-            "/etc/fixture/app.conf",
-            b"setting=1\n",
-        );
-        package.config_files = vec![ConfigFileInfo {
-            path: "/etc/fixture/app.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-        }];
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Config,
-                vec!["/etc/fixture/app.conf".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Config],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
-            selection_reason: None,
-            old_trove_to_upgrade: None,
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: None,
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install phase4-runtime-fixture-1.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        let config = ConfigFile::find_by_path(&conn, "/etc/fixture/app.conf")
-            .unwrap()
-            .expect("declared config file should be tracked");
-        let file = FileEntry::find_by_path(&conn, "/etc/fixture/app.conf")
-            .unwrap()
-            .expect("config file entry should be tracked");
-        assert_eq!(config.file_id, file.id);
-        assert_eq!(config.original_hash, file.sha256_hash);
-        assert_eq!(
-            config.current_hash.as_deref(),
-            Some(file.sha256_hash.as_str())
-        );
-        assert!(config.noreplace);
-        assert_eq!(config.source, ConfigSource::Rpm);
-    }
-
-    #[test]
-    fn install_inner_persists_selected_installed_file_capability_metadata() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let package = FakePackage::with_file("server", "/usr/bin/server", b"server\n");
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/usr/bin/server".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let file_capabilities = vec![
-            file_capability("/usr/bin/server"),
-            file_capability("/usr/bin/not-installed"),
-        ];
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::ccs(),
-            selection_reason: None,
-            old_trove_to_upgrade: None,
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: Some(&file_capabilities),
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install server-1.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        let result = install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        let rows = InstalledFileCapability::find_by_trove(&conn, result.trove_id).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path, "/usr/bin/server");
-        assert_eq!(rows[0].capabilities, vec!["cap_net_bind_service"]);
-        assert!(rows[0].permitted);
-        assert!(rows[0].effective);
-        assert!(!rows[0].inheritable);
-    }
-
-    #[test]
-    fn install_inner_persists_usrmerge_normalized_file_capability_metadata() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let package = FakePackage::with_file("demo", "/usr/bin/demo", b"demo\n");
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/usr/bin/demo".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let manifest_file_capabilities = vec![
-            file_capability("/bin/demo"),
-            file_capability("/sbin/admin-tool"),
-        ];
-        let normalized_file_capabilities = crate::commands::ccs::normalize_ccs_file_capabilities(
-            root.as_path(),
-            &manifest_file_capabilities,
-        )
-        .unwrap();
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::ccs(),
-            selection_reason: None,
-            old_trove_to_upgrade: None,
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: Some(&normalized_file_capabilities),
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install demo-1.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        let result = install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        let rows = InstalledFileCapability::find_by_trove(&conn, result.trove_id).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path, "/usr/bin/demo");
-    }
-
-    #[test]
-    fn install_inner_replaces_installed_file_capability_metadata_on_upgrade() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let mut old_trove = Trove::new(
-            "server".to_string(),
-            "1.0.0".to_string(),
-            TroveType::Package,
-        );
-        let old_trove_id = old_trove.insert(&conn).unwrap();
-        InstalledFileCapability::replace_for_trove(
-            &conn,
-            old_trove_id,
-            &[file_capability("/usr/bin/old-server")],
-        )
-        .unwrap();
-
-        let mut package = FakePackage::with_file("server", "/usr/bin/server", b"server-v2\n");
-        package.version = "2.0.0".to_string();
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/usr/bin/server".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let file_capabilities = vec![file_capability("/usr/bin/server")];
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::ccs(),
-            selection_reason: None,
-            old_trove_to_upgrade: Some(&old_trove),
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: Some(&file_capabilities),
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install server-2.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        let result = install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        assert!(
-            InstalledFileCapability::find_by_trove(&conn, old_trove_id)
-                .unwrap()
-                .is_empty()
-        );
-        let rows = InstalledFileCapability::find_by_trove(&conn, result.trove_id).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path, "/usr/bin/server");
-        assert_eq!(rows[0].trove_id, result.trove_id);
-    }
-
-    #[test]
-    fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-
-        let package = FakePackage {
-            name: "server".to_string(),
-            version: "1.0.0".to_string(),
-            files: vec![PackageFile {
-                path: "/usr/bin/server-link".to_string(),
-                size: 6,
-                mode: 0o120777,
-                sha256: None,
-                symlink_target: Some("server".to_string()),
-            }],
-            extracted_files: vec![ExtractedFile {
-                path: "/usr/bin/server-link".to_string(),
-                content: Vec::new(),
-                size: 6,
-                mode: 0o120777,
-                sha256: None,
-                symlink_target: Some("server".to_string()),
-            }],
-            dependencies: Vec::new(),
-            scriptlets: Vec::new(),
-            config_files: Vec::new(),
-        };
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/usr/bin/server-link".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let file_capabilities = vec![file_capability("/usr/bin/server-link")];
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::ccs(),
-            selection_reason: None,
-            old_trove_to_upgrade: None,
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: Some(&file_capabilities),
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: None,
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install server-1.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        let err = match install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        ) {
-            Ok(_) => panic!("selected symlink file capability target must fail closed"),
-            Err(error) => error,
-        };
-
-        assert!(err.to_string().contains("is not a regular installed file"));
-    }
-
-    #[test]
-    fn install_inner_applies_repository_provenance_from_resolution() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("root");
-        let db_path = temp.path().join("conary.db");
-        std::fs::create_dir_all(&root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open(&db_path).unwrap();
-        let mut repo = Repository::new(
-            "fedora-remi".to_string(),
-            "https://example.invalid/fedora".to_string(),
-        );
-        let repo_id = repo.insert(&conn).unwrap();
-
-        let package = FakePackage::with_file("tree", "/usr/bin/tree", b"tree\n");
-        let extraction = ExtractionResult {
-            extracted_files: package.extracted_files.clone(),
-            classified: HashMap::from([(
-                conary_core::components::ComponentType::Runtime,
-                vec!["/usr/bin/tree".to_string()],
-            )]),
-            component_names_by_path: None,
-            installed_component_names: None,
-            ccs_pre_remove_script: None,
-            installed_component_types: vec![conary_core::components::ComponentType::Runtime],
-            skipped_components: Vec::new(),
-            language_provides: Vec::new(),
-        };
-        let db_path_string = db_path.to_string_lossy().into_owned();
-        let root_string = root.to_string_lossy().into_owned();
-        let ctx = TransactionContext {
-            db_path: &db_path_string,
-            root: &root_string,
-            semantics: InstallSemantics::legacy(PackageFormatType::Rpm),
-            selection_reason: None,
-            old_trove_to_upgrade: None,
-            ccs_manifest_provides: None,
-            ccs_capabilities: None,
-            ccs_file_capabilities: None,
-            execution_path: PackageExecutionPath::MutableLiveRoot,
-            defer_generation: false,
-            repository_provenance: Some(RepositoryInstallProvenance {
-                repository_id: repo_id,
-                source_distro: Some("fedora".to_string()),
-                version_scheme: Some("rpm".to_string()),
-                source_kind: conary_core::repository::RepositorySourceKind::Native,
-            }),
-            legacy_replay: LegacyReplayOptions::default(),
-            accepted_legacy_bundle: None,
-        };
-        let tx_config = TransactionConfig::from_paths(root.clone(), db_path.clone());
-        let mut engine = TransactionEngine::new(tx_config).unwrap();
-        let tx = conn.unchecked_transaction().unwrap();
-        let changeset_id = Changeset::new("Install tree-1.0.0".to_string())
-            .insert(&tx)
-            .unwrap();
-
-        install_inner(
-            &tx,
-            &mut engine,
-            changeset_id,
-            &package,
-            &extraction,
-            &ctx,
-            &InstallProgress::single("Installing"),
-        )
-        .unwrap();
-        tx.commit().unwrap();
-
-        let trove = Trove::find_one_by_name(&conn, "tree").unwrap().unwrap();
-        assert_eq!(trove.install_source, InstallSource::Repository);
-        assert_eq!(trove.installed_from_repository_id, Some(repo_id));
-        assert_eq!(trove.source_distro.as_deref(), Some("fedora"));
-        assert_eq!(trove.version_scheme.as_deref(), Some("rpm"));
-    }
-}
+#[path = "inner/tests.rs"]
+mod tests;

@@ -15,10 +15,13 @@ use std::sync::Arc;
 use std::{net::IpAddr, str::FromStr};
 use tokio::sync::RwLock;
 
-use conary_core::db::models::Repository;
 use conary_core::db::models::admin_token::AdminToken;
 use conary_core::db::models::audit_log::AuditEntry;
 use conary_core::db::models::federation_peer::FederationPeer;
+use conary_core::db::models::{Repository, RepositoryOwnership, RepositoryPackage};
+use conary_core::repository::{
+    OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
+};
 
 use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
@@ -399,9 +402,6 @@ pub async fn add_peer(
         Ok(None) => Err(ServiceError::Internal(
             "Peer inserted but not found on read-back".to_string(),
         )),
-        Err(ServiceError::Internal(msg)) if msg.contains("UNIQUE constraint") => Err(
-            ServiceError::Conflict("Peer with this endpoint already exists".to_string()),
-        ),
         Err(e) => Err(e),
     }
 }
@@ -516,8 +516,9 @@ pub struct CreateRepoInput {
     pub content_url: Option<String>,
     pub enabled: bool,
     pub priority: i32,
-    pub gpg_check: bool,
     pub metadata_expire: i32,
+    pub parser: RepositoryParserConfig,
+    pub trust: Option<RepositoryTrustPolicy>,
 }
 
 /// Create a new repository.
@@ -531,6 +532,9 @@ pub async fn create_repo(
     {
         validate_external_url(content_url).await?;
     }
+    if let Some(trust) = input.trust.as_ref() {
+        validate_repository_trust(trust).await?;
+    }
 
     let db = db_path(state).await;
     blocking(move || {
@@ -539,8 +543,9 @@ pub async fn create_repo(
         repo.content_url = input.content_url;
         repo.enabled = input.enabled;
         repo.priority = input.priority;
-        repo.gpg_check = input.gpg_check;
         repo.metadata_expire = input.metadata_expire;
+        repo.set_parser_config(input.parser)?;
+        repo.trust_policy = input.trust;
         repo.insert(&conn)?;
         Ok(repo)
     })
@@ -553,8 +558,9 @@ pub struct UpdateRepoInput {
     pub content_url: Option<String>,
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
-    pub gpg_check: Option<bool>,
     pub metadata_expire: Option<i32>,
+    pub parser: RepositoryParserConfig,
+    pub trust: Option<RepositoryTrustPolicy>,
 }
 
 /// Result of a repository metadata refresh.
@@ -583,6 +589,9 @@ pub async fn update_repo(
     {
         validate_external_url(content_url).await?;
     }
+    if let Some(trust) = input.trust.as_ref() {
+        validate_repository_trust(trust).await?;
+    }
 
     let db = db_path(state).await;
     let name_owned = name.to_string();
@@ -593,6 +602,16 @@ pub async fn update_repo(
             Some(r) => r,
             None => return Ok(None),
         };
+        if repo.managed_by == RepositoryOwnership::RemiConfig {
+            return Err(conary_core::Error::ConflictError(format!(
+                "repository '{}' is owned by the Remi repository manifest",
+                repo.name
+            )));
+        }
+        let source_changed = repo.url != input.url
+            || repo.content_url != input.content_url
+            || repo.parser_config.as_ref() != Some(&input.parser)
+            || repo.trust_policy != input.trust;
         repo.url = input.url;
         repo.content_url = input.content_url;
         if let Some(enabled) = input.enabled {
@@ -601,13 +620,21 @@ pub async fn update_repo(
         if let Some(priority) = input.priority {
             repo.priority = priority;
         }
-        if let Some(gpg_check) = input.gpg_check {
-            repo.gpg_check = gpg_check;
-        }
         if let Some(metadata_expire) = input.metadata_expire {
             repo.metadata_expire = metadata_expire;
         }
-        repo.update(&conn)?;
+        repo.set_parser_config(input.parser)?;
+        repo.trust_policy = input.trust;
+        let tx = conn.unchecked_transaction()?;
+        if source_changed {
+            let repository_id = repo
+                .id
+                .ok_or_else(|| conary_core::Error::MissingId("Repository has no ID".to_string()))?;
+            RepositoryPackage::delete_by_repository(&tx, repository_id)?;
+            repo.last_sync = None;
+        }
+        repo.update(&tx)?;
+        tx.commit()?;
         Ok(Some(repo))
     })
     .await
@@ -625,6 +652,12 @@ pub async fn delete_repo(
         let repo = Repository::find_by_name(&conn, &name_owned)?;
         match repo {
             Some(r) => {
+                if r.managed_by == RepositoryOwnership::RemiConfig {
+                    return Err(conary_core::Error::ConflictError(format!(
+                        "repository '{}' is owned by the Remi repository manifest",
+                        r.name
+                    )));
+                }
                 let id = r.id.ok_or_else(|| {
                     conary_core::Error::MissingId("Repository has no ID".to_string())
                 })?;
@@ -650,14 +683,6 @@ async fn refresh_loaded_repo(
     db: PathBuf,
     repo: Repository,
 ) -> Result<RepoRefreshResult, ServiceError> {
-    let keyring_dir = conary_core::db::paths::keyring_dir(&db.display().to_string());
-
-    if repo.gpg_check
-        && let Err(e) = conary_core::repository::maybe_fetch_gpg_key(&repo, &keyring_dir).await
-    {
-        tracing::warn!("Failed to fetch GPG key for repo {}: {e}", repo.name);
-    }
-
     let name = repo.name.clone();
     let packages_synced = conary_core::repository::sync_repository_from_db_path(db, repo)
         .await
@@ -668,6 +693,38 @@ async fn refresh_loaded_repo(
         packages_synced,
         skipped: false,
     })
+}
+
+async fn validate_repository_trust(policy: &RepositoryTrustPolicy) -> Result<(), ServiceError> {
+    policy.validate().map_err(ServiceError::from)?;
+    if let RepositoryTrustPolicy::Rpm {
+        metadata: RpmMetadataAuthority::Metalink { url },
+        ..
+    } = policy
+    {
+        validate_external_url(url).await?;
+    }
+    if let RepositoryTrustPolicy::Arch { keyring, .. } = policy {
+        validate_external_url(&keyring.url).await?;
+    }
+    for root in repository_trust_roots(policy) {
+        validate_external_url(&root.url).await?;
+    }
+    Ok(())
+}
+
+fn repository_trust_roots(policy: &RepositoryTrustPolicy) -> Vec<&OpenPgpTrustRoot> {
+    match policy {
+        RepositoryTrustPolicy::Debian { release_keys } => release_keys.iter().collect(),
+        RepositoryTrustPolicy::Rpm {
+            metadata,
+            package_keys,
+        } => match metadata {
+            RpmMetadataAuthority::OpenPgp { keys } => keys.iter().chain(package_keys).collect(),
+            RpmMetadataAuthority::Metalink { .. } => package_keys.iter().collect(),
+        },
+        RepositoryTrustPolicy::Arch { .. } => Vec::new(),
+    }
 }
 
 /// Synchronize a single repository by name.

@@ -180,6 +180,7 @@ mod tests {
             "nginx".to_string(),
             "1.24.0".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         trove.insert(conn).unwrap()
     }

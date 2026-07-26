@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-24
-revision: 16
+last_updated: 2026-07-25
+revision: 17
 summary: Record the published v0.12.0 and remi-v0.7.1 artifact proof contracts
 ---
 
@@ -75,7 +75,7 @@ URLs or paths are listed here.
 First-wave tester instructions should link all of these:
 
 - Support bundle command: `bash scripts/conary-support-bundle.sh`
-- Beta feedback template: `.github/ISSUE_TEMPLATE/beta_feedback.md`
+- Pre-alpha tester feedback template: `.github/ISSUE_TEMPLATE/pre_alpha_feedback.md`
 - This release/source expectation matrix
 - The evidence command block above
 

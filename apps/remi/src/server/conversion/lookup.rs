@@ -3,41 +3,13 @@
 
 use super::ConversionService;
 use anyhow::{Result, anyhow};
-use conary_core::db::models::RepositoryPackage;
-use conary_core::repository::download_package;
+use conary_core::db::models::{Repository, RepositoryPackage};
+use conary_core::repository::{DownloadOptions, download_package_verified};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-fn repository_package_from_lookup_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<RepositoryPackage> {
-    Ok(RepositoryPackage {
-        id: row.get(0)?,
-        repository_id: row.get(1)?,
-        name: row.get(2)?,
-        version: row.get(3)?,
-        package_release: String::new(),
-        architecture: row.get(4)?,
-        description: row.get(5)?,
-        checksum: row.get(6)?,
-        size: row.get(7)?,
-        download_url: row.get(8)?,
-        dependencies: row.get(9)?,
-        metadata: row.get(10)?,
-        synced_at: row.get(11)?,
-        is_security_update: row.get(12)?,
-        severity: row.get(13)?,
-        cve_ids: row.get(14)?,
-        advisory_id: row.get(15)?,
-        advisory_url: row.get(16)?,
-        distro: None,
-        version_scheme: None,
-        canonical_id: None,
-    })
-}
-
 pub(super) struct PackageDownloadRefresh<'a> {
-    pub(super) distro: &'a str,
+    pub(super) profile: &'a str,
     pub(super) package_name: &'a str,
     pub(super) version: Option<&'a str>,
     pub(super) architecture: Option<&'a str>,
@@ -46,6 +18,30 @@ pub(super) struct PackageDownloadRefresh<'a> {
 }
 
 impl ConversionService {
+    async fn download_trusted_repository_package(
+        &self,
+        repo_pkg: &RepositoryPackage,
+        dest_dir: &Path,
+    ) -> Result<PathBuf> {
+        let db_path = self.db_path.clone();
+        let repository_id = repo_pkg.repository_id;
+        let trust = tokio::task::spawn_blocking(move || {
+            let conn = conary_core::db::open_fast(&db_path)?;
+            let repository = Repository::find_by_id(&conn, repository_id)?.ok_or_else(|| {
+                conary_core::Error::NotFound(format!(
+                    "repository {repository_id} not found for package download"
+                ))
+            })?;
+            let keyring = conary_core::db::paths::keyring_dir(&db_path.display().to_string());
+            DownloadOptions::for_repository(&repository, &keyring)
+        })
+        .await
+        .map_err(|error| anyhow!("repository trust lookup task panicked: {error}"))??;
+        download_package_verified(repo_pkg, dest_dir, &trust)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+
     pub(super) async fn find_package_for_conversion_async(
         &self,
         distro: &str,
@@ -68,7 +64,6 @@ impl ConversionService {
                 version.as_deref(),
                 architecture.as_deref(),
             )?;
-            Self::ensure_repository_package_not_critical(&conn, &repo_pkg)?;
             Ok(repo_pkg)
         })
         .await
@@ -85,130 +80,116 @@ impl ConversionService {
     ) -> Result<RepositoryPackage> {
         use conary_core::repository::versioning::compare_repo_versions;
 
-        let route = conary_core::repository::supported_profiles::route_by_slug(distro)
-            .ok_or_else(|| anyhow!("Unknown distribution: {}", distro))?;
-        let profile_id = route
-            .public_profile_ids()
-            .first()
-            .ok_or_else(|| anyhow!("No public profile for route: {}", distro))?;
-        let profile = conary_core::repository::supported_profiles::profile_by_public_id(profile_id)
-            .ok_or_else(|| anyhow!("Profile disappeared for route: {}", distro))?;
-        let repo_patterns = profile.repository_name_patterns();
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
+            .ok_or_else(|| anyhow!("unsupported public profile: {}", distro))?;
         let scheme = profile.version_scheme();
 
         // When a specific version is requested, use a simple exact-match query.
         if let Some(ver) = version {
             if let Some(arch) = architecture {
-                let mut stmt = conn.prepare(
-                    "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
-                            rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
-                            rp.metadata, rp.synced_at, rp.is_security_update, rp.severity,
-                            rp.cve_ids, rp.advisory_id, rp.advisory_url
+                let sql = format!(
+                    "SELECT {}
                      FROM repository_packages rp
                      JOIN repositories r ON rp.repository_id = r.id
                      WHERE rp.name = ?1
-                     AND r.name LIKE ?2
+                     AND r.source_profile = ?2
                      AND rp.version = ?3
                      AND rp.architecture = ?4
                      AND rp.size > 0
-                LIMIT 1",
-                )?;
+                     LIMIT 1",
+                    RepositoryPackage::COLUMNS_PREFIXED
+                );
+                let mut stmt = conn.prepare(&sql)?;
 
-                for repo_pattern in repo_patterns {
-                    match stmt.query_row(
-                        rusqlite::params![package_name, repo_pattern, ver, arch],
-                        repository_package_from_lookup_row,
-                    ) {
-                        Ok(package) => return Ok(package),
-                        Err(rusqlite::Error::QueryReturnedNoRows) => {}
-                        Err(e) => return Err(anyhow!("Database error: {}", e)),
-                    }
-                }
-                return Err(anyhow!(
-                    "Package '{}' version '{}' arch '{}' not found in {} repositories. Run 'conary repo-sync' first.",
-                    package_name,
-                    ver,
-                    arch,
-                    distro
-                ));
+                return stmt
+                    .query_row(
+                        rusqlite::params![package_name, distro, ver, arch],
+                        RepositoryPackage::from_row,
+                    )
+                    .map_err(|error| match error {
+                        rusqlite::Error::QueryReturnedNoRows => anyhow!(
+                            "Package '{}' version '{}' arch '{}' not found for profile {}. Run repository sync first.",
+                            package_name,
+                            ver,
+                            arch,
+                            distro
+                        ),
+                        other => anyhow!("Database error: {other}"),
+                    });
             }
 
-            let mut stmt = conn.prepare(
-                "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
-                        rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
-                        rp.metadata, rp.synced_at, rp.is_security_update, rp.severity,
-                        rp.cve_ids, rp.advisory_id, rp.advisory_url
+            let sql = format!(
+                "SELECT {}
                  FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.name = ?1
-                 AND r.name LIKE ?2
+                 AND r.source_profile = ?2
                  AND rp.version = ?3
                  AND rp.size > 0
                  LIMIT 1",
-            )?;
+                RepositoryPackage::COLUMNS_PREFIXED
+            );
+            let mut stmt = conn.prepare(&sql)?;
 
-            for repo_pattern in repo_patterns {
-                match stmt.query_row(
-                    rusqlite::params![package_name, repo_pattern, ver],
-                    repository_package_from_lookup_row,
-                ) {
-                    Ok(package) => return Ok(package),
-                    Err(rusqlite::Error::QueryReturnedNoRows) => {}
-                    Err(e) => return Err(anyhow!("Database error: {}", e)),
-                }
-            }
-            return Err(anyhow!(
-                "Package '{}' version '{}' not found in {} repositories. Run 'conary repo-sync' first.",
-                package_name,
-                ver,
-                distro
-            ));
+            return stmt
+                .query_row(
+                    rusqlite::params![package_name, distro, ver],
+                    RepositoryPackage::from_row,
+                )
+                .map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => anyhow!(
+                        "Package '{}' version '{}' not found for profile {}. Run repository sync first.",
+                        package_name,
+                        ver,
+                        distro
+                    ),
+                    other => anyhow!("Database error: {other}"),
+                });
         }
 
         // No version specified: fetch all candidates and pick the latest using
         // scheme-aware comparison instead of lexicographic ORDER BY.
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_id, rp.name, rp.version, rp.architecture,
-                    rp.description, rp.checksum, rp.size, rp.download_url, rp.dependencies,
-                    rp.metadata, rp.synced_at, rp.is_security_update, rp.severity,
-                    rp.cve_ids, rp.advisory_id, rp.advisory_url
+        let sql = format!(
+            "SELECT {}
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.name = ?1
-             AND r.name LIKE ?2
+             AND r.source_profile = ?2
              AND (?3 IS NULL OR rp.architecture = ?3)
              AND rp.size > 0",
-        )?;
+            RepositoryPackage::COLUMNS_PREFIXED
+        );
+        let mut stmt = conn.prepare(&sql)?;
 
-        let mut candidates = Vec::new();
-        for repo_pattern in repo_patterns {
-            let matched = stmt
-                .query_map(
-                    rusqlite::params![package_name, repo_pattern, architecture],
-                    repository_package_from_lookup_row,
-                )?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|e| anyhow!("Database error: {}", e))?;
-            candidates.extend(matched);
-        }
+        let candidates = stmt
+            .query_map(
+                rusqlite::params![package_name, distro, architecture],
+                RepositoryPackage::from_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| anyhow!("Database error: {}", e))?;
 
         if candidates.is_empty() {
             return Err(anyhow!(
-                "Package '{}' not found in {} repositories. Run 'conary repo-sync' first.",
+                "Package '{}' not found for profile {}. Run repository sync first.",
                 package_name,
                 distro
             ));
         }
 
-        // Pick the latest version using scheme-aware comparison.
-        // unwrap is safe because we checked candidates is non-empty above.
-        let latest = candidates
-            .into_iter()
-            .max_by(|a, b| {
-                compare_repo_versions(scheme, &a.version, &b.version)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .unwrap();
+        // Pick the latest version while preserving parse failures as typed
+        // lookup errors rather than hiding them inside an infallible sort.
+        let mut candidates = candidates.into_iter();
+        let mut latest = candidates
+            .next()
+            .expect("candidate list was checked as non-empty");
+        for candidate in candidates {
+            if compare_repo_versions(scheme, &candidate.version, &latest.version)?
+                == std::cmp::Ordering::Greater
+            {
+                latest = candidate;
+            }
+        }
 
         Ok(latest)
     }
@@ -218,20 +199,29 @@ impl ConversionService {
         request: PackageDownloadRefresh<'_>,
     ) -> Result<(RepositoryPackage, PathBuf)> {
         let PackageDownloadRefresh {
-            distro,
+            profile,
             package_name,
             version,
             architecture,
             repo_pkg,
             dest_dir,
         } = request;
-        match download_package(&repo_pkg, dest_dir).await {
+        match self
+            .download_trusted_repository_package(&repo_pkg, dest_dir)
+            .await
+        {
             Ok(path) => return Ok((repo_pkg, path)),
-            Err(err) if !Self::is_upstream_not_found(&err) => return Err(err.into()),
+            Err(err)
+                if !err
+                    .downcast_ref::<conary_core::Error>()
+                    .is_some_and(Self::is_upstream_not_found) =>
+            {
+                return Err(err);
+            }
             Err(err) => {
                 info!(
                     "Download for {}:{} hit upstream 404 ({}), refreshing repo {} once",
-                    distro, package_name, err, repo_pkg.repository_id
+                    profile, package_name, err, repo_pkg.repository_id
                 );
             }
         }
@@ -251,21 +241,17 @@ impl ConversionService {
             .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo_name, e))?;
 
         let refreshed_pkg = self
-            .find_package_for_conversion_async(distro, package_name, version, architecture)
+            .find_package_for_conversion_async(profile, package_name, version, architecture)
             .await?;
-        let path = download_package(&refreshed_pkg, dest_dir)
+        let path = self
+            .download_trusted_repository_package(&refreshed_pkg, dest_dir)
             .await
             .map_err(|e| anyhow!("Retry after refresh failed: {}", e))?;
         Ok((refreshed_pkg, path))
     }
 
     fn is_upstream_not_found(err: &conary_core::Error) -> bool {
-        match err {
-            conary_core::Error::DownloadError(message) => {
-                message.contains("HTTP 404") || message.contains("404 Not Found")
-            }
-            _ => false,
-        }
+        matches!(err, conary_core::Error::HttpStatus { status: 404, .. })
     }
 }
 
@@ -279,7 +265,7 @@ mod tests {
     #[test]
     fn test_find_package_found() {
         let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
         insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
 
         let service = ConversionService::new(
@@ -290,7 +276,7 @@ mod tests {
         );
 
         let pkg = service
-            .find_package(&conn, "fedora", "nginx", None, None)
+            .find_package(&conn, "fedora-44", "nginx", None, None)
             .unwrap();
         assert_eq!(pkg.name, "nginx");
         assert_eq!(pkg.version, "1.24.0");
@@ -299,7 +285,7 @@ mod tests {
     #[test]
     fn test_find_package_with_specific_version() {
         let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
         insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
         insert_package(&conn, repo_id, "nginx", "1.25.0", 1100);
 
@@ -311,7 +297,7 @@ mod tests {
         );
 
         let pkg = service
-            .find_package(&conn, "fedora", "nginx", Some("1.24.0"), None)
+            .find_package(&conn, "fedora-44", "nginx", Some("1.24.0"), None)
             .unwrap();
         assert_eq!(pkg.version, "1.24.0");
     }
@@ -319,12 +305,13 @@ mod tests {
     #[test]
     fn test_find_package_with_specific_version_and_architecture() {
         let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
 
         let mut i686 = RepositoryPackage::new(
             repo_id,
             "glib2".to_string(),
             "2.86.0-2.fc44".to_string(),
+            conary_core::repository::versioning::VersionScheme::Rpm,
             "sha256:glib2-i686".to_string(),
             1024,
             "https://example.com/glib2-2.86.0-2.fc44.i686.rpm".to_string(),
@@ -336,6 +323,7 @@ mod tests {
             repo_id,
             "glib2".to_string(),
             "2.86.0-2.fc44".to_string(),
+            conary_core::repository::versioning::VersionScheme::Rpm,
             "sha256:glib2-x86_64".to_string(),
             2048,
             "https://example.com/glib2-2.86.0-2.fc44.x86_64.rpm".to_string(),
@@ -353,7 +341,7 @@ mod tests {
         let pkg = service
             .find_package(
                 &conn,
-                "fedora",
+                "fedora-44",
                 "glib2",
                 Some("2.86.0-2.fc44"),
                 Some("x86_64"),
@@ -366,7 +354,7 @@ mod tests {
     #[test]
     fn test_find_package_not_found() {
         let (temp_file, conn) = create_test_db();
-        insert_repo(&conn, "fedora-base", "fedora");
+        insert_repo(&conn, "fedora-base", "fedora-44");
 
         let service = ConversionService::new(
             PathBuf::from("/tmp/chunks"),
@@ -375,11 +363,11 @@ mod tests {
             None,
         );
 
-        let result = service.find_package(&conn, "fedora", "nonexistent", None, None);
+        let result = service.find_package(&conn, "fedora-44", "nonexistent", None, None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found"));
-        assert!(err_msg.contains("repo-sync"));
+        assert!(err_msg.contains("repository sync"));
     }
 
     #[test]
@@ -396,7 +384,7 @@ mod tests {
         let result = service.find_package(&conn, "gentoo", "nginx", None, None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Unknown distribution"));
+        assert!(err_msg.contains("unsupported public profile"));
     }
 
     #[test]
@@ -421,7 +409,7 @@ mod tests {
     #[test]
     fn test_find_package_ubuntu_distro() {
         let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "ubuntu-main", "ubuntu");
+        let repo_id = insert_repo(&conn, "ubuntu-main", "ubuntu-26.04");
         insert_package(&conn, repo_id, "libc6", "2.38-1", 2048);
 
         let service = ConversionService::new(
@@ -432,7 +420,7 @@ mod tests {
         );
 
         let pkg = service
-            .find_package(&conn, "ubuntu", "libc6", None, None)
+            .find_package(&conn, "ubuntu-26.04", "libc6", None, None)
             .unwrap();
         assert_eq!(pkg.name, "libc6");
     }
@@ -452,23 +440,20 @@ mod tests {
             .find_package(&conn, "debian", "apt", None, None)
             .expect_err("debian is not a supported Remi distro")
             .to_string();
-        assert!(err.contains("Unknown distribution"));
+        assert!(err.contains("unsupported public profile"));
     }
 
     #[test]
-    fn test_find_package_maps_distro_to_repo_pattern() {
-        // Verify all supported distros can resolve to their repo patterns.
-        // We insert repos with the expected naming pattern and ensure find_package
-        // correctly maps distro name -> LIKE pattern.
+    fn test_find_package_uses_exact_persisted_profile() {
         let (temp_file, conn) = create_test_db();
 
         let arch_id = insert_repo(&conn, "arch-core", "arch");
         insert_package(&conn, arch_id, "vim", "9.0", 500);
 
-        let fed_id = insert_repo(&conn, "fedora-base", "fedora");
+        let fed_id = insert_repo(&conn, "fedora-base", "fedora-44");
         insert_package(&conn, fed_id, "vim", "9.0", 500);
 
-        let ubuntu_id = insert_repo(&conn, "ubuntu-main", "ubuntu");
+        let ubuntu_id = insert_repo(&conn, "ubuntu-main", "ubuntu-26.04");
         insert_package(&conn, ubuntu_id, "vim", "9.0", 500);
 
         let service = ConversionService::new(
@@ -485,12 +470,12 @@ mod tests {
         );
         assert!(
             service
-                .find_package(&conn, "fedora", "vim", None, None)
+                .find_package(&conn, "fedora-44", "vim", None, None)
                 .is_ok()
         );
         assert!(
             service
-                .find_package(&conn, "ubuntu", "vim", None, None)
+                .find_package(&conn, "ubuntu-26.04", "vim", None, None)
                 .is_ok()
         );
         assert!(
@@ -501,13 +486,17 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_upstream_not_found_download_error() {
-        let err = conary_core::Error::DownloadError(
-            "HTTP 404 Not Found from https://example.com/pkg.rpm".to_string(),
-        );
+    fn test_detects_typed_upstream_not_found_error() {
+        let err = conary_core::Error::HttpStatus {
+            status: 404,
+            url: "https://example.com/pkg.rpm".to_string(),
+        };
         assert!(ConversionService::is_upstream_not_found(&err));
 
-        let other = conary_core::Error::DownloadError("HTTP 500".to_string());
+        let other = conary_core::Error::HttpStatus {
+            status: 500,
+            url: "https://example.com/pkg.rpm".to_string(),
+        };
         assert!(!ConversionService::is_upstream_not_found(&other));
     }
 }

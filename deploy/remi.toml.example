@@ -6,6 +6,10 @@
 # with recommended production values for the current Hetzner origin behind
 # Cloudflare. Tune storage limits to the actual host capacity.
 
+# Typed package-source authority. The service validates and reconciles this
+# manifest before it starts listeners.
+repository_manifest = "/etc/conary/remi-repositories.toml"
+
 [server]
 # Public API address - bind to localhost when behind nginx/Cloudflare
 bind = "127.0.0.1:8080"
@@ -40,30 +44,6 @@ negative_cache_ttl = "15m"
 # Tune this to the mounted /conary capacity; the production origin currently
 # has dedicated storage, while smaller test hosts should use a lower limit.
 max_cache_size = "700GB"
-
-# Upstream repository definitions
-# Each [upstream.<name>] block configures a distro source for package conversion
-
-[upstream.fedora]
-metalink = "https://mirrors.fedoraproject.org/metalink"
-releases = ["44"]
-arches = ["x86_64"]
-metadata_refresh = "6h"
-priority = 100
-
-[upstream.arch]
-base_url = "https://archive.archlinux.org"
-releases = ["latest"]
-arches = ["x86_64"]
-metadata_refresh = "6h"
-priority = 100
-
-[upstream.ubuntu]
-base_url = "https://archive.ubuntu.com/ubuntu"
-releases = ["resolute"]
-arches = ["amd64"]
-metadata_refresh = "6h"
-priority = 100
 
 [conversion]
 # Enable content-defined chunking for cross-package deduplication
@@ -120,8 +100,8 @@ metadata_sync_interval = "6h"
 # Number of top packages per distro to priority-convert
 convert_top_n = 1000
 
-# Distros to pre-warm (must match [upstream.*] names)
-distros = ["fedora", "arch", "ubuntu"]
+# Exact public route IDs; each must map to one current public profile
+distros = ["fedora", "ubuntu", "arch"]
 
 [web]
 # SvelteKit web frontend for package browsing

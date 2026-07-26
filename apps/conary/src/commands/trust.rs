@@ -100,26 +100,6 @@ pub async fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &
     Ok(())
 }
 
-/// Disable TUF verification for a repository (unsafe operation)
-pub async fn cmd_trust_disable(repo_name: &str, force: bool, db_path: &str) -> Result<()> {
-    if !force {
-        anyhow::bail!("Disabling TUF removes supply chain protection. Use --force to confirm.");
-    }
-
-    let conn = open_db(db_path)?;
-    let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
-
-    conn.execute(
-        "UPDATE repositories SET tuf_enabled = 0 WHERE id = ?1",
-        params![repo_id],
-    )?;
-
-    crate::ui::warn(&format!("TUF verification disabled for: {repo_name}"));
-    println!("This repository is now vulnerable to supply chain attacks.");
-
-    Ok(())
-}
-
 /// Show TUF metadata status for a repository
 pub async fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;

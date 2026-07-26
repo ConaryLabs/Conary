@@ -16,7 +16,7 @@ phase = 2
 
 # Setup: ensure fixture v1 is installed for generation tests
 [[suite.setup]]
-conary = "ccs install ${FIXTURE_V1_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V1_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 # --------------------------------------------------------------------------
 # T51: Build generation
@@ -94,7 +94,7 @@ requires = ["composefs_runtime"]
 
 # Install v2 and build a new generation
 [[test.step]]
-conary = "ccs install ${FIXTURE_V2_CCS} --allow-unsigned --sandbox never --yes"
+conary = "ccs install ${FIXTURE_V2_CCS} --policy ${FIXTURE_CCS_POLICY} --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0

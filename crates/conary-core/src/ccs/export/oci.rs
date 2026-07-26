@@ -16,8 +16,10 @@ use std::path::Path;
 use tar::Builder;
 
 use crate::ccs::package::CcsPackage;
+use crate::ccs::verify::{TrustPolicy, verify_package};
 use crate::hash;
-use crate::packages::traits::PackageFormat;
+use crate::packages::payload::PackagePayloadFile;
+use crate::payload::{PayloadIdentity, PayloadNode, PayloadNodeKind};
 
 /// OCI image layout version
 const OCI_LAYOUT_VERSION: &str = "1.0.0";
@@ -154,21 +156,13 @@ struct OciLayout {
     image_layout_version: String,
 }
 
-/// A file entry for OCI layer construction, distinguishing regular files from symlinks
-enum OciFileEntry {
-    Regular {
-        path: String,
-        content: Vec<u8>,
-        mode: u32,
-    },
-    Symlink {
-        path: String,
-        target: String,
-    },
+/// One exact CCS payload node projected into an OCI layer.
+struct OciFileEntry {
+    payload: PackagePayloadFile,
 }
 
 /// Export CCS packages to OCI image format
-pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -> Result<()> {
+pub fn export_oci(packages: &[String], output: &Path, trust_policy: &TrustPolicy) -> Result<()> {
     if packages.is_empty() {
         anyhow::bail!("No packages specified for export");
     }
@@ -184,8 +178,11 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     let mut container_config = ContainerConfig::default();
 
     for pkg_path in packages {
-        let pkg = CcsPackage::parse(pkg_path)
-            .with_context(|| format!("Failed to parse package: {}", pkg_path))?;
+        let package_path = Path::new(pkg_path);
+        let verified = verify_package(package_path, trust_policy)
+            .with_context(|| format!("Failed to verify CCS package: {pkg_path}"))?;
+        let pkg = CcsPackage::from_verified_archive(pkg_path, &verified)
+            .with_context(|| format!("Failed to open verified CCS package: {pkg_path}"))?;
 
         package_names.push(pkg.manifest().package.name.clone());
 
@@ -196,45 +193,32 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
             container_config.cmd = vec!["/bin/sh".to_string()];
         }
 
-        // Extract file contents
-        let mut blobs = pkg.extract_all_content()?;
-        let files = pkg.file_entries();
-
-        for file in files {
-            if let Some(target) = &file.target {
-                all_files.push(OciFileEntry::Symlink {
-                    path: file.path.clone(),
-                    target: target.clone(),
-                });
-            } else if let Some(content) = blobs.remove(&file.hash) {
-                // Take ownership of the blob to avoid cloning
-                all_files.push(OciFileEntry::Regular {
-                    path: file.path.clone(),
-                    content,
-                    mode: file.mode,
-                });
-            }
+        for payload in pkg.payload().files() {
+            all_files.push(OciFileEntry {
+                payload: payload.clone(),
+            });
         }
     }
 
     // Sort files for deterministic layer
-    all_files.sort_by(|a, b| {
-        let path_a = match a {
-            OciFileEntry::Regular { path, .. } | OciFileEntry::Symlink { path, .. } => path,
-        };
-        let path_b = match b {
-            OciFileEntry::Regular { path, .. } | OciFileEntry::Symlink { path, .. } => path,
-        };
-        path_a.cmp(path_b)
-    });
+    all_files.sort_by(|a, b| a.payload.path.cmp(&b.payload.path));
 
-    // Create layer tarball
-    let layer_data = create_layer_tarball(&all_files)?;
-    let layer_digest = hash::sha256_prefixed(&layer_data);
-    let layer_diff_id = format!("sha256:{}", sha256_hex_uncompressed(&all_files)?);
-
-    // Write layer blob
-    fs::write(blobs_dir.join(&layer_digest[7..]), &layer_data)?;
+    // Create and hash the layer through bounded-memory files.
+    let compressed_layer = temp_dir.path().join(".layer.tar.gz");
+    write_layer_tarball(&all_files, &compressed_layer)?;
+    let layer_digest = format!(
+        "sha256:{}",
+        hash_file(&compressed_layer, hash::HashAlgorithm::Sha256)?
+    );
+    let layer_size = fs::metadata(&compressed_layer)?.len();
+    let uncompressed_layer = temp_dir.path().join(".layer.tar");
+    write_uncompressed_layer(&all_files, &uncompressed_layer)?;
+    let layer_diff_id = format!(
+        "sha256:{}",
+        hash_file(&uncompressed_layer, hash::HashAlgorithm::Sha256)?
+    );
+    fs::remove_file(&uncompressed_layer)?;
+    fs::rename(&compressed_layer, blobs_dir.join(&layer_digest[7..]))?;
 
     // Create config
     let config = create_config(&container_config, &layer_diff_id, &package_names);
@@ -256,7 +240,7 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
         layers: vec![OciDescriptor {
             media_type: LAYER_MEDIA_TYPE.to_string(),
             digest: layer_digest.clone(),
-            size: layer_data.len() as u64,
+            size: layer_size,
             annotations: None,
             platform: None,
         }],
@@ -322,7 +306,7 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
 
     println!("Exported OCI image: {}", output.display());
     println!("  Packages: {}", package_names.join(", "));
-    println!("  Layer size: {} bytes", layer_data.len());
+    println!("  Layer size: {layer_size} bytes");
     println!();
     println!("To load the image:");
     println!("  podman load < {}", output.display());
@@ -336,63 +320,48 @@ pub fn export_oci(packages: &[String], output: &Path, _db_path: Option<&Path>) -
     Ok(())
 }
 
-/// Deterministic mtime for reproducible layers (2024-01-01 00:00:00 UTC)
-const LAYER_MTIME: u64 = 1_704_067_200;
-
 /// Write file entries into a tar archive, creating parent directories as needed
 fn write_tar_entries<W: std::io::Write>(
     archive: &mut Builder<W>,
     files: &[OciFileEntry],
 ) -> Result<()> {
-    let mut created_dirs = std::collections::HashSet::new();
-
     for entry in files {
-        let path = match entry {
-            OciFileEntry::Regular { path, .. } | OciFileEntry::Symlink { path, .. } => path,
-        };
-        let clean_path = path.trim_start_matches('/');
-
-        // Create parent directories
-        let path_obj = Path::new(clean_path);
-        if let Some(parent) = path_obj.parent() {
-            let mut current = std::path::PathBuf::new();
-            for component in parent.components() {
-                match component {
-                    std::path::Component::Normal(c) => current.push(c),
-                    _ => continue,
-                }
-                let dir_path = current.to_string_lossy().to_string();
-                if !dir_path.is_empty() && !created_dirs.contains(&dir_path) {
-                    let mut header = tar::Header::new_gnu();
-                    header.set_entry_type(tar::EntryType::Directory);
-                    header.set_mode(0o755);
-                    header.set_size(0);
-                    header.set_mtime(LAYER_MTIME);
-                    header.set_cksum();
-                    archive.append_data(&mut header, &dir_path, std::io::empty())?;
-                    created_dirs.insert(dir_path);
-                }
-            }
+        let clean_path = entry.payload.path.trim_start_matches('/');
+        if clean_path.is_empty() {
+            anyhow::bail!("OCI payload node path must not resolve to archive root");
         }
-
-        match entry {
-            OciFileEntry::Symlink { target, .. } => {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Symlink);
-                header.set_mode(0o777);
-                header.set_size(0);
-                header.set_mtime(LAYER_MTIME);
+        let mut header = exact_tar_header(&entry.payload.node)?;
+        append_node_pax_extensions(archive, &entry.payload.node)?;
+        match &entry.payload.node.kind {
+            PayloadNodeKind::Regular { .. } => {
+                let authority = entry.payload.content_authority.as_ref().with_context(|| {
+                    format!(
+                        "regular OCI payload {} has no content authority",
+                        entry.payload.path
+                    )
+                })?;
+                let mut content = entry.payload.open_content()?;
+                header.set_size(authority.size);
                 header.set_cksum();
-                archive.append_link(&mut header, clean_path, target.as_str())?;
+                archive.append_data(&mut header, clean_path, content.as_mut())?;
             }
-            OciFileEntry::Regular { content, mode, .. } => {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Regular);
-                header.set_mode(*mode);
-                header.set_size(content.len() as u64);
-                header.set_mtime(LAYER_MTIME);
+            PayloadNodeKind::Symlink { target } => {
                 header.set_cksum();
-                archive.append_data(&mut header, clean_path, content.as_slice())?;
+                archive.append_link(&mut header, clean_path, target)?;
+            }
+            PayloadNodeKind::Hardlink { target, .. } => {
+                header.set_cksum();
+                archive.append_link(&mut header, clean_path, target.trim_start_matches('/'))?;
+            }
+            PayloadNodeKind::Socket => {
+                anyhow::bail!(
+                    "OCI tar layers cannot encode socket payload node {}",
+                    entry.payload.path
+                );
+            }
+            _ => {
+                header.set_cksum();
+                archive.append_data(&mut header, clean_path, std::io::empty())?;
             }
         }
     }
@@ -400,28 +369,93 @@ fn write_tar_entries<W: std::io::Write>(
     Ok(())
 }
 
-/// Create a gzipped tar layer from files
-fn create_layer_tarball(files: &[OciFileEntry]) -> Result<Vec<u8>> {
-    let mut output = Vec::new();
-    {
-        let encoder = GzEncoder::new(&mut output, Compression::default());
-        let mut archive = Builder::new(encoder);
-        write_tar_entries(&mut archive, files)?;
-        let encoder = archive.into_inner()?;
-        encoder.finish()?;
-    }
-    Ok(output)
+fn exact_tar_header(node: &PayloadNode) -> Result<tar::Header> {
+    node.validate()?;
+    let mut header = tar::Header::new_gnu();
+    header.set_mode(node.mode & 0o7777);
+    let PayloadIdentity::Numeric { id: uid } = &node.user else {
+        anyhow::bail!("OCI export requires payload user identity to be resolved");
+    };
+    let PayloadIdentity::Numeric { id: gid } = &node.group else {
+        anyhow::bail!("OCI export requires payload group identity to be resolved");
+    };
+    header.set_uid(*uid);
+    header.set_gid(*gid);
+    header.set_mtime(u64::try_from(node.mtime.seconds).unwrap_or(0));
+    header.set_size(0);
+    let entry_type = match &node.kind {
+        PayloadNodeKind::Regular { .. } => tar::EntryType::Regular,
+        PayloadNodeKind::Directory => tar::EntryType::Directory,
+        PayloadNodeKind::Symlink { .. } => tar::EntryType::Symlink,
+        PayloadNodeKind::Hardlink { .. } => tar::EntryType::Link,
+        PayloadNodeKind::BlockDevice { major, minor } => {
+            header.set_device_major(u32::try_from(*major)?)?;
+            header.set_device_minor(u32::try_from(*minor)?)?;
+            tar::EntryType::Block
+        }
+        PayloadNodeKind::CharacterDevice { major, minor } => {
+            header.set_device_major(u32::try_from(*major)?)?;
+            header.set_device_minor(u32::try_from(*minor)?)?;
+            tar::EntryType::Char
+        }
+        PayloadNodeKind::Fifo => tar::EntryType::Fifo,
+        PayloadNodeKind::Socket => tar::EntryType::new(b's'),
+    };
+    header.set_entry_type(entry_type);
+    Ok(header)
 }
 
-/// Calculate SHA256 of uncompressed layer content (for diff_id)
-fn sha256_hex_uncompressed(files: &[OciFileEntry]) -> Result<String> {
-    let mut output = Vec::new();
-    {
-        let mut archive = Builder::new(&mut output);
-        write_tar_entries(&mut archive, files)?;
-        archive.finish()?;
+fn append_node_pax_extensions<W: std::io::Write>(
+    archive: &mut Builder<W>,
+    node: &PayloadNode,
+) -> Result<()> {
+    let mut extensions = Vec::new();
+    let mtime = exact_pax_timestamp(node.mtime.seconds, node.mtime.nanoseconds);
+    if node.mtime.nanoseconds != 0 || node.mtime.seconds < 0 {
+        extensions.push(("mtime".to_string(), mtime.into_bytes()));
     }
-    Ok(hash::sha256(&output))
+    for (name, value) in &node.xattrs {
+        extensions.push((format!("SCHILY.xattr.{name}"), value.clone()));
+    }
+    archive.append_pax_extensions(
+        extensions
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_slice())),
+    )?;
+    Ok(())
+}
+
+fn exact_pax_timestamp(seconds: i64, nanoseconds: u32) -> String {
+    if nanoseconds == 0 {
+        return seconds.to_string();
+    }
+    if seconds >= 0 {
+        return format!("{seconds}.{nanoseconds:09}");
+    }
+    let whole = seconds.unsigned_abs() - 1;
+    let fractional = 1_000_000_000 - nanoseconds;
+    format!("-{whole}.{fractional:09}")
+}
+
+fn write_layer_tarball(files: &[OciFileEntry], output: &Path) -> Result<()> {
+    let encoder = GzEncoder::new(File::create(output)?, Compression::default());
+    let mut archive = Builder::new(encoder);
+    write_tar_entries(&mut archive, files)?;
+    let encoder = archive.into_inner()?;
+    encoder.finish()?;
+    Ok(())
+}
+
+fn write_uncompressed_layer(files: &[OciFileEntry], output: &Path) -> Result<()> {
+    let mut archive = Builder::new(File::create(output)?);
+    write_tar_entries(&mut archive, files)?;
+    archive.finish()?;
+    Ok(())
+}
+
+fn hash_file(path: &Path, algorithm: hash::HashAlgorithm) -> Result<String> {
+    let mut file = File::open(path)?;
+    Ok(hash::hash_reader(algorithm, &mut file)?.value)
 }
 /// Create OCI image config
 fn create_config(container: &ContainerConfig, diff_id: &str, packages: &[String]) -> OciConfig {
@@ -480,6 +514,29 @@ fn create_config(container: &ContainerConfig, diff_id: &str, packages: &[String]
 mod tests {
     use super::*;
 
+    fn signed_test_package(
+        temp: &tempfile::TempDir,
+    ) -> (std::path::PathBuf, crate::ccs::signing::SigningKeyPair) {
+        let source = temp.path().join("source");
+        fs::create_dir_all(source.join("usr/bin")).unwrap();
+        fs::write(source.join("usr/bin/demo"), b"demo\n").unwrap();
+        let manifest = crate::ccs::manifest::CcsManifest::new_minimal("demo", "1.0.0");
+        let result = crate::ccs::builder::CcsBuilder::new(manifest, &source)
+            .unwrap()
+            .build()
+            .unwrap();
+        let package_path = temp.path().join("demo.ccs");
+        let signer = crate::ccs::signing::SigningKeyPair::generate().with_key_id("export-test");
+        crate::ccs::builder::write_signed_current_ccs_package(
+            &result,
+            &package_path,
+            &signer,
+            false,
+        )
+        .unwrap();
+        (package_path, signer)
+    }
+
     #[test]
     fn test_sha256_integration() {
         let data = b"hello world";
@@ -496,5 +553,30 @@ mod tests {
         assert!(config.entrypoint.is_empty());
         assert!(config.cmd.is_empty());
         assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn export_requires_trusted_signed_v2_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let (package_path, signer) = signed_test_package(&temp);
+        let output = temp.path().join("demo.oci.tar");
+        let trusted = TrustPolicy::strict(vec![signer.public_key_base64()]);
+
+        export_oci(
+            &[package_path.to_string_lossy().into_owned()],
+            &output,
+            &trusted,
+        )
+        .unwrap();
+        assert!(output.exists());
+
+        let untrusted = crate::ccs::signing::SigningKeyPair::generate();
+        let error = export_oci(
+            &[package_path.to_string_lossy().into_owned()],
+            &temp.path().join("untrusted.oci.tar"),
+            &TrustPolicy::strict(vec![untrusted.public_key_base64()]),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("not trusted"));
     }
 }

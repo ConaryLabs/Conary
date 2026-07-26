@@ -1,4 +1,4 @@
-// src/commands/install/resolve.rs
+// apps/conary/src/commands/install/resolve.rs
 //! Package path resolution - downloading from repository if needed
 //!
 //! This module handles resolving package names to local file paths, using
@@ -11,31 +11,34 @@
 //! 3. Use unified resolver to:
 //!    a. Select best repository (priority/version logic)
 //!    b. Look up routing strategies in `package_resolution` table
-//!    c. Try strategies in order (binary, remi, recipe, delegate, legacy)
+//!    c. Try strategies in order (binary, Remi, recipe, delegate, repository)
 //! 4. Return local path to downloaded/built package
 
 use super::super::open_db;
 use crate::commands::progress::{InstallPhase, InstallProgress};
 use anyhow::Result;
-use conary_core::db::models::{ProvideEntry, Redirect};
+#[cfg(test)]
+use conary_core::db::models::ProvideEntry;
+use conary_core::db::models::Redirect;
 use conary_core::db::paths::keyring_dir;
-use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::repository::{
     PackageSource, RepositorySourceMetadata, ResolutionOptions, resolve_package,
 };
+#[cfg(test)]
+use conary_core::version::VersionConstraint;
+#[cfg(test)]
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Result of resolving a package path
 pub struct ResolvedPackage {
     pub path: PathBuf,
     /// Temp directory that must stay alive until installation completes
     pub _temp_dir: Option<TempDir>,
-    /// Source type (for logging/UI)
-    #[allow(dead_code)] // Will be used for logging/UI in future
+    /// Exact acquisition path used for lifecycle handling.
     pub source_type: ResolvedSourceType,
     pub repository_provenance: Option<RepositorySourceMetadata>,
 }
@@ -50,38 +53,13 @@ pub enum ResolutionOutcome {
 
 /// Type of source the package was resolved from
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Variants for future phases
 pub enum ResolvedSourceType {
     /// Local file provided by user
     LocalFile,
     /// Downloaded binary from repository
     Binary,
-    /// Converted via Remi
-    Remi,
-    /// Built from recipe
-    Recipe,
-    /// Resolved through label delegation
-    Delegate,
-    /// Legacy repository_packages path
-    Legacy,
-    /// From local CAS cache
-    LocalCas,
-}
-
-impl ResolvedSourceType {
-    /// Get a human-readable description
-    #[allow(dead_code)] // Will be used for logging/UI in future
-    pub fn description(&self) -> &'static str {
-        match self {
-            Self::LocalFile => "local file",
-            Self::Binary => "binary package",
-            Self::Remi => "Remi conversion",
-            Self::Recipe => "recipe build",
-            Self::Delegate => "delegated resolution",
-            Self::Legacy => "repository",
-            Self::LocalCas => "local cache",
-        }
-    }
+    /// Verified CCS artifact from a repository
+    Ccs,
 }
 
 /// Options that control policy-aware resolution at the install layer.
@@ -91,55 +69,35 @@ pub struct PolicyOptions {
     pub policy: Option<ResolutionPolicy>,
     /// Whether this is a root (user-typed) request.
     pub is_root: bool,
-    /// The primary distro flavor for mixing policy checks.
-    pub primary_flavor: Option<RepositoryDependencyFlavor>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PackageResolutionRequest<'a> {
+    pub package: &'a str,
+    pub db_path: &'a str,
+    pub version: Option<&'a str>,
+    pub package_release: Option<&'a str>,
+    pub repository: Option<&'a str>,
+    pub architecture: Option<&'a str>,
 }
 
 fn build_resolution_options(
     version: Option<&str>,
+    package_release: Option<&str>,
     repo: Option<&str>,
     architecture: Option<&str>,
     policy_opts: &PolicyOptions,
 ) -> ResolutionOptions {
     ResolutionOptions {
         version: version.map(String::from),
+        package_release: package_release.map(String::from),
         repository: repo.map(String::from),
         architecture: architecture.map(String::from),
         output_dir: None,
-        gpg_options: None, // Will be set per-repository in resolver
-        skip_cas: false,
+        skip_installed: false,
         policy: policy_opts.policy.clone(),
         is_root: policy_opts.is_root,
-        primary_flavor: policy_opts.primary_flavor,
     }
-}
-
-/// Resolve package to a local path, downloading from repository if needed
-///
-/// This is the main entry point for package resolution. It uses the unified
-/// resolution flow with per-package routing strategies.
-///
-/// Returns `ResolutionOutcome::AlreadyInstalled` if the package is already
-/// installed at the requested version, avoiding unnecessary downloads.
-#[allow(dead_code)] // Convenience wrapper kept for callers without policy
-pub async fn resolve_package_path(
-    package: &str,
-    db_path: &str,
-    version: Option<&str>,
-    repo: Option<&str>,
-    architecture: Option<&str>,
-    progress: &InstallProgress,
-) -> Result<ResolutionOutcome> {
-    resolve_package_path_with_policy(
-        package,
-        db_path,
-        version,
-        repo,
-        architecture,
-        progress,
-        &PolicyOptions::default(),
-    )
-    .await
 }
 
 /// Resolve package to a local path with explicit policy control.
@@ -147,14 +105,18 @@ pub async fn resolve_package_path(
 /// Like `resolve_package_path` but accepts a `PolicyOptions` to constrain
 /// candidate selection via `ResolutionPolicy`.
 pub async fn resolve_package_path_with_policy(
-    package: &str,
-    db_path: &str,
-    version: Option<&str>,
-    repo: Option<&str>,
-    architecture: Option<&str>,
+    request: PackageResolutionRequest<'_>,
     progress: &InstallProgress,
     policy_opts: &PolicyOptions,
 ) -> Result<ResolutionOutcome> {
+    let PackageResolutionRequest {
+        package,
+        db_path,
+        version,
+        package_release,
+        repository,
+        architecture,
+    } = request;
     // Check if package is a local file
     if Path::new(package).exists() {
         info!("Installing from local file: {}", package);
@@ -178,7 +140,13 @@ pub async fn resolve_package_path_with_policy(
     // Build resolution options
     // Note: keyring_dir will be used when GPG options are integrated into resolution
     let _keyring_dir = keyring_dir(db_path);
-    let options = build_resolution_options(version, repo, architecture, policy_opts);
+    let options = build_resolution_options(
+        version,
+        package_release,
+        repository,
+        architecture,
+        policy_opts,
+    );
 
     // Use unified resolver
     progress.set_status("Resolving package source...");
@@ -257,62 +225,26 @@ fn convert_source_to_resolved(
             _temp_dir,
             repository_provenance,
         } => {
-            info!("Resolved {} from Remi: {}", package, path.display());
+            info!(
+                "Resolved {} as a repository CCS artifact: {}",
+                package,
+                path.display()
+            );
             progress.set_phase(package, InstallPhase::Downloading);
             Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path,
                 _temp_dir,
-                source_type: ResolvedSourceType::Remi,
+                source_type: ResolvedSourceType::Ccs,
                 repository_provenance,
             }))
         }
 
-        PackageSource::Delta {
-            base_version,
-            delta_path,
-            _temp_dir,
-        } => {
+        PackageSource::Installed { name, version, .. } => {
             info!(
-                "Resolved {} from delta (base: {}): {}",
-                package,
-                base_version,
-                delta_path.display()
+                "Package {} {} is already installed, skipping download",
+                name, version
             );
-            progress.set_phase(package, InstallPhase::Downloading);
-            // For now, treat delta as binary - the installer will handle it
-            Ok(ResolutionOutcome::Resolved(ResolvedPackage {
-                path: delta_path,
-                _temp_dir,
-                source_type: ResolvedSourceType::Binary,
-                repository_provenance: None,
-            }))
-        }
-
-        PackageSource::LocalCas { hash } => {
-            // Check if this is an "already installed" marker from the resolver
-            if let Some(rest) = hash.strip_prefix("installed:") {
-                // Format is "installed:{name}:{version}"
-                let parts: Vec<&str> = rest.splitn(2, ':').collect();
-                let (name, version) = if parts.len() == 2 {
-                    (parts[0].to_string(), parts[1].to_string())
-                } else {
-                    (package.to_string(), "unknown".to_string())
-                };
-
-                info!(
-                    "Package {} {} is already installed, skipping download",
-                    name, version
-                );
-
-                return Ok(ResolutionOutcome::AlreadyInstalled { name, version });
-            }
-
-            // Future: handle actual CAS content hashes
-            info!("Resolved {} from local CAS: {}", package, hash);
-            Err(anyhow::anyhow!(
-                "Local CAS resolution not yet implemented (hash: {})",
-                hash
-            ))
+            Ok(ResolutionOutcome::AlreadyInstalled { name, version })
         }
     }
 }
@@ -326,34 +258,49 @@ fn convert_source_to_resolved(
 /// - satisfied: Vec of (dep_name, provider_name, version)
 /// - unsatisfied: Vec of MissingDependency (cloned)
 #[allow(clippy::type_complexity)]
+#[cfg(test)]
 pub fn check_provides_dependencies(
     conn: &Connection,
     missing: &[conary_core::resolver::MissingDependency],
-) -> (
+) -> Result<(
     Vec<(String, String, Option<String>)>,
     Vec<conary_core::resolver::MissingDependency>,
-) {
+)> {
     let mut satisfied = Vec::new();
     let mut unsatisfied = Vec::new();
 
     for dep in missing {
         // Check only declared capability metadata. Repository/AppStream sync
         // owns capability normalization; install should not guess providers.
-        match ProvideEntry::find_declared_satisfying_provider(conn, &dep.name) {
-            Ok(Some((provider, version))) => {
-                satisfied.push((dep.name.clone(), provider, Some(version)));
+        let providers = ProvideEntry::find_declared_provider_contracts(conn, &dep.name)?;
+        let mut satisfying_provider = None;
+        for provider in providers {
+            let satisfies = match &dep.constraint {
+                VersionConstraint::Any => true,
+                constraint => {
+                    let Some(capability_version) = provider.capability_version.as_deref() else {
+                        continue;
+                    };
+                    super::dep_resolution::version_satisfies_constraint(
+                        provider.version_scheme,
+                        capability_version,
+                        constraint,
+                    )?
+                }
+            };
+            if satisfies {
+                satisfying_provider = Some((provider.package_name, provider.package_version));
+                break;
             }
-            Ok(None) => {
-                unsatisfied.push(dep.clone());
-            }
-            Err(e) => {
-                debug!("Error checking provides for {}: {}", dep.name, e);
-                unsatisfied.push(dep.clone());
-            }
+        }
+        if let Some((provider, version)) = satisfying_provider {
+            satisfied.push((dep.name.clone(), provider, Some(version)));
+        } else {
+            unsatisfied.push(dep.clone());
         }
     }
 
-    (satisfied, unsatisfied)
+    Ok((satisfied, unsatisfied))
 }
 
 #[cfg(test)]
@@ -373,17 +320,8 @@ mod tests {
              PRAGMA foreign_keys = ON;",
         )
         .unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         conn
-    }
-
-    #[test]
-    fn test_resolved_source_type_description() {
-        assert_eq!(ResolvedSourceType::LocalFile.description(), "local file");
-        assert_eq!(ResolvedSourceType::Binary.description(), "binary package");
-        assert_eq!(ResolvedSourceType::Remi.description(), "Remi conversion");
-        assert_eq!(ResolvedSourceType::Recipe.description(), "recipe build");
-        assert_eq!(ResolvedSourceType::Legacy.description(), "repository");
     }
 
     #[test]
@@ -396,6 +334,7 @@ mod tests {
     fn test_build_resolution_options_preserves_architecture() {
         let options = build_resolution_options(
             Some("1.2.3"),
+            Some("4"),
             Some("stable"),
             Some("x86_64"),
             &PolicyOptions {
@@ -405,6 +344,7 @@ mod tests {
         );
 
         assert_eq!(options.version.as_deref(), Some("1.2.3"));
+        assert_eq!(options.package_release.as_deref(), Some("4"));
         assert_eq!(options.repository.as_deref(), Some("stable"));
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert!(options.is_root);
@@ -413,11 +353,21 @@ mod tests {
     #[test]
     fn check_provides_dependencies_does_not_guess_package_name_variations() {
         let conn = test_db();
-        let mut trove = Trove::new("glibc".to_string(), "2.42".to_string(), TroveType::Package);
+        let mut trove = Trove::new(
+            "glibc".to_string(),
+            "2.42".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         let trove_id = trove.insert(&conn).unwrap();
-        ProvideEntry::new(trove_id, "glibc".to_string(), Some("2.42".to_string()))
-            .insert(&conn)
-            .unwrap();
+        ProvideEntry::new(
+            trove_id,
+            "glibc".to_string(),
+            Some("2.42".to_string()),
+            conary_core::repository::versioning::VersionScheme::Conary,
+        )
+        .insert(&conn)
+        .unwrap();
 
         let missing = vec![MissingDependency {
             name: "libc.so.6".to_string(),
@@ -425,7 +375,7 @@ mod tests {
             required_by: vec!["demo".to_string()],
         }];
 
-        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing);
+        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing).unwrap();
 
         assert!(satisfied.is_empty());
         assert_eq!(unsatisfied, missing);
@@ -438,11 +388,19 @@ mod tests {
             "openssl-libs".to_string(),
             "3.1.0".to_string(),
             TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        ProvideEntry::new_typed(trove_id, "soname", "libssl.so.3".to_string(), None)
-            .insert(&conn)
-            .unwrap();
+        ProvideEntry::new_typed(
+            trove_id,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::Soname,
+            "libssl.so.3".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Conary,
+            Default::default(),
+        )
+        .insert(&conn)
+        .unwrap();
 
         let missing = vec![MissingDependency {
             name: "libssl.so.3".to_string(),
@@ -450,7 +408,7 @@ mod tests {
             required_by: vec!["demo".to_string()],
         }];
 
-        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing);
+        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing).unwrap();
 
         assert_eq!(
             satisfied,
@@ -458,6 +416,84 @@ mod tests {
                 "libssl.so.3".to_string(),
                 "openssl-libs".to_string(),
                 Some("3.1.0".to_string())
+            )]
+        );
+        assert!(unsatisfied.is_empty());
+    }
+
+    #[test]
+    fn versioned_requirement_rejects_unversioned_declared_capability() {
+        let conn = test_db();
+        let mut trove = Trove::new(
+            "provider".to_string(),
+            "9.0".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Debian,
+        );
+        trove.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
+        let trove_id = trove.insert(&conn).unwrap();
+        ProvideEntry::new_typed(
+            trove_id,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
+            "virtual-abi".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Debian,
+            Default::default(),
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let missing = vec![MissingDependency {
+            name: "virtual-abi".to_string(),
+            constraint: VersionConstraint::parse(">= 2.0").unwrap(),
+            required_by: vec!["consumer".to_string()],
+        }];
+
+        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing).unwrap();
+        assert!(satisfied.is_empty());
+        assert_eq!(unsatisfied, missing);
+    }
+
+    #[test]
+    fn versioned_requirement_checks_all_exact_provider_contracts() {
+        let conn = test_db();
+        for (name, package_version, capability_version) in [
+            ("old-provider", "1.0", "1.0"),
+            ("new-provider", "3.0", "3.0"),
+        ] {
+            let mut trove = Trove::new(
+                name.to_string(),
+                package_version.to_string(),
+                TroveType::Package,
+                conary_core::repository::versioning::VersionScheme::Rpm,
+            );
+            let trove_id = trove.insert(&conn).unwrap();
+            ProvideEntry::new_typed(
+                trove_id,
+                conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
+                "virtual-abi".to_string(),
+                Some(capability_version.to_string()),
+                conary_core::repository::versioning::VersionScheme::Rpm,
+                Default::default(),
+            )
+            .insert(&conn)
+            .unwrap();
+        }
+
+        let missing = vec![MissingDependency {
+            name: "virtual-abi".to_string(),
+            constraint: VersionConstraint::parse(">= 2.0").unwrap(),
+            required_by: vec!["consumer".to_string()],
+        }];
+
+        let (satisfied, unsatisfied) = check_provides_dependencies(&conn, &missing).unwrap();
+        assert_eq!(
+            satisfied,
+            vec![(
+                "virtual-abi".to_string(),
+                "new-provider".to_string(),
+                Some("3.0".to_string())
             )]
         );
         assert!(unsatisfied.is_empty());
@@ -476,8 +512,8 @@ mod tests {
                 _temp_dir: None,
                 repository_provenance: Some(RepositorySourceMetadata {
                     repository_id: 42,
-                    source_distro: Some("fedora".to_string()),
-                    version_scheme: Some("rpm".to_string()),
+                    source_profile: Some("fedora-44".to_string()),
+                    version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
                     source_kind: RepositorySourceKind::Remi,
                 }),
             },
@@ -493,9 +529,13 @@ mod tests {
         let provenance = resolved
             .repository_provenance
             .expect("Remi CCS resolution should keep repository provenance");
+        assert_eq!(resolved.source_type, ResolvedSourceType::Ccs);
         assert_eq!(provenance.repository_id, 42);
-        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
-        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(provenance.source_profile.as_deref(), Some("fedora-44"));
+        assert_eq!(
+            provenance.version_scheme,
+            conary_core::repository::versioning::VersionScheme::Rpm
+        );
         assert_eq!(provenance.source_kind, RepositorySourceKind::Remi);
     }
 }

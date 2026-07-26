@@ -9,8 +9,8 @@ pub(super) async fn dispatch_system_trigger_command(
     trigger_cmd: cli::TriggerCommands,
 ) -> Result<()> {
     match trigger_cmd {
-        cli::TriggerCommands::List { db, all, builtin } => {
-            commands::cmd_trigger_list(&db.db_path, all, builtin).await
+        cli::TriggerCommands::List { db, all } => {
+            commands::cmd_trigger_list(&db.db_path, all).await
         }
 
         cli::TriggerCommands::Show { name, db } => {

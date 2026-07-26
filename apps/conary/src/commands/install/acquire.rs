@@ -1,21 +1,20 @@
-// src/commands/install/acquire.rs
+// apps/conary/src/commands/install/acquire.rs
 
 use super::conversion::{
-    ConversionResult, ConvertedCcsInstallOptions, DEFAULT_CCS_DEPENDENCY_PASSES,
-    install_converted_ccs, try_convert_to_ccs,
+    CcsArtifactInstallOptions, ConversionResult, DEFAULT_CCS_DEPENDENCY_PASSES,
+    install_ccs_artifact, try_convert_to_ccs,
 };
 use super::prepare::parse_package;
 use super::resolve::{
-    PolicyOptions, ResolutionOutcome, ResolvedPackage, ResolvedSourceType,
-    resolve_package_path_with_policy,
+    PackageResolutionRequest, PolicyOptions, ResolutionOutcome, ResolvedPackage,
+    ResolvedSourceType, resolve_package_path_with_policy,
 };
 use super::{
-    DepMode, InstallPhase, InstallProgress, LegacyReplayOptions, PackageFormatType,
-    RepositoryInstallProvenance, detect_package_format,
+    CcsEnvelopeAuthority, InstallIntent, InstallPhase, InstallProgress, PackageFormatType,
+    RepositoryInstallProvenance, bind_transaction_source_profile, detect_package_format,
 };
 use anyhow::{Context, Result};
 use conary_core::packages::PackageFormat;
-use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
@@ -28,20 +27,17 @@ pub(super) struct CcsInstallParams<'a> {
     pub(super) dry_run: bool,
     pub(super) sandbox_mode: SandboxMode,
     pub(super) no_deps: bool,
-    pub(super) no_scripts: bool,
     pub(super) allow_downgrade: bool,
-    pub(super) allow_capabilities: bool,
-    pub(super) dep_mode: Option<DepMode>,
+    pub(super) intent: InstallIntent,
     pub(super) yes: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
-    pub(super) legacy_replay: LegacyReplayOptions,
 }
 
 /// Resolve a package path, detect its format, and parse it.
 ///
 /// Handles early returns for CCS packages (from Remi, by extension, or via
 /// conversion).  Returns `None` if the package was already installed as CCS
-/// (no further processing needed), or `Some(...)` with the parsed legacy
+/// (no further processing needed), or `Some(...)` with the parsed native-format
 /// package and its format type.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn resolve_and_parse_package(
@@ -50,12 +46,11 @@ pub(super) async fn resolve_and_parse_package(
     package: &str,
     db_path: &str,
     version: Option<&str>,
+    package_release: Option<&str>,
     repo: Option<&str>,
     architecture: Option<&str>,
     convert_to_ccs: bool,
-    no_capture: bool,
     policy: &ResolutionPolicy,
-    primary_flavor: Option<RepositoryDependencyFlavor>,
     ccs_opts: &CcsInstallParams<'_>,
 ) -> Result<
     Option<(
@@ -74,7 +69,6 @@ pub(super) async fn resolve_and_parse_package(
     let policy_opts = PolicyOptions {
         policy: Some(policy.clone()),
         is_root: true,
-        primary_flavor,
     };
 
     // Resolve package path (download if needed).
@@ -83,11 +77,14 @@ pub(super) async fn resolve_and_parse_package(
     // TODO(round2): Surface partial-download byte counts in error messages
     // so users can diagnose connection issues vs corrupt mirrors.
     let resolved = match resolve_package_path_with_policy(
-        package_name,
-        db_path,
-        version,
-        repo,
-        architecture,
+        PackageResolutionRequest {
+            package: package_name,
+            db_path,
+            version,
+            package_release,
+            repository: repo,
+            architecture,
+        },
         &progress,
         &policy_opts,
     )
@@ -98,39 +95,40 @@ pub(super) async fn resolve_and_parse_package(
             return Err(e);
         }
         Ok(ResolutionOutcome::AlreadyInstalled { name, version }) => {
-            // Use a specific error type that the caller handles as a clean exit
-            return Err(anyhow::anyhow!(
-                "ALREADY_INSTALLED:{} {} is already installed (skipping download)",
-                name,
-                version
-            ));
+            crate::ui::note(&format!("{name} {version} is already installed"));
+            return Ok(None);
         }
         Ok(ResolutionOutcome::Resolved(pkg)) => pkg,
     };
+    let repository_provenance = install_provenance_from_resolved(&resolved)
+        .or_else(|| ccs_opts.repository_provenance.clone());
+    let resolution_policy =
+        bind_transaction_source_profile(policy.clone(), repository_provenance.as_ref())?;
 
-    // If resolved from Remi, it's already CCS format - install directly
-    if resolved.source_type == ResolvedSourceType::Remi {
-        info!("Package from Remi is already CCS format, installing directly");
+    // Repository-resolved CCS artifacts are already in installable form.
+    if resolved.source_type == ResolvedSourceType::Ccs {
+        info!("Repository supplied a CCS artifact; installing directly");
         let ccs_path = resolved
             .path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Invalid CCS path (non-UTF8)"))?;
-        install_converted_ccs(ConvertedCcsInstallOptions {
+        install_ccs_artifact(CcsArtifactInstallOptions {
             ccs_path,
             db_path: ccs_opts.db_path,
             root: ccs_opts.root,
             dry_run: ccs_opts.dry_run,
             sandbox_mode: ccs_opts.sandbox_mode,
             no_deps: ccs_opts.no_deps,
-            no_scripts: ccs_opts.no_scripts,
             allow_downgrade: ccs_opts.allow_downgrade,
-            allow_capabilities: ccs_opts.allow_capabilities,
-            dep_mode: ccs_opts.dep_mode,
+            intent: ccs_opts.intent,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
-            repository_provenance: install_provenance_from_resolved(&resolved)
-                .or_else(|| ccs_opts.repository_provenance.clone()),
-            legacy_replay: ccs_opts.legacy_replay,
+            envelope_authority: direct_ccs_envelope_authority(
+                resolved.source_type,
+                repository_provenance.as_ref(),
+            )?,
+            repository_provenance,
+            resolution_policy,
         })
         .await?;
         return Ok(None);
@@ -141,42 +139,41 @@ pub(super) async fn resolve_and_parse_package(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid package path (non-UTF8)"))?;
 
-    // Check if it's a CCS package by extension (from update command or local file)
-    if path_str.ends_with(".ccs") {
-        info!("Detected CCS package from path extension, installing directly");
-        install_converted_ccs(ConvertedCcsInstallOptions {
+    if conary_core::ccs::archive_reader::has_current_ccs_archive_contract(&resolved.path)
+        .context("Failed to inspect package archive contract")?
+    {
+        info!("Detected CCS package archive contract, installing directly");
+        install_ccs_artifact(CcsArtifactInstallOptions {
             ccs_path: path_str,
             db_path: ccs_opts.db_path,
             root: ccs_opts.root,
             dry_run: ccs_opts.dry_run,
             sandbox_mode: ccs_opts.sandbox_mode,
             no_deps: ccs_opts.no_deps,
-            no_scripts: ccs_opts.no_scripts,
             allow_downgrade: ccs_opts.allow_downgrade,
-            allow_capabilities: ccs_opts.allow_capabilities,
-            dep_mode: ccs_opts.dep_mode,
+            intent: ccs_opts.intent,
             yes: ccs_opts.yes,
             dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
-            repository_provenance: install_provenance_from_resolved(&resolved)
-                .or_else(|| ccs_opts.repository_provenance.clone()),
-            legacy_replay: ccs_opts.legacy_replay,
+            envelope_authority: direct_ccs_envelope_authority(
+                resolved.source_type,
+                repository_provenance.as_ref(),
+            )?,
+            repository_provenance,
+            resolution_policy,
         })
         .await?;
         return Ok(None);
     }
 
-    // Detect format and parse legacy packages
+    // Detect and parse native package formats.
     let format = detect_package_format(path_str)
         .with_context(|| format!("Failed to detect package format for '{}'", path_str))?;
     info!("Detected package format: {:?}", format);
 
-    let repository_provenance = install_provenance_from_resolved(&resolved)
-        .or_else(|| ccs_opts.repository_provenance.clone());
-
     progress.set_phase(package, InstallPhase::Parsing);
     let pkg = parse_package(&resolved.path, format)?;
 
-    // Convert to CCS format if requested (only for legacy packages)
+    // Convert to CCS format if requested.
     if convert_to_ccs {
         progress.set_status(&format!("Converting {} to CCS format...", pkg.name()));
 
@@ -185,34 +182,36 @@ pub(super) async fn resolve_and_parse_package(
             &resolved.path,
             format,
             db_path,
-            !no_capture,
-            ccs_opts.allow_capabilities,
+            &resolution_policy,
         )
         .await?
         {
             ConversionResult::Converted {
                 ccs_path,
                 temp_dir: _temp_dir,
+                pending_record,
+                signing_public_key,
             } => {
                 // Install via CCS path (temp_dir kept alive until install completes)
-                install_converted_ccs(ConvertedCcsInstallOptions {
+                let installed_trove_id = install_ccs_artifact(CcsArtifactInstallOptions {
                     ccs_path: &ccs_path,
                     db_path: ccs_opts.db_path,
                     root: ccs_opts.root,
                     dry_run: ccs_opts.dry_run,
                     sandbox_mode: ccs_opts.sandbox_mode,
                     no_deps: ccs_opts.no_deps,
-                    no_scripts: ccs_opts.no_scripts,
                     allow_downgrade: ccs_opts.allow_downgrade,
-                    allow_capabilities: ccs_opts.allow_capabilities,
-                    dep_mode: ccs_opts.dep_mode,
+                    intent: ccs_opts.intent,
                     yes: ccs_opts.yes,
                     dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
-                    repository_provenance: install_provenance_from_resolved(&resolved)
-                        .or_else(|| ccs_opts.repository_provenance.clone()),
-                    legacy_replay: ccs_opts.legacy_replay,
+                    envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
+                    repository_provenance,
+                    resolution_policy,
                 })
                 .await?;
+                if let Some(trove_id) = installed_trove_id {
+                    pending_record.persist(db_path, trove_id)?;
+                }
                 return Ok(None);
             }
             ConversionResult::Skipped => {
@@ -224,7 +223,20 @@ pub(super) async fn resolve_and_parse_package(
     Ok(Some((pkg, format, repository_provenance)))
 }
 
-fn install_provenance_from_resolved(
+fn direct_ccs_envelope_authority(
+    source_type: ResolvedSourceType,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+) -> Result<CcsEnvelopeAuthority> {
+    if repository_provenance.is_some() {
+        return Ok(CcsEnvelopeAuthority::Repository);
+    }
+    if source_type == ResolvedSourceType::LocalFile {
+        return Ok(CcsEnvelopeAuthority::LocalDev);
+    }
+    anyhow::bail!("Repository-resolved CCS package is missing exact repository provenance")
+}
+
+pub(super) fn install_provenance_from_resolved(
     resolved: &ResolvedPackage,
 ) -> Option<RepositoryInstallProvenance> {
     resolved
@@ -232,8 +244,8 @@ fn install_provenance_from_resolved(
         .as_ref()
         .map(|provenance| RepositoryInstallProvenance {
             repository_id: provenance.repository_id,
-            source_distro: provenance.source_distro.clone(),
-            version_scheme: provenance.version_scheme.clone(),
+            source_profile: provenance.source_profile.clone(),
+            version_scheme: provenance.version_scheme,
             source_kind: provenance.source_kind.clone(),
         })
 }
@@ -342,11 +354,11 @@ mod tests {
         let resolved = ResolvedPackage {
             path: PathBuf::from("/tmp/example.ccs"),
             _temp_dir: None,
-            source_type: ResolvedSourceType::Remi,
+            source_type: ResolvedSourceType::Ccs,
             repository_provenance: Some(RepositorySourceMetadata {
                 repository_id: 77,
-                source_distro: Some("fedora".to_string()),
-                version_scheme: Some("rpm".to_string()),
+                source_profile: Some("fedora-44".to_string()),
+                version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
                 source_kind: RepositorySourceKind::Static,
             }),
         };
@@ -355,8 +367,11 @@ mod tests {
             .expect("repository provenance should be copied");
 
         assert_eq!(provenance.repository_id, 77);
-        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
-        assert_eq!(provenance.version_scheme.as_deref(), Some("rpm"));
+        assert_eq!(provenance.source_profile.as_deref(), Some("fedora-44"));
+        assert_eq!(
+            provenance.version_scheme,
+            conary_core::repository::versioning::VersionScheme::Rpm
+        );
         assert_eq!(provenance.source_kind, RepositorySourceKind::Static);
     }
 }

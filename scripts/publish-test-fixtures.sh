@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$PROJECT_ROOT/apps/conary/tests/fixtures/conary-test-fixture"
 ADVERSARIAL_DIR="$PROJECT_ROOT/apps/conary/tests/fixtures/adversarial"
-REMI_ENDPOINT="${REMI_ENDPOINT:-https://packages.conary.io}"
+REMI_ENDPOINT="${REMI_ENDPOINT:-https://remi.conary.io}"
 REMI_ADMIN_ENDPOINT="${REMI_ADMIN_ENDPOINT:-}"
 REMI_ADMIN_TOKEN="${REMI_ADMIN_TOKEN:-}"
 CONARY_BIN="${CONARY_BIN:-$PROJECT_ROOT/target/debug/conary}"
@@ -26,20 +26,18 @@ publish_phase2_fixtures() {
     fi
 
     echo ""
-    echo "Publishing Phase 2 fixtures to Remi admin package endpoints ($REMI_ADMIN_ENDPOINT)..."
+    echo "Publishing Phase 2 fixtures to Remi's test-fixture surface ($REMI_ADMIN_ENDPOINT)..."
     for ver in v1 v2; do
         pkg=$(ls "$FIXTURE_DIR/$ver/output/"*.ccs 2>/dev/null | head -1)
         [ -z "$pkg" ] && { echo "FATAL: No CCS for $ver" >&2; exit 1; }
-
-        for distro in fedora ubuntu arch; do
-            printf "  %s -> %s... " "$ver" "$distro"
-            curl -sf -X POST \
-                -H "Authorization: Bearer $REMI_ADMIN_TOKEN" \
-                --data-binary "@$pkg" \
-                "$REMI_ADMIN_ENDPOINT/v1/admin/packages/$distro" \
-                && echo "OK" \
-                || echo "WARN (upload failed)"
-        done
+        filename=$(basename "$pkg")
+        printf "  %s... " "$ver"
+        curl -sf -X PUT \
+            -H "Authorization: Bearer $REMI_ADMIN_TOKEN" \
+            --data-binary "@$pkg" \
+            "$REMI_ADMIN_ENDPOINT/v1/admin/test-fixtures/conary-test-fixture/$ver/$filename" \
+            && echo "OK" \
+            || echo "WARN (upload failed)"
     done
 }
 

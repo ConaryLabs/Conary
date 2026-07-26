@@ -165,13 +165,7 @@ impl Drop for SocketManager {
 #[cfg(unix)]
 fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
     use nix::unistd::{Gid, chown};
-    let gid = match lookup_group_gid(group_name, &["wheel", "sudo", "adm"])? {
-        Some(gid) => gid,
-        None => {
-            log::warn!("Could not find any suitable group for socket ownership");
-            return Ok(());
-        }
-    };
+    let gid = lookup_group_gid(group_name)?;
 
     chown(path, None, Some(Gid::from_raw(gid)))
         .map_err(|e| conary_core::Error::IoError(format!("Failed to set socket group: {}", e)))?;
@@ -180,7 +174,7 @@ fn set_socket_group(path: &Path, group_name: &str) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn lookup_group_gid(group_name: &str, fallbacks: &[&str]) -> Result<Option<libc::gid_t>> {
+pub(crate) fn lookup_group_gid(group_name: &str) -> Result<libc::gid_t> {
     use std::ffi::CString;
 
     let group_cstr = CString::new(group_name).map_err(|_| {
@@ -190,28 +184,14 @@ fn lookup_group_gid(group_name: &str, fallbacks: &[&str]) -> Result<Option<libc:
     unsafe {
         let grp = libc::getgrnam(group_cstr.as_ptr());
         if !grp.is_null() {
-            return Ok(Some((*grp).gr_gid));
-        }
-
-        for fallback in fallbacks {
-            let Ok(fallback_cstr) = CString::new(*fallback) else {
-                log::warn!("Skipping invalid fallback socket group name");
-                continue;
-            };
-
-            let fallback_group = libc::getgrnam(fallback_cstr.as_ptr());
-            if !fallback_group.is_null() {
-                log::info!(
-                    "Group '{}' not found, using '{}' instead",
-                    group_name,
-                    fallback
-                );
-                return Ok(Some((*fallback_group).gr_gid));
-            }
+            return Ok((*grp).gr_gid);
         }
     }
 
-    Ok(None)
+    Err(conary_core::Error::ConfigError(format!(
+        "Configured socket group '{}' does not exist",
+        group_name
+    )))
 }
 
 /// Extract peer credentials from an async Unix socket connection.
@@ -394,9 +374,14 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_group_gid_ignores_invalid_fallback_names() {
-        let gid = lookup_group_gid("definitely-missing-conary-group", &["bad\0group"]).unwrap();
-        assert!(gid.is_none());
+    fn configured_socket_group_must_exist_exactly() {
+        let error = lookup_group_gid("definitely-missing-conary-group")
+            .expect_err("missing configured group must fail instead of selecting another group");
+        assert!(
+            error.to_string().contains(
+                "Configured socket group 'definitely-missing-conary-group' does not exist"
+            )
+        );
     }
 
     #[test]

@@ -7,8 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use conary_core::ccs::CcsPackage;
-use conary_core::packages::PackageFormat;
 use conary_core::recipe::hermetic::HostBuildRecord;
 use conary_core::recipe::{CookResult, Recipe};
 
@@ -183,8 +181,7 @@ pub(crate) fn host_build_record_from_cook_result(
         package_name: recipe.package.name.clone(),
         package_version: recipe.package.version.clone(),
         package_release: recipe.package.release.clone(),
-        architecture: cooked_package_architecture(&result.package_path)
-            .or_else(|| provenance.host_arch.clone()),
+        architecture: provenance.host_arch.clone(),
         output_merkle_root,
         diagnostic_input_key: provenance.recipe_hash.clone(),
         diagnostic_dna_hash: provenance.dna_hash.clone(),
@@ -204,16 +201,6 @@ fn record_matches(
         && record.package_version == package_version
         && record.package_release == package_release
         && record.architecture.as_deref() == architecture
-}
-
-fn cooked_package_architecture(package_path: &Path) -> Option<String> {
-    let package = CcsPackage::parse(&package_path.to_string_lossy()).ok()?;
-    package
-        .manifest()
-        .package
-        .platform
-        .as_ref()
-        .and_then(|platform| platform.arch.clone())
 }
 
 fn record_sort_key(path: &Path, record: &HostBuildRecord, diagnostics: &mut Vec<String>) -> i128 {

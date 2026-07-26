@@ -417,23 +417,3 @@ pub async fn cmd_derive_stale(db_path: &str) -> Result<()> {
 
     Ok(())
 }
-
-/// Mark all derived packages from a parent as stale
-/// (Called internally when parent packages are updated)
-#[allow(dead_code)] // TODO: wire into the update pipeline
-pub async fn cmd_derive_mark_stale(parent_name: &str, db_path: &str) -> Result<()> {
-    let conn = open_db(db_path)?;
-
-    let count = DerivedPackage::mark_stale(&conn, parent_name)?;
-
-    if count > 0 {
-        println!(
-            "Marked {} derived packages as stale (parent '{}' was updated).",
-            count, parent_name
-        );
-    } else {
-        println!("No derived packages found for parent '{}'.", parent_name);
-    }
-
-    Ok(())
-}

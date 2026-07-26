@@ -1,991 +1,787 @@
 // conary-core/src/db/schema.rs
 
-//! Database schema definitions and migrations for Conary
+//! Current-only SQLite schema initialization.
 //!
-//! This module defines the SQLite schema for all core tables and provides
-//! a migration system to evolve the schema over time.
+//! Conary is pre-alpha and does not carry forward databases from former
+//! schema revisions. A database either has the current schema or
+//! must be rebuilt from authoritative package and repository inputs.
 
-use super::migrations;
-use crate::error::Result;
-use rusqlite::Connection;
+use super::current_schema;
+use crate::error::{Error, Result};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use std::path::Path;
 use tracing::info;
 
-/// Current schema version
-pub const SCHEMA_VERSION: i32 = 79;
+/// Revision 21 of the current-only schema epoch.
+///
+/// Revision 21 hard-cuts installed and native-lifecycle provenance from its
+/// ambiguous former name to one exact public `source_profile`. It
+/// retains revision 20's exact package release, source-native architecture,
+/// Debian Multi-Arch behavior, typed provider range boundaries, and identity
+/// indexes. Pre-alpha databases from revision 20 must be rebuilt; no
+/// compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 21;
+/// Stable identity that distinguishes this epoch from retired schema revisions.
+pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
-/// Initialize the schema version tracking table
-fn init_schema_version(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS schema_version (
-            version INTEGER PRIMARY KEY,
-            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )",
-        [],
-    )?;
-    Ok(())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaCompatibility {
+    Fresh,
+    Current,
+    RebuildRequired { observed: String },
 }
 
-/// Get the current schema version from the database
-pub fn get_schema_version(conn: &Connection) -> Result<i32> {
-    init_schema_version(conn)?;
+/// Inspect a database without creating, validating, or otherwise mutating it.
+pub fn inspect(path: impl AsRef<Path>) -> Result<SchemaCompatibility> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Ok(SchemaCompatibility::Fresh);
+    }
 
-    let version = conn.query_row(
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let current_version = get_schema_version(&conn)?;
+    match get_schema_identity(&conn)? {
+        Some((epoch, revision)) if epoch == SCHEMA_EPOCH && revision == SCHEMA_VERSION => {
+            if current_version == SCHEMA_VERSION {
+                Ok(SchemaCompatibility::Current)
+            } else {
+                Ok(SchemaCompatibility::RebuildRequired {
+                    observed: format!(
+                        "schema epoch {epoch} with inconsistent version {current_version}"
+                    ),
+                })
+            }
+        }
+        Some((epoch, revision)) => Ok(SchemaCompatibility::RebuildRequired {
+            observed: format!("schema epoch {epoch} revision {revision}"),
+        }),
+        None if database_is_fresh(&conn)? => Ok(SchemaCompatibility::Fresh),
+        None if current_version == 0 => Ok(SchemaCompatibility::RebuildRequired {
+            observed: "unversioned non-empty database".to_string(),
+        }),
+        None => Ok(SchemaCompatibility::RebuildRequired {
+            observed: format!("retired migration-chain schema version {current_version}"),
+        }),
+    }
+}
+
+/// Return zero for a fresh database or the exact schema epoch stored on disk.
+pub fn get_schema_version(conn: &Connection) -> Result<i32> {
+    if !table_exists(conn, "schema_version")? {
+        return Ok(0);
+    }
+
+    conn.query_row(
         "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
         [],
         |row| row.get(0),
-    );
-
-    match version {
-        Ok(v) => Ok(v),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
-        Err(e) => Err(e.into()),
-    }
+    )
+    .optional()
+    .map(|version| version.unwrap_or(0))
+    .map_err(Into::into)
 }
 
-/// Set the schema version
-fn set_schema_version(conn: &Connection, version: i32) -> Result<()> {
-    conn.execute(
-        "INSERT INTO schema_version (version) VALUES (?1)",
-        [version],
-    )?;
-    Ok(())
-}
-
-/// Apply all pending migrations to bring the database up to date
-pub fn migrate(conn: &Connection) -> Result<()> {
+/// Initialize a fresh database or validate that it already uses this epoch.
+///
+/// Any prior schema is rejected with an explicit rebuild requirement. This is
+/// deliberate: carrying an untested compatibility chain would make old
+/// structure, queue normalization, and retired workflow state authoritative.
+pub fn ensure_current(conn: &Connection) -> Result<()> {
     let current_version = get_schema_version(conn)?;
-    info!("Current schema version: {}", current_version);
-
-    if current_version >= SCHEMA_VERSION {
-        info!("Schema is up to date");
-        return Ok(());
-    }
-
-    // Apply migrations in order, each wrapped in a transaction for atomicity
-    for version in (current_version + 1)..=SCHEMA_VERSION {
-        info!("Applying migration to version {}", version);
-        apply_migration_version(conn, version)?;
-    }
-
-    info!(
-        "Schema migration complete. Now at version {}",
-        SCHEMA_VERSION
-    );
-    Ok(())
-}
-
-fn migration_requires_foreign_keys_disabled(version: i32) -> bool {
-    version == 63
-}
-
-fn apply_migration_version(conn: &Connection, version: i32) -> Result<()> {
-    if migration_requires_foreign_keys_disabled(version) {
-        conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
-    }
-
-    let tx = conn.unchecked_transaction()?;
-    let result = apply_migration(&tx, version).and_then(|()| set_schema_version(&tx, version));
-
-    match result {
-        Ok(()) => tx.commit()?,
-        Err(e) => {
-            drop(tx); // rollback on drop
-            if migration_requires_foreign_keys_disabled(version) {
-                let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
+    match get_schema_identity(conn)? {
+        Some((epoch, revision)) if epoch == SCHEMA_EPOCH && revision == SCHEMA_VERSION => {
+            if current_version != SCHEMA_VERSION {
+                return Err(rebuild_required(&format!(
+                    "schema epoch {epoch} with inconsistent version {current_version}"
+                )));
             }
-
-            let observed_version = get_schema_version(conn)?;
-            if observed_version >= version {
-                info!(
-                    "Migration version {} was already committed by another connection",
-                    version
-                );
-                return Ok(());
-            }
-
-            return Err(e);
+            info!("Schema is current at epoch {}", SCHEMA_VERSION);
+            return Ok(());
         }
-    };
-
-    if migration_requires_foreign_keys_disabled(version) {
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
-        if stmt.exists([])? {
-            return Err(crate::error::Error::InitError(format!(
-                "Foreign key check failed after migration version {}",
-                version
+        Some((epoch, revision)) => {
+            return Err(rebuild_required(&format!(
+                "schema epoch {epoch} revision {revision}"
+            )));
+        }
+        None if database_is_fresh(conn)? => {}
+        None if current_version == 0 => return Err(rebuild_required("unversioned non-empty")),
+        None => {
+            return Err(rebuild_required(&format!(
+                "retired migration-chain schema version {current_version}"
             )));
         }
     }
 
+    let tx = conn.unchecked_transaction()?;
+    current_schema::create_current_schema(&tx)?;
+    tx.execute(
+        "INSERT INTO schema_identity (epoch, revision) VALUES (?1, ?2)",
+        params![SCHEMA_EPOCH, SCHEMA_VERSION],
+    )?;
+    tx.execute(
+        "INSERT INTO schema_version (version) VALUES (?1)",
+        params![SCHEMA_VERSION],
+    )?;
+    tx.commit()?;
+    info!("Initialized current schema epoch {}", SCHEMA_VERSION);
     Ok(())
 }
 
-/// Apply a specific migration version
-fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
-    match version {
-        1 => migrations::migrate_v1(conn),
-        2 => migrations::migrate_v2(conn),
-        3 => migrations::migrate_v3(conn),
-        4 => migrations::migrate_v4(conn),
-        5 => migrations::migrate_v5(conn),
-        6 => migrations::migrate_v6(conn),
-        7 => migrations::migrate_v7(conn),
-        8 => migrations::migrate_v8(conn),
-        9 => migrations::migrate_v9(conn),
-        10 => migrations::migrate_v10(conn),
-        11 => migrations::migrate_v11(conn),
-        12 => migrations::migrate_v12(conn),
-        13 => migrations::migrate_v13(conn),
-        14 => migrations::migrate_v14(conn),
-        15 => migrations::migrate_v15(conn),
-        16 => migrations::migrate_v16(conn),
-        17 => migrations::migrate_v17(conn),
-        18 => migrations::migrate_v18(conn),
-        19 => migrations::migrate_v19(conn),
-        20 => migrations::migrate_v20(conn),
-        21 => migrations::migrate_v21(conn),
-        22 => migrations::migrate_v22(conn),
-        23 => migrations::migrate_v23(conn),
-        24 => migrations::migrate_v24(conn),
-        25 => migrations::migrate_v25(conn),
-        26 => migrations::migrate_v26(conn),
-        27 => migrations::migrate_v27(conn),
-        28 => migrations::migrate_v28(conn),
-        29 => migrations::migrate_v29(conn),
-        30 => migrations::migrate_v30(conn),
-        31 => migrations::migrate_v31(conn),
-        32 => migrations::migrate_v32(conn),
-        33 => migrations::migrate_v33(conn),
-        34 => migrations::migrate_v34(conn),
-        35 => migrations::migrate_v35(conn),
-        36 => migrations::migrate_v36(conn),
-        37 => migrations::migrate_v37(conn),
-        38 => migrations::migrate_v38(conn),
-        39 => migrations::migrate_v39(conn),
-        40 => migrations::migrate_v40(conn),
-        41 => migrations::migrate_v41(conn),
-        42 => migrations::migrate_v42(conn),
-        43 => migrations::migrate_v43(conn),
-        44 => migrations::migrate_v44(conn),
-        45 => migrations::migrate_v45(conn),
-        46 => migrations::migrate_v46(conn),
-        47 => migrations::migrate_v47(conn),
-        48 => migrations::migrate_v48(conn),
-        49 => migrations::migrate_v49(conn),
-        50 => migrations::migrate_v50(conn),
-        51 => migrations::migrate_v51(conn),
-        52 => migrations::migrate_v52(conn),
-        53 => migrations::migrate_v53(conn),
-        54 => migrations::migrate_v54(conn),
-        55 => migrations::migrate_v55(conn),
-        56 => migrations::migrate_v56(conn),
-        57 => migrations::migrate_v57(conn),
-        58 => migrations::migrate_v58(conn),
-        59 => migrations::migrate_v59(conn),
-        60 => migrations::migrate_v60(conn),
-        61 => migrations::migrate_v61(conn),
-        62 => migrations::migrate_v62(conn),
-        63 => migrations::migrate_v63(conn),
-        64 => migrations::migrate_v64(conn),
-        65 => migrations::migrate_v65(conn),
-        66 => migrations::migrate_v66(conn),
-        67 => migrations::migrate_v67(conn),
-        68 => migrations::migrate_v68(conn),
-        69 => migrations::migrate_v69(conn),
-        70 => migrations::migrate_v70(conn),
-        71 => migrations::migrate_v71(conn),
-        72 => migrations::migrate_v72(conn),
-        73 => migrations::migrate_v73(conn),
-        74 => migrations::migrate_v74(conn),
-        75 => migrations::migrate_v75(conn),
-        76 => migrations::migrate_v76(conn),
-        77 => migrations::migrate_v77(conn),
-        78 => migrations::migrate_v78(conn),
-        79 => migrations::migrate_v79(conn),
-        _ => Err(crate::error::Error::InitError(format!(
-            "Unknown migration version: {}",
-            version
-        ))),
+fn get_schema_identity(conn: &Connection) -> Result<Option<(String, i32)>> {
+    if !table_exists(conn, "schema_identity")? {
+        return Ok(None);
     }
+    conn.query_row(
+        "SELECT epoch, revision FROM schema_identity LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM sqlite_schema
+            WHERE type = 'table' AND name = ?1
+        )",
+        [table],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn database_is_fresh(conn: &Connection) -> Result<bool> {
+    conn.query_row(
+        "SELECT NOT EXISTS(
+            SELECT 1
+            FROM sqlite_schema
+            WHERE name NOT LIKE 'sqlite_%'
+        )",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn rebuild_required(observed: &str) -> Error {
+    Error::InitError(format!(
+        "database uses {observed}; this pre-alpha build supports only schema epoch \
+         {SCHEMA_EPOCH} revision {SCHEMA_VERSION}. Rebuild the database from authoritative inputs"
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        (temp_file, conn)
-    }
+    #[test]
+    fn ensure_current_creates_schema_atomically() {
+        let conn = Connection::open_in_memory().unwrap();
 
-    fn create_test_db_at_version(version: i32) -> (NamedTempFile, Connection) {
-        let (temp_file, conn) = create_test_db();
-        init_schema_version(&conn).unwrap();
+        ensure_current(&conn).unwrap();
 
-        for current in 1..=version {
-            apply_migration(&conn, current).unwrap();
-            set_schema_version(&conn, current).unwrap();
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(
+            get_schema_identity(&conn).unwrap(),
+            Some((SCHEMA_EPOCH.to_string(), SCHEMA_VERSION))
+        );
+        for table in [
+            "troves",
+            "repositories",
+            "converted_packages",
+            "installed_file_capabilities",
+            "generation_publications",
+            "activation_requests",
+            "generation_activation_intents",
+            "debian_alternative_groups",
+        ] {
+            assert!(table_exists(&conn, table).unwrap(), "missing {table}");
         }
-
-        (temp_file, conn)
     }
 
     #[test]
-    fn test_schema_version_tracking() {
-        let (_temp, conn) = create_test_db();
-
-        // Initial version should be 0
-        let version = get_schema_version(&conn).unwrap();
-        assert_eq!(version, 0);
-
-        // Set version to 1
-        set_schema_version(&conn, 1).unwrap();
-        let version = get_schema_version(&conn).unwrap();
-        assert_eq!(version, 1);
+    fn ensure_current_is_idempotent_for_current_epoch() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        ensure_current(&conn).unwrap();
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]
-    fn test_migrate_creates_all_tables() {
-        let (_temp, conn) = create_test_db();
+    fn read_only_inspection_names_exact_deployment_action() {
+        let missing_dir = tempfile::tempdir().unwrap();
+        let missing = missing_dir.path().join("missing.db");
+        assert_eq!(inspect(&missing).unwrap(), SchemaCompatibility::Fresh);
 
-        // Run migration
-        migrate(&conn).unwrap();
+        let current = tempfile::NamedTempFile::new().unwrap();
+        let conn = Connection::open(current.path()).unwrap();
+        ensure_current(&conn).unwrap();
+        drop(conn);
+        assert_eq!(
+            inspect(current.path()).unwrap(),
+            SchemaCompatibility::Current
+        );
 
-        // Verify all tables exist
-        let tables: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-
-        assert!(tables.contains(&"troves".to_string()));
-        assert!(tables.contains(&"changesets".to_string()));
-        assert!(tables.contains(&"files".to_string()));
-        assert!(tables.contains(&"flavors".to_string()));
-        assert!(tables.contains(&"provenance".to_string()));
-        assert!(tables.contains(&"dependencies".to_string()));
-        assert!(tables.contains(&"repository_package_keys".to_string()));
-        assert!(tables.contains(&"schema_version".to_string()));
-    }
-
-    #[test]
-    fn test_migrate_is_idempotent() {
-        let (_temp, conn) = create_test_db();
-
-        // Run migration twice
-        migrate(&conn).unwrap();
-        let version1 = get_schema_version(&conn).unwrap();
-
-        migrate(&conn).unwrap();
-        let version2 = get_schema_version(&conn).unwrap();
-
-        assert_eq!(version1, version2);
-        assert_eq!(version1, SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn test_migrate_allows_post_hooks_failed_changesets() {
-        let (_temp, conn) = create_test_db();
-        migrate(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO changesets (description, status, applied_at)
-             VALUES (?1, 'post_hooks_failed', CURRENT_TIMESTAMP)",
-            ["post-hooks degraded install"],
+        let retired = tempfile::NamedTempFile::new().unwrap();
+        let conn = Connection::open(retired.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (79);",
         )
         .unwrap();
+        drop(conn);
+        assert_eq!(
+            inspect(retired.path()).unwrap(),
+            SchemaCompatibility::RebuildRequired {
+                observed: "retired migration-chain schema version 79".to_string()
+            }
+        );
+    }
 
-        let status: String = conn
+    #[test]
+    fn current_schema_seeds_no_heuristic_package_triggers() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        let retired_builtin_columns: i64 = conn
             .query_row(
-                "SELECT status FROM changesets ORDER BY id DESC LIMIT 1",
+                "SELECT COUNT(*) FROM pragma_table_info('triggers') WHERE name = 'builtin'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(status, "post_hooks_failed");
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM triggers", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        assert_eq!(retired_builtin_columns, 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT value FROM server_metadata WHERE key = 'canonical_map_revision'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            "0"
+        );
     }
 
     #[test]
-    fn test_apply_migration_version_handles_concurrent_completion() {
-        let (temp_file, conn_a) = create_test_db_at_version(64);
-        let conn_b = Connection::open(temp_file.path()).unwrap();
+    fn current_schema_has_only_exact_canonical_mapping_authority() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
 
-        let stale_version = get_schema_version(&conn_a).unwrap();
-        assert_eq!(stale_version, 64);
-
-        apply_migration_version(&conn_b, 65).unwrap();
-        apply_migration_version(&conn_a, 65).unwrap();
-
-        let version_a = get_schema_version(&conn_a).unwrap();
-        let version_b = get_schema_version(&conn_b).unwrap();
-        assert_eq!(version_a, 65);
-        assert_eq!(version_b, 65);
-
-        let mut stmt = conn_a
-            .prepare("PRAGMA table_info(derived_packages)")
+        let retired_repo_id: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM pragma_table_info('package_implementations')
+                 WHERE name = 'repo_id'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        let columns: Vec<String> = stmt
-            .query_map([], |row| row.get(1))
+        assert_eq!(retired_repo_id, 0);
+        assert!(!table_exists(&conn, "package_overrides").unwrap());
+    }
+
+    #[test]
+    fn current_schema_requires_explicit_installation_semantics() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        let mut trove_columns = conn.prepare("PRAGMA table_info('troves')").unwrap();
+        let trove_columns = trove_columns
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
             .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
+            .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
+        for required in ["install_source", "install_reason", "version_scheme"] {
+            let (_, not_null, default) = trove_columns
+                .iter()
+                .find(|(name, _, _)| name == required)
+                .unwrap_or_else(|| panic!("missing troves.{required}"));
+            assert!(*not_null, "troves.{required} must be NOT NULL");
+            assert_eq!(
+                default, &None,
+                "troves.{required} must not invent a default"
+            );
+        }
 
-        assert!(columns.contains(&"last_built_version".to_string()));
-        assert!(columns.contains(&"last_built_parent_version".to_string()));
-        assert!(columns.contains(&"build_artifact_hash".to_string()));
-        assert!(columns.contains(&"build_artifact_path".to_string()));
-        assert!(columns.contains(&"build_artifact_size".to_string()));
-    }
+        for sql in [
+            "INSERT INTO troves (
+                 name, version, type, install_reason, version_scheme
+             ) VALUES ('missing-source', '1', 'package', 'explicit', 'conary')",
+            "INSERT INTO troves (
+                 name, version, type, install_source, version_scheme
+             ) VALUES ('missing-reason', '1', 'package', 'file', 'conary')",
+            "INSERT INTO troves (
+                 name, version, type, install_source, install_reason
+             ) VALUES ('missing-scheme', '1', 'package', 'file', 'explicit')",
+        ] {
+            let error = conn.execute(sql, []).unwrap_err();
+            assert!(
+                error.to_string().contains("NOT NULL constraint failed"),
+                "{error}"
+            );
+        }
 
-    #[test]
-    fn migration_adds_scriptlet_metadata_columns_to_converted_packages() {
-        let (_temp, conn) = create_test_db_at_version(69);
         conn.execute(
-            "INSERT INTO converted_packages (original_format, original_checksum, conversion_version, conversion_fidelity, enhancement_version, enhancement_status)
-             VALUES ('rpm', 'sha256:old', 3, 'high', 0, 'pending')",
+            "INSERT INTO system_states (state_number, summary, package_count)
+             VALUES (1, 'explicit semantics', 0)",
             [],
         )
         .unwrap();
-
-        migrate(&conn).unwrap();
-
-        let row = conn
-            .query_row(
-                "SELECT scriptlet_fidelity, target_compatibility, publication_status, blocked_reason_codes_json, scriptlet_summary_json
-                 FROM converted_packages
-                 WHERE original_checksum = 'sha256:old'",
+        let error = conn
+            .execute(
+                "INSERT INTO state_members (state_id, trove_name, trove_version)
+                 VALUES (1, 'missing-reason', '1')",
                 [],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                },
             )
-            .unwrap();
-
-        assert_eq!(row.0, "unknown");
-        assert_eq!(row.1, "unknown");
-        assert_eq!(row.2, "public");
-        assert_eq!(row.3, "[]");
-        assert_eq!(row.4, "{}");
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("state_members.install_reason"),
+            "{error}"
+        );
     }
 
     #[test]
-    fn migration_v71_creates_installed_legacy_scriptlet_bundles_table() {
-        let (_temp, conn) = create_test_db_at_version(70);
+    fn current_schema_enforces_exact_null_architecture_trove_identity() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let insert = |name: &str, architecture: Option<&str>| {
+            conn.execute(
+                "INSERT INTO troves (
+                     name, version, type, architecture, install_source,
+                     install_reason, version_scheme
+                 ) VALUES (?1, '1', 'package', ?2, 'file', 'explicit', 'conary')",
+                params![name, architecture],
+            )
+        };
 
-        apply_migration_version(&conn, 71).unwrap();
+        insert("null-architecture", None).unwrap();
+        let duplicate = insert("null-architecture", None).unwrap_err().to_string();
+        assert!(
+            duplicate.contains("UNIQUE constraint failed")
+                && duplicate.contains("idx_troves_exact_identity"),
+            "{duplicate}"
+        );
+        insert("null-architecture", Some("x86_64")).unwrap();
 
-        assert_eq!(get_schema_version(&conn).unwrap(), 71);
+        let empty = insert("empty-architecture", Some(""))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            empty.contains("CHECK constraint failed")
+                && empty.contains("architecture IS NULL OR length(architecture) > 0"),
+            "{empty}"
+        );
+    }
 
-        let columns: Vec<(String, String, bool)> = conn
-            .prepare("PRAGMA table_info(installed_legacy_scriptlet_bundles)")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)? != 0,
-                ))
-            })
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        let column_names: Vec<&str> = columns.iter().map(|(name, _, _)| name.as_str()).collect();
+    #[test]
+    fn current_schema_requires_exact_repository_artifact_architecture() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let insert = |checksum: &str, architecture: Option<&str>| {
+            conn.execute(
+                "INSERT INTO converted_packages (
+                     artifact_kind, original_format, original_checksum,
+                     package_name, package_version, source_profile, package_architecture,
+                     chunk_hashes_json, total_size, content_hash, ccs_path
+                 ) VALUES (
+                     'repository', 'rpm', ?1, 'fixture', '1.0-1', 'fedora-44',
+                     ?2, '[\"sha256:chunk\"]', 42, 'sha256:content',
+                     '/tmp/fixture.ccs'
+                 )",
+                params![checksum, architecture],
+            )
+        };
 
-        for required in [
-            "id",
-            "trove_id",
-            "source_format",
-            "source_family",
-            "source_distro",
-            "source_release",
-            "source_arch",
-            "source_package",
-            "source_version",
-            "target_id",
-            "target_compatibility",
-            "foreign_replay_policy",
-            "scriptlet_fidelity",
-            "publication_status",
-            "evidence_digest",
-            "replay_policy",
-            "replay_enabled",
-            "bundle_toml",
-            "installed_changeset_id",
-            "installed_at",
+        for (checksum, architecture) in [
+            ("sha256:missing-architecture", None),
+            ("sha256:empty-architecture", Some("")),
         ] {
-            assert!(
-                column_names.contains(&required),
-                "missing installed bundle column {required}"
-            );
+            let error = insert(checksum, architecture).unwrap_err().to_string();
+            assert!(error.contains("CHECK constraint failed"), "{error}");
         }
 
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, required)| name == "trove_id" && ty == "INTEGER" && *required)
-        );
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, required)| name == "bundle_toml" && ty == "TEXT" && *required)
-        );
-
-        let indexes: Vec<String> = conn
-            .prepare("PRAGMA index_list(installed_legacy_scriptlet_bundles)")
-            .unwrap()
-            .query_map([], |row| row.get(1))
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        assert!(indexes.contains(&"idx_installed_legacy_scriptlet_bundles_trove".to_string()));
-        assert!(indexes.contains(&"idx_installed_legacy_scriptlet_bundles_evidence".to_string()));
-
-        let fks: Vec<(String, String, String)> = conn
-            .prepare("PRAGMA foreign_key_list(installed_legacy_scriptlet_bundles)")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(6)?,
-                ))
-            })
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        assert!(fks.iter().any(|(from, table, on_delete)| {
-            from == "trove_id" && table == "troves" && on_delete.eq_ignore_ascii_case("CASCADE")
-        }));
-        assert!(fks.iter().any(|(from, table, on_delete)| {
-            from == "installed_changeset_id"
-                && table == "changesets"
-                && on_delete.eq_ignore_ascii_case("SET NULL")
-        }));
+        insert("sha256:exact-architecture", Some("x86_64")).unwrap();
     }
 
     #[test]
-    fn migration_v72_creates_repository_package_keys_table() {
-        let (_temp, conn) = create_test_db_at_version(71);
+    fn current_schema_requires_exact_native_identity_for_native_owned_troves() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
 
-        apply_migration_version(&conn, 72).unwrap();
-
-        assert_eq!(get_schema_version(&conn).unwrap(), 72);
-
-        let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
-            .prepare("PRAGMA table_info(repository_package_keys)")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)? != 0,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, i32>(5)?,
-                ))
-            })
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        let column_names: Vec<&str> = columns
-            .iter()
-            .map(|(name, _, _, _, _)| name.as_str())
-            .collect();
-
-        for required in [
-            "repository_id",
-            "public_key",
-            "key_id",
-            "status",
-            "synced_at",
-        ] {
-            assert!(
-                column_names.contains(&required),
-                "missing repository package key column {required}"
-            );
-        }
-
-        assert!(columns.iter().any(|(name, ty, required, _, pk)| {
-            name == "repository_id" && ty == "INTEGER" && *required && *pk == 1
-        }));
-        assert!(columns.iter().any(|(name, ty, required, _, pk)| {
-            name == "public_key" && ty == "TEXT" && *required && *pk == 2
-        }));
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, required, _, _)| name == "key_id" && ty == "TEXT" && !*required)
-        );
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, required, _, _)| name == "status" && ty == "TEXT" && *required)
-        );
-        assert!(columns.iter().any(|(name, ty, required, default, _)| {
-            name == "synced_at"
-                && ty == "TEXT"
-                && *required
-                && default
-                    .as_deref()
-                    .is_some_and(|value| value.contains("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"))
-        }));
-
-        let create_sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'repository_package_keys'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(create_sql.contains("status IN ('active', 'retired')"));
-        assert!(create_sql.contains("REFERENCES repositories(id) ON DELETE CASCADE"));
-
-        let indexes: Vec<String> = conn
-            .prepare("PRAGMA index_list(repository_package_keys)")
-            .unwrap()
-            .query_map([], |row| row.get(1))
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        assert!(indexes.contains(&"idx_repository_package_keys_repo".to_string()));
-    }
-
-    #[test]
-    fn migration_v73_creates_try_sessions_table() {
-        let (_temp, conn) = create_test_db_at_version(72);
-
-        migrate(&conn).unwrap();
-
-        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 79);
-
-        let columns: Vec<(String, String, bool, Option<String>, i32)> = conn
-            .prepare("PRAGMA table_info(try_sessions)")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)? != 0,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, i32>(5)?,
-                ))
-            })
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        let column_names: Vec<&str> = columns
-            .iter()
-            .map(|(name, _, _, _, _)| name.as_str())
-            .collect();
-
-        for required in [
-            "id",
-            "package_path",
-            "package_name",
-            "package_version",
-            "previous_generation_id",
-            "try_generation_id",
-            "launcher_pid",
-            "launcher_boot_id",
-            "status",
-            "mode",
-            "open_slot",
-            "work_dir",
-            "last_error",
-            "started_at",
-            "updated_at",
-            "completed_at",
-        ] {
-            assert!(
-                column_names.contains(&required),
-                "missing try_sessions column {required}"
-            );
-        }
-
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, _, _, pk)| { name == "id" && ty == "TEXT" && *pk == 1 })
-        );
-        assert!(columns.iter().any(|(name, ty, required, _, _)| {
-            name == "package_path" && ty == "TEXT" && *required
-        }));
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, required, _, _)| name == "status" && ty == "TEXT" && *required)
-        );
-        assert!(
-            columns
-                .iter()
-                .any(|(name, ty, required, _, _)| name == "mode" && ty == "TEXT" && *required)
-        );
-        assert!(columns.iter().any(|(name, ty, required, default, _)| {
-            name == "open_slot" && ty == "INTEGER" && *required && default.as_deref() == Some("1")
-        }));
-        assert!(columns.iter().any(|(name, ty, required, default, _)| {
-            name == "started_at"
-                && ty == "TEXT"
-                && *required
-                && default
-                    .as_deref()
-                    .is_some_and(|value| value.contains("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"))
-        }));
-        assert!(columns.iter().any(|(name, ty, required, default, _)| {
-            name == "updated_at"
-                && ty == "TEXT"
-                && *required
-                && default
-                    .as_deref()
-                    .is_some_and(|value| value.contains("strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"))
-        }));
-
-        let create_sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'try_sessions'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(create_sql.contains("status IN ('active', 'orphaned', 'kept', 'rolled_back')"));
-        assert!(create_sql.contains("mode IN ('namespace', 'activated')"));
-        assert!(create_sql.contains("CHECK (open_slot = 1)"));
-
-        let index_sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_try_sessions_single_open'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(index_sql.contains("ON try_sessions(open_slot)"));
-        assert!(index_sql.contains("WHERE status IN ('active', 'orphaned')"));
-    }
-
-    #[test]
-    fn test_troves_table_constraints() {
-        let (_temp, conn) = create_test_db();
-        migrate(&conn).unwrap();
-
-        // Insert a valid trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
-            ["test-package", "1.0.0", "package", "x86_64"],
-        )
-        .unwrap();
-
-        // Try to insert duplicate - should fail due to UNIQUE constraint
-        let result = conn.execute(
-            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
-            ["test-package", "1.0.0", "package", "x86_64"],
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_foreign_key_constraints() {
-        let (_temp, conn) = create_test_db();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        migrate(&conn).unwrap();
-
-        // Try to insert a file without a trove - should fail
-        let result = conn.execute(
-            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            [
-                "/usr/bin/test",
-                "abc123",
-                "1024",
-                "755",
-                "999", // Non-existent trove_id
-            ],
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_v11_creates_component_tables() {
-        let (_temp, conn) = create_test_db();
-        migrate(&conn).unwrap();
-
-        // Verify component tables exist
-        let tables: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-
-        assert!(tables.contains(&"components".to_string()));
-        assert!(tables.contains(&"component_dependencies".to_string()));
-        assert!(tables.contains(&"component_provides".to_string()));
-    }
-
-    #[test]
-    fn test_v11_component_file_relationship() {
-        let (_temp, conn) = create_test_db();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        migrate(&conn).unwrap();
-
-        // Create a trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
-            ["nginx", "1.24.0", "package", "x86_64"],
-        )
-        .unwrap();
-
-        let trove_id: i64 = conn
-            .query_row("SELECT id FROM troves WHERE name = 'nginx'", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-
-        // Create a component for the trove
-        conn.execute(
-            "INSERT INTO components (parent_trove_id, name, description) VALUES (?1, ?2, ?3)",
-            rusqlite::params![trove_id, "runtime", "Executable files"],
-        )
-        .unwrap();
-
-        let component_id: i64 = conn
-            .query_row(
-                "SELECT id FROM components WHERE parent_trove_id = ?1 AND name = 'runtime'",
-                [trove_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        // Create a file linked to the component
-        conn.execute(
-            "INSERT INTO files (path, sha256_hash, size, permissions, trove_id, component_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                "/usr/sbin/nginx",
-                "abc123",
-                1024,
-                755,
-                trove_id,
-                component_id
-            ],
-        )
-        .unwrap();
-
-        // Verify the file is linked to the component
-        let file_component_id: i64 = conn
-            .query_row(
-                "SELECT component_id FROM files WHERE path = '/usr/sbin/nginx'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(file_component_id, component_id);
-    }
-
-    #[test]
-    fn test_v11_component_unique_constraint() {
-        let (_temp, conn) = create_test_db();
-        migrate(&conn).unwrap();
-
-        // Create a trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
-            ["openssl", "3.0.0", "package", "x86_64"],
-        )
-        .unwrap();
-
-        let trove_id: i64 = conn
-            .query_row("SELECT id FROM troves WHERE name = 'openssl'", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-
-        // Create a component
-        conn.execute(
-            "INSERT INTO components (parent_trove_id, name) VALUES (?1, ?2)",
-            rusqlite::params![trove_id, "lib"],
-        )
-        .unwrap();
-
-        // Try to create duplicate component - should fail
-        let result = conn.execute(
-            "INSERT INTO components (parent_trove_id, name) VALUES (?1, ?2)",
-            rusqlite::params![trove_id, "lib"],
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_v11_component_cascade_delete() {
-        let (_temp, conn) = create_test_db();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        migrate(&conn).unwrap();
-
-        // Create a trove
-        conn.execute(
-            "INSERT INTO troves (name, version, type, architecture) VALUES (?1, ?2, ?3, ?4)",
-            ["curl", "8.0.0", "package", "x86_64"],
-        )
-        .unwrap();
-
-        let trove_id: i64 = conn
-            .query_row("SELECT id FROM troves WHERE name = 'curl'", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-
-        // Create components
-        conn.execute(
-            "INSERT INTO components (parent_trove_id, name) VALUES (?1, ?2)",
-            rusqlite::params![trove_id, "runtime"],
-        )
-        .unwrap();
-
-        // Delete the trove - components should cascade delete
-        conn.execute("DELETE FROM troves WHERE id = ?1", [trove_id])
-            .unwrap();
-
-        // Verify component was deleted
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM components WHERE parent_trove_id = ?1",
-                [trove_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    fn migrate_v77_creates_installed_file_capabilities_table() {
-        let (_temp, conn) = create_test_db_at_version(76);
-
-        apply_migration_version(&conn, 77).unwrap();
-
-        assert_eq!(get_schema_version(&conn).unwrap(), 77);
-
-        let columns: Vec<(String, String, bool, Option<String>)> = conn
-            .prepare("PRAGMA table_info(installed_file_capabilities)")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i32>(3)? != 0,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            })
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        let column_names: Vec<&str> = columns
-            .iter()
-            .map(|(name, _, _, _)| name.as_str())
-            .collect();
-
-        for required in [
-            "id",
-            "trove_id",
-            "path",
-            "capabilities_json",
-            "permitted",
-            "effective",
-            "inheritable",
-            "created_at",
-        ] {
-            assert!(
-                column_names.contains(&required),
-                "missing installed file capability column {required}"
-            );
-        }
-
-        assert!(
-            columns.iter().any(|(name, ty, required, _)| {
-                name == "trove_id" && ty == "INTEGER" && *required
-            })
-        );
-        assert!(columns.iter().any(|(name, ty, required, _)| {
-            name == "capabilities_json" && ty == "TEXT" && *required
-        }));
-        assert!(columns.iter().any(|(name, _, required, default)| {
-            name == "permitted" && *required && default.as_deref() == Some("1")
-        }));
-        assert!(columns.iter().any(|(name, _, required, default)| {
-            name == "effective" && *required && default.as_deref() == Some("1")
-        }));
-        assert!(columns.iter().any(|(name, _, required, default)| {
-            name == "inheritable" && *required && default.as_deref() == Some("0")
-        }));
-
-        let create_sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'installed_file_capabilities'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(create_sql.contains("UNIQUE(trove_id, path)"));
-        assert!(create_sql.contains("REFERENCES troves(id) ON DELETE CASCADE"));
-
-        let indexes: Vec<String> = conn
-            .prepare("PRAGMA index_list(installed_file_capabilities)")
-            .unwrap()
-            .query_map([], |row| row.get(1))
-            .unwrap()
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        assert!(indexes.contains(&"idx_installed_file_capabilities_trove".to_string()));
-        assert!(indexes.contains(&"idx_installed_file_capabilities_path".to_string()));
-    }
-
-    #[test]
-    fn migration_v78_preserves_existing_scriptlet_evidence_history() {
-        let (_temp, conn) = create_test_db_at_version(77);
-        conn.execute(
-            "INSERT INTO scriptlet_evidence_clusters (
-                cluster_key, schema_version, distro, target_profile, blocked_class,
-                command, normalized_command_shape, normalized_command_shape_hash,
-                lifecycle_phase, state
+        for sql in [
+            "INSERT INTO troves (
+                 name, version, type, install_source, install_reason, version_scheme
              ) VALUES (
-                's1-history', 1, 'ubuntu', 'ubuntu-26.04', 'unknown-command',
-                'set', 'set', 'shape-hash', 'postinstall', 'adapter-candidate'
+                 'missing-native-id', '1', 'package', 'adopted-full', 'explicit', 'rpm'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, install_source, install_reason, version_scheme,
+                 native_package_identity_json
+             ) VALUES (
+                 'malformed-native-id', '1', 'package', 'taken', 'explicit', 'rpm', '{bad'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, install_source, install_reason, version_scheme,
+                 native_package_identity_json
+             ) VALUES (
+                 'conary-with-native-id', '1', 'package', 'file', 'explicit', 'conary',
+                 '{\"manager\":\"pacman\",\"selector\":\"bash\",\"name\":\"bash\",
+                   \"version\":\"5.3-1\",\"architecture\":\"x86_64\"}'
+             )",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+
+        conn.execute(
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 version_scheme, native_package_identity_json
+             ) VALUES (
+                 'perl', '4:5.40.0-1.fc44', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'rpm',
+                 '{\"manager\":\"rpm\",
+                   \"selector\":\"perl-4:5.40.0-1.fc44.x86_64\",
+                   \"name\":\"perl\",\"epoch\":4,\"version\":\"5.40.0\",
+                   \"release\":\"1.fc44\",\"architecture\":\"x86_64\"}'
              )",
             [],
         )
         .unwrap();
+
+        for sql in [
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 version_scheme, native_package_identity_json
+             ) VALUES (
+                 'wrong-name', '2.41-12', 'package', 'i386',
+                 'adopted-track', 'explicit', 'debian',
+                 '{\"manager\":\"dpkg\",\"selector\":\"libc6:i386\",\"name\":\"libc6\",
+                   \"version\":\"2.41-12\",\"architecture\":\"i386\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 version_scheme, native_package_identity_json
+             ) VALUES (
+                 'libc6', '2.41-11', 'package', 'i386',
+                 'adopted-track', 'explicit', 'debian',
+                 '{\"manager\":\"dpkg\",\"selector\":\"libc6:i386\",\"name\":\"libc6\",
+                   \"version\":\"2.41-12\",\"architecture\":\"i386\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 version_scheme, native_package_identity_json
+             ) VALUES (
+                 'libc6', '2.41-12', 'package', 'amd64',
+                 'adopted-track', 'explicit', 'debian',
+                 '{\"manager\":\"dpkg\",\"selector\":\"libc6:i386\",\"name\":\"libc6\",
+                   \"version\":\"2.41-12\",\"architecture\":\"i386\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 version_scheme, native_package_identity_json
+             ) VALUES (
+                 'libc6', '2.41-12', 'package', 'i386',
+                 'adopted-track', 'explicit', 'debian',
+                 '{\"manager\":\"dpkg\",\"selector\":\"libc6:amd64\",\"name\":\"libc6\",
+                   \"version\":\"2.41-12\",\"architecture\":\"i386\"}'
+             )",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn current_schema_separates_installed_and_repository_conversions() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        ensure_current(&conn).unwrap();
         conn.execute(
-            "INSERT INTO scriptlet_evidence_notes (cluster_key, actor, body)
-             VALUES ('s1-history', 'maintainer', 'keep me')",
+            "INSERT INTO troves (
+                 name, version, type, install_source, install_reason, version_scheme
+             ) VALUES ('installed', '1', 'package', 'file', 'explicit', 'conary')",
             [],
         )
         .unwrap();
 
-        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO converted_packages (
+                 artifact_kind, trove_id, original_format, original_checksum,
+                 conversion_version
+             ) VALUES ('installed', 1, 'rpm', 'sha256:installed', 11)",
+            [],
+        )
+        .unwrap();
 
-        let (normalization_version, state, note_count): (i64, String, i64) = conn
-            .query_row(
-                "SELECT c.normalization_version, c.state, COUNT(n.id)
-                 FROM scriptlet_evidence_clusters c
-                 LEFT JOIN scriptlet_evidence_notes n ON n.cluster_key = c.cluster_key
-                 WHERE c.cluster_key = 's1-history'
-                 GROUP BY c.cluster_key",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        for sql in [
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version
+             ) VALUES ('installed', 'rpm', 'sha256:installed-without-trove', 11)",
+            "INSERT INTO converted_packages (
+                 artifact_kind, trove_id, original_format, original_checksum,
+                 conversion_version, package_name
+             ) VALUES ('installed', 1, 'rpm', 'sha256:installed-with-repo-field', 11, 'pkg')",
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version,
+                 package_version, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path
+             ) VALUES (
+                 'repository', 'rpm', 'sha256:missing-name', 11,
+                 '1', 'fedora', '[]', 0, 'sha256:content', '/tmp/pkg.ccs'
+             )",
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version,
+                 package_name, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path
+             ) VALUES (
+                 'repository', 'rpm', 'sha256:missing-version', 11,
+                 'pkg', 'fedora', '[]', 0, 'sha256:content', '/tmp/pkg.ccs'
+             )",
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version,
+                 package_name, package_version, source_profile, total_size, content_hash, ccs_path
+             ) VALUES (
+                 'repository', 'rpm', 'sha256:missing-chunks', 11,
+                 'pkg', '1', 'fedora', 0, 'sha256:content', '/tmp/pkg.ccs'
+             )",
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version,
+                 package_name, package_version, source_profile, chunk_hashes_json, content_hash, ccs_path
+             ) VALUES (
+                 'repository', 'rpm', 'sha256:missing-size', 11,
+                 'pkg', '1', 'fedora', '[]', 'sha256:content', '/tmp/pkg.ccs'
+             )",
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version,
+                 package_name, package_version, source_profile, chunk_hashes_json, total_size, ccs_path
+             ) VALUES (
+                 'repository', 'rpm', 'sha256:missing-hash', 11,
+                 'pkg', '1', 'fedora', '[]', 0, '/tmp/pkg.ccs'
+             )",
+            "INSERT INTO converted_packages (
+                 artifact_kind, original_format, original_checksum, conversion_version,
+                 package_name, package_version, source_profile, chunk_hashes_json, total_size, content_hash
+             ) VALUES (
+                 'repository', 'rpm', 'sha256:missing-path', 11,
+                 'pkg', '1', 'fedora', '[]', 0, 'sha256:content'
+             )",
+        ] {
+            assert!(conn.execute(sql, []).is_err(), "{sql}");
+        }
+    }
+
+    #[test]
+    fn current_schema_persists_only_executable_daemon_job_kinds() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        for kind in ["install", "remove", "update", "enhance"] {
+            conn.execute(
+                "INSERT INTO daemon_jobs (id, kind, spec_json) VALUES (?1, ?2, '{}')",
+                params![format!("job-{kind}"), kind],
             )
             .unwrap();
-        assert_eq!(normalization_version, 1);
-        assert_eq!(state, "adapter-candidate");
-        assert_eq!(note_count, 1);
+        }
+        for kind in ["dry_run", "rollback", "verify", "garbage_collect", "gc"] {
+            assert!(
+                conn.execute(
+                    "INSERT INTO daemon_jobs (id, kind, spec_json) VALUES (?1, ?2, '{}')",
+                    params![format!("job-{kind}"), kind],
+                )
+                .is_err(),
+                "unsupported daemon job {kind} was persisted"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_current_rejects_every_retired_incremental_schema_version() {
+        for version in [1, 79] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                INSERT INTO schema_version (version) VALUES ({version});"
+            ))
+            .unwrap();
+
+            let error = ensure_current(&conn).unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("migration-chain schema version {version}")),
+                "{error}"
+            );
+            assert!(error.contains("Rebuild the database"));
+        }
+    }
+
+    #[test]
+    fn ensure_current_rejects_nonempty_unversioned_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE stray (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+
+        let error = ensure_current(&conn).unwrap_err().to_string();
+        assert!(error.contains("unversioned non-empty"));
+        assert!(!table_exists(&conn, "troves").unwrap());
+    }
+
+    #[test]
+    fn ensure_current_rejects_unversioned_schema_objects_without_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE VIEW stray AS SELECT 1 AS id", [])
+            .unwrap();
+
+        let error = ensure_current(&conn).unwrap_err().to_string();
+        assert!(error.contains("unversioned non-empty"));
+        assert!(error.contains("Rebuild the database"));
+        assert!(!table_exists(&conn, "troves").unwrap());
+    }
+
+    #[test]
+    fn ensure_current_rejects_unversioned_indexes_and_triggers() {
+        for ddl in [
+            "CREATE TABLE stray (id INTEGER PRIMARY KEY);
+             CREATE INDEX stray_index ON stray(id);",
+            "CREATE TABLE stray (id INTEGER PRIMARY KEY);
+             CREATE TRIGGER stray_trigger AFTER INSERT ON stray
+             BEGIN
+                 SELECT NEW.id;
+             END;",
+        ] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(ddl).unwrap();
+
+            let error = ensure_current(&conn).unwrap_err().to_string();
+            assert!(error.contains("unversioned non-empty"), "{error}");
+            assert!(error.contains("Rebuild the database"), "{error}");
+            assert!(!table_exists(&conn, "troves").unwrap());
+        }
+    }
+
+    #[test]
+    fn current_schema_has_no_scriptlet_review_queue_objects() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        for name in [
+            "scriptlet_evidence_clusters",
+            "scriptlet_evidence_cluster_samples",
+            "scriptlet_evidence_state_events",
+            "scriptlet_evidence_notes",
+            "scriptlet_evidence_backfill_runs",
+            "idx_scriptlet_evidence_clusters_state_last_seen",
+            "idx_scriptlet_evidence_clusters_class",
+            "idx_scriptlet_evidence_samples_cluster",
+            "idx_scriptlet_evidence_samples_package",
+            "idx_scriptlet_evidence_samples_unique_observation",
+            "idx_scriptlet_evidence_backfill_status",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM sqlite_schema WHERE name = ?1
+                    )",
+                    [name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                !exists,
+                "retired scriptlet review queue object remains: {name}"
+            );
+        }
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info('converted_packages')")
+            .unwrap();
+        let converted_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(!converted_columns.contains(&"conversion_fidelity".to_string()));
+        assert!(!converted_columns.contains(&"detected_hooks".to_string()));
+    }
+
+    #[test]
+    fn current_schema_uses_exact_source_profile_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        for table in [
+            "repository_packages",
+            "converted_packages",
+            "native_package_publications",
+            "download_stats",
+            "download_counts",
+            "delta_manifests",
+        ] {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info('{table}')"))
+                .unwrap();
+            let columns = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert!(
+                columns.contains(&"source_profile".to_string()),
+                "{table} must persist exact source_profile authority"
+            );
+            assert!(
+                !columns.contains(&"distro".to_string()),
+                "{table} retains the ambiguous distro column"
+            );
+        }
+    }
+
+    #[test]
+    fn current_schema_enforces_typed_unique_rollback_lineage() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        let mut mutation = crate::db::models::Changeset::new("forward mutation".to_string());
+        let mutation_id = mutation.insert(&conn).unwrap();
+        let mut rollback =
+            crate::db::models::Changeset::new_rollback("compensation".to_string(), mutation_id);
+        let rollback_id = rollback.insert(&conn).unwrap();
+        let stored = crate::db::models::Changeset::find_by_id(&conn, rollback_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.kind, crate::db::models::ChangesetKind::Rollback);
+        assert_eq!(stored.reverts_changeset_id, Some(mutation_id));
+
+        let mut duplicate =
+            crate::db::models::Changeset::new_rollback("duplicate".to_string(), mutation_id);
+        assert!(duplicate.insert(&conn).is_err());
+        assert!(
+            conn.execute(
+                "INSERT INTO changesets (description, kind, status)
+                 VALUES ('unbound rollback', 'rollback', 'pending')",
+                [],
+            )
+            .is_err()
+        );
     }
 }

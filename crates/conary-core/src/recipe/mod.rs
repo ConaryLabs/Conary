@@ -49,11 +49,10 @@ mod cache;
 mod format;
 mod graph;
 pub mod hermetic;
-pub mod inference;
 mod kitchen;
 pub mod parser;
-pub mod pkgbuild;
 pub mod recording;
+pub mod scaffold;
 
 pub use cache::{BuildCache, CacheConfig, CacheEntry, CacheStats, DependencyHashes, ToolchainInfo};
 pub use format::{
@@ -61,12 +60,11 @@ pub use format::{
     PatchInfo, PatchSection, Recipe, RemoteSourceSection, SourceSection, is_remote_url,
 };
 pub use graph::{BootstrapPhase, BootstrapPlan, RecipeGraph};
-pub use inference::{
-    BuildSystem, InferenceEvent, InferenceOptions, InferenceResult, InferenceTrace,
-};
 pub use kitchen::{
-    Cook, CookResult, Kitchen, KitchenConfig, MakedependsResolver, MakedependsResult, NoopResolver,
-    SourceChecksumPolicy, SourceDownloadPolicy, StageConfig, StageRegistry,
+    CcsPackageSigningAuthority, Cook, CookResult, Kitchen, KitchenConfig, SourceDownloadPolicy,
+    StageConfig, StageRegistry,
 };
 pub use parser::{parse_recipe, parse_recipe_file, validate_recipe};
-pub use pkgbuild::{convert_pkgbuild, pkgbuild_to_toml};
+pub use scaffold::{
+    MaterializeOptions, render_recipe_toml, scaffold_named_recipe, write_recipe_toml,
+};

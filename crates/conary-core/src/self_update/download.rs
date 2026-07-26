@@ -18,7 +18,7 @@ pub async fn download_update(
 ) -> Result<PathBuf> {
     let dest_path = dest_dir.join("conary-update.ccs");
     let response = send_update_request(download_url).await?;
-    stream_update_to_disk(response, &dest_path, expected_sha256, None).await?;
+    stream_update_to_disk(response, &dest_path, expected_sha256, None, None).await?;
     Ok(dest_path)
 }
 
@@ -58,7 +58,14 @@ pub async fn download_update_with_progress(
         spinner
     };
 
-    stream_update_to_disk(response, &dest_path, expected_sha256, Some(&pb)).await?;
+    stream_update_to_disk(
+        response,
+        &dest_path,
+        expected_sha256,
+        content_length,
+        Some(&pb),
+    )
+    .await?;
     Ok(dest_path)
 }
 
@@ -95,43 +102,194 @@ async fn stream_update_to_disk(
     mut response: reqwest::Response,
     dest_path: &Path,
     expected_sha256: &str,
+    expected_size: Option<u64>,
     progress: Option<&indicatif::ProgressBar>,
 ) -> Result<()> {
     use crate::hash::{HashAlgorithm, Hasher};
     use std::io::Write;
 
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(Error::ParseError(
+            "Invalid expected self-update SHA-256: expected exactly 64 hexadecimal characters"
+                .to_string(),
+        ));
+    }
+    if let (Some(expected), Some(advertised)) = (expected_size, response.content_length())
+        && advertised != expected
+    {
+        return Err(Error::DownloadError(format!(
+            "Self-update response length mismatch: signed metadata expects {expected} bytes, HTTP response advertises {advertised}"
+        )));
+    }
+
     let mut file = fs::File::create(dest_path)
         .map_err(|e| Error::IoError(format!("Failed to create output file: {e}")))?;
     let mut hasher = Hasher::new(HashAlgorithm::Sha256);
+    let mut actual_size = 0u64;
 
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| Error::DownloadError(format!("Failed to read download stream: {e}")))?
-    {
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                return Err(cleanup_partial_download(
+                    dest_path,
+                    Error::DownloadError(format!("Failed to read download stream: {error}")),
+                ));
+            }
+        };
+        let chunk_size = u64::try_from(chunk.len()).map_err(|_| {
+            cleanup_partial_download(
+                dest_path,
+                Error::DownloadError("Self-update response size overflow".to_string()),
+            )
+        })?;
+        actual_size = actual_size.checked_add(chunk_size).ok_or_else(|| {
+            cleanup_partial_download(
+                dest_path,
+                Error::DownloadError("Self-update response size overflow".to_string()),
+            )
+        })?;
+        if let Some(expected) = expected_size
+            && actual_size > expected
+        {
+            return Err(cleanup_partial_download(
+                dest_path,
+                Error::DownloadError(format!(
+                    "Self-update response exceeds signed metadata size: expected {expected} bytes, received at least {actual_size}"
+                )),
+            ));
+        }
         hasher.update(&chunk);
-        file.write_all(&chunk)
-            .map_err(|e| Error::IoError(format!("Failed to write downloaded data: {e}")))?;
+        file.write_all(&chunk).map_err(|error| {
+            cleanup_partial_download(
+                dest_path,
+                Error::IoError(format!("Failed to write downloaded data: {error}")),
+            )
+        })?;
         if let Some(pb) = progress {
             pb.inc(chunk.len() as u64);
         }
     }
 
-    file.flush()
-        .map_err(|e| Error::IoError(format!("Failed to flush download file: {e}")))?;
+    file.flush().map_err(|error| {
+        cleanup_partial_download(
+            dest_path,
+            Error::IoError(format!("Failed to flush download file: {error}")),
+        )
+    })?;
 
     if let Some(pb) = progress {
         pb.finish_and_clear();
     }
 
+    if let Some(expected) = expected_size
+        && actual_size != expected
+    {
+        return Err(cleanup_partial_download(
+            dest_path,
+            Error::DownloadError(format!(
+                "Self-update response length mismatch: signed metadata expects {expected} bytes, received {actual_size}"
+            )),
+        ));
+    }
+
     let actual_hash = hasher.finalize().value;
     if actual_hash != expected_sha256 {
-        fs::remove_file(dest_path).ok();
-        return Err(Error::ChecksumMismatch {
-            expected: expected_sha256.to_string(),
-            actual: actual_hash,
-        });
+        return Err(cleanup_partial_download(
+            dest_path,
+            Error::ChecksumMismatch {
+                expected: expected_sha256.to_string(),
+                actual: actual_hash,
+            },
+        ));
     }
 
     Ok(())
+}
+
+fn cleanup_partial_download(path: &Path, primary: Error) -> Error {
+    match fs::remove_file(path) {
+        Ok(()) => primary,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => primary,
+        Err(error) => Error::IoError(format!(
+            "{primary}; additionally failed to remove partial update {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn spawn_download_server(body: Vec<u8>, include_length: bool) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request).await.unwrap();
+            let length = if include_length {
+                format!("Content-Length: {}\r\n", body.len())
+            } else {
+                String::new()
+            };
+            let headers = format!("HTTP/1.1 200 OK\r\n{length}Connection: close\r\n\r\n");
+            stream.write_all(headers.as_bytes()).await.unwrap();
+            stream.write_all(&body).await.unwrap();
+        });
+        format!("http://{address}/conary.ccs")
+    }
+
+    #[tokio::test]
+    async fn signed_download_size_is_exact_and_partial_file_is_removed() {
+        let body = b"short".to_vec();
+        let url = spawn_download_server(body.clone(), false).await;
+        let directory = tempfile::tempdir().unwrap();
+        let error = download_update_with_progress(
+            &url,
+            &crate::hash::sha256(&body),
+            directory.path(),
+            Some(body.len() as u64 + 1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("signed metadata expects"));
+        assert!(!directory.path().join("conary-update.ccs").exists());
+    }
+
+    #[tokio::test]
+    async fn exact_signed_download_size_and_digest_succeed() {
+        let body = b"current signed update".to_vec();
+        let url = spawn_download_server(body.clone(), true).await;
+        let directory = tempfile::tempdir().unwrap();
+        let path = download_update_with_progress(
+            &url,
+            &crate::hash::sha256(&body),
+            directory.path(),
+            Some(body.len() as u64),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn malformed_expected_digest_is_rejected_before_writing() {
+        let body = b"content".to_vec();
+        let url = spawn_download_server(body, true).await;
+        let directory = tempfile::tempdir().unwrap();
+        let error = download_update(&url, "not-a-sha256", directory.path())
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("expected exactly 64"));
+        assert!(!directory.path().join("conary-update.ccs").exists());
+    }
 }

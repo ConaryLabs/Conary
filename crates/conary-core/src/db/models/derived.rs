@@ -722,6 +722,7 @@ mod tests {
             "nginx-custom".to_string(),
             "1.0.0+corp".to_string(),
             TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
 

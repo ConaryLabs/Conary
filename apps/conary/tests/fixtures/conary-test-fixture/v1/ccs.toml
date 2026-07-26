@@ -1,6 +1,9 @@
 [package]
 name = "conary-test-fixture"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Test fixture for Phase 2 E2E validation"
 license = "MIT"
 
@@ -12,10 +15,6 @@ libc = "gnu"
 [provides]
 capabilities = ["conary-test-fixture"]
 binaries = []
-
-[requires]
-capabilities = []
-packages = []
 
 [components]
 default = ["runtime"]

@@ -1,11 +1,13 @@
-// src/commands/ccs/payload_paths.rs
+// apps/conary/src/commands/ccs/payload_paths.rs
 
 //! CCS payload path normalization and symlink safety.
 
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::manifest::FileCapability;
-use conary_core::packages::traits::{ExtractedFile, PackageFormat};
+use conary_core::packages::payload::PackagePayloadFile;
+use conary_core::packages::traits::PackageFormat;
+use conary_core::payload::PayloadNodeKind;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Component as PathComponent, Path, PathBuf};
@@ -36,70 +38,26 @@ pub(super) fn sanitize_package_relative_path(path: &str) -> Result<PathBuf> {
     Ok(normalized)
 }
 
-fn deployed_mode(mode: i32) -> (i32, bool) {
+fn deployed_mode(mode: u32) -> (u32, bool) {
     let stripped = mode & !0o6000;
     (stripped, stripped != mode)
 }
 
-fn is_symlink_mode(mode: i32) -> bool {
-    (mode & 0o170000) == 0o120000
+fn is_payload_symlink(file: &PackagePayloadFile) -> bool {
+    matches!(file.node.kind, PayloadNodeKind::Symlink { .. })
 }
 
-fn is_extracted_symlink(file: &ExtractedFile) -> bool {
-    is_symlink_mode(file.mode) || file.symlink_target.is_some()
-}
-
-fn symlink_target_for_file(file: &ExtractedFile) -> Result<String> {
-    if let Some(target) = &file.symlink_target {
+fn symlink_target_for_file(file: &PackagePayloadFile) -> Result<String> {
+    if let PayloadNodeKind::Symlink { target } = &file.node.kind {
         return Ok(target.clone());
     }
-
-    String::from_utf8(file.content.clone()).context("invalid symlink target in package payload")
+    anyhow::bail!("payload node {} is not a symlink", file.path)
 }
 
 struct DeploymentFile {
-    file: ExtractedFile,
+    file: PackagePayloadFile,
     relative_path: PathBuf,
     symlink_target: Option<String>,
-}
-
-fn standard_usrmerge_target(component: &str) -> Option<&'static str> {
-    match component {
-        "bin" => Some("usr/bin"),
-        "sbin" => Some("usr/sbin"),
-        "lib" => Some("usr/lib"),
-        "lib64" => Some("usr/lib64"),
-        _ => None,
-    }
-}
-
-fn rewrite_standard_usrmerge_root_symlink(relative_path: &Path) -> Result<PathBuf> {
-    let mut components = relative_path.components();
-    let Some(first) = components.next() else {
-        return Ok(relative_path.to_path_buf());
-    };
-    let first = first.as_os_str().to_str().ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid non-UTF8 package path component in {}",
-            relative_path.display()
-        )
-    })?;
-    let Some(target) = standard_usrmerge_target(first) else {
-        return Ok(relative_path.to_path_buf());
-    };
-
-    // Only rewrite descendants such as bin/foo. A package entry that targets
-    // the root symlink itself should still collide/fail rather than replace it.
-    let remaining: Vec<_> = components.collect();
-    if remaining.is_empty() {
-        return Ok(relative_path.to_path_buf());
-    }
-
-    let mut rewritten = PathBuf::from(target);
-    for component in remaining {
-        rewritten.push(component.as_os_str());
-    }
-    Ok(rewritten)
 }
 
 fn deployment_path_to_package_path(relative_path: &Path) -> Result<String> {
@@ -134,7 +92,8 @@ pub(crate) fn normalize_ccs_file_capabilities(
 
 fn package_deployment_relative_path(root_path: &Path, package_path: &str) -> Result<PathBuf> {
     let relative_path = sanitize_package_relative_path(package_path)?;
-    let relative_path = rewrite_standard_usrmerge_root_symlink(&relative_path)?;
+    // The selected root is the sole usr-merge authority. Path spelling never
+    // invents a `/bin`, `/sbin`, `/lib`, or `/lib64` rewrite.
     resolve_existing_symlink_ancestors(root_path, &relative_path)
 }
 
@@ -182,16 +141,12 @@ fn resolve_existing_root_relative_path(
                     .with_context(|| format!("failed to read symlink {}", candidate.display()))?;
                 resolved.pop();
                 let (mut redirected, target_relative) = if target.is_absolute() {
-                    let canonical_root = std::fs::canonicalize(root_path).with_context(|| {
-                        format!(
-                            "failed to resolve install root {} while validating package path {}",
-                            root_path.display(),
-                            package_path.display()
-                        )
-                    })?;
-                    let target_relative = target.strip_prefix(&canonical_root).map_err(|_| {
+                    // Absolute symlinks are absolute inside the selected root,
+                    // exactly as they are after chroot/pivot_root. They never
+                    // acquire authority over the host filesystem namespace.
+                    let target_relative = target.strip_prefix(Path::new("/")).map_err(|_| {
                         path_traversal_error(format!(
-                            "package path {} escapes the install root through symlink {} -> {}",
+                            "package path {} resolves through invalid absolute symlink {} -> {}",
                             package_path.display(),
                             blocker.display(),
                             target.display()
@@ -269,13 +224,20 @@ fn path_traversal_error(message: String) -> anyhow::Error {
     anyhow::Error::new(conary_core::Error::PathTraversal(message))
 }
 
-fn identical_regular_deployment(existing: &ExtractedFile, current: &ExtractedFile) -> bool {
-    !is_extracted_symlink(existing)
-        && !is_extracted_symlink(current)
-        && existing.sha256 == current.sha256
-        && existing.size == current.size
-        && deployed_mode(existing.mode).0 == deployed_mode(current.mode).0
-        && existing.content == current.content
+fn identical_regular_deployment(
+    existing: &PackagePayloadFile,
+    current: &PackagePayloadFile,
+) -> bool {
+    if !matches!(existing.node.kind, PayloadNodeKind::Regular { .. })
+        || !matches!(current.node.kind, PayloadNodeKind::Regular { .. })
+    {
+        return false;
+    }
+    let mut existing_node = existing.node.clone();
+    let mut current_node = current.node.clone();
+    existing_node.mode = deployed_mode(existing_node.mode).0;
+    current_node.mode = deployed_mode(current_node.mode).0;
+    existing.content_authority == current.content_authority && existing_node == current_node
 }
 
 fn find_symlink_blocker(
@@ -354,36 +316,37 @@ pub(crate) fn validate_ccs_payload_paths(
         .iter()
         .map(|file| file.path.as_str())
         .collect();
-    let extracted_files: Vec<_> = if selected_paths.is_empty() {
+    let payload_files: Vec<_> = if selected_paths.is_empty() {
         Vec::new()
     } else {
         ccs_pkg
-            .extract_file_contents()?
+            .package_payload()?
+            .into_files()
             .into_iter()
             .filter(|file| selected_paths.contains(file.path.as_str()))
             .collect()
     };
-    if extracted_files.is_empty() && !selected_file_entries.is_empty() {
+    if payload_files.is_empty() && !selected_file_entries.is_empty() {
         anyhow::bail!(
             "No files matched the selected components: {}",
             selected_component_names.join(", ")
         );
     }
 
-    normalize_ccs_extracted_files(root_path, extracted_files)?;
+    normalize_ccs_payload_files(root_path, payload_files)?;
 
     Ok(())
 }
 
-pub(crate) fn normalize_ccs_extracted_files(
+pub(crate) fn normalize_ccs_payload_files(
     root_path: &Path,
-    extracted_files: Vec<ExtractedFile>,
-) -> Result<Vec<ExtractedFile>> {
+    payload_files: Vec<PackagePayloadFile>,
+) -> Result<Vec<PackagePayloadFile>> {
     let mut deployment_files: Vec<DeploymentFile> = Vec::new();
     let mut seen_indexes: HashMap<PathBuf, usize> = HashMap::new();
-    for file in extracted_files {
+    for file in payload_files {
         let relative_path = package_deployment_relative_path(root_path, &file.path)?;
-        let current_is_symlink = is_extracted_symlink(&file);
+        let current_is_symlink = is_payload_symlink(&file);
         let symlink_target = if current_is_symlink {
             Some(symlink_target_for_file(&file)?)
         } else {
@@ -391,7 +354,7 @@ pub(crate) fn normalize_ccs_extracted_files(
         };
         if let Some(existing_index) = seen_indexes.get(&relative_path).copied() {
             let existing = &deployment_files[existing_index].file;
-            let existing_is_symlink = is_extracted_symlink(existing);
+            let existing_is_symlink = is_payload_symlink(existing);
             if existing_is_symlink || current_is_symlink {
                 anyhow::bail!(
                     "symlink deployment path collision detected for {}",
@@ -432,10 +395,8 @@ pub(crate) fn normalize_ccs_extracted_files(
     let mut normalized = Vec::with_capacity(deployment_files.len());
     for mut deployment in deployment_files {
         deployment.file.path = deployment_path_to_package_path(&deployment.relative_path)?;
-        if deployment.symlink_target.is_some() {
-            deployment.file.symlink_target = deployment.symlink_target;
-        } else {
-            deployment.file.mode = deployed_mode(deployment.file.mode).0;
+        if deployment.symlink_target.is_none() {
+            deployment.file.node.mode = deployed_mode(deployment.file.node.mode).0;
         }
         normalized.push(deployment.file);
     }
@@ -446,12 +407,24 @@ pub(crate) fn normalize_ccs_extracted_files(
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_ccs_extracted_files, normalize_ccs_file_capabilities, normalize_ccs_package_path,
-        sanitize_package_relative_path,
+        normalize_ccs_file_capabilities, normalize_ccs_package_path, sanitize_package_relative_path,
     };
     use conary_core::ccs::manifest::FileCapability;
     use conary_core::packages::traits::ExtractedFile;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
     use std::path::PathBuf;
+
+    fn normalize_ccs_extracted_files(
+        root_path: &std::path::Path,
+        files: Vec<ExtractedFile>,
+    ) -> anyhow::Result<Vec<ExtractedFile>> {
+        let payload =
+            conary_core::packages::PackagePayload::from_extracted_in_memory(files)?.into_files();
+        let normalized = super::normalize_ccs_payload_files(root_path, payload)?;
+        conary_core::packages::PackagePayload::new(normalized)
+            .to_extracted_in_memory()
+            .map_err(anyhow::Error::from)
+    }
 
     fn file_capability(path: &str) -> FileCapability {
         FileCapability {
@@ -494,9 +467,14 @@ mod tests {
         assert!(err.to_string().contains("empty package path"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn normalize_file_capabilities_follows_usrmerge_payload_paths() {
+    fn normalize_file_capabilities_follows_exact_root_symlinks() {
         let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+        std::fs::create_dir_all(root.path().join("usr/sbin")).unwrap();
+        std::os::unix::fs::symlink("usr/bin", root.path().join("bin")).unwrap();
+        std::os::unix::fs::symlink("usr/sbin", root.path().join("sbin")).unwrap();
         let normalized = normalize_ccs_file_capabilities(
             root.path(),
             &[
@@ -516,6 +494,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn normalize_package_path_does_not_invent_usrmerge_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            normalize_ccs_package_path(root.path(), "/bin/demo").unwrap(),
+            "/bin/demo"
+        );
+        assert_eq!(
+            normalize_ccs_package_path(root.path(), "/sbin/admin-tool").unwrap(),
+            "/sbin/admin-tool"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn normalize_payload_follows_safe_existing_relative_symlink_ancestor() {
@@ -527,11 +519,12 @@ mod tests {
             root.path(),
             vec![ExtractedFile {
                 path: "/usr/lib64/libform.so.6".to_string(),
+                node: PayloadNode::regular(0o644),
                 content: b"fixture".to_vec(),
-                sha256: Some("fixture-hash".to_string()),
-                size: 7,
-                mode: 0o100644,
-                symlink_target: None,
+                content_authority: Some(PayloadContentAuthority {
+                    sha256: conary_core::hash::sha256(b"fixture"),
+                    size: 7,
+                }),
             }],
         )
         .unwrap();
@@ -541,30 +534,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn normalize_payload_follows_safe_existing_absolute_symlink_ancestor_inside_root() {
+    fn normalize_payload_follows_root_relative_absolute_usrmerge_symlink() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("usr/lib")).unwrap();
-        std::os::unix::fs::symlink(root.path().join("usr/lib"), root.path().join("usr/lib64"))
-            .unwrap();
+        std::os::unix::fs::symlink("/usr/lib", root.path().join("lib")).unwrap();
 
         assert_eq!(
-            normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap(),
+            normalize_ccs_package_path(root.path(), "/lib/libform.so.6").unwrap(),
             "/usr/lib/libform.so.6"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn normalize_payload_rejects_absolute_symlink_ancestor_outside_root() {
+    fn normalize_payload_never_interprets_absolute_symlink_in_host_namespace() {
         let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("usr")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.path().join("usr/lib64")).unwrap();
+        std::os::unix::fs::symlink("/host-only/location", root.path().join("usr/lib64")).unwrap();
 
-        let err = normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap_err();
-
-        assert!(err.to_string().contains("escapes the install root"));
-        assert!(err.to_string().contains("usr/lib64"));
+        assert_eq!(
+            normalize_ccs_package_path(root.path(), "/usr/lib64/libform.so.6").unwrap(),
+            "/host-only/location/libform.so.6"
+        );
     }
 
     #[cfg(unix)]

@@ -1,6 +1,14 @@
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "dep-liba", capability_kind = "PackageName", version_constraint = "=1.0.0", native_text = "dep-liba =1.0.0" } }, alternatives = [{ name = "dep-liba", capability_kind = "PackageName", version_constraint = "=1.0.0", native_text = "dep-liba =1.0.0" }], native_text = "dep-liba =1.0.0" },
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "dep-libb", capability_kind = "PackageName", version_constraint = ">=1.0.0", native_text = "dep-libb >=1.0.0" } }, alternatives = [{ name = "dep-libb", capability_kind = "PackageName", version_constraint = ">=1.0.0", native_text = "dep-libb >=1.0.0" }], native_text = "dep-libb >=1.0.0" },
+]
+
 [package]
 name = "dep-app"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Application with chained dependency requirements"
 license = "MIT"
 
@@ -12,13 +20,6 @@ libc = "gnu"
 [provides]
 capabilities = ["dep-app"]
 binaries = ["/usr/bin/dep-app-v1"]
-
-[requires]
-capabilities = []
-packages = [
-    { name = "dep-liba", version = ">=1.0, <2.0" },
-    { name = "dep-libb", version = ">=1.0" },
-]
 
 [components]
 default = ["runtime"]

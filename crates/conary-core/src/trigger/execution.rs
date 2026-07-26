@@ -1,50 +1,16 @@
 // conary-core/src/trigger/execution.rs
 
 use super::TriggerExecutor;
-use crate::child_wait::wait_with_output;
+use crate::child_wait::wait_with_output_process_group;
 use crate::db::models::Trigger;
 use crate::error::{Error, Result};
+use crate::scriptlet::configure_target_command_boundary;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tracing::{debug, warn};
 
 impl TriggerExecutor<'_> {
-    /// Execute a single trigger handler
-    pub(super) fn execute_handler(&self, trigger: &Trigger) -> Result<Option<String>> {
-        let parts = shell_split(&trigger.handler).map_err(|e| {
-            Error::TriggerError(format!(
-                "Failed to parse handler '{}': {e}",
-                trigger.handler
-            ))
-        })?;
-        if parts.is_empty() {
-            return Err(Error::TriggerError("Empty handler command".to_string()));
-        }
-
-        let cmd = parts[0].as_str();
-        let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
-
-        debug!("Executing: {} {:?}", cmd, args);
-
-        let root_string = self.root.to_string_lossy().into_owned();
-        let child = Command::new(cmd)
-            .args(args)
-            .env("CONARY_TRIGGER_NAME", &trigger.name)
-            .env("CONARY_ROOT", root_string)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::TriggerError(format!("Failed to spawn '{}': {}", cmd, e)))?;
-
-        self.wait_and_capture(child, &trigger.name, cmd, None)
-    }
-
-    /// Execute a trigger handler inside a target root using chroot
-    ///
-    /// This method runs the handler inside the target filesystem, which is
-    /// necessary for triggers to work correctly during bootstrap or when
-    /// installing to a non-live filesystem.
+    /// Execute one exact trigger argv inside the materialized selected root.
     pub(super) fn execute_handler_in_target(&self, trigger: &Trigger) -> Result<Option<String>> {
         let parts = shell_split(&trigger.handler).map_err(|e| {
             Error::TriggerError(format!(
@@ -66,44 +32,48 @@ impl TriggerExecutor<'_> {
             args
         );
 
-        if !nix::unistd::geteuid().is_root() {
-            warn!(
-                "Target root trigger execution requires root privileges, skipping '{}'",
-                trigger.name
-            );
-            return Ok(Some(
-                "Skipped: target root execution requires root privileges".to_string(),
-            ));
-        }
-
-        let child = Command::new("chroot")
-            .arg(self.root)
-            .arg(cmd)
+        let mut command = Command::new(cmd);
+        command
             .args(args)
+            .env_clear()
+            .env("HOME", "/root")
+            .env("TERM", "dumb")
+            .env("LANG", "C.UTF-8")
+            .env("SHELL", "/bin/sh")
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
             .env("CONARY_TRIGGER_NAME", &trigger.name)
             .env("CONARY_ROOT", "/")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                Error::TriggerError(format!("Failed to spawn chroot for '{}': {}", cmd, e))
-            })?;
+            .stderr(Stdio::piped());
+        configure_target_command_boundary(&mut command, self.root).map_err(|error| {
+            Error::TriggerError(format!(
+                "Failed to establish selected-root boundary for '{}': {error}",
+                trigger.name
+            ))
+        })?;
+        let child = command.spawn().map_err(|e| {
+            Error::TriggerError(format!(
+                "Failed to spawn '{}' in selected root {}: {}",
+                cmd,
+                self.root.display(),
+                e
+            ))
+        })?;
 
-        self.wait_and_capture(child, &trigger.name, cmd, Some(self.root))
+        self.wait_and_capture(child, &trigger.name, cmd, self.root)
     }
 
     /// Wait for a spawned child process with timeout, capture output, and check status.
     ///
-    /// If `chroot_path` is `Some`, error messages include the chroot context.
     fn wait_and_capture(
         &self,
         mut child: std::process::Child,
         trigger_name: &str,
         cmd: &str,
-        chroot_path: Option<&Path>,
+        target_root: &Path,
     ) -> Result<Option<String>> {
-        let outcome = wait_with_output(&mut child, self.timeout)?;
+        let outcome = wait_with_output_process_group(&mut child, self.timeout)?;
         let stdout = String::from_utf8_lossy(&outcome.stdout);
         let stderr = String::from_utf8_lossy(&outcome.stderr);
 
@@ -119,20 +89,12 @@ impl TriggerExecutor<'_> {
         }
 
         if outcome.timed_out {
-            let context = match chroot_path {
-                Some(root) => format!(
-                    "Handler '{}' timed out after {} seconds (chroot: {})",
-                    cmd,
-                    self.timeout.as_secs(),
-                    root.display()
-                ),
-                None => format!(
-                    "Handler '{}' timed out after {} seconds",
-                    cmd,
-                    self.timeout.as_secs()
-                ),
-            };
-            Err(Error::TriggerError(context))
+            Err(Error::TriggerError(format!(
+                "Handler '{}' timed out after {} seconds (selected root: {})",
+                cmd,
+                self.timeout.as_secs(),
+                target_root.display()
+            )))
         } else {
             let status = outcome
                 .status
@@ -147,42 +109,16 @@ impl TriggerExecutor<'_> {
                 })
             } else {
                 let code = status.code().unwrap_or(-1);
-                let context = match chroot_path {
-                    Some(root) => format!(
-                        "Handler '{}' failed with exit code {} (chroot: {}): {}",
-                        cmd,
-                        code,
-                        root.display(),
-                        stderr.trim()
-                    ),
-                    None => format!(
-                        "Handler '{}' failed with exit code {}: {}",
-                        cmd,
-                        code,
-                        stderr.trim()
-                    ),
-                };
-                Err(Error::TriggerError(context))
+                Err(Error::TriggerError(format!(
+                    "Handler '{}' failed with exit code {} (selected root: {}): {}",
+                    cmd,
+                    code,
+                    target_root.display(),
+                    stderr.trim()
+                )))
             }
         }
     }
-}
-
-/// Check if a handler command exists on the system
-pub(super) fn handler_exists(cmd: &str) -> bool {
-    if cmd.is_empty() {
-        return false;
-    }
-
-    if cmd.starts_with('/') {
-        return Path::new(cmd).exists();
-    }
-
-    if let Ok(output) = Command::new("which").arg(cmd).output() {
-        return output.status.success();
-    }
-
-    false
 }
 
 /// Check if a handler command exists in a target root
@@ -275,12 +211,19 @@ pub(super) fn shell_split(input: &str) -> std::result::Result<Vec<String>, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::handler_exists;
+    use super::handler_exists_in_root;
 
     #[test]
-    fn test_handler_exists() {
-        assert!(handler_exists("/bin/true") || handler_exists("/usr/bin/true"));
-        assert!(!handler_exists("/nonexistent/command"));
-        assert!(!handler_exists(""));
+    fn handler_lookup_is_confined_to_the_selected_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+        std::fs::write(root.path().join("usr/bin/fixture-trigger"), b"fixture").unwrap();
+        assert!(handler_exists_in_root("fixture-trigger", root.path()));
+        assert!(handler_exists_in_root(
+            "/usr/bin/fixture-trigger",
+            root.path()
+        ));
+        assert!(!handler_exists_in_root("/bin/true", root.path()));
+        assert!(!handler_exists_in_root("", root.path()));
     }
 }

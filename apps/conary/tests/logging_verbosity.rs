@@ -25,10 +25,7 @@ fn temp_db_path() -> (tempfile::TempDir, String) {
 #[test]
 fn system_init_is_quiet_by_default() {
     let (_tmp, db) = temp_db_path();
-    let out = run_with_env(
-        &["system", "init", "--profile", "fedora-44", "--db-path", &db],
-        None,
-    );
+    let out = run_with_env(&["system", "init", "--db-path", &db], None);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     assert!(out.status.success(), "stderr:\n{stderr}");
@@ -41,18 +38,7 @@ fn system_init_is_quiet_by_default() {
 #[test]
 fn verbose_restores_info_logs() {
     let (_tmp, db) = temp_db_path();
-    let out = run_with_env(
-        &[
-            "--verbose",
-            "system",
-            "init",
-            "--profile",
-            "fedora-44",
-            "--db-path",
-            &db,
-        ],
-        None,
-    );
+    let out = run_with_env(&["--verbose", "system", "init", "--db-path", &db], None);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     assert!(out.status.success(), "stderr:\n{stderr}");
@@ -66,15 +52,7 @@ fn verbose_restores_info_logs() {
 fn rust_log_overrides_quiet() {
     let (_tmp, db) = temp_db_path();
     let out = run_with_env(
-        &[
-            "--quiet",
-            "system",
-            "init",
-            "--profile",
-            "fedora-44",
-            "--db-path",
-            &db,
-        ],
+        &["--quiet", "system", "init", "--db-path", &db],
         Some("info"),
     );
     let stderr = String::from_utf8_lossy(&out.stderr);

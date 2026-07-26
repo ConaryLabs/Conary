@@ -1,152 +1,289 @@
-// src/commands/install/source_policy.rs
+// apps/conary/src/commands/install/source_policy.rs
 
+use super::RepositoryInstallProvenance;
 use anyhow::Result;
-use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-use conary_core::repository::resolution_policy::{RequestScope, ResolutionPolicy};
-use conary_core::repository::supported_profiles::dependency_flavor_for_name;
+use conary_core::repository::resolution_policy::{
+    DependencyMixingPolicy, RequestScope, ResolutionPolicy,
+};
 use tracing::{info, warn};
 
 /// Overlay install-specific request scope from CLI flags onto the effective policy.
 ///
-/// The `--from-distro` flag constrains the root request to a specific distro
-/// flavor; `--repo` constrains to a specific repository.  Both apply to the
+/// The `--from` flag constrains the root request to an exact supported profile;
+/// `--repo` constrains to a specific repository. Both apply to the
 /// root request only (transitive deps are governed by the mixing policy).
 pub(super) fn build_resolution_policy(
+    conn: &rusqlite::Connection,
     mut policy: ResolutionPolicy,
-    from_distro: Option<&str>,
+    from_profile: Option<&str>,
     repo: Option<&str>,
-) -> ResolutionPolicy {
-    let scope = if let Some(target_distro) = from_distro {
-        // Map distro name to the correct flavor for request-scope filtering
-        let flavor = distro_name_to_flavor(target_distro);
-        if let Some(f) = flavor {
-            RequestScope::DistroFlavor(f)
-        } else {
-            // Unknown flavor -- use repo scope as a fallback
-            RequestScope::Repository(target_distro.to_string())
-        }
+) -> Result<ResolutionPolicy> {
+    let scope = if let Some(target_profile) = from_profile {
+        let profile_id = exact_profile_id(target_profile).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unsupported source profile '{target_profile}'; --from requires an exact supported profile ID"
+            )
+        })?;
+        policy.set_primary_profile(Some(profile_id.to_string()));
+        RequestScope::DistroProfile(profile_id.to_string())
     } else if let Some(r) = repo {
+        let repository = conary_core::db::models::Repository::find_by_name(conn, r)?
+            .ok_or_else(|| anyhow::anyhow!("repository '{r}' does not exist"))?;
+        policy.set_primary_profile(
+            repository
+                .resolution_source_profile()?
+                .map(|profile| profile.id().to_string()),
+        );
         RequestScope::Repository(r.to_string())
     } else {
         RequestScope::Any
     };
 
     policy.request_scope = scope;
-    policy
+    Ok(policy)
+}
+
+/// Bind dependency resolution to exact selected-root provenance.
+///
+/// An explicit scope or persisted system pin already supplies a primary
+/// profile. Otherwise a repository-backed root establishes it from the
+/// selected package/repository contract. Local files do not manufacture that
+/// authority; strict dependency solving will require the user to pin or scope
+/// the transaction.
+pub(super) fn bind_transaction_source_profile(
+    mut policy: ResolutionPolicy,
+    provenance: Option<&RepositoryInstallProvenance>,
+) -> Result<ResolutionPolicy> {
+    if let Some(provenance) = provenance {
+        let selected = match provenance.source_profile.as_deref() {
+            Some(selected) => Some(
+                conary_core::repository::supported_profiles::profile_by_public_id(selected)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "selected repository {} declares unsupported source profile '{}'",
+                            provenance.repository_id,
+                            selected
+                        )
+                    })?
+                    .id(),
+            ),
+            None if provenance.version_scheme
+                == conary_core::repository::versioning::VersionScheme::Conary =>
+            {
+                None
+            }
+            None => {
+                return Err(anyhow::anyhow!(
+                    "selected repository {} has no exact source profile",
+                    provenance.repository_id
+                ));
+            }
+        };
+
+        if let Some(selected) = selected {
+            match policy.primary_profile() {
+                Some(primary)
+                    if policy.mixing == DependencyMixingPolicy::Strict && primary != selected =>
+                {
+                    anyhow::bail!(
+                        "selected root profile '{}' conflicts with strict transaction profile '{}'",
+                        selected,
+                        primary
+                    );
+                }
+                Some(_) => {}
+                None => policy.set_primary_profile(Some(selected.to_string())),
+            }
+        }
+    }
+
+    policy.validate_profile_ids().map_err(anyhow::Error::msg)?;
+    Ok(policy)
 }
 
 /// Resolve the canonical name for a package.
 ///
-/// If `--from <distro>` was specified, resolve the canonical name to that
-/// distro's package name.  Otherwise, use canonical expansion to find the best
+/// If `--from <profile>` was specified, resolve the canonical name to that
+/// profile's package name. Otherwise, use canonical expansion to find the best
 /// implementation for the current system (canonical expansion applies only to
 /// root requests, never deps).
 pub(super) fn resolve_canonical_name(
     conn: &rusqlite::Connection,
     package: &str,
-    from_distro: Option<&str>,
+    from_profile: Option<&str>,
     policy: &ResolutionPolicy,
 ) -> Result<Option<String>> {
-    if let Some(target_distro) = from_distro {
+    if let Some(target_profile) = from_profile {
+        let profile_id = exact_profile_id(target_profile).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unsupported source profile '{target_profile}'; --from requires an exact supported profile ID"
+            )
+        })?;
         if let Some(canonical) =
             conary_core::db::models::CanonicalPackage::resolve_name(conn, package)?
         {
-            let impls = conary_core::db::models::PackageImplementation::find_by_canonical(
-                conn,
-                canonical
-                    .id
-                    .ok_or_else(|| anyhow::anyhow!("Canonical package has no ID"))?,
-            )?;
-            if let Some(imp) = impls.iter().find(|i| i.distro == target_distro) {
+            let canonical_id = canonical
+                .id
+                .ok_or_else(|| anyhow::anyhow!("canonical package has no ID"))?;
+            if let Some(implementation) =
+                conary_core::db::models::PackageImplementation::find_for_distro(
+                    conn,
+                    canonical_id,
+                    profile_id,
+                )?
+            {
                 info!(
                     "Resolved canonical '{}' -> '{}' for {}",
-                    package, imp.distro_name, target_distro
+                    package, implementation.distro_name, profile_id
                 );
-                return Ok(Some(imp.distro_name.clone()));
+                return Ok(Some(implementation.distro_name));
             }
+            let available = conary_core::db::models::PackageImplementation::find_by_canonical(
+                conn,
+                canonical_id,
+            )?;
             warn!(
-                "No implementation of '{}' found for distro '{}'",
-                package, target_distro
+                "No implementation of '{}' found for profile '{}' (available: {})",
+                package,
+                profile_id,
+                available
+                    .iter()
+                    .map(|implementation| implementation.distro.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
         Ok(None)
     } else {
-        // No explicit --from-distro: use canonical resolver to expand and rank
-        // implementations by pin/affinity/override.  This only applies to root
-        // requests -- deps are never canonically expanded.
+        // No explicit --from: expand implementations and select only when
+        // exact policy provides a unique authority. This applies only to root
+        // requests; dependencies are never canonically expanded.
         use conary_core::resolver::canonical::CanonicalResolver;
         let canonical_resolver = CanonicalResolver::new(conn);
         let candidates = canonical_resolver.expand(package)?;
-        if candidates.len() > 1 {
-            let ranked = canonical_resolver.rank_candidates_with_policy(&candidates, policy)?;
+        if let Some(selected) =
+            canonical_resolver.select_candidate_with_policy(&candidates, policy)?
+        {
             info!(
-                "Canonical expansion for '{}': {} implementations, best = '{}' ({})",
+                "Canonical expansion for '{}': {} implementations, selected = '{}' ({})",
                 package,
-                ranked.len(),
-                ranked[0].distro_name,
-                ranked[0].distro,
+                candidates.len(),
+                selected.distro_name,
+                selected.distro,
             );
-            // Use the top-ranked implementation
-            Ok(Some(ranked[0].distro_name.clone()))
-        } else if candidates.len() == 1 {
-            Ok(Some(candidates[0].distro_name.clone()))
+            Ok(Some(selected.distro_name))
         } else {
-            // No canonical mapping -- use the name as-is
             Ok(None)
         }
     }
 }
 
-/// Map a distro identifier string to its `RepositoryDependencyFlavor`.
-///
-/// Returns `None` for unrecognised distro names.
-fn distro_name_to_flavor(distro: &str) -> Option<RepositoryDependencyFlavor> {
-    dependency_flavor_for_name(distro)
+fn exact_profile_id(value: &str) -> Option<&'static str> {
+    conary_core::repository::supported_profiles::profile_by_public_id(value)
+        .map(conary_core::repository::supported_profiles::SupportedProfile::id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::repository::RepositorySourceKind;
+    use conary_core::repository::versioning::VersionScheme;
 
-    #[test]
-    fn distro_name_to_flavor_accepts_public_ids_and_route_slugs() {
-        assert_eq!(
-            distro_name_to_flavor("fedora-44"),
-            Some(RepositoryDependencyFlavor::Rpm)
-        );
-        assert_eq!(
-            distro_name_to_flavor("fedora"),
-            Some(RepositoryDependencyFlavor::Rpm)
-        );
-        assert_eq!(
-            distro_name_to_flavor("ubuntu-26.04"),
-            Some(RepositoryDependencyFlavor::Deb)
-        );
-        assert_eq!(
-            distro_name_to_flavor("ubuntu"),
-            Some(RepositoryDependencyFlavor::Deb)
-        );
-        assert_eq!(
-            distro_name_to_flavor("arch"),
-            Some(RepositoryDependencyFlavor::Arch)
-        );
-    }
-
-    #[test]
-    fn distro_name_to_flavor_rejects_unsupported_derivatives() {
-        for name in [
-            "debian",
-            "debian-13",
-            "linux-mint",
-            "ubuntu-noble",
-            "fedora-45",
-        ] {
-            assert_eq!(distro_name_to_flavor(name), None, "{name}");
+    fn provenance(profile: Option<&str>) -> RepositoryInstallProvenance {
+        RepositoryInstallProvenance {
+            repository_id: 7,
+            source_profile: profile.map(str::to_string),
+            version_scheme: VersionScheme::Rpm,
+            source_kind: RepositorySourceKind::Native,
         }
     }
 
     #[test]
-    fn distro_name_to_flavor_unknown() {
-        assert_eq!(distro_name_to_flavor("nixos"), None);
+    fn exact_profile_id_accepts_only_public_ids() {
+        assert_eq!(exact_profile_id("fedora-44"), Some("fedora-44"));
+        assert_eq!(exact_profile_id("ubuntu-26.04"), Some("ubuntu-26.04"));
+        assert_eq!(exact_profile_id("arch"), Some("arch"));
+    }
+
+    #[test]
+    fn exact_profile_id_rejects_unsupported_derivatives() {
+        for name in [
+            "debian",
+            "debian-13",
+            "fedora",
+            "linux-mint",
+            "ubuntu",
+            "ubuntu-noble",
+            "fedora-45",
+        ] {
+            assert_eq!(exact_profile_id(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn exact_profile_id_rejects_unknown() {
+        assert_eq!(exact_profile_id("nixos"), None);
+    }
+
+    #[test]
+    fn selected_root_binds_unscoped_transaction_profile() {
+        let policy = bind_transaction_source_profile(
+            ResolutionPolicy::new(),
+            Some(&provenance(Some("fedora-44"))),
+        )
+        .unwrap();
+        assert_eq!(policy.primary_profile(), Some("fedora-44"));
+    }
+
+    #[test]
+    fn strict_transaction_rejects_selected_root_profile_conflict() {
+        let error = bind_transaction_source_profile(
+            ResolutionPolicy::new().with_primary_profile("ubuntu-26.04"),
+            Some(&provenance(Some("fedora-44"))),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("conflicts with strict"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn selected_root_requires_exact_supported_profile() {
+        for profile in [None, Some("fedora"), Some("rpm")] {
+            assert!(
+                bind_transaction_source_profile(
+                    ResolutionPolicy::new(),
+                    Some(&provenance(profile)),
+                )
+                .is_err(),
+                "{profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_native_conary_package_does_not_invent_a_distro_profile() {
+        let conary = RepositoryInstallProvenance {
+            repository_id: 9,
+            source_profile: None,
+            version_scheme: VersionScheme::Conary,
+            source_kind: RepositorySourceKind::Static,
+        };
+        let policy =
+            bind_transaction_source_profile(ResolutionPolicy::new(), Some(&conary)).unwrap();
+        assert_eq!(policy.primary_profile(), None);
+    }
+
+    #[test]
+    fn guarded_transaction_preserves_persisted_primary_profile() {
+        let policy = bind_transaction_source_profile(
+            ResolutionPolicy::new()
+                .with_mixing(DependencyMixingPolicy::Guarded)
+                .with_primary_profile("ubuntu-26.04"),
+            Some(&provenance(Some("fedora-44"))),
+        )
+        .unwrap();
+        assert_eq!(policy.primary_profile(), Some("ubuntu-26.04"));
     }
 }

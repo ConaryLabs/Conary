@@ -2,7 +2,10 @@
 # tests/fixtures/adversarial/build-malicious.sh
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONARY_BIN="${1:-${CONARY_BIN:-$(pwd)/target/debug/conary}}"
+DEFAULT_CONARY_BIN="${CARGO_TARGET_DIR:-$(pwd)/target}/debug/conary"
+CONARY_BIN="${1:-${CONARY_BIN:-$DEFAULT_CONARY_BIN}}"
+source "$SCRIPT_DIR/../ccs-test-authority/env.sh"
+fixture_ccs_require_authority
 
 build_fixture() {
     local fixture_dir="$1"
@@ -10,7 +13,8 @@ build_fixture() {
     rm -f "$fixture_dir/output/"*.ccs
     "$CONARY_BIN" ccs build "$fixture_dir/ccs.toml" \
         --source "$fixture_dir/stage" \
-        --output "$fixture_dir/output/"
+        --output "$fixture_dir/output/" \
+        --key "$FIXTURE_CCS_KEY"
 }
 
 mutate_ccs() {
@@ -21,7 +25,8 @@ mutate_ccs() {
     tmpdir="$(mktemp -d)"
     tar -xzf "$source_ccs" -C "$tmpdir"
     "$mutator" "$tmpdir"
-    tar -czf "$output_ccs" -C "$tmpdir" .
+    mapfile -t archive_entries < <(find "$tmpdir" -type f -printf '%P\n' | sort)
+    tar -czf "$output_ccs" -C "$tmpdir" "${archive_entries[@]}"
     rm -rf "$tmpdir"
 }
 
@@ -33,7 +38,8 @@ mutate_ccs_with_payload() {
     tmpdir="$(mktemp -d)"
     tar -xzf "$source_ccs" -C "$tmpdir"
     mutate_decompression_bomb "$tmpdir" "$payload"
-    tar -czf "$output_ccs" -C "$tmpdir" .
+    mapfile -t archive_entries < <(find "$tmpdir" -type f -printf '%P\n' | sort)
+    tar -czf "$output_ccs" -C "$tmpdir" "${archive_entries[@]}"
     rm -rf "$tmpdir"
 }
 
@@ -68,7 +74,7 @@ path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 for entry in data["files"]:
-    if entry.get("type") == "regular":
+    if entry.get("node", {}).get("kind", {}).get("type") == "regular":
         entry["path"] = "/usr/share/passwd-link"
         break
 with open(path, "w", encoding="utf-8") as f:
@@ -90,16 +96,6 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-}
-
-build_signed_fixture() {
-    local fixture_dir="$1"
-    local output_name="$2"
-    local key_path="$3"
-    local built_ccs
-    build_fixture "$fixture_dir"
-    built_ccs="$(find "$fixture_dir/output" -maxdepth 1 -name '*.ccs' | head -1)"
-    "$CONARY_BIN" ccs sign "$built_ccs" --key "$key_path" --output "$fixture_dir/output/$output_name"
 }
 
 mutate_decompression_bomb() {
@@ -126,9 +122,10 @@ os.makedirs(os.path.join(objects_dir, digest[:2]), exist_ok=True)
 with open(os.path.join(objects_dir, digest[:2], digest[2:]), "wb") as f:
     f.write(content)
 
-entry = data["files"][0]
-entry["size"] = len(content)
-entry["sha256"] = digest
+entry = next(item for item in data["files"] if "content" in item)
+entry["content"]["size"] = len(content)
+entry["content"]["sha256"] = digest
+data["size"] = len(content)
 
 with open(runtime_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
@@ -151,7 +148,8 @@ with open(sys.argv[1], "wb") as f:
 PY
     "$CONARY_BIN" ccs build "$fixture_dir/ccs.toml" \
         --source "$fixture_dir/stage" \
-        --output "$fixture_dir/output/"
+        --output "$fixture_dir/output/" \
+        --key "$FIXTURE_CCS_KEY"
     local base_ccs
     base_ccs="$(find "$fixture_dir/output" -maxdepth 1 -name '*.ccs' | head -1)"
     rm -f "$output_path"
@@ -170,40 +168,17 @@ make_executable "$SCRIPT_DIR/malicious/decompression-bomb/stage/usr/bin/decompre
 make_executable "$SCRIPT_DIR/malicious/expired-signature/stage/usr/bin/expired-signature"
 
 echo "Building base malicious fixtures..."
-for fixture in path-traversal symlink-attack setuid hostile-scriptlet proc-environ outside-root-write cap-net-raw capability-overflow; do
+for fixture in path-traversal symlink-attack setuid failing-scriptlet hostile-scriptlet proc-environ outside-root-write cap-net-raw capability-overflow; do
     build_fixture "$SCRIPT_DIR/malicious/$fixture"
 done
 
-key_base="$SCRIPT_DIR/malicious/expired-signature/output/expired-signature-key"
-mkdir -p "$SCRIPT_DIR/malicious/expired-signature/output"
-if [ ! -f "${key_base}.private" ]; then
-    "$CONARY_BIN" ccs keygen --output "$key_base" --key-id "expired-signature" --force
-fi
-public_key="$(python3 - <<PY
-import pathlib
-import tomllib
-path = pathlib.Path("${key_base}.public")
-with path.open("rb") as f:
-    data = tomllib.load(f)
-print(data["key"])
-PY
-)"
-cat > "$SCRIPT_DIR/malicious/expired-signature/trust-policy.toml" <<EOF
-trusted_keys = ["$public_key"]
-allow_unsigned = false
-require_timestamp = true
-max_signature_age = 86400
-EOF
-build_signed_fixture \
-    "$SCRIPT_DIR/malicious/expired-signature" \
-    "expired-signature.ccs" \
-    "${key_base}.private"
+build_fixture "$SCRIPT_DIR/malicious/expired-signature"
 
 echo "Mutating expired signature timestamp..."
-signed_src="$SCRIPT_DIR/malicious/expired-signature/output/expired-signature.ccs"
+signed_src="$(find "$SCRIPT_DIR/malicious/expired-signature/output" -maxdepth 1 -name 'expired-signature-*.ccs' | head -1)"
 expired_dst="$SCRIPT_DIR/malicious/expired-signature/output/expired-signature-expired.ccs"
 mutate_ccs "$signed_src" "$expired_dst" mutate_signature_timestamp
-mv "$expired_dst" "$signed_src"
+mv "$expired_dst" "$SCRIPT_DIR/malicious/expired-signature/output/expired-signature.ccs"
 
 echo "Building decompression bomb fixture..."
 build_decompression_bomb "$SCRIPT_DIR/malicious/decompression-bomb"

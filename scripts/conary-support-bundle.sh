@@ -165,8 +165,8 @@ fi
 
 capture_db_query "db-integrity-check.txt" "SQLite integrity check" "PRAGMA integrity_check;"
 capture_db_query "db-tables.txt" "SQLite table inventory" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
-capture_db_query "source-settings.txt" "Host profile and source-selection settings" \
-    "SELECT key || '=' || value FROM settings WHERE key IN ('system.host-profile','source.selection-mode','source.allowed-distros') ORDER BY key;"
+capture_db_query "source-settings.txt" "Source-selection settings" \
+    "SELECT key || '=' || value FROM settings WHERE key = 'source.allowed-distros' ORDER BY key;"
 
 printf 'Support bundle written to %s\n' "$target_dir"
 printf 'Review %s/README.txt before attaching the bundle to an issue.\n' "$target_dir"

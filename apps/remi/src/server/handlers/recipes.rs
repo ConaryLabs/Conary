@@ -20,6 +20,8 @@ use url::Url;
 pub struct RecipeBuildRequest {
     /// URL to the recipe file
     pub recipe_url: String,
+    /// Exact supported Remi profile whose targets key signs the result
+    pub distro: String,
 }
 
 /// Response for successful recipe build
@@ -90,7 +92,10 @@ pub async fn build_recipe(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(request): Json<RecipeBuildRequest>,
 ) -> Response {
-    info!("Recipe build request: {}", request.recipe_url);
+    info!(
+        "Recipe build request: {} for {}",
+        request.recipe_url, request.distro
+    );
 
     // Validate URL to prevent SSRF
     if let Err(e) = validate_url(&request.recipe_url) {
@@ -104,7 +109,7 @@ pub async fn build_recipe(
     let state_read = state.read().await;
     let result = state_read
         .conversion_service
-        .build_from_recipe(&request.recipe_url)
+        .build_from_recipe(&request.recipe_url, &request.distro)
         .await;
 
     match result {

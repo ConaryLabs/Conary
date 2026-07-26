@@ -28,7 +28,7 @@ fn open_derivation_db(db_path: Option<&Path>) -> Result<Connection> {
         None => {
             let conn =
                 Connection::open_in_memory().context("Failed to open in-memory derivation DB")?;
-            conary_core::db::schema::migrate(&conn)
+            conary_core::db::schema::ensure_current(&conn)
                 .context("Failed to initialize in-memory derivation schema")?;
             Ok(conn)
         }

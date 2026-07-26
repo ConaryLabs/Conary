@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_mode_zero_parsing() {
         let temp_dir = TempDir::new().unwrap();
-        let executor = HookExecutor::new(temp_dir.path());
+        let executor = HookExecutor::new(temp_dir.path(), Default::default());
 
         let dir_path = temp_dir.path().join("var/lib/zero_mode");
 
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn test_directory_creation_in_target() {
         let temp_dir = TempDir::new().unwrap();
-        let executor = HookExecutor::new(temp_dir.path());
+        let executor = HookExecutor::new(temp_dir.path(), Default::default());
 
         let dir_path = temp_dir.path().join("var/lib/test");
 

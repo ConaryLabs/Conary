@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use conary_core::db::models::{
     NativePackagePublication, NativePublicationStatus, Repository, RepositoryPackage,
 };
+use conary_core::repository::versioning::VersionScheme;
 use conary_core::trust::{
     MetaFile, Signed, SnapshotMetadata, TUF_SPEC_VERSION, TargetDescription, TargetsMetadata,
     sign_tuf_metadata,
@@ -79,11 +80,23 @@ pub fn commit_native_publication_blocking(
 ) -> Result<()> {
     let mut conn = crate::server::open_runtime_db(db_path)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported release route '{distro}'"))?
+            .id();
     let repo_id = ensure_release_repository(&tx, distro)?;
-    let repo_package_id = upsert_repository_projection(&tx, repo_id, distro, &artifact, &promoted)?;
-    let superseded = supersede_active_native_identity(&tx, distro, &artifact)?;
+    let repo_package_id =
+        upsert_repository_projection(&tx, repo_id, source_profile, &artifact, &promoted)?;
+    let superseded = supersede_active_native_identity(&tx, source_profile, &artifact)?;
     delete_superseded_tuf_targets(&tx, repo_id, &superseded)?;
-    insert_native_publication(&tx, repo_id, repo_package_id, distro, &artifact, &promoted)?;
+    insert_native_publication(
+        &tx,
+        repo_id,
+        repo_package_id,
+        source_profile,
+        &artifact,
+        &promoted,
+    )?;
     refresh_release_tuf_metadata(&tx, keys_dir, distro, repo_id, &artifact, &promoted)?;
     tx.commit()?;
 
@@ -94,6 +107,8 @@ pub fn commit_native_publication_blocking(
 }
 
 fn ensure_release_repository(conn: &rusqlite::Connection, distro: &str) -> Result<i64> {
+    let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+        .ok_or_else(|| anyhow::anyhow!("unsupported release route '{distro}'"))?;
     if let Some((id, tuf_enabled)) = conn
         .query_row(
             "SELECT id, tuf_enabled FROM repositories WHERE name = ?1",
@@ -108,18 +123,23 @@ fn ensure_release_repository(conn: &rusqlite::Connection, distro: &str) -> Resul
                 params![id],
             )?;
         }
+        conn.execute(
+            "UPDATE repositories SET source_profile = ?1 WHERE id = ?2",
+            params![profile.id(), id],
+        )?;
         return Ok(id);
     }
 
     let mut repo = Repository::new(distro.to_string(), format!("remi-release://{distro}"));
     repo.tuf_enabled = true;
+    repo.source_profile = Some(profile.id().to_string());
     repo.insert(conn).map_err(anyhow::Error::from)
 }
 
 fn upsert_repository_projection(
     conn: &rusqlite::Connection,
     repo_id: i64,
-    distro: &str,
+    source_profile: &str,
     artifact: &VerifiedNativeArtifact,
     _promoted: &PromotedNativeArtifact,
 ) -> Result<i64> {
@@ -159,7 +179,7 @@ fn upsert_repository_projection(
         conn.execute(
             "UPDATE repository_packages
              SET checksum = ?1, size = ?2, download_url = ?3, metadata = ?4,
-                 description = ?5, distro = ?6
+                 description = ?5, source_profile = ?6
              WHERE id = ?7",
             params![
                 artifact.content_hash,
@@ -167,7 +187,7 @@ fn upsert_repository_projection(
                 download_url,
                 metadata,
                 "Remi native CCS release artifact",
-                distro,
+                source_profile,
                 id,
             ],
         )?;
@@ -178,6 +198,7 @@ fn upsert_repository_projection(
         repo_id,
         artifact.name.clone(),
         artifact.version.clone(),
+        VersionScheme::Conary,
         artifact.content_hash.clone(),
         i64::try_from(artifact.total_size).context("native artifact size exceeds i64")?,
         download_url,
@@ -186,24 +207,24 @@ fn upsert_repository_projection(
     package.architecture = Some(artifact.architecture.clone());
     package.description = Some("Remi native CCS release artifact".to_string());
     package.metadata = Some(metadata);
-    package.distro = Some(distro.to_string());
+    package.source_profile = Some(source_profile.to_string());
     package.insert(conn).map_err(anyhow::Error::from)
 }
 
 fn supersede_active_native_identity(
     conn: &rusqlite::Connection,
-    distro: &str,
+    source_profile: &str,
     artifact: &VerifiedNativeArtifact,
 ) -> Result<Vec<SupersededNativePublication>> {
     let mut stmt = conn.prepare(
         "SELECT id, package_path, content_hash, target_path
          FROM native_package_publications
-         WHERE status = 'public' AND distro = ?1 AND name = ?2 AND version = ?3
+         WHERE status = 'public' AND source_profile = ?1 AND name = ?2 AND version = ?3
            AND package_release = ?4 AND architecture = ?5",
     )?;
     let rows = stmt.query_map(
         params![
-            distro,
+            source_profile,
             artifact.name,
             artifact.version,
             artifact.package_release,
@@ -256,7 +277,7 @@ fn insert_native_publication(
     conn: &rusqlite::Connection,
     repo_id: i64,
     repo_package_id: i64,
-    distro: &str,
+    source_profile: &str,
     artifact: &VerifiedNativeArtifact,
     promoted: &PromotedNativeArtifact,
 ) -> Result<()> {
@@ -265,7 +286,7 @@ fn insert_native_publication(
         id: None,
         repository_id: repo_id,
         repository_package_id: repo_package_id,
-        distro: distro.to_string(),
+        source_profile: source_profile.to_string(),
         name: artifact.name.clone(),
         version: artifact.version.clone(),
         package_release: artifact.package_release.clone(),

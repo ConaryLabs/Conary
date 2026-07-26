@@ -4,9 +4,7 @@
 //! This module provides the infrastructure for enhancing converted packages
 //! with additional metadata that wasn't available in the original format:
 //!
-//! - **Capability inference**: Determine what system resources a package needs
-//! - **Provenance extraction**: Extract build/source metadata from legacy formats
-//! - **Subpackage relationships**: Track relationships between base packages and subpackages
+//! - **Provenance extraction**: Extract build/source metadata from native formats
 //!
 //! # Architecture
 //!
@@ -24,14 +22,13 @@
 //! │  (manages registered enhancers)                              │
 //! └─────────────────────────────────────────────────────────────┘
 //!                              │
-//!              ┌───────────────┼───────────────┐
-//!              ▼               ▼               ▼
-//! ┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐
-//! │CapabilityEnhancer│ │ProvenanceEnh │ │SubpackageEnhancer│
-//! │                  │ │              │ │                  │
-//! │(infers caps from │ │(extracts     │ │(detects base/    │
-//! │ binaries/files)  │ │ provenance)  │ │ subpackage rels) │
-//! └──────────────────┘ └──────────────┘ └──────────────────┘
+//!                              │
+//!                              ▼
+//!                   ┌──────────────────┐
+//!                   │ProvenanceEnhancer│
+//!                   │(records exact    │
+//!                   │source metadata)  │
+//!                   └──────────────────┘
 //! ```
 //!
 //! # Usage
@@ -42,7 +39,7 @@
 //! let runner = EnhancementRunner::new(&db)?;
 //!
 //! // Enhance a specific package
-//! runner.enhance(trove_id, &[EnhancementType::Capabilities])?;
+//! runner.enhance(trove_id)?;
 //!
 //! // Enhance all pending packages
 //! runner.enhance_all_pending()?;
@@ -74,41 +71,29 @@ pub const ENHANCEMENT_VERSION: i32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnhancementType {
-    /// Infer security capabilities from package contents
-    Capabilities,
-    /// Extract provenance information from legacy metadata
+    /// Extract provenance information from native package metadata
     Provenance,
-    /// Detect and record subpackage relationships
-    Subpackages,
 }
 
 impl EnhancementType {
     /// Get the string name of this enhancement type
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Capabilities => "capabilities",
             Self::Provenance => "provenance",
-            Self::Subpackages => "subpackages",
         }
     }
 
     /// Parse from string name
     pub fn parse_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "capabilities" | "caps" => Some(Self::Capabilities),
             "provenance" | "prov" => Some(Self::Provenance),
-            "subpackages" | "subpkg" => Some(Self::Subpackages),
             _ => None,
         }
     }
 
     /// Get all enhancement types
     pub fn all() -> &'static [EnhancementType] {
-        &[
-            EnhancementType::Capabilities,
-            EnhancementType::Provenance,
-            EnhancementType::Subpackages,
-        ]
+        &[EnhancementType::Provenance]
     }
 }
 
@@ -225,7 +210,7 @@ pub trait EnhancementEngine: Send + Sync {
     ///
     /// The enhancement should:
     /// 1. Read package data from the context
-    /// 2. Perform inference/extraction
+    /// 2. Extract exact source provenance
     /// 3. Store results via the context's database connection
     ///
     /// Returns `Ok(())` on success, or an error describing what went wrong.
@@ -242,20 +227,8 @@ mod tests {
     #[test]
     fn test_enhancement_type_parsing() {
         assert_eq!(
-            EnhancementType::parse_name("capabilities"),
-            Some(EnhancementType::Capabilities)
-        );
-        assert_eq!(
-            EnhancementType::parse_name("caps"),
-            Some(EnhancementType::Capabilities)
-        );
-        assert_eq!(
             EnhancementType::parse_name("provenance"),
             Some(EnhancementType::Provenance)
-        );
-        assert_eq!(
-            EnhancementType::parse_name("subpackages"),
-            Some(EnhancementType::Subpackages)
         );
         assert_eq!(EnhancementType::parse_name("unknown"), None);
     }
@@ -280,7 +253,7 @@ mod tests {
         let mut result = EnhancementResult_::new(42);
         assert!(result.is_success());
 
-        result.record_success(EnhancementType::Capabilities);
+        result.record_success(EnhancementType::Provenance);
         assert!(result.is_success());
         assert_eq!(result.applied.len(), 1);
 

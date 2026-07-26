@@ -46,6 +46,7 @@ fn list_one_package() {
         "nginx".to_string(),
         "1.27.2".to_string(),
         TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
     );
     trove.architecture = Some("x86_64".to_string());
     trove.insert(&conn).unwrap();

@@ -9,14 +9,17 @@
 use std::fmt;
 
 use resolvo::{
-    Candidates, Condition, ConditionId, ConditionalRequirement, Dependencies, DependencyProvider,
+    Candidates, Condition, ConditionId, Dependencies, DependencyProvider,
     HintDependenciesAvailable, Interner, KnownDependencies, NameId, SolvableId, SolverCache,
     StringId, VersionSetId, VersionSetUnionId,
 };
 
 use super::ConaryProvider;
-use super::matching::{constraint_matches_package, constraint_matches_provide};
-use super::types::{ConaryConstraint, SolverDep};
+use super::matching::{
+    constraint_architecture_matches_package, constraint_architecture_matches_provide,
+    constraint_matches_package, constraint_matches_provide, provider_expression_matches_package,
+};
+use super::types::ConaryConstraint;
 
 // --- Display helpers ---
 
@@ -89,15 +92,13 @@ impl Interner for ConaryProvider<'_> {
     ) -> impl Iterator<Item = VersionSetId> {
         self.version_set_unions
             .get(version_set_union.0 as usize)
-            .cloned()
-            .unwrap_or_default()
+            .expect("resolvo requested a version-set union minted by this provider")
+            .clone()
             .into_iter()
     }
 
-    fn resolve_condition(&self, _condition: ConditionId) -> Condition {
-        // ConaryProvider does not use conditions; return a permissive default
-        // rather than panicking if resolvo ever calls this unexpectedly.
-        Condition::Requirement(VersionSetId::default())
+    fn resolve_condition(&self, condition: ConditionId) -> Condition {
+        self.conditions[condition.as_u32() as usize].clone()
     }
 }
 
@@ -112,34 +113,76 @@ impl DependencyProvider for ConaryProvider<'_> {
     ) -> Vec<SolvableId> {
         let (name_id, ref constraint) = self.version_sets[version_set.0 as usize];
         let requested_name = &self.names[name_id.0 as usize];
+        let requested_kind = match constraint {
+            ConaryConstraint::Repository {
+                capability_kind, ..
+            } => *capability_kind,
+            ConaryConstraint::Requested(_)
+            | ConaryConstraint::RpmRuntime(_)
+            | ConaryConstraint::ProviderExpression { .. } => None,
+        };
         candidates
             .iter()
             .copied()
             .filter(|&sid| {
                 let pkg = &self.solvables[sid.0 as usize];
-                let matches = if pkg.name == *requested_name {
-                    constraint_matches_package(constraint, &pkg.version, pkg.version_scheme)
-                } else if let Some(provided_version) = pkg
-                    .provided_capabilities
-                    .iter()
-                    .find(|(capability, _version)| capability == requested_name)
-                    .and_then(|(_capability, version)| version.as_deref())
-                {
-                    constraint_matches_provide(
-                        constraint,
-                        Some(provided_version),
-                        pkg.version_scheme,
-                        &pkg.version,
-                        pkg.version_scheme,
-                    )
-                } else {
-                    constraint_matches_provide(
-                        constraint,
-                        None,
-                        pkg.version_scheme,
-                        &pkg.version,
-                        pkg.version_scheme,
-                    )
+                let matches = match constraint {
+                    ConaryConstraint::RpmRuntime(_) => false,
+                    ConaryConstraint::ProviderExpression { expression } => {
+                        constraint_architecture_matches_package(
+                            constraint,
+                            pkg,
+                            &self.native_architecture,
+                        ) && provider_expression_matches_package(expression, pkg)
+                            .expect("resolver package versions are validated before SAT filtering")
+                    }
+                    _ if matches!(
+                        requested_kind,
+                        None
+                            | Some(
+                                crate::repository::dependency_model::RepositoryCapabilityKind::PackageName
+                            )
+                    ) && (pkg.name == *requested_name
+                        || self
+                            .canonical_equivalents(requested_name)
+                            .iter()
+                            .any(|equivalent| equivalent == &pkg.name)) =>
+                    {
+                        constraint_architecture_matches_package(
+                            constraint,
+                            pkg,
+                            &self.native_architecture,
+                        ) && constraint_matches_package(
+                            constraint,
+                            &pkg.version,
+                            pkg.version_scheme,
+                        )
+                        .expect("resolver package versions are validated before SAT filtering")
+                    }
+                    _ => pkg
+                        .provided_capabilities
+                        .iter()
+                        .filter(|capability| {
+                            capability.name == *requested_name
+                                && requested_kind.is_none_or(|kind| capability.kind == kind)
+                        })
+                        .any(|capability| {
+                            constraint_architecture_matches_provide(
+                                constraint,
+                                pkg,
+                                &capability.architecture_qualifier,
+                                capability.version_scheme,
+                                &self.native_architecture,
+                            ) && constraint_matches_provide(
+                                constraint,
+                                capability.version.as_deref(),
+                                capability.version_relation,
+                                capability.version_scheme,
+                            )
+                            .expect(
+                                "resolver capability versions are validated before SAT filtering",
+                            )
+                        }),
                 };
                 if inverse { !matches } else { matches }
             })
@@ -148,6 +191,19 @@ impl DependencyProvider for ConaryProvider<'_> {
 
     async fn get_candidates(&self, name: NameId) -> Option<Candidates> {
         let name_str = &self.names[name.0 as usize];
+        if name_str == "\0conary:false" {
+            return None;
+        }
+        if self.provider_expression_name_ids.contains(&name.0) {
+            let candidates = self.solvable_ids.clone();
+            return (!candidates.is_empty()).then_some(Candidates {
+                candidates,
+                favored: None,
+                locked: None,
+                hint_dependencies_available: HintDependenciesAvailable::All,
+                excluded: Vec::new(),
+            });
+        }
         let mut candidates = self.solvables_for_name(name);
 
         // Always include canonical equivalents so the solver can fall back to
@@ -168,19 +224,10 @@ impl DependencyProvider for ConaryProvider<'_> {
             }
         }
 
-        // Always load virtual providers alongside exact-name candidates.
-        // The solver's ranking (sort_candidates) and filtering handle which
-        // to prefer -- suppressing virtual providers when exact-name candidates
-        // exist causes missed alternatives (e.g. library provides).
-        {
-            let providers = self.resolve_virtual_provide(name_str);
-            for provider_name in &providers {
-                if let Some(&provider_name_id) = self.name_to_id.get(provider_name) {
-                    candidates.extend(self.solvables_for_name(provider_name_id));
-                }
-            }
-            candidates.extend(self.solvables_for_provide(name_str));
-        }
+        // Virtual providers were resolved from typed repository/installed
+        // provide rows during provider construction. SAT callbacks only
+        // consume those preloaded facts and never fall back to metadata text.
+        candidates.extend(self.solvables_for_provide(name_str));
 
         if candidates.is_empty() {
             return None;
@@ -191,19 +238,13 @@ impl DependencyProvider for ConaryProvider<'_> {
         // If the package is pinned (troves.pinned = 1), lock the solver to
         // the installed version so the SAT solver cannot choose a different
         // version.  This implements G3: respect per-package version pins.
-        let locked =
-            if crate::db::models::Trove::is_pinned_by_name(self.conn, name_str).unwrap_or(false) {
-                // Find the installed solvable whose name matches and is pinned
-                candidates
-                    .iter()
-                    .find(|&&sid| {
-                        let pkg = &self.solvables[sid.0 as usize];
-                        pkg.name == *name_str && pkg.installed_trove_id.is_some()
-                    })
-                    .copied()
-            } else {
-                None
-            };
+        let locked = candidates
+            .iter()
+            .find(|&&sid| {
+                let pkg = &self.solvables[sid.0 as usize];
+                pkg.name == *name_str && pkg.installed_pinned
+            })
+            .copied();
 
         Some(Candidates {
             candidates,
@@ -235,25 +276,26 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
 
-            let a_latest = self.has_positive_latest_signal(pkg_a);
-            let b_latest = self.has_positive_latest_signal(pkg_b);
-            if a_latest != b_latest {
-                return b_latest.cmp(&a_latest);
-            }
-
             // Higher repository priority is preferred
             if pkg_a.repository_priority != pkg_b.repository_priority {
                 return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
             }
 
-            if let Some(version_cmp) = super::matching::compare_package_versions_desc(
-                &pkg_a.version,
-                pkg_a.version_scheme,
-                &pkg_b.version,
-                pkg_b.version_scheme,
-            ) && version_cmp != std::cmp::Ordering::Equal
-            {
-                return version_cmp;
+            if pkg_a.version_scheme == pkg_b.version_scheme {
+                let version_cmp = crate::repository::versioning::compare_package_identities(
+                    pkg_b.version_scheme,
+                    &pkg_b.version,
+                    pkg_b.package_release.as_deref(),
+                    pkg_a.version_scheme,
+                    &pkg_a.version,
+                    pkg_a.package_release.as_deref(),
+                )
+                .expect(
+                    "resolver package versions and releases are validated before candidate sorting",
+                );
+                if version_cmp != std::cmp::Ordering::Equal {
+                    return version_cmp;
+                }
             }
 
             let a_installed = pkg_a.installed_trove_id.is_some();
@@ -266,43 +308,12 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn get_dependencies(&self, solvable: SolvableId) -> Dependencies {
-        let mut requirements = Vec::new();
-
-        if let Some(dep_list) = self.dependencies.get(&solvable.0) {
-            for dep in dep_list {
-                match dep {
-                    SolverDep::Single(dep_name, constraint) => {
-                        if let Some(req) = self.lookup_requirement(dep_name, constraint) {
-                            requirements.push(req);
-                        }
-                    }
-                    SolverDep::OrGroup(alternatives) => {
-                        let mut vs_ids = Vec::new();
-                        for (dep_name, constraint) in alternatives {
-                            if let Some(&dep_name_id) = self.name_to_id.get(dep_name) {
-                                let cache_key = (dep_name_id.0, constraint.clone());
-                                if let Some(&vs_id) = self.version_set_cache.get(&cache_key) {
-                                    vs_ids.push(vs_id);
-                                }
-                            }
-                        }
-                        if vs_ids.len() == 1 {
-                            // Single-alternative OR group: emit as a simple requirement
-                            requirements.push(ConditionalRequirement::from(vs_ids[0]));
-                        } else if vs_ids.len() > 1 {
-                            // Look up the union ID from our pool
-                            if let Some(union_id) = self.find_union_id(&vs_ids) {
-                                requirements.push(ConditionalRequirement::from(union_id));
-                            }
-                        }
-                    }
-                }
-            }
+        match self.compiled_dependencies.get(&solvable.0) {
+            Some(requirements) => Dependencies::Known(KnownDependencies {
+                requirements: requirements.clone(),
+                constrains: Vec::new(),
+            }),
+            None => Dependencies::Unknown(self.missing_dependency_authority),
         }
-
-        Dependencies::Known(KnownDependencies {
-            requirements,
-            constrains: Vec::new(),
-        })
     }
 }

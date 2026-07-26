@@ -31,8 +31,7 @@ pub(crate) struct RecordCliRequest {
     pub(crate) backend: RequestedRecordBackend,
     pub(crate) validate: bool,
     pub(crate) keep_raw_trace: bool,
-    pub(crate) unsafe_host: bool,
-    pub(crate) allow_network: bool,
     pub(crate) json: bool,
+    pub(crate) signing_key_path: Option<PathBuf>,
     pub(crate) command: Vec<String>,
 }

@@ -6,163 +6,68 @@
 //! dependencies, provides, and other data needed by the solver.
 
 use crate::db::models::{
-    DependencyEntry, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+    InstalledRequirementGroup, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
     RepositoryRequirementGroup,
 };
-use crate::error::Result;
-use crate::repository::versioning::{
-    RepoVersionConstraint, VersionScheme, infer_version_scheme, parse_repo_constraint,
+use crate::error::{Error, Result};
+use crate::repository::dependency_model::{
+    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryRequirementExpression,
+    RepositoryRequirementKind,
 };
-use crate::version::VersionConstraint;
+use crate::repository::rpm_runtime::RpmRuntimeRequirement;
+use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint};
+use crate::resolver::identity::ProvidedCapability;
 
-use super::types::{ConaryConstraint, SolverDep};
-
-/// Map a dependency entry to a `SolverDep` using the given version scheme.
-///
-/// Shared by `load_installed_packages` and `load_removal_data` to avoid
-/// duplicating the scheme-aware constraint construction.
-pub(super) fn dep_entry_to_solver_dep(dep: &DependencyEntry, scheme: VersionScheme) -> SolverDep {
-    let constraint = match (scheme, dep.version_constraint.as_deref()) {
-        (VersionScheme::Rpm, Some(s)) => {
-            ConaryConstraint::Legacy(match VersionConstraint::parse(s) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(
-                        constraint = %s,
-                        dep = %dep.depends_on_name,
-                        error = %e,
-                        "Failed to parse RPM version constraint; using unsatisfiable sentinel"
-                    );
-                    // Use an exact match on an impossible version so the solver
-                    // reports this dep as unsatisfiable rather than silently
-                    // accepting anything.
-                    VersionConstraint::parse("= __UNPARSEABLE__").unwrap_or(VersionConstraint::Any)
-                }
-            })
-        }
-        (VersionScheme::Rpm, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
-        (native, Some(s)) => ConaryConstraint::Repository {
-            scheme: native,
-            constraint: match parse_repo_constraint(native, s) {
-                Some(c) => c,
-                None => {
-                    tracing::warn!(
-                        constraint = %s,
-                        dep = %dep.depends_on_name,
-                        scheme = ?native,
-                        "Failed to parse repo version constraint; using unsatisfiable sentinel"
-                    );
-                    // Exact match on an impossible version -- no real package
-                    // will match, making the dep unsatisfiable.
-                    RepoVersionConstraint::Exact("__UNPARSEABLE__".to_string())
-                }
-            },
-            raw: Some(s.to_string()),
-        },
-        (native, None) => ConaryConstraint::Repository {
-            scheme: native,
-            constraint: RepoVersionConstraint::Any,
-            raw: None,
-        },
-    };
-    SolverDep::Single(dep.depends_on_name.clone(), constraint)
-}
-
-/// Convert a flat requirement row to (name, constraint).
-fn row_to_constraint(
-    row: RepositoryRequirement,
-    repo_scheme: Option<VersionScheme>,
-) -> (String, ConaryConstraint) {
-    let raw = row.version_constraint.clone();
-    let constraint = match (repo_scheme, raw.as_deref()) {
-        (Some(scheme), Some(value)) => ConaryConstraint::Repository {
-            scheme,
-            constraint: match parse_repo_constraint(scheme, value) {
-                Some(c) => c,
-                None => {
-                    tracing::warn!(
-                        constraint = %value,
-                        capability = %row.capability,
-                        scheme = ?scheme,
-                        "Failed to parse repo version constraint in requirement row; using unsatisfiable sentinel"
-                    );
-                    RepoVersionConstraint::Exact("__UNPARSEABLE__".to_string())
-                }
-            },
-            raw,
-        },
-        (Some(scheme), None) => ConaryConstraint::Repository {
-            scheme,
-            constraint: RepoVersionConstraint::Any,
-            raw: None,
-        },
-        (None, Some(value)) => ConaryConstraint::Legacy(match VersionConstraint::parse(value) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    constraint = %value,
-                    capability = %row.capability,
-                    error = %e,
-                    "Failed to parse legacy version constraint in requirement row; using unsatisfiable sentinel"
-                );
-                VersionConstraint::parse("= __UNPARSEABLE__").unwrap_or(VersionConstraint::Any)
-            }
-        }),
-        (None, None) => ConaryConstraint::Legacy(VersionConstraint::Any),
-    };
-    (row.capability, constraint)
-}
+use super::types::{
+    CapabilityExpression, ConaryConstraint, SolverDep, SolverExpression, SolverRelation,
+};
 
 /// Load dependency requests for a repository package.
 pub(super) fn load_repo_dependency_requests(
     conn: &rusqlite::Connection,
     pkg: &RepositoryPackage,
-    repo: &crate::db::models::Repository,
+    _repo: &crate::db::models::Repository,
 ) -> Result<Vec<SolverDep>> {
-    let repo_scheme = infer_version_scheme(repo);
-    let Some(repository_package_id) = pkg.id else {
-        return Ok(pkg
-            .parse_dependency_requests()?
-            .into_iter()
-            .map(|(name, constraint)| SolverDep::Single(name, ConaryConstraint::Legacy(constraint)))
-            .collect());
-    };
+    let package_scheme = pkg.version_scheme;
+    let package_architecture = pkg.architecture.as_deref().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "repository package '{}-{}' has no architecture authority",
+            pkg.name, pkg.version
+        ))
+    })?;
+    let repository_package_id = pkg.id.ok_or_else(|| {
+        Error::MissingId(format!(
+            "repository package '{}-{}' has no persisted ID while loading dependencies",
+            pkg.name, pkg.version
+        ))
+    })?;
 
-    // Try group-based loading first for OR and conditional support
     let groups =
         RepositoryRequirementGroup::find_by_repository_package(conn, repository_package_id)?;
-    if !groups.is_empty() {
-        return load_grouped_dependency_requests(conn, &groups, repo_scheme);
+    if groups.is_empty() {
+        let orphan_clauses =
+            RepositoryRequirement::find_by_repository_package(conn, repository_package_id)?;
+        if orphan_clauses.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(Error::ConfigError(format!(
+            "repository package '{}' has requirement clauses without authoritative expression groups",
+            pkg.name
+        )));
     }
 
-    // Fall back to flat requirement rows (legacy data or non-grouped deps)
-    let rows = RepositoryRequirement::find_by_repository_package(conn, repository_package_id)?;
-    if rows.is_empty() {
-        return Ok(pkg
-            .parse_dependency_requests()?
-            .into_iter()
-            .map(|(name, constraint)| SolverDep::Single(name, ConaryConstraint::Legacy(constraint)))
-            .collect());
-    }
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let (name, constraint) = row_to_constraint(row, repo_scheme);
-            SolverDep::Single(name, constraint)
-        })
-        .collect())
+    load_grouped_dependency_requests(conn, &groups, package_scheme, package_architecture)
 }
 
 /// Load dependency requests using the group-based model.
 ///
-/// Groups with `behavior = "hard"` become solver requirements.
-/// Multi-clause groups produce `SolverDep::OrGroup` (Debian OR dependencies).
-/// Conditional and unsupported-rich behaviors are logged and skipped.
+/// The persisted expression is authoritative. Behavior labels and clause rows
+/// remain diagnostics/search indexes; they never decide solver semantics.
 fn load_grouped_dependency_requests(
-    conn: &rusqlite::Connection,
+    _conn: &rusqlite::Connection,
     groups: &[RepositoryRequirementGroup],
-    repo_scheme: Option<VersionScheme>,
+    package_scheme: VersionScheme,
+    package_architecture: &str,
 ) -> Result<Vec<SolverDep>> {
     let mut deps = Vec::new();
 
@@ -172,75 +77,342 @@ fn load_grouped_dependency_requests(
             continue;
         }
 
-        match group.behavior.as_str() {
-            "conditional" | "unsupported_rich" => {
-                tracing::debug!(
-                    "Skipping {} dependency (behavior={}): {:?}",
-                    group.kind,
-                    group.behavior,
-                    group.native_text,
-                );
-                continue;
-            }
-            _ => {} // "hard" -- process normally
-        }
-
-        let Some(group_id) = group.id else {
-            continue;
-        };
-        let clauses = RepositoryRequirement::find_by_group(conn, group_id)?;
-
-        if clauses.is_empty() {
-            continue;
-        }
-
-        if clauses.len() == 1 {
-            let (name, constraint) =
-                row_to_constraint(clauses.into_iter().next().unwrap(), repo_scheme);
-            deps.push(SolverDep::Single(name, constraint));
-        } else {
-            // Multi-clause: OR-group
-            let alternatives: Vec<(String, ConaryConstraint)> = clauses
-                .into_iter()
-                .map(|clause| row_to_constraint(clause, repo_scheme))
-                .collect();
-            deps.push(SolverDep::OrGroup(alternatives));
-        }
+        let expression =
+            serde_json::from_str::<RepositoryRequirementExpression>(&group.expression_json)
+                .map_err(|error| {
+                    Error::ConfigError(format!(
+                        "repository requirement group {} has invalid expression JSON: {error}",
+                        group
+                            .id
+                            .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string())
+                    ))
+                })?;
+        deps.push(SolverDep {
+            expression: repository_expression_to_solver_for_architecture(
+                &expression,
+                package_scheme,
+                package_architecture,
+            )?,
+        });
     }
 
     Ok(deps)
 }
 
-/// Load provided capabilities for a repository package as simple (name, version) pairs.
+pub(crate) fn repository_expression_to_solver(
+    expression: &RepositoryRequirementExpression,
+    scheme: VersionScheme,
+) -> Result<SolverExpression> {
+    let native_architecture = crate::repository::registry::detect_system_arch();
+    repository_expression_to_solver_for_architecture(expression, scheme, &native_architecture)
+}
+
+fn repository_expression_to_solver_for_architecture(
+    expression: &RepositoryRequirementExpression,
+    scheme: VersionScheme,
+    depending_architecture: &str,
+) -> Result<SolverExpression> {
+    use RepositoryRequirementExpression as Source;
+
+    match expression {
+        Source::Atom(clause) => {
+            if let Some(requirement) = RpmRuntimeRequirement::from_clause(clause, scheme)
+                .map_err(|error| Error::ConfigError(error.to_string()))?
+            {
+                requirement
+                    .ensure_supported()
+                    .map_err(|error| Error::ConfigError(error.to_string()))?;
+                return Ok(SolverExpression::atom(
+                    requirement.feature.capability().to_string(),
+                    ConaryConstraint::RpmRuntime(requirement),
+                ));
+            }
+            let raw = clause.version_constraint.clone();
+            let constraint = match raw.as_deref() {
+                Some(value) => parse_repo_constraint(scheme, value).map_err(|error| {
+                    Error::ConfigError(format!(
+                        "repository requirement '{}' has invalid {:?} constraint '{}': {error}",
+                        clause.name, scheme, value
+                    ))
+                })?,
+                None => RepoVersionConstraint::Any,
+            };
+            Ok(SolverExpression::atom(
+                clause.name.clone(),
+                ConaryConstraint::Repository {
+                    scheme,
+                    constraint,
+                    capability_kind: clause.capability_kind,
+                    raw,
+                    architecture_qualifier: clause.architecture_qualifier.clone(),
+                    depending_architecture: depending_architecture.to_string(),
+                },
+            ))
+        }
+        Source::And(operands) => Ok(SolverExpression::And(
+            operands
+                .iter()
+                .map(|operand| {
+                    repository_expression_to_solver_for_architecture(
+                        operand,
+                        scheme,
+                        depending_architecture,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        Source::Or(operands) => Ok(SolverExpression::Or(
+            operands
+                .iter()
+                .map(|operand| {
+                    repository_expression_to_solver_for_architecture(
+                        operand,
+                        scheme,
+                        depending_architecture,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        Source::If {
+            requirement,
+            condition,
+            otherwise,
+        } => {
+            let requirement = repository_expression_to_solver_for_architecture(
+                requirement,
+                scheme,
+                depending_architecture,
+            )?;
+            let condition = repository_expression_to_solver_for_architecture(
+                condition,
+                scheme,
+                depending_architecture,
+            )?;
+            let first = SolverExpression::Or(vec![
+                SolverExpression::Not(Box::new(condition.clone())),
+                requirement,
+            ]);
+            Ok(match otherwise {
+                Some(otherwise) => SolverExpression::And(vec![
+                    first,
+                    SolverExpression::Or(vec![
+                        condition,
+                        repository_expression_to_solver_for_architecture(
+                            otherwise,
+                            scheme,
+                            depending_architecture,
+                        )?,
+                    ]),
+                ]),
+                None => first,
+            })
+        }
+        Source::Unless {
+            requirement,
+            condition,
+            otherwise,
+        } => {
+            let requirement = repository_expression_to_solver_for_architecture(
+                requirement,
+                scheme,
+                depending_architecture,
+            )?;
+            let condition = repository_expression_to_solver_for_architecture(
+                condition,
+                scheme,
+                depending_architecture,
+            )?;
+            let first = SolverExpression::Or(vec![condition.clone(), requirement]);
+            Ok(match otherwise {
+                Some(otherwise) => SolverExpression::And(vec![
+                    first,
+                    SolverExpression::Or(vec![
+                        SolverExpression::Not(Box::new(condition)),
+                        repository_expression_to_solver_for_architecture(
+                            otherwise,
+                            scheme,
+                            depending_architecture,
+                        )?,
+                    ]),
+                ]),
+                None => first,
+            })
+        }
+        Source::With { .. } | Source::Without { .. } => {
+            let provider_expression = CapabilityExpression::from_repository(expression, scheme)
+                .map_err(Error::ConfigError)?;
+            Ok(SolverExpression::atom(
+                format!("\0conary:same-provider:{provider_expression:?}"),
+                ConaryConstraint::ProviderExpression {
+                    expression: provider_expression,
+                },
+            ))
+        }
+    }
+}
+
+pub(super) fn relation_to_solver_dep(relation: &SolverRelation) -> Result<SolverDep> {
+    Ok(SolverDep {
+        expression: SolverExpression::Not(Box::new(repository_expression_to_solver(
+            &relation.relation.expression,
+            relation.scheme,
+        )?)),
+    })
+}
+
+pub(super) fn load_repo_relations(
+    conn: &rusqlite::Connection,
+    pkg: &RepositoryPackage,
+) -> Result<Vec<SolverRelation>> {
+    let package_scheme = pkg.version_scheme;
+    let repository_package_id = pkg.id.ok_or_else(|| {
+        Error::MissingId(format!(
+            "repository package '{}-{}' has no persisted ID while loading relations",
+            pkg.name, pkg.version
+        ))
+    })?;
+    let groups =
+        RepositoryRequirementGroup::find_by_repository_package(conn, repository_package_id)?;
+    let mut relations = Vec::new();
+    for group in groups {
+        let Some(kind) = RepositoryRequirementKind::from_str_exact(&group.kind) else {
+            return Err(Error::ConfigError(format!(
+                "repository requirement group {} has unknown kind '{}'",
+                group
+                    .id
+                    .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string()),
+                group.kind
+            )));
+        };
+        if !kind.is_negative_relation() {
+            continue;
+        }
+        let expression =
+            serde_json::from_str::<RepositoryRequirementExpression>(&group.expression_json)
+                .map_err(|error| {
+                    Error::ConfigError(format!(
+                        "repository relation group {} has invalid expression JSON: {error}",
+                        group
+                            .id
+                            .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string())
+                    ))
+                })?;
+        // Conversion is also strict constraint validation.
+        repository_expression_to_solver(&expression, package_scheme)?;
+        let alternatives = expression.atoms().into_iter().cloned().collect::<Vec<_>>();
+        let first = alternatives
+            .first()
+            .cloned()
+            .ok_or_else(|| Error::ConfigError("repository relation has no atoms".to_string()))?;
+        let mut relation =
+            crate::repository::dependency_model::RepositoryRequirementGroup::simple(kind, first)
+                .with_behavior(if expression.is_conditional() {
+                    ConditionalRequirementBehavior::Conditional
+                } else {
+                    ConditionalRequirementBehavior::Hard
+                })
+                .with_expression(expression);
+        relation.alternatives = alternatives;
+        relation.native_text = group.native_text;
+        crate::repository::package_relation::validate_native_relation(&relation, package_scheme)
+            .map_err(Error::ConfigError)?;
+        relations.push(SolverRelation {
+            scheme: package_scheme,
+            relation,
+        });
+    }
+    Ok(relations)
+}
+
+pub(super) fn load_installed_relations(
+    conn: &rusqlite::Connection,
+    trove_id: i64,
+) -> Result<Vec<SolverRelation>> {
+    InstalledRequirementGroup::find_by_trove(conn, trove_id)?
+        .into_iter()
+        .filter(|record| record.kind.is_negative_relation())
+        .map(|record| {
+            let relation = SolverRelation {
+                scheme: record.version_scheme,
+                relation: record.requirement,
+            };
+            repository_expression_to_solver(&relation.relation.expression, relation.scheme)?;
+            Ok(relation)
+        })
+        .collect()
+}
+
+pub(super) fn load_installed_dependency_requests(
+    conn: &rusqlite::Connection,
+    trove_id: i64,
+    package_architecture: &str,
+) -> Result<Vec<SolverDep>> {
+    InstalledRequirementGroup::find_by_trove(conn, trove_id)?
+        .into_iter()
+        .filter(|record| {
+            matches!(
+                record.kind,
+                RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
+            )
+        })
+        .map(|record| {
+            Ok(SolverDep {
+                expression: repository_expression_to_solver_for_architecture(
+                    &record.requirement.expression,
+                    record.version_scheme,
+                    package_architecture,
+                )?,
+            })
+        })
+        .collect()
+}
+
+/// Load exact typed provided capabilities for a repository package.
 pub(super) fn load_repo_provided_capabilities(
     conn: &rusqlite::Connection,
     pkg: &RepositoryPackage,
-    repo: &crate::db::models::Repository,
-) -> Result<Vec<(String, Option<String>)>> {
-    let _repo_scheme = infer_version_scheme(repo);
-    let Some(repository_package_id) = pkg.id else {
-        return Ok(parse_repo_provides(pkg));
-    };
+    _repo: &crate::db::models::Repository,
+) -> Result<Vec<ProvidedCapability>> {
+    let repository_package_id = pkg.id.ok_or_else(|| {
+        Error::MissingId(format!(
+            "repository package '{}-{}' has no persisted ID while loading provides",
+            pkg.name, pkg.version
+        ))
+    })?;
 
     let rows = RepositoryProvide::find_by_repository_package(conn, repository_package_id)?;
     if rows.is_empty() {
-        return Ok(parse_repo_provides(pkg));
+        return Ok(Vec::new());
     }
 
-    let mut capabilities = Vec::new();
-    for row in rows {
-        let typed = if row.kind == "package" || row.kind.is_empty() {
-            row.capability.clone()
-        } else {
-            format!("{}({})", row.kind, row.capability)
-        };
-        capabilities.push((row.capability.clone(), row.version.clone()));
-        if typed != row.capability {
-            capabilities.push((typed, row.version));
-        }
-    }
+    rows.into_iter()
+        .map(|row| {
+            Ok(ProvidedCapability {
+                kind: capability_kind_from_db(&row.kind)?,
+                name: row.capability,
+                version: row.version,
+                version_relation: row.version_relation,
+                version_scheme: row.version_scheme,
+                architecture_qualifier: row.architecture_qualifier,
+            })
+        })
+        .collect()
+}
 
-    Ok(capabilities)
+fn capability_kind_from_db(kind: &str) -> Result<RepositoryCapabilityKind> {
+    match kind {
+        "package" => Ok(RepositoryCapabilityKind::PackageName),
+        "virtual" => Ok(RepositoryCapabilityKind::Virtual),
+        "soname" => Ok(RepositoryCapabilityKind::Soname),
+        "file" => Ok(RepositoryCapabilityKind::File),
+        "path" => Ok(RepositoryCapabilityKind::Path),
+        "binary" => Ok(RepositoryCapabilityKind::Binary),
+        "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "generic" => Ok(RepositoryCapabilityKind::Generic),
+        other => Err(Error::ConfigError(format!(
+            "unsupported persisted repository capability kind '{other}'"
+        ))),
+    }
 }
 
 /// Find a repository package by its ID.
@@ -249,84 +421,4 @@ pub(super) fn find_repo_package_by_id(
     repository_package_id: i64,
 ) -> Result<Option<RepositoryPackage>> {
     RepositoryPackage::find_by_id(conn, repository_package_id)
-}
-
-/// Escape special characters for SQL LIKE patterns.
-///
-/// SQLite LIKE treats `%` and `_` as wildcards. When searching for literal
-/// text we must escape them (along with the escape character itself).
-pub(super) fn escape_like(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '\\' | '%' | '_' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// Parse a stored version scheme string into its enum variant.
-pub(super) fn parse_stored_version_scheme(raw: Option<&str>) -> Option<VersionScheme> {
-    match raw? {
-        "rpm" => Some(VersionScheme::Rpm),
-        "debian" => Some(VersionScheme::Debian),
-        "arch" => Some(VersionScheme::Arch),
-        _ => None,
-    }
-}
-
-fn parse_repo_provides(pkg: &RepositoryPackage) -> Vec<(String, Option<String>)> {
-    let Some(metadata_json) = pkg.metadata.as_deref() else {
-        return Vec::new();
-    };
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) else {
-        return Vec::new();
-    };
-    let Some(provides) = metadata
-        .get("rpm_provides")
-        .and_then(|value| value.as_array())
-    else {
-        return Vec::new();
-    };
-
-    provides
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(parse_provide_entry)
-        .collect()
-}
-
-fn parse_provide_entry(entry: &str) -> (String, Option<String>) {
-    const OPS: [&str; 5] = ["<=", ">=", "=", "<", ">"];
-
-    for op in OPS {
-        if let Some((name, version)) = entry.split_once(op) {
-            let name = name.trim();
-            let version = version.trim();
-            if name.is_empty() || version.is_empty() {
-                continue;
-            }
-            return (name.to_string(), Some(version.to_string()));
-        }
-    }
-
-    (entry.trim().to_string(), None)
-}
-
-/// Check whether a repository package provides a given capability.
-pub(super) fn repo_package_provides_capability(
-    conn: &rusqlite::Connection,
-    pkg: &RepositoryPackage,
-    capability: &str,
-) -> Result<bool> {
-    let Some(repo) = crate::db::models::Repository::find_by_id(conn, pkg.repository_id)? else {
-        return Ok(false);
-    };
-    Ok(load_repo_provided_capabilities(conn, pkg, &repo)?
-        .iter()
-        .any(|(provided, _version)| provided == capability))
 }

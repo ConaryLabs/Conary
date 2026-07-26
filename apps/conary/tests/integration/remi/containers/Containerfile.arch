@@ -9,7 +9,15 @@ FROM docker.io/library/archlinux:latest
 
 ARG INSTALL_MODE=binary
 
-RUN pacman -Syu --noconfirm ca-certificates curl python shadow sqlite && pacman -Scc --noconfirm
+RUN pacman -Syu --noconfirm \
+        ca-certificates \
+        curl \
+        diffutils \
+        libseccomp \
+        python \
+        shadow \
+        sqlite \
+    && pacman -Scc --noconfirm
 
 # Copy all conary* files from build context (binary or package)
 COPY conary* /tmp/install/
@@ -22,6 +30,11 @@ RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.pkg.tar.zst 1>/dev/n
     else \
         echo "No conary binary or package found in build context" >&2; exit 1; \
     fi && rm -rf /tmp/install
+
+RUN /usr/bin/conary --version \
+    && command -v cmp \
+    && command -v diff \
+    && test -e /lib64/ld-linux-x86-64.so.2
 
 COPY config.toml /opt/remi-tests/config.toml
 # Phase 2 test fixtures (recipes, PKGBUILD)

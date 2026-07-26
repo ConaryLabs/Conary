@@ -1,18 +1,17 @@
-// src/commands/ccs/install/command_capability_tests.rs
+// apps/conary/src/commands/ccs/install/command_capability_tests.rs
 
 use std::collections::HashMap;
 
 use super::command::cmd_ccs_install;
-use super::test_support::{ccs_init_file, stage_test_boot_assets};
+use super::test_support::{ccs_init_file, ccs_regular_file, stage_test_boot_assets};
 
 #[tokio::test]
 async fn ccs_install_persists_capability_declarations() {
     use conary_core::capability::{
-        CapabilityDeclaration, FilesystemCapabilities, NetworkCapabilities, SyscallCapabilities,
-        load_capabilities_by_name,
+        CapabilityDeclaration, FilesystemCapabilities, LinuxCapabilities, NetworkCapabilities,
+        SyscallCapabilities, load_capabilities_by_name,
     };
-    use conary_core::ccs::builder::write_ccs_package;
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -32,34 +31,28 @@ async fn ccs_install_persists_capability_declarations() {
     let init_hash = hash::sha256(&init_content);
     let total_size = (content.len() + init_content.len()) as u64;
     let files = vec![
-        FileEntry {
-            path: "/usr/bin/cap-decl".to_string(),
-            hash: file_hash.clone(),
-            size: content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
-        FileEntry {
-            path: "/usr/sbin/init".to_string(),
-            hash: init_hash.clone(),
-            size: init_content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
+        ccs_regular_file(
+            "/usr/bin/cap-decl".to_string(),
+            file_hash.clone(),
+            content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
+        ccs_regular_file(
+            "/sbin/init".to_string(),
+            init_hash.clone(),
+            init_content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
     ];
     let mut manifest = CcsManifest::new_minimal("declared-capabilities", "1.0.0");
     manifest.capabilities = Some(CapabilityDeclaration {
         version: 1,
         rationale: Some("needs outbound TLS and read access".to_string()),
         network: NetworkCapabilities {
-            outbound: vec!["443".to_string()],
-            listen: Vec::new(),
+            connect_tcp: vec![443],
+            bind_tcp: Vec::new(),
             none: false,
         },
         filesystem: FilesystemCapabilities {
@@ -69,6 +62,7 @@ async fn ccs_install_persists_capability_declarations() {
             deny: Vec::new(),
         },
         syscalls: SyscallCapabilities::default(),
+        linux: LinuxCapabilities::default(),
     });
     let result = BuildResult {
         manifest,
@@ -87,21 +81,18 @@ async fn ccs_install_persists_capability_declarations() {
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
-        None,
-        crate::commands::SandboxMode::None,
+        crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -114,16 +105,15 @@ async fn ccs_install_persists_capability_declarations() {
         stored.rationale.as_deref(),
         Some("needs outbound TLS and read access")
     );
-    assert_eq!(stored.network.outbound, vec!["443"]);
+    assert_eq!(stored.network.connect_tcp, vec![443]);
     assert_eq!(stored.filesystem.read, vec!["/etc/ssl/certs"]);
     assert_eq!(stored.filesystem.execute, vec!["/usr/bin"]);
 }
 
 #[tokio::test]
 async fn ccs_install_rejects_scriptlet_capabilities_without_enforcement_before_mutation() {
-    use conary_core::ccs::builder::write_ccs_package;
     use conary_core::ccs::manifest::ScriptletCapabilityDeclaration;
-    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry, FileType};
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -141,16 +131,13 @@ async fn ccs_install_rejects_scriptlet_capabilities_without_enforcement_before_m
     let file_hash = hash::sha256(&content);
     let (init_file, init_content, init_hash) = ccs_init_file();
     let files = vec![
-        FileEntry {
-            path: "/usr/bin/scriptlet-capability".to_string(),
-            hash: file_hash.clone(),
-            size: content.len() as u64,
-            mode: 0o100755,
-            component: "runtime".to_string(),
-            file_type: FileType::Regular,
-            target: None,
-            chunks: None,
-        },
+        ccs_regular_file(
+            "/usr/bin/scriptlet-capability".to_string(),
+            file_hash.clone(),
+            content.len() as u64,
+            0o100755,
+            "runtime".to_string(),
+        ),
         init_file,
     ];
     let total_size = (content.len() + init_content.len()) as u64;
@@ -179,21 +166,18 @@ async fn ccs_install_rejects_scriptlet_capabilities_without_enforcement_before_m
         chunked: false,
         chunk_stats: None,
     };
-    write_ccs_package(&result, &package_path).unwrap();
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
 
     let err = cmd_ccs_install(
         package_path.to_str().unwrap(),
         db_path_str,
         install_root.to_str().unwrap(),
         false,
-        true,
-        None,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
         None,
         crate::commands::SandboxMode::Always,
         true,
         false,
-        false,
-        None,
     )
     .await
     .unwrap_err();

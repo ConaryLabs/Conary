@@ -22,7 +22,7 @@ use super::build_runner::PackageBuildRunner;
 use super::config::BootstrapConfig;
 use super::toolchain::{Toolchain, ToolchainKind};
 use crate::recipe::parser::parse_recipe_file;
-use crate::recipe::{Kitchen, KitchenConfig, SourceChecksumPolicy};
+use crate::recipe::{Kitchen, KitchenConfig};
 
 /// Derive the LFS target triplet from the bootstrap configuration.
 ///
@@ -116,7 +116,7 @@ impl CrossToolsBuilder {
         let sources_dir = work_dir.join("sources");
         std::fs::create_dir_all(&sources_dir)?;
 
-        let runner = PackageBuildRunner::new(&sources_dir, &config);
+        let runner = PackageBuildRunner::new(&sources_dir);
 
         Ok(Self {
             work_dir: work_dir.to_path_buf(),
@@ -232,7 +232,6 @@ impl CrossToolsBuilder {
             source_cache: self.work_dir.join("sources"),
             jobs: self.config.jobs as u32,
             use_isolation: false,
-            checksum_policy: SourceChecksumPolicy::BootstrapLegacy,
             extra_env: extra_env.to_vec(),
             ..Default::default()
         };

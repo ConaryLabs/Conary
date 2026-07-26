@@ -2,7 +2,7 @@
 
 use super::TransactionEngine;
 use crate::Result;
-use crate::db::models::{GenerationPublication, GenerationPublicationPhase, SystemState};
+use crate::db::models::{GenerationPublication, SystemState};
 use crate::generation::artifact::{GenerationArtifact, load_generation_artifact_for_activation};
 use rusqlite::Connection;
 use std::path::Path;
@@ -52,23 +52,16 @@ impl TransactionEngine {
             );
         }
 
-        if let Ok(Some(current_num)) = current_generation(&self.config.root) {
+        if let Some(current_num) = current_generation(&self.config.root)? {
             let gen_dir = self.config.generations_dir.join(current_num.to_string());
 
             match load_generation_artifact_for_number(current_num, &gen_dir) {
                 Ok(artifact) => {
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
-                        if complete_selected_current_publication_debt(
-                            conn,
-                            current_num,
-                            &pending_debt,
-                        )? {
-                            return Ok(());
-                        }
                         if !pending_debt.is_empty() {
                             tracing::warn!(
                                 count = pending_debt.len(),
-                                "Recovery found pending generation publication debt; continuing with valid selected generation so a later publish or package mutation can flush current DB state"
+                                "Recovery found pending generation publication debt; the selected link does not prove configuration projection or generation DB backup completion"
                             );
                         }
                         tracing::debug!(
@@ -78,12 +71,6 @@ impl TransactionEngine {
                         return mark_generation_state_active_if_present(conn, current_num);
                     }
 
-                    let _ = complete_selected_current_publication_debt(
-                        conn,
-                        current_num,
-                        &pending_debt,
-                    )?;
-
                     let (required_verity, expected_digest) = artifact_mount_policy(&artifact);
                     let is_mounted = crate::generation::mount::is_generation_mounted(
                         &self.config.mount_point,
@@ -91,8 +78,7 @@ impl TransactionEngine {
                         &artifact.cas_dir,
                         required_verity,
                         expected_digest.as_deref(),
-                    )
-                    .unwrap_or(false);
+                    )?;
 
                     if is_mounted {
                         tracing::debug!(
@@ -106,7 +92,7 @@ impl TransactionEngine {
                         "Recovery: generation {} has valid artifact but is not mounted, mounting",
                         current_num
                     );
-                    return self.mount_artifact_and_link(conn, current_num, &artifact, policy);
+                    return self.mount_artifact_and_link(conn, current_num, &artifact);
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -151,7 +137,7 @@ impl TransactionEngine {
                         );
                         return mark_generation_state_active_if_present(conn, expected);
                     }
-                    return self.mount_artifact_and_link(conn, expected, &artifact, policy);
+                    return self.mount_artifact_and_link(conn, expected, &artifact);
                 }
                 Err(e) => {
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
@@ -172,20 +158,20 @@ impl TransactionEngine {
                 );
                 return Ok(());
             }
-            if !generations_dir_has_entries(&self.config.generations_dir) {
+            if !generations_dir_has_entries(&self.config.generations_dir)? {
                 tracing::debug!("Recovery: no selected generation and no generation images exist");
                 return Ok(());
             }
             tracing::warn!("Recovery: no selected generation, scanning artifacts");
         }
 
-        if let Some(artifact) = self.find_latest_intact_generation() {
+        if let Some(artifact) = self.find_latest_intact_generation()? {
             let gen_num = artifact.generation;
             tracing::info!(
                 "Recovery: found valid generation artifact for generation {}, mounting",
                 gen_num
             );
-            return self.mount_artifact_and_link(conn, gen_num, &artifact, policy);
+            return self.mount_artifact_and_link(conn, gen_num, &artifact);
         }
 
         Err(crate::Error::RecoveryFailed(
@@ -206,7 +192,6 @@ impl TransactionEngine {
         conn: &Connection,
         gen_num: i64,
         artifact: &GenerationArtifact,
-        policy: RecoveryScanPolicy,
     ) -> Result<()> {
         let (requested_verity, digest) = artifact_mount_policy(artifact);
 
@@ -222,7 +207,7 @@ impl TransactionEngine {
             })?;
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
-        mark_generation_state_active_for_policy(conn, gen_num, policy)?;
+        mark_generation_state_active_if_present(conn, gen_num)?;
 
         tracing::info!(
             "Recovery: generation {} mounted and symlink updated",
@@ -233,23 +218,43 @@ impl TransactionEngine {
 
     /// Scan the generations directory descending by number and return the
     /// highest generation whose artifact manifest and metadata validate.
-    pub(super) fn find_latest_intact_generation(&self) -> Option<GenerationArtifact> {
-        if !self.config.generations_dir.exists() {
-            return None;
-        }
+    pub(super) fn find_latest_intact_generation(&self) -> Result<Option<GenerationArtifact>> {
+        let entries = match std::fs::read_dir(&self.config.generations_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
 
-        let mut candidates: Vec<i64> = std::fs::read_dir(&self.config.generations_dir)
-            .ok()?
-            .flatten()
-            .filter_map(|entry| entry.file_name().to_string_lossy().parse::<i64>().ok())
-            .collect();
+        let mut candidates = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                tracing::debug!(
+                    path = %entry.path().display(),
+                    "Recovery: ignoring generation entry whose name is not valid UTF-8"
+                );
+                continue;
+            };
+            let Ok(generation) = name.parse::<i64>() else {
+                tracing::debug!(
+                    path = %entry.path().display(),
+                    "Recovery: ignoring non-generation directory"
+                );
+                continue;
+            };
+            candidates.push(generation);
+        }
 
         candidates.sort_unstable_by(|a, b| b.cmp(a));
 
         for gen_num in candidates {
             let gen_dir = self.config.generations_dir.join(gen_num.to_string());
             match load_generation_artifact_for_number(gen_num, &gen_dir) {
-                Ok(artifact) => return Some(artifact),
+                Ok(artifact) => return Ok(Some(artifact)),
                 Err(error) => {
                     tracing::debug!(
                         "Recovery: generation {} failed artifact validation, skipping: {}",
@@ -260,50 +265,12 @@ impl TransactionEngine {
             }
         }
 
-        None
+        Ok(None)
     }
 }
 
 fn pending_publication_debt(conn: &Connection) -> Result<Vec<GenerationPublication>> {
     GenerationPublication::pending_recoverable(conn)
-}
-
-fn debt_matches_selected_current(debt: &GenerationPublication, current_num: i64) -> bool {
-    debt.generation_number == Some(current_num)
-        && matches!(
-            debt.phase,
-            GenerationPublicationPhase::ArtifactReady
-                | GenerationPublicationPhase::CurrentPublished
-        )
-}
-
-fn complete_selected_current_publication_debt(
-    conn: &Connection,
-    current_num: i64,
-    pending_debt: &[GenerationPublication],
-) -> Result<bool> {
-    if pending_debt.is_empty() {
-        return Ok(false);
-    }
-    if !pending_debt
-        .iter()
-        .all(|debt| debt_matches_selected_current(debt, current_num))
-    {
-        return Ok(false);
-    }
-
-    mark_generation_state_active_if_present(conn, current_num)?;
-    let completed = GenerationPublication::mark_complete_through(
-        conn,
-        GenerationPublication::applied_high_water_changeset_id(conn)?,
-        current_num,
-        current_num,
-    )?;
-    tracing::info!(
-        completed,
-        "Recovery completed publication debt for durably selected generation {current_num}"
-    );
-    Ok(completed > 0)
 }
 
 fn mark_generation_state_active_if_present(conn: &Connection, gen_num: i64) -> Result<()> {
@@ -319,34 +286,25 @@ fn mark_generation_state_active_if_present(conn: &Connection, gen_num: i64) -> R
     }
 }
 
-fn mark_generation_state_active_for_policy(
-    conn: &Connection,
-    gen_num: i64,
-    policy: RecoveryScanPolicy,
-) -> Result<()> {
-    match mark_generation_state_active_if_present(conn, gen_num) {
-        Ok(()) => Ok(()),
-        Err(error) if policy == RecoveryScanPolicy::SelectedOrLatestArtifact => {
-            tracing::warn!(
-                "Recovery selected valid generation {gen_num}, but DB active-state catch-up failed: {error}"
-            );
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
 impl Drop for TransactionEngine {
     fn drop(&mut self) {
         self.release_lock();
     }
 }
 
-fn generations_dir_has_entries(path: &Path) -> bool {
-    std::fs::read_dir(path)
-        .ok()
-        .and_then(|mut entries| entries.next())
-        .is_some()
+fn generations_dir_has_entries(path: &Path) -> Result<bool> {
+    let mut entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    match entries.next() {
+        Some(entry) => {
+            entry?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<GenerationArtifact> {
@@ -396,62 +354,5 @@ mod tests {
         let debts = pending_publication_debt(&conn).unwrap();
         assert_eq!(debts.len(), 1);
         assert_eq!(debts[0].status, GenerationPublicationStatus::Failed);
-    }
-
-    #[test]
-    fn debt_matches_selected_current_accepts_artifact_ready_and_current_published() {
-        let mut debt = GenerationPublication {
-            id: Some(1),
-            trigger_changeset_id: Some(1),
-            published_through_changeset_id: None,
-            tx_uuid: None,
-            db_path: "/tmp/db".to_string(),
-            runtime_root: "/tmp/root".to_string(),
-            phase: GenerationPublicationPhase::ArtifactReady,
-            status: GenerationPublicationStatus::Failed,
-            state_number: Some(7),
-            generation_number: Some(7),
-            summary: "fixture".to_string(),
-            last_error: None,
-            retry_count: 1,
-            recoverable: true,
-            created_at: None,
-            updated_at: None,
-            completed_at: None,
-        };
-        assert!(debt_matches_selected_current(&debt, 7));
-        debt.phase = GenerationPublicationPhase::CurrentPublished;
-        assert!(debt_matches_selected_current(&debt, 7));
-        debt.phase = GenerationPublicationPhase::PendingBuild;
-        assert!(!debt_matches_selected_current(&debt, 7));
-        debt.phase = GenerationPublicationPhase::CurrentPublished;
-        debt.generation_number = Some(8);
-        assert!(!debt_matches_selected_current(&debt, 7));
-    }
-
-    #[test]
-    fn selected_generation_recovery_leaves_nonmatching_debt_visible() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().to_path_buf();
-        let db_path = root.join("conary.db");
-        crate::db::init(&db_path).unwrap();
-        let conn = crate::db::open(&db_path).unwrap();
-
-        conn.execute(
-            "INSERT INTO generation_publications (
-                db_path, runtime_root, phase, status, summary
-             ) VALUES (?1, ?2, 'pending_build', 'failed', 'fixture')",
-            (db_path.display().to_string(), root.display().to_string()),
-        )
-        .unwrap();
-
-        let debts = pending_publication_debt(&conn).unwrap();
-        assert!(!complete_selected_current_publication_debt(&conn, 7, &debts).unwrap());
-        assert_eq!(
-            GenerationPublication::pending_recoverable(&conn)
-                .unwrap()
-                .len(),
-            1
-        );
     }
 }

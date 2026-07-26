@@ -4,7 +4,7 @@
 
 <PageMeta
 	title="About Remi and the package index — Conary"
-	description="Learn how the public package index relates to Conary, Remi, upstream repositories, and policy-gated CCS conversion."
+	description="Learn how the public package index relates to Conary, Remi, upstream repositories, and source-independent CCS conversion."
 	path="/about"
 />
 
@@ -19,28 +19,29 @@
 		</p>
 
 		<p class="animate-in" style="--stagger: 2">
-			The supported first-tester path starts with Conary-owned package operations and
-			reversible tracking of native packages while dnf, apt, or pacman remains authoritative.
-			Conary's CCS format uses content-addressable storage. EROFS generations plus optional
-			composefs/fs-verity integration are a separate VM/debug workflow, not a boundary around
-			every package operation.
+			The supported tester path installs a package whose source format differs from the
+			host's native package format. Conary owns that package operation; dnf, apt, or
+			pacman is involved only when the user explicitly adopts or takes over existing
+			native state. CCS uses content-addressable storage, while EROFS generations remain
+			a separate advanced workflow.
 		</p>
 
 		<h2>What is Remi?</h2>
 
 		<p>
 			Remi is Conary's on-demand conversion proxy. It sits between your system and upstream
-			distribution repositories and attempts to convert supported RPM, DEB, and Arch packages
-			into CCS. Public serving is policy-gated: unsupported or unsafe package behavior is
-			refused or held for review, and a first conversion may be slower than a cache hit.
+			distribution repositories and converts RPM, DEB, and Arch packages into CCS while
+			preserving their exact source lifecycle, dependency, version, payload, and
+			configuration contracts. A first conversion may be slower than a cache hit; a
+			missing typed model is an engineering error, not an indefinite review state.
 		</p>
 
 		<h2>Key Features</h2>
 
 		<div class="features-grid">
 			<div class="feature">
-				<h3>Adoption-led preview</h3>
-				<p>Track native packages without silently taking authority from the distro package manager</p>
+				<h3>Cross-distro package execution</h3>
+				<p>Run RPM, DEB, and Arch source semantics through Conary on any supported target</p>
 			</div>
 			<div class="feature">
 				<h3>Explicit apply intent</h3>
@@ -48,15 +49,15 @@
 			</div>
 			<div class="feature">
 				<h3>Cross-distribution</h3>
-				<p>Use one CLI and index for the supported Fedora, Arch, and Ubuntu preview profiles</p>
+				<p>Use one CLI and index across supported Fedora, Arch, and Ubuntu targets</p>
 			</div>
 			<div class="feature">
 				<h3>Content-addressable storage</h3>
 				<p>Store Conary-owned content by hash and reuse identical files across packages</p>
 			</div>
 			<div class="feature">
-				<h3>Policy-gated conversion</h3>
-				<p>Serve converted artifacts only when current parser, dependency, and scriptlet policy allows</p>
+				<h3>Exact conversion contract</h3>
+				<p>Serve current-schema artifacts from typed parsers and lifecycle ABIs, never string heuristics</p>
 			</div>
 			<div class="feature">
 				<h3>Advanced paths stay separate</h3>

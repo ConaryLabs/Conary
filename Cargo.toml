@@ -24,6 +24,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Hashing
+sha1 = "0.10.6"
 sha2 = "0.11.0"
 
 # Logging
@@ -47,6 +48,7 @@ indicatif = "0.18"
 
 # Temp files
 tempfile = "3.10"
+criterion = "0.7"
 
 # IDs
 uuid = { version = "1.0", features = ["v4"] }
@@ -64,6 +66,8 @@ url = "2.5"
 walkdir = "2.5"
 glob = "0.3.3"
 libc = "0.2"
+libseccomp = "0.4"
+caps = "0.5.6"
 inotify = "0.11"
 nix = { version = "0.31", features = ["user", "mount", "sched", "process", "signal", "resource", "fs"] }
 
@@ -77,6 +81,11 @@ x509-cert = { version = "0.2", features = ["pem", "std"] }
 # Archives
 tar = "0.4"
 flate2 = "1.0"
+rpm = { version = "0.25", default-features = false, features = ["payload"] }
+rpm-version = "0.5.0"
+debversion = "0.5.4"
+alpm-types = "0.11.2"
+semver = "1.0.28"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -107,6 +116,9 @@ schemars = "1.0"
 fs2 = "0.4"
 log = "0.4"
 regex = "1.10"
+target-lexicon = "0.13.5"
+tree-sitter = "0.26.11"
+tree-sitter-bash = "0.25.1"
 
 [profile.release]
 lto = true

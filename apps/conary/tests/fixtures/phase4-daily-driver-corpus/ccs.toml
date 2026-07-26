@@ -1,6 +1,13 @@
+requirements = [
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "bash", capability_kind = "PackageName", native_text = "bash" } }, alternatives = [{ name = "bash", capability_kind = "PackageName", native_text = "bash" }], native_text = "bash" },
+]
+
 [package]
 name = "phase4-daily-driver-corpus"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "Phase 4 daily-driver corpus fixture for native package-manager parity"
 license = "MIT"
 
@@ -13,16 +20,14 @@ libc = "gnu"
 capabilities = ["phase4-daily-driver-corpus", "phase4-corpus-tool"]
 binaries = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt"]
 
-[requires]
-capabilities = []
-packages = [{ name = "bash" }]
-
 [components]
 default = ["runtime", "config"]
 
-[config]
-files = ["/etc/phase4-corpus/app.conf"]
+[[config.files]]
+path = "/etc/phase4-corpus/app.conf"
 noreplace = true
+ghost = false
+remove_on_upgrade = false
 
 [hooks]
 
@@ -48,6 +53,7 @@ unit = "phase4-corpus.service"
 enable = false
 
 [[hooks.alternatives]]
+link = "/usr/bin/phase4-corpus-tool"
 name = "phase4-corpus-tool"
 path = "/usr/bin/phase4-corpus-alt"
 priority = 40

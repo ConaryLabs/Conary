@@ -45,6 +45,7 @@ pub mod test_fixtures {
             DistroConfig {
                 remi_distro: "fedora-44".to_string(),
                 repo_name: "remi".to_string(),
+                build_context: DistroBuildContext::Binary,
                 containerfile: None,
                 test_packages: Vec::new(),
             },

@@ -2,7 +2,7 @@
 
 //! Federation peer model - manages peer entries in the federation_peers table
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
@@ -95,11 +95,17 @@ pub fn insert(
     node_name: Option<&str>,
     tier: &str,
 ) -> Result<()> {
-    conn.execute(
+    let affected = conn.execute(
         "INSERT INTO federation_peers (id, endpoint, node_name, tier) \
-         VALUES (?1, ?2, ?3, ?4)",
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT DO NOTHING",
         params![id, endpoint, node_name, tier],
     )?;
+    if affected == 0 {
+        return Err(Error::ConflictError(format!(
+            "federation peer ID or endpoint already exists: {id}"
+        )));
+    }
     Ok(())
 }
 
@@ -144,7 +150,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::ensure_current(&conn).unwrap();
         conn
     }
 
@@ -202,6 +208,30 @@ mod tests {
 
         let missing = find_by_id(&conn, "nonexistent").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn duplicate_peer_is_a_typed_conflict() {
+        let conn = test_conn();
+        insert(
+            &conn,
+            "peer-gamma",
+            "https://gamma.example.com",
+            Some("Gamma Node"),
+            "cell_hub",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            insert(
+                &conn,
+                "peer-other",
+                "https://gamma.example.com",
+                Some("Duplicate Endpoint"),
+                "leaf",
+            ),
+            Err(Error::ConflictError(_))
+        ));
     }
 
     #[test]
