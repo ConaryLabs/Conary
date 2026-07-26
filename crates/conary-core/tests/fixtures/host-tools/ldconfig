@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+if [ "${1-}" = "--version" ]; then
+    printf 'ldconfig (GNU libc) 2.40\n'
+fi

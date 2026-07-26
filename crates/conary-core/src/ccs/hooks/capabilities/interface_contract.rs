@@ -404,40 +404,31 @@ fn executable_is_runnable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{HostToolFixture, link_host_tool};
     use std::fs;
 
     #[cfg(unix)]
-    fn executable_script(body: &str) -> (tempfile::TempDir, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
+    fn executable_fixture(fixture: HostToolFixture) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("tool");
-        fs::write(&executable, body).unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&executable, permissions).unwrap();
+        link_host_tool(&executable, fixture);
         (directory, executable)
     }
 
     #[cfg(unix)]
     #[test]
     fn same_name_success_exit_is_not_an_interface_descriptor() {
-        let (_directory, executable) = executable_script("#!/bin/sh\nexit 0\n");
+        let (_directory, executable) = executable_fixture(HostToolFixture::ExitSuccess);
         assert!(ExecutableInterface::probe_systemctl(executable).is_none());
     }
 
     #[cfg(unix)]
     #[test]
     fn descriptor_revalidation_detects_executable_replacement() {
-        let (_directory, executable) = executable_script(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'sysctl from procps-ng 4.0.6'; fi\nexit 0\n",
-        );
+        let (_directory, executable) = executable_fixture(HostToolFixture::Sysctl406);
         let descriptor = ExecutableInterface::probe_sysctl(executable.clone()).unwrap();
-        fs::write(
-            &executable,
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'sysctl from procps-ng 4.0.7'; fi\nexit 0\n",
-        )
-        .unwrap();
+        fs::remove_file(&executable).unwrap();
+        link_host_tool(&executable, HostToolFixture::Sysctl407);
 
         assert!(!descriptor.is_available());
     }
@@ -445,23 +436,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn descriptor_preserves_and_revalidates_the_selected_symlink_path() {
-        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::fs::symlink;
 
         let directory = tempfile::tempdir().unwrap();
         let first = directory.path().join("first");
         let second = directory.path().join("second");
         let selected = directory.path().join("sysctl");
-        let body = |version: &str| {
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'sysctl from procps-ng {version}'; fi\nexit 0\n"
-            )
-        };
-        for (path, version) in [(&first, "4.0.6"), (&second, "4.0.7")] {
-            fs::write(path, body(version)).unwrap();
-            let mut permissions = fs::metadata(path).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(path, permissions).unwrap();
-        }
+        link_host_tool(&first, HostToolFixture::Sysctl406);
+        link_host_tool(&second, HostToolFixture::Sysctl407);
         symlink(&first, &selected).unwrap();
 
         let descriptor = ExecutableInterface::probe_sysctl(selected.clone()).unwrap();
@@ -475,7 +457,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn interface_probe_has_a_hard_timeout() {
-        let (_directory, executable) = executable_script("#!/bin/sh\nsleep 30 &\nwait\n");
+        let (_directory, executable) = executable_fixture(HostToolFixture::Timeout);
         assert!(
             run_probe_with_timeout(
                 &executable,

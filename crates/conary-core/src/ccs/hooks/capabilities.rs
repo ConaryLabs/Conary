@@ -579,29 +579,19 @@ mod tests {
     use super::*;
     use crate::ccs::manifest::Service;
     use crate::ccs::native_lifecycle::SourceFormat;
+    use crate::test_support::{HostToolFixture, link_host_tool};
     use std::fs;
 
     #[cfg(unix)]
     fn fake_interface(directory: &Path, name: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
         let path = directory.join(name);
-        let version = match name {
-            "systemctl" | "systemd-sysusers" | "systemd-tmpfiles" => "systemd 257",
-            "sysctl" => "sysctl from procps-ng 4.0.6",
-            "ldconfig" => "ldconfig (GNU libc) 2.40",
+        let fixture = match name {
+            "systemctl" | "systemd-sysusers" | "systemd-tmpfiles" => HostToolFixture::Systemd,
+            "sysctl" => HostToolFixture::Sysctl406,
+            "ldconfig" => HostToolFixture::Ldconfig,
             other => panic!("unknown fake interface {other}"),
         };
-        fs::write(
-            &path,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '{version}'; fi\nexit 0\n"
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).unwrap();
+        link_host_tool(&path, fixture);
         path
     }
 
@@ -736,22 +726,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn arch_ldconfig_requires_target_config_and_executable_adapter() {
-        use std::os::unix::fs::PermissionsExt;
-
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("etc")).unwrap();
         fs::create_dir_all(root.path().join("sbin")).unwrap();
-        fs::write(
-            root.path().join("sbin/ldconfig"),
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'ldconfig (GNU libc) 2.40'; fi\nexit 0\n",
-        )
-        .unwrap();
-
-        let mut permissions = fs::metadata(root.path().join("sbin/ldconfig"))
-            .unwrap()
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(root.path().join("sbin/ldconfig"), permissions).unwrap();
+        link_host_tool(
+            &root.path().join("sbin/ldconfig"),
+            HostToolFixture::Ldconfig,
+        );
         let inventory = HostCapabilityInventory {
             ldconfig: Some(
                 ExecutableInterface::probe_ldconfig_in_root(
