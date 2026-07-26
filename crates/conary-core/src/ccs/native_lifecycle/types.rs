@@ -46,6 +46,20 @@ string_enum! {
     }
 }
 
+impl VersionScheme {
+    /// Project lifecycle vocabulary into the package/repository version
+    /// authority without comparing their deliberately different wire names.
+    #[must_use]
+    pub const fn repository_scheme(self) -> crate::repository::versioning::VersionScheme {
+        match self {
+            Self::Rpm => crate::repository::versioning::VersionScheme::Rpm,
+            Self::Deb => crate::repository::versioning::VersionScheme::Debian,
+            Self::Arch => crate::repository::versioning::VersionScheme::Arch,
+            Self::Semver => crate::repository::versioning::VersionScheme::Conary,
+        }
+    }
+}
+
 string_enum! {
     pub enum ScriptletFidelity {
         NativeFree => "native-free",
@@ -109,6 +123,33 @@ string_enum! {
         TriggerCount => "trigger-count",
         FilePath => "file-path",
         InstalledVersion => "installed-version",
+        MostRecentlyConfiguredVersion => "most-recently-configured-version",
         Literal => "literal",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VersionScheme;
+    use crate::repository::versioning::VersionScheme as RepositoryVersionScheme;
+
+    #[test]
+    fn lifecycle_version_schemes_project_to_typed_repository_authority() {
+        assert_eq!(
+            VersionScheme::Rpm.repository_scheme(),
+            RepositoryVersionScheme::Rpm
+        );
+        assert_eq!(
+            VersionScheme::Deb.repository_scheme(),
+            RepositoryVersionScheme::Debian
+        );
+        assert_eq!(
+            VersionScheme::Arch.repository_scheme(),
+            RepositoryVersionScheme::Arch
+        );
+        assert_eq!(
+            VersionScheme::Semver.repository_scheme(),
+            RepositoryVersionScheme::Conary
+        );
     }
 }

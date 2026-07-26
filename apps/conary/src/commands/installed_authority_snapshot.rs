@@ -363,7 +363,7 @@ impl TroveSnapshot {
             if bundle.source_package != self.name
                 || bundle.source_version != self.version
                 || bundle.source_arch != self.architecture
-                || bundle.version_scheme.as_str() != self.version_scheme.as_str()
+                || bundle.version_scheme.repository_scheme() != self.version_scheme
             {
                 bail!(
                     "rollback snapshot '{}' native lifecycle identity differs from installed package identity",

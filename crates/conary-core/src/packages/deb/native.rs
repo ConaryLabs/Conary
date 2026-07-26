@@ -227,8 +227,8 @@ impl DebPackage {
                     vec![Self::deb_arg(
                         2,
                         "most-recently-configured-version",
-                        NativeArgumentValue::InstalledVersion,
-                        false,
+                        NativeArgumentValue::MostRecentlyConfiguredVersion,
+                        true,
                     )],
                     vec![
                         NativeLifecyclePath::PostInstall,

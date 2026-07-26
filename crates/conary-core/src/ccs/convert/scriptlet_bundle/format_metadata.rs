@@ -394,6 +394,10 @@ fn deb_argument_value(
         NativeArgumentValue::InstalledVersion => {
             (BundleDebMaintainerArgumentValue::InstalledVersion, None)
         }
+        NativeArgumentValue::MostRecentlyConfiguredVersion => (
+            BundleDebMaintainerArgumentValue::MostRecentlyConfiguredVersion,
+            None,
+        ),
         NativeArgumentValue::Raw(literal) => (
             BundleDebMaintainerArgumentValue::Literal,
             Some(literal.clone()),

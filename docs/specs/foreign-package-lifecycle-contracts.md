@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 31
+revision: 32
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -260,7 +260,7 @@ validation prove the replacement complete for every control-flow path. That is
 a new schema contract, not a partial suppression marker or a mixture of guessed
 diagnostics and partial source-program execution.
 
-Current native lifecycle schema revision 18 has no replacement marker,
+Current native lifecycle schema revision 19 has no replacement marker,
 arbitrary extension map, reason code, effect projection, unknown-command
 evidence, diagnostic-class list/count, adapter-registry digest, publication
 policy, or parallel security-policy intent. Every source entry carries an exact

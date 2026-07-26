@@ -92,7 +92,7 @@ fn upgrade_uses_policy_defined_maintainer_script_arguments() {
 }
 
 #[test]
-fn fresh_install_omits_absent_configure_version_argument() {
+fn fresh_install_passes_null_most_recently_configured_version_argument() {
     let installing = bundle(
         SourceFormat::Deb,
         vec![deb_entry(
@@ -132,7 +132,10 @@ fn fresh_install_omits_absent_configure_version_argument() {
     .unwrap();
 
     assert_eq!(plan.events[0].stage, NativeEventStage::DebPostInstall);
-    assert_eq!(plan.events[0].args, vec!["configure"]);
+    assert_eq!(
+        plan.events[0].args,
+        vec!["configure".to_string(), String::new()]
+    );
 }
 
 #[test]

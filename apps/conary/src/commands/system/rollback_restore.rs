@@ -672,7 +672,7 @@ fn restore_native_lifecycle(
         toml::from_str(&native.bundle_toml).map_err(snapshot_error)?;
     if bundle.source_package != snapshot.name
         || bundle.source_version != snapshot.version
-        || bundle.version_scheme.as_str() != snapshot.version_scheme.as_str()
+        || bundle.version_scheme.repository_scheme() != snapshot.version_scheme
         || bundle.source_arch != snapshot.architecture
     {
         return Err(Error::InitError(format!(

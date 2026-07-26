@@ -344,6 +344,9 @@ pub(super) fn materialize_invocation(
                 DebMaintainerArgumentValue::Action => Some(mode.as_str().to_string()),
                 DebMaintainerArgumentValue::OldVersion
                 | DebMaintainerArgumentValue::InstalledVersion => change.old_version.clone(),
+                DebMaintainerArgumentValue::MostRecentlyConfiguredVersion => {
+                    Some(change.old_version.clone().unwrap_or_default())
+                }
                 DebMaintainerArgumentValue::NewVersion => change
                     .new_version
                     .clone()

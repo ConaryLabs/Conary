@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 46
+revision: 47
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -181,7 +181,7 @@ and payload visibility contract is
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
 **native_lifecycle.rs** -- Current persisted RPM, Debian, and Arch lifecycle
-ABI. The schema-revision-18 bundle lives in the TOML manifest as
+ABI. The schema-revision-19 bundle lives in the TOML manifest as
 `[native_lifecycle]` and records source identity and version scheme, exact
 entries with typed executable/control-artifact kind, body digests,
 interpreters, native invocation contracts, RPM triggers, Debian

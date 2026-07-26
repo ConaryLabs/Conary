@@ -692,7 +692,7 @@ description = "nginx converted from RPM"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 18
+schema_revision = 19
 source_format = "rpm"
 source_family = "fedora-rhel"
 source_profile = "fedora-44"
@@ -768,7 +768,7 @@ description = "policy fixture"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 18
+schema_revision = 19
 source_format = "rpm"
 source_family = "rpm"
 source_profile = "fedora-44"

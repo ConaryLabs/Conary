@@ -14,7 +14,7 @@ pub use rpm::*;
 pub use types::*;
 
 pub const NATIVE_LIFECYCLE_SCHEMA_V1: &str = "conary.native-lifecycles.v1";
-pub const NATIVE_LIFECYCLE_SCHEMA_REVISION: u16 = 18;
+pub const NATIVE_LIFECYCLE_SCHEMA_REVISION: u16 = 19;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

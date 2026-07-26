@@ -119,6 +119,9 @@ fn native_argument_value(value: &NativeArgumentValue) -> String {
         NativeArgumentValue::TriggerCount => "trigger-count".to_string(),
         NativeArgumentValue::FilePath => "file-path".to_string(),
         NativeArgumentValue::InstalledVersion => "installed-version".to_string(),
+        NativeArgumentValue::MostRecentlyConfiguredVersion => {
+            "most-recently-configured-version".to_string()
+        }
         NativeArgumentValue::Raw(value) => format!("raw:{value}"),
     }
 }

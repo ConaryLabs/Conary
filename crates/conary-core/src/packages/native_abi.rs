@@ -158,6 +158,7 @@ pub enum NativeArgumentValue {
     TriggerCount,
     FilePath,
     InstalledVersion,
+    MostRecentlyConfiguredVersion,
     Raw(String),
 }
 

@@ -16,9 +16,7 @@ use crate::ccs::hooks::{
 pub use crate::ccs::manifest_provenance::{
     ManifestProvenance, ProvenanceDep, ProvenancePatch, ProvenanceSignature,
 };
-use crate::ccs::native_lifecycle::{
-    NativeLifecycleBundle, VersionScheme as NativeLifecycleVersionScheme,
-};
+use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::v2::PackageKindTagV2;
 use crate::filesystem::path::sanitize_path;
@@ -316,12 +314,7 @@ impl CcsManifest {
                     "native lifecycle bundle validation failed: {error}"
                 ))
             })?;
-            let bundle_scheme = match &bundle.version_scheme {
-                NativeLifecycleVersionScheme::Rpm => VersionScheme::Rpm,
-                NativeLifecycleVersionScheme::Deb => VersionScheme::Debian,
-                NativeLifecycleVersionScheme::Arch => VersionScheme::Arch,
-                NativeLifecycleVersionScheme::Semver => VersionScheme::Conary,
-            };
+            let bundle_scheme = bundle.version_scheme.repository_scheme();
             if self.package.version_scheme != bundle_scheme {
                 return Err(ManifestError::Invalid(format!(
                     "package version scheme '{}' disagrees with native lifecycle bundle scheme '{}'",

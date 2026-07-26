@@ -148,8 +148,8 @@ fn deb_entry(
                         DebMaintainerMode::Configure,
                     ) => vec![(
                         "most-recently-configured-version",
-                        DebMaintainerArgumentValue::InstalledVersion,
-                        false,
+                        DebMaintainerArgumentValue::MostRecentlyConfiguredVersion,
+                        true,
                     )],
                     (
                         DebControlMember::Prerm | DebControlMember::Postrm,

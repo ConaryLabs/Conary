@@ -108,11 +108,18 @@ fn insert_exact_trove(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{Changeset, ChangesetStatus, TroveType};
+    use conary_core::ccs::native_lifecycle::{
+        NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
+        ScriptletFidelity, SourceFormat, VersionScheme as LifecycleVersionScheme,
+    };
+    use conary_core::db::models::{
+        Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, TroveType,
+    };
     use conary_core::generation::root_manifest::{
         GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest, MutableStateManifest,
     };
     use conary_core::payload::{PayloadNode, PayloadNodeKind, ResolvedPayloadNode};
+    use conary_core::repository::dependency_model::DebianMultiArch;
     use conary_core::repository::versioning::VersionScheme;
 
     fn rollback_root() -> CapturedSelectedRoot {
@@ -169,5 +176,74 @@ mod tests {
         assert_eq!(snapshots[0].name, "snapshot-fixture");
         assert_eq!(snapshots[0].version, "1.0.0-1");
         assert_eq!(snapshots[0].version_scheme, VersionScheme::Rpm);
+    }
+
+    #[test]
+    fn records_debian_lifecycle_snapshot_without_wire_name_comparison() {
+        let (_root, db_path) = crate::commands::test_helpers::create_test_db();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut installed = Trove::new(
+            "snapshot-deb-fixture".to_string(),
+            "1.0.0-1".to_string(),
+            TroveType::Package,
+            VersionScheme::Debian,
+        );
+        installed.architecture = Some("amd64".to_string());
+        installed.debian_multi_arch = Some(DebianMultiArch::No);
+        installed.id = Some(installed.insert(&conn).unwrap());
+
+        let bundle = NativeLifecycleBundle {
+            schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+            schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
+            source_format: SourceFormat::Deb,
+            source_family: "debian".to_string(),
+            source_profile: None,
+            source_release: None,
+            source_arch: Some("amd64".to_string()),
+            source_package: installed.name.clone(),
+            source_version: installed.version.clone(),
+            source_checksum: None,
+            version_scheme: LifecycleVersionScheme::Deb,
+            conversion_tool: "conary".to_string(),
+            conversion_tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            conversion_policy: "typed-rollback-test".to_string(),
+            evidence_digest: None,
+            scriptlet_fidelity: ScriptletFidelity::NativeFree,
+            entries: Vec::new(),
+        };
+        let mut lifecycle =
+            InstalledNativeLifecycleBundle::new(installed.id.unwrap(), None, &bundle).unwrap();
+        lifecycle.insert_or_replace(&conn).unwrap();
+
+        let mut changeset = Changeset::new("Upgrade Debian snapshot fixture".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        record_install_rollback_snapshots(
+            &conn,
+            changeset_id,
+            [&installed],
+            std::iter::empty(),
+            rollback_root(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let metadata: String = conn
+            .query_row(
+                "SELECT metadata FROM changesets WHERE id = ?1",
+                [changeset_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let snapshots = crate::commands::parse_rollback_snapshots(&metadata).unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0]
+                .native_lifecycle
+                .as_ref()
+                .unwrap()
+                .source_format,
+            "deb"
+        );
+        assert_eq!(snapshots[0].version_scheme, VersionScheme::Debian);
     }
 }
