@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 21
+revision: 22
 summary: Map fixture ownership, including the selected-generation cross-source lifecycle matrix and public v4 QEMU image contract
 ---
 
@@ -34,6 +34,7 @@ Each fixture family should record:
 | Family ID | Owner | Fast proof |
 |-----------|-------|------------|
 | `foreign-package-lifecycle-contracts` | Source parsers, CCS lifecycle bundle, and transaction planner | `cargo test -p conary-core native_abi`; `cargo test -p conary-core native_lifecycle`; `cargo test -p conary-core native_transaction` |
+| `host-executable-interface-fixtures` | Core test support and checked-in host tools | `cargo test -p conary-core bootstrap::guest_profile::tests`; `cargo test -p conary-core ccs::hooks` |
 | `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
 | `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
 | `ccs-v2-lifecycle-authoring-proof` | CCS v2 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v2` |
@@ -75,6 +76,38 @@ Each fixture family should record:
   fixture, but neither is expected-output authority. A fixture for an
   missing executable semantic must assert a typed preflight failure before
   payload or database mutation and remain required implementation work.
+
+### host-executable-interface-fixtures
+
+- **Owner:** typed linker and fixture catalog:
+  `crates/conary-core/src/test_support.rs`; stable executable sources:
+  `crates/conary-core/tests/fixtures/host-tools/`.
+- **Purpose:** Exercise guest-profile key generation and the exact systemd,
+  sysusers, tmpfiles, sysctl, and ldconfig executable-interface contracts
+  without writing an executable inode immediately before production code
+  launches it.
+- **Fixture sources:** checked-in executable shell fixtures selected through
+  `HostToolFixture`; each test creates only a per-case symlink and ordinary
+  target-root output. The systemd fixture records systemctl argv under
+  `var/lib/conary-test/systemctl-calls` and copies the selected tmpfiles
+  declaration to
+  `var/lib/conary-test/systemd-tmpfiles-captured.conf`.
+- **Consumes:** `bootstrap::guest_profile::tests`;
+  `ccs::hooks::capabilities::tests`;
+  `ccs::hooks::capabilities::interface_contract::tests`;
+  `ccs::hooks::systemd::tests`; and `ccs::hooks::tmpfiles::tests`.
+- **Fast proof:** `cargo test -p conary-core
+  bootstrap::guest_profile::tests`; `cargo test -p conary-core ccs::hooks`.
+- **Medium proof:** `cargo test -p conary-core --lib`.
+- **Slow proof:** the pull-request `workspace-tests` job under parallel hosted
+  CI.
+- **Regeneration:** hand-maintained, typed fixture selection. Add a distinct
+  checked-in executable when behavior or executable identity must differ; do
+  not generate executable shell files during the consuming test.
+- **Safety notes:** These files are test-only host command doubles. They do not
+  define production capability support, weaken executable digest/version/path
+  revalidation, or authorize host mutation. Do not replace this boundary with
+  retries, sleeps, test serialization, or error-string exceptions.
 
 ### ccs-v2-native-authority-fixtures
 

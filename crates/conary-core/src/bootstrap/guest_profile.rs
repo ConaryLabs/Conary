@@ -207,41 +207,12 @@ d /var/lib/sshd 0700 root root -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use crate::test_support::{HostToolFixture, link_host_tool};
 
     fn write_fake_ssh_keygen(sysroot: &Path) {
         let bin_dir = sysroot.join("usr/bin");
         fs::create_dir_all(&bin_dir).unwrap();
-
-        let script_path = bin_dir.join("ssh-keygen");
-        fs::write(
-            &script_path,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-
-key_path=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -f)
-      key_path="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-
-mkdir -p "$(dirname "$key_path")"
-printf 'fake-private-key\n' > "$key_path"
-printf 'ssh-ed25519 AAAATESTKEY generated-by-test\n' > "$key_path.pub"
-"#,
-        )
-        .unwrap();
-
-        let mut perms = fs::metadata(&script_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms).unwrap();
+        link_host_tool(&bin_dir.join("ssh-keygen"), HostToolFixture::SshKeygen);
     }
 
     fn write_fake_sshd_service(sysroot: &Path) {

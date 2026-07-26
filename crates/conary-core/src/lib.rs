@@ -54,6 +54,9 @@ pub mod trust;
 pub mod util;
 pub mod version;
 
+#[cfg(test)]
+mod test_support;
+
 pub use automation::{AiSuggestion, AutomationManager, AutomationSummary, PendingAction};
 pub use bootstrap::{
     Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, StageManager, TargetArch, Toolchain,

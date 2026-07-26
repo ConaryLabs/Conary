@@ -143,26 +143,15 @@ mod tests {
     use super::*;
     use crate::ccs::hooks::{HostCapabilityInventory, InitSystemCapability, SystemdInterface};
     use crate::ccs::manifest::{Hooks, Service, SystemdHook};
+    use crate::test_support::{HostToolFixture, SYSTEMCTL_CAPTURE_PATH, link_host_tool};
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
 
     #[cfg(unix)]
-    fn executor_with_recording_systemctl(root: &Path, log: &Path) -> HookExecutor {
-        use std::os::unix::fs::PermissionsExt;
-
-        let executable = log.parent().unwrap().join("systemctl");
-        fs::write(
-            &executable,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'systemd 257'; exit 0; fi\nprintf '%s\\n' \"$*\" >> '{}'\n",
-                log.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&executable, permissions).unwrap();
+    fn executor_with_recording_systemctl(root: &Path, tools: &Path) -> HookExecutor {
+        let executable = tools.join("systemctl");
+        link_host_tool(&executable, HostToolFixture::Systemd);
         let capabilities = HostCapabilityInventory {
             init_system: InitSystemCapability::Systemd,
             systemd: Some(SystemdInterface::probe(executable, true).unwrap()),
@@ -176,8 +165,8 @@ mod tests {
     fn target_enable_and_disable_use_systemctl_root_contract() {
         let target = TempDir::new().unwrap();
         let tools = TempDir::new().unwrap();
-        let log = tools.path().join("calls");
-        let executor = executor_with_recording_systemctl(target.path(), &log);
+        let log = target.path().join(SYSTEMCTL_CAPTURE_PATH);
+        let executor = executor_with_recording_systemctl(target.path(), tools.path());
 
         executor
             .systemd_set_enabled("portable.service", true)
@@ -202,9 +191,8 @@ mod tests {
     fn post_hooks_execute_generic_services_and_false_means_disable() {
         let target = TempDir::new().unwrap();
         let tools = TempDir::new().unwrap();
-        let log = tools.path().join("calls");
-        let executor = executor_with_recording_systemctl(target.path(), &log);
-        fs::remove_file(&log).unwrap();
+        let log = target.path().join(SYSTEMCTL_CAPTURE_PATH);
+        let executor = executor_with_recording_systemctl(target.path(), tools.path());
         let mut hooks = Hooks::default();
         hooks.systemd.push(SystemdHook {
             unit: "disabled.service".to_string(),
@@ -237,9 +225,8 @@ mod tests {
     fn runtime_service_action_becomes_activation_intent_without_target_systemctl_call() {
         let target = TempDir::new().unwrap();
         let tools = TempDir::new().unwrap();
-        let log = tools.path().join("calls");
-        let executor = executor_with_recording_systemctl(target.path(), &log);
-        fs::remove_file(&log).unwrap();
+        let log = target.path().join(SYSTEMCTL_CAPTURE_PATH);
+        let executor = executor_with_recording_systemctl(target.path(), tools.path());
         let mut hooks = Hooks::default();
         hooks.services.push(Service {
             name: "api.service".to_string(),
@@ -250,9 +237,8 @@ mod tests {
         let results = executor.execute_post_hooks_with_results(&hooks);
 
         assert!(results.all_succeeded());
-        let calls = fs::read_to_string(&log).unwrap();
         assert!(
-            !calls.contains("reload-or-try-restart api.service"),
+            !log.exists(),
             "runtime action signaled selected-root systemctl"
         );
         let intents = executor.take_activation_invocations();

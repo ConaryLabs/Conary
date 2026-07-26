@@ -292,22 +292,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn selected_root_persists_and_executes_the_typed_tmpfiles_interface() {
-        use std::os::unix::fs::PermissionsExt;
+        use crate::test_support::{HostToolFixture, TMPFILES_CAPTURE_PATH, link_host_tool};
 
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("systemd-tmpfiles");
-        let captured = directory.path().join("captured.conf");
-        fs::write(
-            &executable,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'systemd 257'; exit 0; fi\nif [ \"$1\" = \"--dry-run\" ]; then cat >/dev/null; exit 0; fi\ncase \"$1\" in --root=*) root=${{1#--root=}} ;; *) exit 2 ;; esac\n[ \"$2\" = \"--create\" ] || exit 2\ncp \"$root$3\" '{}'\n",
-                captured.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&executable, permissions).unwrap();
+        link_host_tool(&executable, HostToolFixture::Systemd);
 
         let capabilities = HostCapabilityInventory {
             tmpfiles: Some(TmpfilesInterface::probe(executable).unwrap()),
@@ -323,7 +312,7 @@ mod tests {
         executor.apply_tmpfile(&entry).unwrap();
 
         assert_eq!(
-            fs::read_to_string(captured).unwrap(),
+            fs::read_to_string(target.path().join(TMPFILES_CAPTURE_PATH)).unwrap(),
             render_tmpfiles_entry(&entry).unwrap()
         );
         let config_path = target.path().join(format!(

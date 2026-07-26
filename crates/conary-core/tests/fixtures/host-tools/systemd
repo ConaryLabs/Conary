@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+case "${1-}" in
+    --version)
+        printf 'systemd 257\n'
+        exit 0
+        ;;
+    show)
+        printf '257\n'
+        exit 0
+        ;;
+    --dry-run)
+        cat >/dev/null
+        exit 0
+        ;;
+    --root=*)
+        root=${1#--root=}
+        if [ "$root" = "/" ]; then
+            exit 0
+        fi
+
+        capture_dir="$root/var/lib/conary-test"
+        mkdir -p "$capture_dir"
+        if [ "${2-}" = "--create" ]; then
+            cp "$root$3" "$capture_dir/systemd-tmpfiles-captured.conf"
+        else
+            printf '%s\n' "$*" >> "$capture_dir/systemctl-calls"
+        fi
+        exit 0
+        ;;
+esac
+
+exit 0
