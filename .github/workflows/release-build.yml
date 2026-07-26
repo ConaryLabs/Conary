@@ -100,6 +100,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
         with:
           components: clippy,rustfmt
+      - uses: ./.github/actions/setup-exact-ownership-tests
       - name: Check formatting
         run: cargo fmt --check
       - name: Run clippy

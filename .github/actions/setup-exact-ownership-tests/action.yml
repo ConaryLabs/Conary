@@ -1,0 +1,15 @@
+name: setup-exact-ownership-tests
+description: Enable and prove the namespaces required by exact ownership tests.
+runs:
+  using: composite
+  steps:
+    - name: Enable exact ownership-test namespaces
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+
+        unshare --user --map-root-user --mount --propagation private /bin/true
