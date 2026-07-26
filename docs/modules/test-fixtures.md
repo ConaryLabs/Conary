@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 18
-summary: Map fixture ownership, including signed integration CCS authority, source-independent lifecycle transactions, and the public v4 QEMU image contract
+last_updated: 2026-07-26
+revision: 21
+summary: Map fixture ownership, including the selected-generation cross-source lifecycle matrix and public v4 QEMU image contract
 ---
 
 # Test Fixtures And Proof Maps
@@ -278,18 +278,28 @@ Each fixture family should record:
 - **Fixture sources:** `apps/conary/tests/integration/remi/manifests/`;
   `apps/conary/tests/integration/remi/containers/`;
   `apps/conary/tests/fixtures/conary-test-fixture/`;
+  `apps/conary/tests/fixtures/native/`;
+  `apps/conary/tests/fixtures/native-lifecycle-parity/`;
+  `apps/conary/tests/fixtures/phase4-runtime-fixture{,-v2}/`;
+  `apps/conary/tests/fixtures/native-selected-root-layout/`;
   `apps/conary/tests/fixtures/adversarial/`; disposable signing authority and
   policy under `apps/conary/tests/fixtures/ccs-test-authority/`.
 - **Consumes:** `cargo run -p conary-test -- list`, manifest parser tests,
   suite runner, local QEMU validation scripts.
 - **Fast proof:** `cargo run -p conary-test -- list`;
-  `cargo test -p conary-test suite_inventory`.
+  `cargo test -p conary-test suite_inventory`;
+  `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
+  `cargo test -p conary-test native_cross_source_`.
 - **Medium proof:**
   `cargo test -p conary-test config::tests::test_load_phase1_core_manifest`;
   `cargo test -p conary-test config::tests::test_load_phase3_group_m_manifest_installs_local_fixture_ccs`.
 - **Slow proof:** Suite-specific commands such as
   `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
-  when behavior changes require live integration proof. `fedora44` is the
+  and
+  `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4`
+  when behavior changes require live integration proof. Run the focused
+  lifecycle suite on `fedora44`, `ubuntu-26.04`, and `arch` for complete target
+  image coverage. `fedora44` is the
   existing `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`.
 - **Regeneration:** Manifests are hand-maintained TOML. Rotate the test-only
@@ -308,7 +318,17 @@ Each fixture family should record:
   not retired/current CCS format identifiers. Corrupt and malicious archive
   cases start from signed current authority and mutate afterward. Scriptlet
   failure tests require nonzero install status plus absent package state and
-  payload; degraded installed-state success is not a fixture contract.
+  payload; degraded installed-state success is not a fixture contract. Native
+  cross-source lifecycle assertions read selected-generation manifests and CAS
+  objects; the container's incidental root filesystem is not package-state
+  authority. Fedora/RPM, Ubuntu/dpkg, and Arch/pacman each capture the fixture's
+  exact ordered argv/stdin/payload-boundary trace and byte-verify the matching
+  `native-lifecycle-parity/expected/` contract before that contract is used for
+  all nine source-format/target-profile Conary rows. Each manifest lane supplies
+  its native oracle format explicitly; fixture execution does not infer
+  authority from distro-name matching. The typed workflow test owns the three
+  required target lanes and the stable all-lane aggregator context; do not
+  weaken either in workflow-only edits.
 
 ### qemu-source-image-fixtures
 

@@ -21,8 +21,8 @@ use tracing::{debug, info};
 pub struct RepositoryIndex {
     /// Index format version
     pub version: u32,
-    /// Distribution name
-    pub distro: String,
+    /// Exact public source profile.
+    pub source_profile: String,
     /// When the index was generated (ISO 8601)
     pub generated_at: String,
     /// Total number of packages
@@ -72,8 +72,8 @@ pub struct IndexGenConfig {
     pub chunk_dir: String,
     /// Output directory for index files
     pub output_dir: String,
-    /// Specific distribution to generate (None = all)
-    pub distro: Option<String>,
+    /// Exact public source profile to generate (None = all)
+    pub source_profile: Option<String>,
     /// Path to signing key (optional)
     pub sign_key: Option<String>,
 }
@@ -81,8 +81,8 @@ pub struct IndexGenConfig {
 /// Result of index generation
 #[derive(Debug)]
 pub struct IndexGenResult {
-    /// Distribution name
-    pub distro: String,
+    /// Exact public source profile.
+    pub source_profile: String,
     /// Path to generated index file
     pub index_path: String,
     /// Number of packages in index
@@ -95,8 +95,17 @@ pub struct IndexGenResult {
 
 /// Generate repository indices
 pub fn generate_indices(config: &IndexGenConfig) -> Result<Vec<IndexGenResult>> {
-    let distros = match &config.distro {
-        Some(d) => vec![d.clone()],
+    let source_profiles = match &config.source_profile {
+        Some(source_profile) => {
+            let profile =
+                conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+                    .with_context(|| {
+                    format!(
+                        "unsupported exact source profile '{source_profile}' for index generation"
+                    )
+                })?;
+            vec![profile.id().to_string()]
+        }
         None => conary_core::repository::supported_profiles::public_profiles()
             .iter()
             .map(|profile| profile.id().to_string())
@@ -104,19 +113,22 @@ pub fn generate_indices(config: &IndexGenConfig) -> Result<Vec<IndexGenResult>> 
     };
 
     let mut results = Vec::new();
-    for distro in distros {
+    for source_profile in source_profiles {
         results.push(
-            generate_index_for_distro(config, &distro)
-                .with_context(|| format!("generate repository index for {distro}"))?,
+            generate_index_for_profile(config, &source_profile)
+                .with_context(|| format!("generate repository index for {source_profile}"))?,
         );
     }
 
     Ok(results)
 }
 
-/// Generate index for a specific distribution
-fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<IndexGenResult> {
-    info!("Generating index for distribution: {}", distro);
+/// Generate an index for one exact source profile.
+fn generate_index_for_profile(
+    config: &IndexGenConfig,
+    source_profile: &str,
+) -> Result<IndexGenResult> {
+    info!("Generating index for source profile: {}", source_profile);
 
     // Open database
     let conn = conary_core::db::open(&config.db_path)?;
@@ -133,7 +145,7 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     debug!("Found {} converted packages total", converted.len());
 
     // Get package metadata from repository_packages table
-    let packages = get_packages_for_distro(&conn, distro, &converted)?;
+    let packages = get_packages_for_profile(&conn, source_profile, &converted)?;
     let package_count = packages.len();
     let version_count: usize = packages.values().map(|p| p.versions.len()).sum();
 
@@ -142,8 +154,8 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
 
     // Build the index
     let index = RepositoryIndex {
-        version: 1,
-        distro: distro.to_string(),
+        version: 2,
+        source_profile: source_profile.to_string(),
         generated_at: Utc::now().to_rfc3339(),
         package_count,
         chunk_count,
@@ -153,7 +165,7 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     };
 
     // Ensure output directory exists
-    let output_dir = Path::new(&config.output_dir).join(distro);
+    let output_dir = Path::new(&config.output_dir).join(source_profile);
     fs::create_dir_all(&output_dir).context("Failed to create output directory")?;
 
     // Write index file
@@ -173,7 +185,7 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     };
 
     Ok(IndexGenResult {
-        distro: distro.to_string(),
+        source_profile: source_profile.to_string(),
         index_path: index_path.to_string_lossy().to_string(),
         package_count,
         version_count,
@@ -181,10 +193,10 @@ fn generate_index_for_distro(config: &IndexGenConfig, distro: &str) -> Result<In
     })
 }
 
-/// Get packages for a specific distribution, matching with converted packages
-fn get_packages_for_distro(
+/// Get packages for one exact source profile, matching converted artifacts.
+fn get_packages_for_profile(
     conn: &rusqlite::Connection,
-    distro: &str,
+    source_profile: &str,
     converted: &[ConvertedPackage],
 ) -> Result<HashMap<String, PackageIndexEntry>> {
     let current_conversions = converted
@@ -197,12 +209,12 @@ fn get_packages_for_distro(
         "SELECT rp.name, rp.version, r.package_format, rp.checksum
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.default_strategy_distro = ?1
+         WHERE r.source_profile = ?1
            AND rp.size > 0
          ORDER BY rp.name, rp.version DESC",
     )?;
 
-    let rows = stmt.query_map([distro], |row| {
+    let rows = stmt.query_map([source_profile], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -216,7 +228,7 @@ fn get_packages_for_distro(
     for row_result in rows {
         let (name, version, package_format, _checksum) = row_result?;
 
-        // For now, include all packages from the distro
+        // For now, include all packages from the source_profile
         // In a full implementation, we'd match by checksum
         let entry = packages
             .entry(name.clone())
@@ -230,7 +242,7 @@ fn get_packages_for_distro(
             let artifact = candidate.repository_artifact()?;
             if artifact.package_name == name
                 && artifact.package_version == version
-                && artifact.distro == distro
+                && artifact.source_profile == source_profile
             {
                 converted_info = Some(candidate);
                 break;
@@ -266,7 +278,7 @@ fn get_packages_for_distro(
     // public-profile identity.
     for conv in current_conversions {
         let artifact = conv.repository_artifact()?;
-        if artifact.distro == distro {
+        if artifact.source_profile == source_profile {
             let name = artifact.package_name;
             let version = artifact.package_version;
             let entry = packages
@@ -381,7 +393,7 @@ mod tests {
             db_path: db_path.display().to_string(),
             chunk_dir: root.join("chunks").display().to_string(),
             output_dir: root.join("index").display().to_string(),
-            distro: Some("fedora".to_string()),
+            source_profile: Some("fedora-44".to_string()),
             sign_key: None,
         }
     }
@@ -389,8 +401,8 @@ mod tests {
     #[test]
     fn test_repository_index_serialization() {
         let index = RepositoryIndex {
-            version: 1,
-            distro: "arch".to_string(),
+            version: 2,
+            source_profile: "arch".to_string(),
             generated_at: "2026-01-16T12:00:00Z".to_string(),
             package_count: 1,
             chunk_count: 10,
@@ -418,7 +430,7 @@ mod tests {
 
         // Deserialize back
         let parsed: RepositoryIndex = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.distro, "arch");
+        assert_eq!(parsed.source_profile, "arch");
         assert_eq!(parsed.package_count, 1);
     }
 
@@ -431,6 +443,7 @@ mod tests {
             "fedora-44".to_string(),
             "pkg".to_string(),
             "1.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:source".to_string(),
             &["sha256:chunk".to_string()],
@@ -446,15 +459,15 @@ mod tests {
             .unwrap();
         let converted = vec![converted];
 
-        let packages = get_packages_for_distro(&conn, "fedora-44", &converted).unwrap();
+        let packages = get_packages_for_profile(&conn, "fedora-44", &converted).unwrap();
         let version = packages.get("pkg").unwrap().versions.first().unwrap();
         let scriptlets = version.scriptlets.as_ref().unwrap();
 
         assert_eq!(scriptlets.scriptlet_fidelity, "native-lifecycle");
 
         let index = RepositoryIndex {
-            version: 1,
-            distro: "fedora-44".to_string(),
+            version: 2,
+            source_profile: "fedora-44".to_string(),
             generated_at: "2026-01-16T12:00:00Z".to_string(),
             package_count: packages.len(),
             chunk_count: 1,
@@ -476,6 +489,7 @@ mod tests {
             "fedora-44".to_string(),
             "stale-only".to_string(),
             "1.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:stale-only-source".to_string(),
             &["sha256:stale-only-chunk".to_string()],
@@ -485,7 +499,7 @@ mod tests {
         );
         converted.conversion_version = conary_core::db::models::CONVERSION_VERSION - 1;
 
-        let packages = get_packages_for_distro(&conn, "fedora-44", &[converted]).unwrap();
+        let packages = get_packages_for_profile(&conn, "fedora-44", &[converted]).unwrap();
 
         assert!(
             packages
@@ -495,18 +509,32 @@ mod tests {
     }
 
     #[test]
-    fn index_generation_propagates_a_distro_failure() {
+    fn index_generation_propagates_a_source_profile_failure() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("corrupt.sqlite");
         fs::write(&db_path, b"not a SQLite database").unwrap();
         let config = test_config(temp.path(), &db_path);
 
         let error = generate_indices(&config)
-            .expect_err("a failed distro index must fail the requested generation")
+            .expect_err("a failed source_profile index must fail the requested generation")
             .to_string();
 
         assert!(
-            error.contains("generate repository index for fedora"),
+            error.contains("generate repository index for fedora-44"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn index_generation_rejects_route_alias_as_persisted_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = test_config(temp.path(), &temp.path().join("unused.sqlite"));
+        config.source_profile = Some("fedora".to_string());
+
+        let error = generate_indices(&config).unwrap_err().to_string();
+
+        assert!(
+            error.contains("unsupported exact source profile 'fedora'"),
             "{error}"
         );
     }

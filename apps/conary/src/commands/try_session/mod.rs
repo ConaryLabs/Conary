@@ -603,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn namespace_try_install_plan_uses_selected_root_and_shared_runtime_config() {
+    fn namespace_try_install_plan_uses_selected_root_and_shared_runtime() {
         let fixture = TryRuntimeFixture::new();
         let work_dir = fixture.root.join("try/session-a");
         let copied_db = work_dir.join("conary.db");
@@ -621,14 +621,6 @@ mod tests {
         );
         assert_ne!(plan.install_root, PathBuf::from("/"));
         assert_eq!(plan.runtime_root, fixture.runtime_root());
-        assert_eq!(plan.transaction_config.db_path, copied_db);
-        assert_eq!(
-            plan.transaction_config.objects_dir,
-            fixture.root.join("objects")
-        );
-        assert_eq!(
-            plan.transaction_config.generations_dir,
-            fixture.root.join("generations")
-        );
+        assert_eq!(plan.copied_db_path, copied_db);
     }
 }

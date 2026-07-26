@@ -137,11 +137,10 @@ impl<'a> AutomationChecker<'a> {
 
     /// Find packages with available security updates
     fn find_security_updates(&self) -> Result<Vec<SecurityUpdateCandidate>> {
-        // Fetch candidates with version_scheme, filtering by provenance.
-        // Join on name AND match the installed package's source_distro to the
-        // repository's distro so we don't compare against rows from a different
-        // distro on mixed-repo databases. Fall back to name-only when
-        // source_distro is NULL (pre-provenance installs).
+        // Fetch candidates with version_scheme and exact profile provenance.
+        // SQLite `IS` gives null-safe equality: source-independent Conary
+        // packages match source-independent repositories, while foreign
+        // packages match only the exact persisted public profile.
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT t.name, t.version, rp.version,
                     rp.security_cves, rp.security_severity,
@@ -150,9 +149,7 @@ impl<'a> AutomationChecker<'a> {
              JOIN repository_packages rp ON t.name = rp.name
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.is_security_update = 1
-               AND (t.source_distro IS NULL
-                    OR t.source_distro = r.name
-                    OR t.source_distro = r.default_strategy_distro)",
+               AND t.source_profile IS r.source_profile",
         )?;
 
         let mut updates = Vec::new();
@@ -399,8 +396,8 @@ impl<'a> AutomationChecker<'a> {
 
     /// Check for available updates
     fn check_updates(&self, results: &mut CheckResults) -> Result<()> {
-        // Fetch candidates with version_scheme, filtering by provenance
-        // to avoid comparing against repository rows from the wrong distro.
+        // Fetch candidates with version_scheme and null-safe exact profile
+        // provenance so mixed-source repositories cannot cross-match.
         let mut stmt = self.conn.prepare(
             "SELECT t.name, t.version, rp.version,
                     t.version_scheme, rp.version_scheme
@@ -408,9 +405,7 @@ impl<'a> AutomationChecker<'a> {
              JOIN repository_packages rp ON t.name = rp.name
              JOIN repositories r ON rp.repository_id = r.id
              WHERE (rp.is_security_update IS NULL OR rp.is_security_update = 0)
-               AND (t.source_distro IS NULL
-                    OR t.source_distro = r.name
-                    OR t.source_distro = r.default_strategy_distro)",
+               AND t.source_profile IS r.source_profile",
         )?;
 
         let rows = stmt.query_map([], |row| {

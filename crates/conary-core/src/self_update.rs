@@ -155,40 +155,18 @@ fn checked_binary_size(size: u64) -> Result<usize> {
     })
 }
 
-fn reserve_binary_buffer(capacity: usize) -> Result<Vec<u8>> {
-    let mut content = Vec::new();
-    content.try_reserve_exact(capacity).map_err(|error| {
-        Error::IoError(format!(
-            "Failed to reserve /usr/bin/conary buffer ({capacity} bytes): {error}"
-        ))
-    })?;
-    Ok(content)
-}
-
-fn verify_object_hash(expected: &str, content: &[u8]) -> Result<()> {
-    let actual = crate::hash::sha256(content);
-    if actual != expected {
-        return Err(Error::ChecksumMismatch {
-            expected: expected.to_string(),
-            actual,
-        });
-    }
-    Ok(())
-}
-
 fn canonical_conary_entry(
     verified: &crate::ccs::verify::VerifiedCcsArchive,
 ) -> Result<&crate::ccs::builder::FileEntry> {
-    let contents = verified.archive();
-    if contents.manifest.package.name != "conary" {
+    if verified.authority().identity.name != "conary" {
         return Err(Error::ParseError(format!(
             "Self-update package identity is {:?}, expected \"conary\"",
-            contents.manifest.package.name
+            verified.authority().identity.name
         )));
     }
 
     let mut conary_entry = None;
-    for component in contents.components.values() {
+    for component in verified.components().values() {
         for file in &component.files {
             if file.path != "/usr/bin/conary" {
                 continue;
@@ -261,87 +239,97 @@ fn canonical_conary_entry(
     Ok(file)
 }
 
-fn reconstruct_conary_binary(
+fn canonical_conary_payload<'a>(
+    verified: &'a crate::ccs::verify::VerifiedCcsArchive,
     file: &crate::ccs::builder::FileEntry,
-    objects: &std::collections::HashMap<String, Vec<u8>>,
-) -> Result<Vec<u8>> {
+) -> Result<&'a crate::packages::payload::PackagePayloadFile> {
     let authority = file.content.as_ref().ok_or_else(|| {
         Error::ParseError("CCS package /usr/bin/conary is missing content authority".to_string())
     })?;
-    let expected_size = checked_binary_size(authority.size)?;
-
-    let content = match &file.chunks {
-        None => objects.get(&authority.sha256).cloned().ok_or_else(|| {
-            Error::ParseError(format!(
-                "CCS package is missing object {} for /usr/bin/conary",
-                authority.sha256
-            ))
-        })?,
-        Some(chunks) if chunks.is_empty() => {
-            return Err(Error::ParseError(
-                "CCS package /usr/bin/conary carries an empty chunk list".to_string(),
-            ));
-        }
-        Some(chunks) => {
-            let mut content = reserve_binary_buffer(expected_size)?;
-            for chunk_hash in chunks {
-                let chunk = objects.get(chunk_hash).ok_or_else(|| {
-                    Error::ParseError(format!(
-                        "CCS package is missing chunk object {chunk_hash} for /usr/bin/conary"
-                    ))
-                })?;
-                verify_object_hash(chunk_hash, chunk)?;
-                let new_len = content.len().checked_add(chunk.len()).ok_or_else(|| {
-                    Error::IoError(format!(
-                        "Binary entry too large (overflow, max {MAX_SELF_UPDATE_BINARY_SIZE})"
-                    ))
-                })?;
-                if new_len > expected_size {
-                    return Err(Error::ParseError(format!(
-                        "CCS package /usr/bin/conary size mismatch: expected {} bytes, got at least {new_len}",
-                        authority.size
-                    )));
-                }
-                content.extend_from_slice(chunk);
-            }
-            content
-        }
-    };
-
-    if content.len() as u64 != authority.size {
-        return Err(Error::ParseError(format!(
-            "CCS package /usr/bin/conary size mismatch: expected {} bytes, got {}",
-            authority.size,
-            content.len()
-        )));
+    checked_binary_size(authority.size)?;
+    let mut matches = verified
+        .payload()
+        .files()
+        .iter()
+        .filter(|candidate| candidate.path == file.path);
+    let payload = matches.next().ok_or_else(|| {
+        Error::ParseError(format!(
+            "CCS package is missing authenticated payload source {} for /usr/bin/conary",
+            authority.sha256
+        ))
+    })?;
+    if matches.next().is_some() {
+        return Err(Error::ParseError(
+            "CCS package repeats authenticated /usr/bin/conary payload source".to_string(),
+        ));
     }
-    verify_object_hash(&authority.sha256, &content)?;
-    Ok(content)
+    if payload.node != file.node || payload.content_authority.as_ref() != Some(authority) {
+        return Err(Error::ParseError(
+            "authenticated /usr/bin/conary payload source disagrees with signed authority"
+                .to_string(),
+        ));
+    }
+    Ok(payload)
 }
 
-fn persist_extracted_binary(content: &[u8], target_dir: &Path, mode: u32) -> Result<PathBuf> {
-    if content.len() as u64 > MAX_SELF_UPDATE_BINARY_SIZE {
-        return Err(Error::IoError(format!(
-            "Binary entry too large ({} bytes, max {MAX_SELF_UPDATE_BINARY_SIZE})",
-            content.len()
-        )));
-    }
+fn persist_extracted_binary(
+    payload: &crate::packages::payload::PackagePayloadFile,
+    target_dir: &Path,
+) -> Result<PathBuf> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read as _, Write as _};
 
-    let tmp = tempfile::Builder::new()
+    let authority = payload.content_authority.as_ref().ok_or_else(|| {
+        Error::ParseError("CCS package /usr/bin/conary is missing content authority".to_string())
+    })?;
+    checked_binary_size(authority.size)?;
+    let mut source = payload.open_content()?;
+    let mut tmp = tempfile::Builder::new()
         .prefix(".conary-update-")
         .tempfile_in(target_dir)
         .map_err(|e| Error::IoError(format!("Failed to create temp file: {e}")))?;
-    {
-        use std::io::Write as _;
-        tmp.as_file()
-            .write_all(content)
-            .map_err(|e| Error::IoError(format!("Failed to write binary: {e}")))?;
+    let mut digest = Sha256::new();
+    let mut copied = 0_u64;
+    let mut buffer = [0_u8; crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE];
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        copied = copied.checked_add(read as u64).ok_or_else(|| {
+            Error::IoError("self-update payload size arithmetic overflow".to_string())
+        })?;
+        if copied > authority.size {
+            return Err(Error::ParseError(format!(
+                "CCS package /usr/bin/conary size mismatch: expected {} bytes, got at least {copied}",
+                authority.size
+            )));
+        }
+        digest.update(&buffer[..read]);
+        tmp.as_file_mut().write_all(&buffer[..read])?;
     }
+    if copied != authority.size {
+        return Err(Error::ParseError(format!(
+            "CCS package /usr/bin/conary size mismatch: expected {} bytes, got {copied}",
+            authority.size
+        )));
+    }
+    let actual = hex::encode(digest.finalize());
+    if actual != authority.sha256 {
+        return Err(Error::ChecksumMismatch {
+            expected: authority.sha256.clone(),
+            actual,
+        });
+    }
+    tmp.as_file_mut().sync_all()?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(mode & 0o7777))?;
+        fs::set_permissions(
+            tmp.path(),
+            fs::Permissions::from_mode(payload.node.mode & 0o7777),
+        )?;
     }
 
     let dest = tmp
@@ -360,8 +348,8 @@ pub fn extract_binary(
     target_dir: &Path,
 ) -> Result<PathBuf> {
     let entry = canonical_conary_entry(verified)?;
-    let content = reconstruct_conary_binary(entry, &verified.archive().blobs)?;
-    persist_extracted_binary(&content, target_dir, entry.node.mode)
+    let payload = canonical_conary_payload(verified, entry)?;
+    persist_extracted_binary(payload, target_dir)
 }
 
 /// Atomically replace the running conary binary and register in CAS
@@ -425,7 +413,7 @@ pub fn verify_binary(binary_path: &Path, expected_version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Read, Write};
 
     fn create_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -442,84 +430,78 @@ mod tests {
         builder.append_data(&mut header, path, content).unwrap();
     }
 
-    fn append_test_object<W: Write>(builder: &mut tar::Builder<W>, hash: &str, content: &[u8]) {
-        let path = format!("objects/{}/{}", &hash[..2], &hash[2..]);
-        append_test_tar_entry(builder, &path, content);
-    }
-
-    fn current_self_update_entry(
+    fn current_self_update_build(
+        package_name: &str,
         content: &[u8],
-        chunks: Option<Vec<String>>,
-    ) -> crate::ccs::builder::FileEntry {
-        crate::ccs::builder::FileEntry {
-            path: "/usr/bin/conary".to_string(),
-            node: crate::payload::PayloadNode::regular(0o755),
-            content: Some(crate::payload::PayloadContentAuthority {
-                sha256: crate::hash::sha256(content),
-                size: content.len() as u64,
-            }),
-            component: "runtime".to_string(),
-            chunks,
-        }
+    ) -> crate::ccs::builder::BuildResult {
+        crate::ccs::builder::test_support::single_file_build_result_at(
+            package_name,
+            "1.0.0",
+            "/usr/bin/conary",
+            content,
+        )
     }
 
     fn write_current_self_update_ccs(
         path: &Path,
-        package_name: &str,
-        file_entry: crate::ccs::builder::FileEntry,
-        objects: &[(String, Vec<u8>)],
+        build: &crate::ccs::builder::BuildResult,
     ) -> crate::ccs::signing::SigningKeyPair {
-        use crate::ccs::v2::schema::{
-            ComponentAuthorityV2, ConflictPolicyV2, FileAuthorityV2, PackageKindV2,
-        };
-        use std::collections::BTreeMap;
-
-        let content_size = file_entry.content.as_ref().unwrap().size;
-        let mut authority =
-            crate::ccs::v2::schema::AuthorityDocumentV2::empty_package_for_tests(package_name);
-        authority.components = BTreeMap::from([(
-            "runtime".to_string(),
-            ComponentAuthorityV2 {
-                name: "runtime".to_string(),
-                default: true,
-                file_count: 1,
-                total_size: content_size,
-            },
-        )]);
-        let PackageKindV2::Package(package) = &mut authority.kind else {
-            unreachable!();
-        };
-        package.files.push(FileAuthorityV2 {
-            path: file_entry.path.clone(),
-            node: file_entry.node.clone(),
-            content: file_entry.content.clone(),
-            component: file_entry.component.clone(),
-            config: None,
-            conflict: ConflictPolicyV2::Error,
-        });
-
-        let component = crate::ccs::builder::ComponentData {
-            name: "runtime".to_string(),
-            files: vec![file_entry],
-            hash: "bound-by-v2-authority".to_string(),
-            size: content_size,
-        };
-        let manifest = authority.to_cbor().unwrap();
         let key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("self-update-test");
-        let signature = serde_json::to_vec(&key.sign(&manifest)).unwrap();
-        let component_json = serde_json::to_vec(&component).unwrap();
+        crate::ccs::builder::write_signed_current_ccs_package(build, path, &key, false).unwrap();
+        key
+    }
+
+    fn chunked_self_update_build(
+        package_name: &str,
+        chunks: &[&[u8]],
+    ) -> crate::ccs::builder::BuildResult {
+        let content = chunks.concat();
+        let mut build = current_self_update_build(package_name, &content);
+        let chunk_hashes = chunks
+            .iter()
+            .map(|chunk| crate::hash::sha256(chunk))
+            .collect::<Vec<_>>();
+        build.blobs.clear();
+        for (hash, chunk) in chunk_hashes.iter().zip(chunks) {
+            build.blobs.insert(hash.clone(), chunk.to_vec());
+        }
+        build.files[0].chunks = Some(chunk_hashes.clone());
+        build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
+        build.chunked = true;
+        build
+    }
+
+    fn replace_current_object_bytes(path: &Path, hash: &str, replacement: &[u8]) {
+        let target = format!("objects/{}/{}", &hash[..2], &hash[2..]);
+        let file = std::fs::File::open(path).unwrap();
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        let mut entries = Vec::new();
+        let mut replaced = false;
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            if !entry.header().entry_type().is_file() {
+                continue;
+            }
+            let entry_path = entry.path().unwrap().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry_path == Path::new(&target) {
+                bytes = replacement.to_vec();
+                replaced = true;
+            }
+            entries.push((entry_path, bytes));
+        }
+        drop(archive);
+        assert!(replaced, "current CCS fixture object {hash} was not found");
 
         let file = std::fs::File::create(path).unwrap();
         let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
         let mut builder = tar::Builder::new(encoder);
-        append_test_tar_entry(&mut builder, "MANIFEST", &manifest);
-        append_test_tar_entry(&mut builder, "MANIFEST.sig", &signature);
-        append_test_tar_entry(&mut builder, "components/runtime.json", &component_json);
-        for (hash, bytes) in objects {
-            append_test_object(&mut builder, hash, bytes);
+        for (entry_path, bytes) in entries {
+            append_test_tar_entry(&mut builder, entry_path.to_str().unwrap(), &bytes);
         }
         builder.into_inner().unwrap().finish().unwrap();
-        key
     }
 
     fn verify_test_self_update_ccs(
@@ -531,6 +513,15 @@ mod tests {
             &crate::ccs::verify::TrustPolicy::strict(vec![key.public_key_base64()]),
         )
         .unwrap()
+    }
+
+    fn assert_error_chain_contains(error: &anyhow::Error, expected: &str) {
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string().contains(expected)),
+            "expected {expected:?} in error chain: {error:#}"
+        );
     }
 
     #[test]
@@ -603,8 +594,7 @@ mod tests {
 
         let file = std::fs::File::create(&ccs_path).unwrap();
         let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-        let mut builder = tar::Builder::new(encoder);
-        append_test_tar_entry(&mut builder, "usr/bin/conary", b"legacy");
+        let builder = tar::Builder::new(encoder);
         builder.into_inner().unwrap().finish().unwrap();
 
         let key = crate::ccs::signing::SigningKeyPair::generate();
@@ -613,7 +603,7 @@ mod tests {
             &crate::ccs::verify::TrustPolicy::strict(vec![key.public_key_base64()]),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("missing required CBOR MANIFEST"));
+        assert_error_chain_contains(&error, "missing required current v2 MANIFEST authority");
     }
 
     #[test]
@@ -621,13 +611,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ccs_path = dir.path().join("current.ccs");
         let content = b"#!/bin/sh\necho current\n";
-        let hash = crate::hash::sha256(content);
-        let key = write_current_self_update_ccs(
-            &ccs_path,
-            "conary",
-            current_self_update_entry(content, None),
-            &[(hash, content.to_vec())],
-        );
+        let build = current_self_update_build("conary", content);
+        let key = write_current_self_update_ccs(&ccs_path, &build);
 
         let verified = verify_test_self_update_ccs(&ccs_path, &key);
         let binary = extract_binary(&verified, dir.path()).unwrap();
@@ -635,25 +620,36 @@ mod tests {
     }
 
     #[test]
-    fn extract_binary_reconstructs_current_chunked_payload_authority() {
+    fn extract_binary_reads_current_authority_from_chunked_builder_state() {
         let dir = tempfile::tempdir().unwrap();
         let ccs_path = dir.path().join("chunked.ccs");
         let first = b"#!/bin/sh\n";
         let second = b"echo chunks\n";
         let content = [first.as_slice(), second.as_slice()].concat();
-        let first_hash = crate::hash::sha256(first);
-        let second_hash = crate::hash::sha256(second);
-        let key = write_current_self_update_ccs(
-            &ccs_path,
-            "conary",
-            current_self_update_entry(
-                &content,
-                Some(vec![first_hash.clone(), second_hash.clone()]),
-            ),
-            &[(first_hash, first.to_vec()), (second_hash, second.to_vec())],
-        );
+        let build = chunked_self_update_build("conary", &[first, second]);
+        let key = write_current_self_update_ccs(&ccs_path, &build);
 
         let verified = verify_test_self_update_ccs(&ccs_path, &key);
+        let content_hash = crate::hash::sha256(&content);
+        let crate::ccs::v2::schema::PackageKindV2::Package(package) = &verified.authority().kind
+        else {
+            panic!("self-update fixture must carry package authority");
+        };
+        assert_eq!(
+            package.files[0].content.as_ref().unwrap().sha256,
+            content_hash
+        );
+        assert_eq!(
+            verified
+                .payload()
+                .files()
+                .iter()
+                .filter_map(|file| file.content_authority.as_ref())
+                .map(|authority| authority.sha256.as_str())
+                .collect::<Vec<_>>(),
+            vec![content_hash]
+        );
+        assert!(verified.components()["runtime"].files[0].chunks.is_none());
         let binary = extract_binary(&verified, dir.path()).unwrap();
         assert_eq!(std::fs::read(binary).unwrap(), content);
     }
@@ -663,13 +659,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ccs_path = dir.path().join("wrong-package.ccs");
         let content = b"#!/bin/sh\n";
-        let hash = crate::hash::sha256(content);
-        let key = write_current_self_update_ccs(
-            &ccs_path,
-            "not-conary",
-            current_self_update_entry(content, None),
-            &[(hash, content.to_vec())],
-        );
+        let build = current_self_update_build("not-conary", content);
+        let key = write_current_self_update_ccs(&ccs_path, &build);
 
         let verified = verify_test_self_update_ccs(&ccs_path, &key);
         let error = extract_binary(&verified, dir.path()).unwrap_err();
@@ -683,25 +674,22 @@ mod tests {
     }
 
     #[test]
-    fn extract_binary_rejects_chunk_object_hash_mismatch() {
+    fn extract_binary_rejects_current_object_path_hash_mismatch() {
         let dir = tempfile::tempdir().unwrap();
-        let ccs_path = dir.path().join("bad-chunk-hash.ccs");
-        let expected_chunk = b"#!/bin/sh\n";
-        let tampered_chunk = b"#!/bin/bash\n";
-        let expected_hash = crate::hash::sha256(expected_chunk);
-        let key = write_current_self_update_ccs(
-            &ccs_path,
-            "conary",
-            current_self_update_entry(tampered_chunk, Some(vec![expected_hash.clone()])),
-            &[(expected_hash.clone(), tampered_chunk.to_vec())],
-        );
+        let ccs_path = dir.path().join("bad-object-hash.ccs");
+        let expected_content = b"#!/bin/sh\n";
+        let tampered_content = b"#!/bin/zz\n";
+        let expected_hash = crate::hash::sha256(expected_content);
+        let build = current_self_update_build("conary", expected_content);
+        let key = write_current_self_update_ccs(&ccs_path, &build);
+        replace_current_object_bytes(&ccs_path, &expected_hash, tampered_content);
 
         let error = crate::ccs::verify::verify_package(
             &ccs_path,
             &crate::ccs::verify::TrustPolicy::strict(vec![key.public_key_base64()]),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("chunk hash mismatch"));
+        assert_error_chain_contains(&error, "CCS object path hash mismatch");
     }
 
     #[test]

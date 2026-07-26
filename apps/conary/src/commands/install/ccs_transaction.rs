@@ -6,20 +6,22 @@
 //! transaction mechanics stay in `install/mod.rs`.
 
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
-use super::native_events::PreparedNativeTransaction;
+use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::{
-    ExtractionResult, FinalizeInstallOutput, InstallPhase, InstallProgress, InstallSemantics,
-    RepositoryInstallProvenance, TransactionContext, UpgradeCheck, build_execution_mode,
-    check_upgrade_status, execute_install_transaction_in_selected_root_with_post_graph,
+    ExtractionResult, FinalizeInstallOutput, InstallIntent, InstallPhase, InstallProgress,
+    InstallSemantics, RepositoryInstallProvenance, TransactionContext, UpgradeCheck,
+    build_execution_mode, check_upgrade_status,
+    execute_install_transaction_in_selected_root_with_post_graph,
     finalize_install_without_snapshot, preflight_extracted_file_ownership,
     runtime_requirement_count,
 };
 use anyhow::{Context, Result};
+use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::components::ComponentType;
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::info;
 
 pub(crate) struct CcsTransactionInstallOptions<'a> {
@@ -30,6 +32,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub quiet: bool,
     pub sandbox_mode: SandboxMode,
     pub allow_downgrade: bool,
+    pub intent: InstallIntent,
     pub reinstall: bool,
     pub selection_reason: Option<&'a str>,
     pub selected_manifest_components: Option<Vec<String>>,
@@ -67,15 +70,16 @@ fn extract_and_classify_ccs_manifest_files(
         .map(|file| file.path.as_str())
         .collect();
 
-    let extracted_files: Vec<_> = if selected_paths.is_empty() {
+    let payload_files: Vec<_> = if selected_paths.is_empty() {
         Vec::new()
     } else {
-        pkg.extract_file_contents()?
+        pkg.package_payload()?
+            .into_files()
             .into_iter()
             .filter(|file| selected_paths.contains(file.path.as_str()))
             .collect()
     };
-    if extracted_files.is_empty() && !selected_entries.is_empty() {
+    if payload_files.is_empty() && !selected_entries.is_empty() {
         anyhow::bail!(
             "No files matched the selected CCS components: {}",
             selected_component_names.join(", ")
@@ -83,7 +87,7 @@ fn extract_and_classify_ccs_manifest_files(
     }
 
     let extracted_files =
-        crate::commands::ccs::normalize_ccs_extracted_files(root_path, extracted_files)?;
+        crate::commands::ccs::normalize_ccs_payload_files(root_path, payload_files)?;
 
     let mut component_names_by_path = HashMap::new();
     let mut classified: HashMap<ComponentType, Vec<String>> = HashMap::new();
@@ -153,6 +157,7 @@ fn check_ccs_upgrade_status(
     pkg: &conary_core::ccs::CcsPackage,
     semantics: &InstallSemantics,
     allow_downgrade: bool,
+    intent: InstallIntent,
     reinstall: bool,
 ) -> Result<UpgradeCheck> {
     let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
@@ -160,6 +165,7 @@ fn check_ccs_upgrade_status(
     for trove in &existing {
         if trove.architecture == pkg.architecture().map(|s: &str| s.to_string())
             && trove.version == pkg.version()
+            && trove.package_release.as_deref() == pkg.package_release()
         {
             if reinstall {
                 info!("Reinstalling {} version {}", pkg.name(), pkg.version());
@@ -174,14 +180,43 @@ fn check_ccs_upgrade_status(
         }
     }
 
-    check_upgrade_status(conn, pkg, semantics, allow_downgrade)
+    check_upgrade_status(conn, pkg, semantics, allow_downgrade, intent)
 }
 
-fn ccs_has_pre_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
+/// Recover the package-manager semantics carried through a converted CCS
+/// archive. CCS is a transport here; it must not erase the source package
+/// manager's version, config, or directory-materialization contract.
+pub(super) fn install_semantics_for_ccs_manifest(
+    manifest: &conary_core::ccs::manifest::CcsManifest,
+) -> Result<InstallSemantics> {
+    let Some(native) = manifest.native_lifecycle.as_ref() else {
+        return Ok(InstallSemantics::ccs(manifest.package.version_scheme));
+    };
+    native
+        .validate()
+        .context("converted CCS native lifecycle contract is invalid")?;
+    let format = match native.source_format {
+        SourceFormat::Rpm => super::PackageFormatType::Rpm,
+        SourceFormat::Deb => super::PackageFormatType::Deb,
+        SourceFormat::Arch => super::PackageFormatType::Arch,
+    };
+    let semantics = InstallSemantics::native_package(format);
+    if manifest.package.version_scheme != semantics.version_scheme {
+        anyhow::bail!(
+            "converted CCS source format '{}' requires package version scheme '{}', got '{}'",
+            native.source_format.as_str(),
+            semantics.version_scheme.as_str(),
+            manifest.package.version_scheme.as_str()
+        );
+    }
+    Ok(semantics)
+}
+
+pub(super) fn ccs_has_pre_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
     !hooks.users.is_empty() || !hooks.groups.is_empty() || !hooks.directories.is_empty()
 }
 
-fn ccs_has_post_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
+pub(super) fn ccs_has_post_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
     !hooks.services.is_empty()
         || !hooks.systemd.is_empty()
         || !hooks.tmpfiles.is_empty()
@@ -190,7 +225,9 @@ fn ccs_has_post_hooks(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
         || hooks.post_install.is_some()
 }
 
-fn ccs_requires_host_capability_inventory(hooks: &conary_core::ccs::manifest::Hooks) -> bool {
+pub(super) fn ccs_requires_host_capability_inventory(
+    hooks: &conary_core::ccs::manifest::Hooks,
+) -> bool {
     !hooks.services.is_empty()
         || !hooks.systemd.is_empty()
         || !hooks.tmpfiles.is_empty()
@@ -282,7 +319,9 @@ fn show_ccs_lifecycle_dry_run(manifest: &conary_core::ccs::manifest::CcsManifest
     crate::ui::field("Lifecycle", &summary);
 }
 
-fn enforce_ccs_scriptlet_capability_gate(pkg: &conary_core::ccs::CcsPackage) -> Result<()> {
+pub(super) fn enforce_ccs_scriptlet_capability_gate(
+    pkg: &conary_core::ccs::CcsPackage,
+) -> Result<()> {
     if !pkg.manifest().scriptlets.has_capability_declarations() {
         return Ok(());
     }
@@ -298,38 +337,36 @@ pub(crate) fn install_ccs_package_transactionally(
     pkg: &conary_core::ccs::CcsPackage,
     opts: CcsTransactionInstallOptions<'_>,
 ) -> Result<CcsTransactionInstallResult> {
-    install_ccs_package_transactionally_inner(conn, pkg, opts, None, None)
+    install_ccs_package_transactionally_inner(conn, pkg, opts, None)
 }
 
 pub(crate) fn install_ccs_package_transactionally_in_selected_root(
     conn: &mut rusqlite::Connection,
     pkg: &conary_core::ccs::CcsPackage,
     opts: CcsTransactionInstallOptions<'_>,
-    transaction_config_override: conary_core::transaction::TransactionConfig,
     selected_root: &mut crate::commands::generation::selected_root::SelectedRootSession,
 ) -> Result<CcsTransactionInstallResult> {
-    install_ccs_package_transactionally_inner(
-        conn,
-        pkg,
-        opts,
-        Some(transaction_config_override),
-        Some(selected_root),
-    )
+    install_ccs_package_transactionally_inner(conn, pkg, opts, Some(selected_root))
 }
 
 fn install_ccs_package_transactionally_inner(
     conn: &mut rusqlite::Connection,
     pkg: &conary_core::ccs::CcsPackage,
     opts: CcsTransactionInstallOptions<'_>,
-    transaction_config_override: Option<conary_core::transaction::TransactionConfig>,
     selected_root: Option<&mut crate::commands::generation::selected_root::SelectedRootSession>,
 ) -> Result<CcsTransactionInstallResult> {
     let caller_owned_selected_root = selected_root.is_some();
     let progress = InstallProgress::single("Installing");
-    let semantics = InstallSemantics::ccs(pkg.manifest().package.version_scheme);
+    let semantics = install_semantics_for_ccs_manifest(pkg.manifest())?;
     enforce_ccs_scriptlet_capability_gate(pkg)?;
-    let upgrade =
-        check_ccs_upgrade_status(conn, pkg, &semantics, opts.allow_downgrade, opts.reinstall)?;
+    let upgrade = check_ccs_upgrade_status(
+        conn,
+        pkg,
+        &semantics,
+        opts.allow_downgrade,
+        opts.intent,
+        opts.reinstall,
+    )?;
     let old_trove = match &upgrade {
         UpgradeCheck::FreshInstall => None,
         UpgradeCheck::AlreadyInstalled(trove) => {
@@ -340,7 +377,9 @@ fn install_ccs_package_transactionally_inner(
                 trove.architecture.as_deref().unwrap_or("no-arch")
             )
         }
-        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove.as_ref()),
+        UpgradeCheck::Upgrade(trove)
+        | UpgradeCheck::Downgrade(trove)
+        | UpgradeCheck::Replatform(trove) => Some(trove.as_ref()),
     };
     // Dry-run remains filesystem-read-only. Every real CCS mutation receives
     // either its caller-owned try root or a freshly materialized selected root.
@@ -355,7 +394,7 @@ fn install_ccs_package_transactionally_inner(
     } else {
         None
     };
-    let mut selected_root = match selected_root {
+    let selected_root = match selected_root {
         Some(selected_root) => Some(selected_root),
         None => owned_selected_root.as_mut(),
     };
@@ -393,16 +432,22 @@ fn install_ccs_package_transactionally_inner(
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
     let native_transaction = PreparedNativeTransaction::prepare_install(
         conn,
-        pkg.name(),
-        pkg.version(),
-        pkg.architecture(),
-        semantics.version_scheme,
-        pkg.provides(),
-        native_lifecycle_bundle,
-        old_trove,
-        &relation_plan.removals,
-        &relation_plan.deconfigurations,
-        &extraction,
+        NativeInstallInput {
+            package_name: pkg.name(),
+            package_version: pkg.version(),
+            package_arch: pkg.architecture(),
+            version_scheme: semantics.version_scheme,
+            provides: pkg.provides(),
+            new_bundle: native_lifecycle_bundle,
+            old_trove,
+            relation_removals: &relation_plan.removals,
+            relation_deconfigurations: &relation_plan.deconfigurations,
+            paths: extraction
+                .extracted_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect(),
+        },
     )?;
     let hooks = &pkg.manifest().hooks;
     // CCS hooks are package-scoped authority. Component names do not infer
@@ -439,7 +484,7 @@ fn install_ccs_package_transactionally_inner(
     }
 
     let ccs_removal_hook_plan =
-        CcsRemovalHookPlan::prepare(conn, old_trove.into_iter(), relation_plan.removals.iter())?;
+        CcsRemovalHookPlan::prepare(conn, old_trove, relation_plan.removals.iter())?;
 
     let selected_component_names =
         if let Some(selected) = opts.selected_manifest_components.as_ref() {
@@ -465,7 +510,6 @@ fn install_ccs_package_transactionally_inner(
         semantics,
         selection_reason: opts.selection_reason,
         old_trove_to_upgrade: old_trove,
-        ccs_manifest_provides: Some(&pkg.manifest().provides),
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
         ccs_file_capabilities: Some(&normalized_file_capabilities),
         // Deferral is an ownership contract for try sessions: that caller
@@ -493,49 +537,26 @@ fn install_ccs_package_transactionally_inner(
             .context("CCS pre-install hook failed")?;
     }
 
-    let selected_root = selected_root
-        .as_deref_mut()
-        .context("real CCS install has no selected-root transaction")?;
-    let transaction_config = transaction_config_override.unwrap_or_else(|| {
-        conary_core::transaction::TransactionConfig::from_paths(
-            selected_root.selected_root().to_path_buf(),
-            PathBuf::from(opts.db_path),
-        )
-    });
+    let selected_root =
+        selected_root.context("real CCS install has no selected-root transaction")?;
     let tx_result = execute_install_transaction_in_selected_root_with_post_graph(
         conn,
         pkg,
         &extraction,
         &tx_ctx,
         &progress,
-        transaction_config,
         selected_root,
         &native_transaction,
         &native_execution_mode,
         || {
             if ccs_has_post_hooks(hooks) {
-                execute_ccs_post_hooks(pkg, hooks, &hook_executor)?;
+                execute_ccs_post_hooks(pkg.name(), pkg.version(), hooks, &hook_executor)?;
             }
-            Ok(hook_executor
-                .take_activation_invocations()
-                .into_iter()
-                .map(|captured| conary_core::db::models::NewActivationRequest {
-                    source_kind: match captured.source {
-                        conary_core::ccs::CcsActivationSource::DeclarativeService => {
-                            conary_core::db::models::ActivationRequestSourceKind::CcsService
-                        }
-                        conary_core::ccs::CcsActivationSource::CapturedRuntime => {
-                            conary_core::db::models::ActivationRequestSourceKind::captured_for(
-                                &captured.invocation,
-                            )
-                        }
-                    },
-                    source_package: pkg.name().to_string(),
-                    source_version: pkg.version().to_string(),
-                    source_entry: captured.source_entry,
-                    invocation: captured.invocation,
-                })
-                .collect())
+            Ok(ccs_activation_requests(
+                pkg.name(),
+                pkg.version(),
+                &hook_executor,
+            ))
         },
     )?;
     finalize_install_without_snapshot(
@@ -552,8 +573,9 @@ fn install_ccs_package_transactionally_inner(
     })
 }
 
-fn execute_ccs_post_hooks(
-    pkg: &conary_core::ccs::CcsPackage,
+pub(super) fn execute_ccs_post_hooks(
+    package_name: &str,
+    package_version: &str,
     hooks: &conary_core::ccs::manifest::Hooks,
     hook_executor: &conary_core::ccs::HookExecutor,
 ) -> Result<()> {
@@ -573,12 +595,39 @@ fn execute_ccs_post_hooks(
     if !failures.is_empty() {
         anyhow::bail!(
             "post-install hooks failed for {} {}: {}",
-            pkg.name(),
-            pkg.version(),
+            package_name,
+            package_version,
             failures.join("; ")
         );
     }
     Ok(())
+}
+
+pub(super) fn ccs_activation_requests(
+    package_name: &str,
+    package_version: &str,
+    hook_executor: &conary_core::ccs::HookExecutor,
+) -> Vec<conary_core::db::models::NewActivationRequest> {
+    hook_executor
+        .take_activation_invocations()
+        .into_iter()
+        .map(|captured| conary_core::db::models::NewActivationRequest {
+            source_kind: match captured.source {
+                conary_core::ccs::CcsActivationSource::DeclarativeService => {
+                    conary_core::db::models::ActivationRequestSourceKind::CcsService
+                }
+                conary_core::ccs::CcsActivationSource::CapturedRuntime => {
+                    conary_core::db::models::ActivationRequestSourceKind::captured_for(
+                        &captured.invocation,
+                    )
+                }
+            },
+            source_package: package_name.to_string(),
+            source_version: package_version.to_string(),
+            source_entry: captured.source_entry,
+            invocation: captured.invocation,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -586,6 +635,107 @@ mod tests {
     use conary_core::ccs::manifest::{
         CcsManifest, DirectoryHook, ScriptHook, Service, ServiceAction, SystemdHook,
     };
+    use conary_core::ccs::native_lifecycle::{
+        NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
+        ScriptletFidelity, SourceFormat, VersionScheme as NativeVersionScheme,
+    };
+    use conary_core::repository::dependency_model::DebianMultiArch;
+    use conary_core::repository::versioning::VersionScheme;
+
+    fn native_free_bundle(format: SourceFormat, version: &str) -> NativeLifecycleBundle {
+        NativeLifecycleBundle {
+            schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+            schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
+            source_format: format,
+            source_family: format.as_str().to_string(),
+            source_profile: None,
+            source_release: None,
+            source_arch: Some("x86_64".to_string()),
+            source_package: format!("{}-transport", format.as_str()),
+            source_version: version.to_string(),
+            source_checksum: Some(format!("sha256:{}", "1".repeat(64))),
+            version_scheme: match format {
+                SourceFormat::Rpm => NativeVersionScheme::Rpm,
+                SourceFormat::Deb => NativeVersionScheme::Deb,
+                SourceFormat::Arch => NativeVersionScheme::Arch,
+            },
+            conversion_tool: "conary-test".to_string(),
+            conversion_tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            conversion_policy: "typed-source-abi-test".to_string(),
+            evidence_digest: Some(format!("sha256:{}", "2".repeat(64))),
+            scriptlet_fidelity: ScriptletFidelity::NativeFree,
+            entries: Vec::new(),
+        }
+    }
+
+    fn reloaded_converted_manifest(format: SourceFormat, version: &str) -> CcsManifest {
+        let mut manifest =
+            CcsManifest::new_minimal(&format!("{}-transport", format.as_str()), version);
+        manifest.package.version_scheme = match format {
+            SourceFormat::Rpm => VersionScheme::Rpm,
+            SourceFormat::Deb => VersionScheme::Debian,
+            SourceFormat::Arch => VersionScheme::Arch,
+        };
+        manifest.package.debian_multi_arch = match format {
+            SourceFormat::Deb => Some(DebianMultiArch::No),
+            SourceFormat::Rpm | SourceFormat::Arch => None,
+        };
+        manifest.native_lifecycle = Some(native_free_bundle(format, version));
+        let encoded = toml::to_string_pretty(&manifest).unwrap();
+        CcsManifest::parse(&encoded).unwrap()
+    }
+
+    #[test]
+    fn reloaded_converted_ccs_preserves_exact_source_install_semantics() {
+        for (format, version, expected) in [
+            (
+                SourceFormat::Rpm,
+                "1.0-1",
+                super::super::PackageFormatType::Rpm,
+            ),
+            (
+                SourceFormat::Deb,
+                "1.0-1",
+                super::super::PackageFormatType::Deb,
+            ),
+            (
+                SourceFormat::Arch,
+                "1.0-1",
+                super::super::PackageFormatType::Arch,
+            ),
+        ] {
+            let manifest = reloaded_converted_manifest(format, version);
+            let semantics = super::install_semantics_for_ccs_manifest(&manifest).unwrap();
+            assert_eq!(
+                semantics,
+                super::super::InstallSemantics::native_package(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn converted_ccs_source_format_rejects_a_mismatched_package_version_scheme() {
+        let mut manifest = reloaded_converted_manifest(SourceFormat::Deb, "1.0-1");
+        manifest.package.version_scheme = VersionScheme::Rpm;
+
+        let error = super::install_semantics_for_ccs_manifest(&manifest).unwrap_err();
+
+        assert!(
+            error.to_string().contains(
+                "source format 'deb' requires package version scheme 'debian', got 'rpm'"
+            ),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn author_native_ccs_keeps_ccs_semantics() {
+        let manifest = CcsManifest::new_minimal("author-native", "1.0.0");
+        assert_eq!(
+            super::install_semantics_for_ccs_manifest(&manifest).unwrap(),
+            super::super::InstallSemantics::ccs(VersionScheme::Conary)
+        );
+    }
 
     #[test]
     fn ccs_dry_run_always_plans_typed_lifecycle_without_inspecting_script_text() {
@@ -650,3 +800,7 @@ mod tests {
         assert!(entries.contains(&"service:enabled.service:enable".to_string()));
     }
 }
+
+#[cfg(test)]
+#[path = "ccs_transaction/converted_directory_tests.rs"]
+mod converted_directory_tests;

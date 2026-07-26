@@ -16,11 +16,11 @@ use conary_core::ccs::native_transaction::{
 };
 use conary_core::db::models::{FileEntry, InstalledNativeLifecycleBundle, Trove, TroveType};
 use conary_core::repository::dependency_model::{
-    PackageRelationRemovalMode, RepositoryRequirementKind,
+    DebianMultiArch, PackageRelationRemovalMode, RepositoryRequirementKind,
 };
 use conary_core::scriptlet::ExecutionMode;
 use conary_core::transaction::{PackageRelationIncomingIdentity, PackageRelationRemoval};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 
 #[path = "tests/arch.rs"]
@@ -75,7 +75,7 @@ fn pre_remove_bundle(package_name: &str, version: &str) -> NativeLifecycleBundle
         schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora".to_string(),
-        source_distro: Some("fedora-44".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         source_release: Some("44".to_string()),
         source_arch: Some("x86_64".to_string()),
         source_package: package_name.to_string(),
@@ -102,7 +102,7 @@ fn rpm_bundle_for_phase(
     let entry = &mut bundle.entries[0];
     entry.id = entry_id.to_string();
     entry.native_slot = entry_id.trim_start_matches("rpm:").to_string();
-    entry.phase = phase.clone();
+    entry.phase = phase;
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry.interpreter = interpreter.to_string();
     entry.transaction_order.position = phase.as_str().to_string();
@@ -136,19 +136,6 @@ fn prepared_with_projected_event(
     }
 }
 
-fn empty_extraction() -> ExtractionResult {
-    ExtractionResult {
-        extracted_files: Vec::new(),
-        classified: HashMap::new(),
-        component_names_by_path: None,
-        installed_component_names: None,
-        ccs_remove_hook: None,
-        installed_component_types: Vec::new(),
-        skipped_components: Vec::new(),
-        language_provides: Vec::new(),
-    }
-}
-
 fn deb_entry(
     id: &str,
     phase: LifecyclePath,
@@ -167,7 +154,7 @@ fn deb_entry(
         DebControlMember::Triggers => "triggers",
     }
     .to_string();
-    entry.phase = phase.clone();
+    entry.phase = phase;
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry.interpreter = interpreter.to_string();
     entry.rpm_runtime = None;
@@ -217,6 +204,9 @@ fn deb_remove_with_recovery_bundle(package_name: &str, version: &str) -> NativeL
     let mut bundle = pre_remove_bundle(package_name, version);
     bundle.source_format = SourceFormat::Deb;
     bundle.source_family = "debian".to_string();
+    bundle.source_profile = Some("ubuntu-26.04".to_string());
+    bundle.source_release = Some("26.04".to_string());
+    bundle.source_arch = Some("amd64".to_string());
     bundle.version_scheme = LifecycleVersionScheme::Deb;
     bundle.entries = vec![
         deb_entry(
@@ -274,7 +264,7 @@ fn deb_trigger_runtime_bundle(
     let mut bundle = pre_remove_bundle(package_name, "1");
     bundle.source_format = SourceFormat::Deb;
     bundle.source_family = "debian".to_string();
-    bundle.source_distro = Some("debian".to_string());
+    bundle.source_profile = Some("ubuntu-26.04".to_string());
     bundle.source_release = Some("13".to_string());
     bundle.source_arch = Some("amd64".to_string());
     bundle.version_scheme = LifecycleVersionScheme::Deb;
@@ -382,16 +372,18 @@ fn relation_removal_is_a_first_class_native_remove_event() {
 
     let prepared = PreparedNativeTransaction::prepare_install(
         &conn,
-        "newpkg",
-        "2",
-        None,
-        conary_core::repository::versioning::VersionScheme::Rpm,
-        &[],
-        None,
-        None,
-        &removals,
-        &[],
-        &empty_extraction(),
+        NativeInstallInput {
+            package_name: "newpkg",
+            package_version: "2",
+            package_arch: None,
+            version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
+            provides: &[],
+            new_bundle: None,
+            old_trove: None,
+            relation_removals: &removals,
+            relation_deconfigurations: &[],
+            paths: Vec::new(),
+        },
     )
     .unwrap();
 
@@ -416,6 +408,7 @@ fn debian_disappearance_requires_one_exact_overwriter_for_every_non_conffile_pat
         TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Debian,
     );
+    old.debian_multi_arch = Some(DebianMultiArch::No);
     let old_id = old.insert(&conn).unwrap();
     let mut conffile = ConfigFile::new(
         "/etc/oldpkg.conf".to_string(),
@@ -535,6 +528,7 @@ fn transaction_preflight_walks_debian_recovery_branches() {
         TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Debian,
     );
+    trove.debian_multi_arch = Some(DebianMultiArch::No);
     let trove_id = trove.insert(&conn).unwrap();
     let bundle = deb_remove_with_recovery_bundle("deb-fixture", "1");
     InstalledNativeLifecycleBundle::new(trove_id, None, &bundle)
@@ -840,6 +834,7 @@ fn persisted_debian_trigger_batch_success_clears_reverse_await_state() {
         conary_core::repository::versioning::VersionScheme::Debian,
     );
     interested_trove.architecture = Some("amd64".to_string());
+    interested_trove.debian_multi_arch = Some(DebianMultiArch::No);
     let interested_trove_id = interested_trove.insert(&conn).unwrap();
     let mut interested = InstalledNativeLifecycleBundle::new(
         interested_trove_id,
@@ -858,6 +853,7 @@ fn persisted_debian_trigger_batch_success_clears_reverse_await_state() {
         conary_core::repository::versioning::VersionScheme::Debian,
     );
     awaiter_trove.architecture = Some("amd64".to_string());
+    awaiter_trove.debian_multi_arch = Some(DebianMultiArch::No);
     let awaiter_trove_id = awaiter_trove.insert(&conn).unwrap();
     let mut awaiter = InstalledNativeLifecycleBundle::new(
         awaiter_trove_id,

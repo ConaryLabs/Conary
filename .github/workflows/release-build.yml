@@ -516,7 +516,7 @@ jobs:
           routed to a manual review queue. SBOM and provenance sidecars are not
           published yet.
 
-          Report results with the [beta feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md).
+          Report results with the [pre-alpha tester feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md).
 
           ## Changes
 

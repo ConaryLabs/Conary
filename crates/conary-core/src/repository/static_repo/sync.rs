@@ -164,6 +164,7 @@ fn static_package_row(
             .join_display(&entry.path)
             .map_err(|error| Error::ParseError(format!("Invalid static package path: {error}")))?,
     );
+    package.package_release = entry.release.clone();
     package.architecture = Some(entry.arch.clone());
     package.description = entry.description.clone();
     package.metadata = Some(
@@ -186,6 +187,8 @@ fn static_package_row(
                 provide.native_text.clone(),
                 entry.version_scheme,
             )
+            .with_version_relation(provide.version_relation)
+            .with_architecture_qualifier(provide.architecture_qualifier.clone())
         })
         .collect();
     let mut all_groups = entry.requirements.clone();
@@ -359,6 +362,11 @@ mod tests {
                     name: "widget-api".to_string(),
                     kind: RepositoryCapabilityKind::Generic,
                     version: Some("3".to_string()),
+                    version_relation: Some(
+                        crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                    ),
+                    architecture_qualifier:
+                        crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
                     native_text: Some("widget-api = 3".to_string()),
                 },
             ]

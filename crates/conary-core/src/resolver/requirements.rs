@@ -9,12 +9,14 @@ use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementExpression,
 };
-use crate::repository::selector::PackageSelector;
-use crate::repository::versioning::{
-    RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
-};
+use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint};
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::identity::ProvidedCapability;
+use crate::resolver::provider::matching::{
+    constraint_architecture_matches_package, constraint_architecture_matches_provide,
+    constraint_matches_package, constraint_matches_provide,
+};
+use crate::resolver::provider::types::ConaryConstraint;
 
 /// Load the exact installed package/provide facts used by bounded requirement
 /// evaluation outside the SAT provider.
@@ -34,29 +36,25 @@ pub fn load_installed_package_identities(
             let mut provided_capabilities = Vec::new();
             for provide in ProvideEntry::find_by_trove(conn, trove_id)? {
                 provided_capabilities.push(ProvidedCapability {
-                    name: provide.capability.clone(),
-                    version: provide.version.clone(),
-                    version_scheme,
+                    kind: provide.kind,
+                    name: provide.capability,
+                    version: provide.version,
+                    version_relation: provide.version_relation,
+                    version_scheme: provide.version_scheme,
+                    architecture_qualifier: provide.architecture_qualifier,
                 });
-                let typed = provide.to_typed_string();
-                if typed != provide.capability {
-                    provided_capabilities.push(ProvidedCapability {
-                        name: typed,
-                        version: provide.version,
-                        version_scheme,
-                    });
-                }
             }
             Ok(PackageIdentity {
                 repo_package_id: None,
                 name: trove.name,
                 version: trove.version,
-                package_release: None,
+                package_release: trove.package_release,
                 architecture: trove.architecture,
+                debian_multi_arch: trove.debian_multi_arch,
                 version_scheme,
                 repository_id: trove.installed_from_repository_id,
                 repository_name: String::new(),
-                repository_distro: trove.source_distro,
+                repository_profile: trove.source_profile,
                 repository_priority: 0,
                 canonical_id: None,
                 canonical_name: None,
@@ -77,20 +75,23 @@ pub fn load_installed_package_identities(
 pub(crate) fn load_requirement_candidate_identities(
     conn: &rusqlite::Connection,
     expression: &RepositoryRequirementExpression,
-    architecture: &str,
+    version_scheme: VersionScheme,
 ) -> Result<Vec<PackageIdentity>> {
-    let mut identities = load_installed_package_identities(conn)?
-        .into_iter()
-        .filter(|identity| {
-            PackageSelector::is_architecture_compatible(
-                identity.architecture.as_deref(),
-                architecture,
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut identities = load_installed_package_identities(conn)?;
     let mut seen_repository_packages = HashSet::new();
 
     for clause in expression.atoms() {
+        if let Some(runtime) = crate::repository::rpm_runtime::RpmRuntimeRequirement::from_clause(
+            clause,
+            version_scheme,
+        )
+        .map_err(|error| Error::ConfigError(error.to_string()))?
+        {
+            runtime
+                .ensure_supported()
+                .map_err(|error| Error::ConfigError(error.to_string()))?;
+            continue;
+        }
         if matches!(
             clause.capability_kind,
             None | Some(RepositoryCapabilityKind::PackageName)
@@ -99,7 +100,6 @@ pub(crate) fn load_requirement_candidate_identities(
                 add_repository_identity(
                     conn,
                     identity,
-                    architecture,
                     &mut seen_repository_packages,
                     &mut identities,
                 )?;
@@ -122,7 +122,6 @@ pub(crate) fn load_requirement_candidate_identities(
             add_repository_identity(
                 conn,
                 identity,
-                architecture,
                 &mut seen_repository_packages,
                 &mut identities,
             )?;
@@ -135,16 +134,13 @@ pub(crate) fn load_requirement_candidate_identities(
 fn add_repository_identity(
     conn: &rusqlite::Connection,
     mut identity: PackageIdentity,
-    architecture: &str,
     seen_repository_packages: &mut HashSet<i64>,
     identities: &mut Vec<PackageIdentity>,
 ) -> Result<()> {
     let Some(repository_package_id) = identity.repo_package_id else {
         return Ok(());
     };
-    if !PackageSelector::is_architecture_compatible(identity.architecture.as_deref(), architecture)
-        || !seen_repository_packages.insert(repository_package_id)
-    {
+    if !seen_repository_packages.insert(repository_package_id) {
         return Ok(());
     }
 
@@ -172,18 +168,13 @@ fn repository_provided_capabilities(
     let mut capabilities = Vec::new();
     for provide in RepositoryProvide::find_by_repository_package(conn, repository_package_id)? {
         capabilities.push(ProvidedCapability {
-            name: provide.capability.clone(),
-            version: provide.version.clone(),
+            kind: repository_capability_kind_from_db(&provide.kind)?,
+            name: provide.capability,
+            version: provide.version,
+            version_relation: provide.version_relation,
             version_scheme: provide.version_scheme,
+            architecture_qualifier: provide.architecture_qualifier,
         });
-        let typed = typed_capability_name(&provide.kind, &provide.capability);
-        if typed != provide.capability {
-            capabilities.push(ProvidedCapability {
-                name: typed,
-                version: provide.version,
-                version_scheme: provide.version_scheme,
-            });
-        }
     }
     Ok(capabilities)
 }
@@ -194,15 +185,26 @@ fn repository_capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
         RepositoryCapabilityKind::Virtual => "virtual",
         RepositoryCapabilityKind::Soname => "soname",
         RepositoryCapabilityKind::File => "file",
+        RepositoryCapabilityKind::Path => "path",
+        RepositoryCapabilityKind::Binary => "binary",
+        RepositoryCapabilityKind::PkgConfig => "pkgconfig",
         RepositoryCapabilityKind::Generic => "generic",
     }
 }
 
-fn typed_capability_name(kind: &str, name: &str) -> String {
-    if kind.is_empty() || kind == "package" {
-        name.to_string()
-    } else {
-        format!("{kind}({name})")
+fn repository_capability_kind_from_db(kind: &str) -> Result<RepositoryCapabilityKind> {
+    match kind {
+        "package" => Ok(RepositoryCapabilityKind::PackageName),
+        "virtual" => Ok(RepositoryCapabilityKind::Virtual),
+        "soname" => Ok(RepositoryCapabilityKind::Soname),
+        "file" => Ok(RepositoryCapabilityKind::File),
+        "path" => Ok(RepositoryCapabilityKind::Path),
+        "binary" => Ok(RepositoryCapabilityKind::Binary),
+        "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "generic" => Ok(RepositoryCapabilityKind::Generic),
+        other => Err(Error::ConfigError(format!(
+            "unsupported persisted repository capability kind '{other}'"
+        ))),
     }
 }
 
@@ -214,17 +216,66 @@ fn typed_capability_name(kind: &str, name: &str) -> String {
 pub fn requirement_expression_satisfied(
     expression: &RepositoryRequirementExpression,
     version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
+    packages: &[PackageIdentity],
+) -> Result<bool> {
+    if depending_architecture.is_empty() || native_architecture.is_empty() {
+        return Err(Error::ConfigError(
+            "requirement evaluation requires explicit depending and native architectures"
+                .to_string(),
+        ));
+    }
+    if let Some(package) = packages.iter().find(|package| {
+        package
+            .architecture
+            .as_deref()
+            .is_none_or(|architecture| architecture.is_empty())
+    }) {
+        return Err(Error::ConfigError(format!(
+            "package '{}' has no architecture authority during requirement evaluation",
+            package.name
+        )));
+    }
+    requirement_expression_satisfied_validated(
+        expression,
+        version_scheme,
+        depending_architecture,
+        native_architecture,
+        packages,
+    )
+}
+
+fn requirement_expression_satisfied_validated(
+    expression: &RepositoryRequirementExpression,
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
     packages: &[PackageIdentity],
 ) -> Result<bool> {
     match expression {
         RepositoryRequirementExpression::Atom(clause) => packages
             .iter()
-            .map(|package| atom_satisfied(clause, version_scheme, package))
+            .map(|package| {
+                atom_satisfied(
+                    clause,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    package,
+                )
+            })
             .collect::<Result<Vec<_>>>()
             .map(|matches| matches.into_iter().any(|matched| matched)),
         RepositoryRequirementExpression::And(operands) => {
             for operand in operands {
-                if !requirement_expression_satisfied(operand, version_scheme, packages)? {
+                if !requirement_expression_satisfied_validated(
+                    operand,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    packages,
+                )? {
                     return Ok(false);
                 }
             }
@@ -232,7 +283,13 @@ pub fn requirement_expression_satisfied(
         }
         RepositoryRequirementExpression::Or(operands) => {
             for operand in operands {
-                if requirement_expression_satisfied(operand, version_scheme, packages)? {
+                if requirement_expression_satisfied_validated(
+                    operand,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    packages,
+                )? {
                     return Ok(true);
                 }
             }
@@ -243,10 +300,28 @@ pub fn requirement_expression_satisfied(
             condition,
             otherwise,
         } => {
-            if requirement_expression_satisfied(condition, version_scheme, packages)? {
-                requirement_expression_satisfied(requirement, version_scheme, packages)
+            if requirement_expression_satisfied_validated(
+                condition,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                packages,
+            )? {
+                requirement_expression_satisfied_validated(
+                    requirement,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    packages,
+                )
             } else if let Some(otherwise) = otherwise {
-                requirement_expression_satisfied(otherwise, version_scheme, packages)
+                requirement_expression_satisfied_validated(
+                    otherwise,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    packages,
+                )
             } else {
                 Ok(true)
             }
@@ -256,10 +331,28 @@ pub fn requirement_expression_satisfied(
             condition,
             otherwise,
         } => {
-            if !requirement_expression_satisfied(condition, version_scheme, packages)? {
-                requirement_expression_satisfied(requirement, version_scheme, packages)
+            if !requirement_expression_satisfied_validated(
+                condition,
+                version_scheme,
+                depending_architecture,
+                native_architecture,
+                packages,
+            )? {
+                requirement_expression_satisfied_validated(
+                    requirement,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    packages,
+                )
             } else if let Some(otherwise) = otherwise {
-                requirement_expression_satisfied(otherwise, version_scheme, packages)
+                requirement_expression_satisfied_validated(
+                    otherwise,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    packages,
+                )
             } else {
                 Ok(true)
             }
@@ -267,9 +360,19 @@ pub fn requirement_expression_satisfied(
         RepositoryRequirementExpression::With { left, right } => {
             for package in packages {
                 let package = std::slice::from_ref(package);
-                if requirement_expression_satisfied(left, version_scheme, package)?
-                    && requirement_expression_satisfied(right, version_scheme, package)?
-                {
+                if requirement_expression_satisfied_validated(
+                    left,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    package,
+                )? && requirement_expression_satisfied_validated(
+                    right,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    package,
+                )? {
                     return Ok(true);
                 }
             }
@@ -278,9 +381,19 @@ pub fn requirement_expression_satisfied(
         RepositoryRequirementExpression::Without { left, right } => {
             for package in packages {
                 let package = std::slice::from_ref(package);
-                if requirement_expression_satisfied(left, version_scheme, package)?
-                    && !requirement_expression_satisfied(right, version_scheme, package)?
-                {
+                if requirement_expression_satisfied_validated(
+                    left,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    package,
+                )? && !requirement_expression_satisfied_validated(
+                    right,
+                    version_scheme,
+                    depending_architecture,
+                    native_architecture,
+                    package,
+                )? {
                     return Ok(true);
                 }
             }
@@ -292,9 +405,21 @@ pub fn requirement_expression_satisfied(
 fn atom_satisfied(
     clause: &RepositoryRequirementClause,
     version_scheme: VersionScheme,
+    depending_architecture: &str,
+    native_architecture: &str,
     package: &PackageIdentity,
 ) -> Result<bool> {
-    let constraint = clause
+    if let Some(runtime) =
+        crate::repository::rpm_runtime::RpmRuntimeRequirement::from_clause(clause, version_scheme)
+            .map_err(|error| Error::ConfigError(error.to_string()))?
+    {
+        runtime
+            .ensure_supported()
+            .map_err(|error| Error::ConfigError(error.to_string()))?;
+        return Ok(true);
+    }
+    let raw = clause.version_constraint.clone();
+    let native_constraint = clause
         .version_constraint
         .as_deref()
         .map(|raw| {
@@ -309,41 +434,48 @@ fn atom_satisfied(
         })
         .transpose()?
         .unwrap_or(RepoVersionConstraint::Any);
+    let constraint = ConaryConstraint::Repository {
+        scheme: version_scheme,
+        constraint: native_constraint,
+        capability_kind: clause.capability_kind,
+        raw,
+        architecture_qualifier: clause.architecture_qualifier.clone(),
+        depending_architecture: depending_architecture.to_string(),
+    };
 
     if matches!(
         clause.capability_kind,
         None | Some(RepositoryCapabilityKind::PackageName)
     ) && package.name == clause.name
     {
-        if matches!(constraint, RepoVersionConstraint::Any) {
-            return Ok(true);
-        }
-        if package.version_scheme != version_scheme {
+        if !constraint_architecture_matches_package(&constraint, package, native_architecture) {
             return Ok(false);
         }
-        return Ok(repo_version_satisfies(
-            version_scheme,
-            &package.version,
+        return Ok(constraint_matches_package(
             &constraint,
+            &package.version,
+            package.version_scheme,
         )?);
     }
 
-    let capability_name = clause.capability_kind.map_or_else(
-        || clause.name.clone(),
-        |kind| typed_capability_name(repository_capability_kind(kind), &clause.name),
-    );
-    for provide in package
-        .provided_capabilities
-        .iter()
-        .filter(|provide| provide.name == capability_name)
-    {
-        if matches!(constraint, RepoVersionConstraint::Any) {
-            return Ok(true);
-        }
-        if let Some(version) = provide.version.as_deref()
-            && provide.version_scheme == version_scheme
-            && repo_version_satisfies(version_scheme, version, &constraint)?
-        {
+    for provide in package.provided_capabilities.iter().filter(|provide| {
+        provide.name == clause.name
+            && clause
+                .capability_kind
+                .is_none_or(|kind| provide.kind == kind)
+    }) {
+        if constraint_architecture_matches_provide(
+            &constraint,
+            package,
+            &provide.architecture_qualifier,
+            provide.version_scheme,
+            native_architecture,
+        ) && constraint_matches_provide(
+            &constraint,
+            provide.version.as_deref(),
+            provide.version_relation,
+            provide.version_scheme,
+        )? {
             return Ok(true);
         }
     }
@@ -353,6 +485,9 @@ fn atom_satisfied(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repository::dependency_model::{
+        DebianMultiArch, ProvideArchitectureQualifier, RequirementArchitectureQualifier,
+    };
     use crate::repository::rpm_dependency::parse_rpm_dependency;
     use crate::resolver::identity::ProvidedCapability;
 
@@ -362,11 +497,12 @@ mod tests {
             name: name.to_string(),
             version: "1".to_string(),
             package_release: None,
-            architecture: None,
+            architecture: Some("x86_64".to_string()),
+            debian_multi_arch: None,
             version_scheme: VersionScheme::Rpm,
             repository_id: None,
             repository_name: String::new(),
-            repository_distro: None,
+            repository_profile: None,
             repository_priority: 0,
             canonical_id: None,
             canonical_name: None,
@@ -375,12 +511,34 @@ mod tests {
             provided_capabilities: provides
                 .iter()
                 .map(|name| ProvidedCapability {
+                    kind: RepositoryCapabilityKind::Generic,
                     name: (*name).to_string(),
                     version: None,
+                    version_relation: None,
                     version_scheme: VersionScheme::Rpm,
+                    architecture_qualifier: Default::default(),
                 })
                 .collect(),
         }
+    }
+
+    fn debian_provider(
+        owner_architecture: &str,
+        qualifier: ProvideArchitectureQualifier,
+    ) -> PackageIdentity {
+        let mut package = package("mail-provider", &[]);
+        package.architecture = Some(owner_architecture.to_string());
+        package.debian_multi_arch = Some(DebianMultiArch::No);
+        package.version_scheme = VersionScheme::Debian;
+        package.provided_capabilities = vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::Virtual,
+            name: "mail-api".to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: qualifier,
+        }];
+        package
     }
 
     #[test]
@@ -390,6 +548,8 @@ mod tests {
             !requirement_expression_satisfied(
                 &expression,
                 VersionScheme::Rpm,
+                "x86_64",
+                "x86_64",
                 &[
                     package("provider-a", &["feature-a"]),
                     package("provider-b", &["feature-b"]),
@@ -401,6 +561,8 @@ mod tests {
             requirement_expression_satisfied(
                 &expression,
                 VersionScheme::Rpm,
+                "x86_64",
+                "x86_64",
                 &[package("provider-both", &["feature-a", "feature-b"])],
             )
             .unwrap()
@@ -413,6 +575,7 @@ mod tests {
             name: "libexample.so.1".to_string(),
             capability_kind: Some(RepositoryCapabilityKind::Soname),
             version_constraint: None,
+            architecture_qualifier: Default::default(),
             native_text: Some("libexample.so.1".to_string()),
         });
 
@@ -420,17 +583,103 @@ mod tests {
             !requirement_expression_satisfied(
                 &expression,
                 VersionScheme::Rpm,
+                "x86_64",
+                "x86_64",
                 &[package("libexample.so.1", &[])],
             )
             .unwrap()
         );
+        let mut provider = package("libexample", &[]);
+        provider.provided_capabilities = vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::Soname,
+            name: "libexample.so.1".to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: Default::default(),
+        }];
         assert!(
             requirement_expression_satisfied(
                 &expression,
                 VersionScheme::Rpm,
-                &[package("libexample", &["soname(libexample.so.1)"])],
+                "x86_64",
+                "x86_64",
+                &[provider],
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn bounded_evaluator_uses_exact_debian_provide_architecture() {
+        let any = RepositoryRequirementExpression::Atom(RepositoryRequirementClause {
+            name: "mail-api".to_string(),
+            capability_kind: None,
+            version_constraint: None,
+            architecture_qualifier: RequirementArchitectureQualifier::Any,
+            native_text: Some("mail-api:any".to_string()),
+        });
+        let unqualified = RepositoryRequirementExpression::Atom(
+            RepositoryRequirementClause::name_only("mail-api".to_string()),
+        );
+        let explicit_any = debian_provider("arm64", ProvideArchitectureQualifier::Any);
+
+        assert!(
+            requirement_expression_satisfied(
+                &any,
+                VersionScheme::Debian,
+                "amd64",
+                "amd64",
+                std::slice::from_ref(&explicit_any),
+            )
+            .unwrap()
+        );
+        assert!(
+            !requirement_expression_satisfied(
+                &unqualified,
+                VersionScheme::Debian,
+                "amd64",
+                "amd64",
+                std::slice::from_ref(&explicit_any),
+            )
+            .unwrap()
+        );
+
+        let exact_amd64 = debian_provider(
+            "arm64",
+            ProvideArchitectureQualifier::Exact("amd64".to_string()),
+        );
+        assert!(
+            requirement_expression_satisfied(
+                &unqualified,
+                VersionScheme::Debian,
+                "amd64",
+                "amd64",
+                &[exact_amd64],
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn bounded_evaluator_rejects_missing_architecture_authority() {
+        let expression = RepositoryRequirementExpression::Atom(
+            RepositoryRequirementClause::name_only("feature-a".to_string()),
+        );
+        let mut provider = package("provider", &["feature-a"]);
+        provider.architecture = None;
+
+        let error = requirement_expression_satisfied(
+            &expression,
+            VersionScheme::Rpm,
+            "x86_64",
+            "x86_64",
+            &[provider],
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("has no architecture authority"),
+            "{error}"
         );
     }
 }

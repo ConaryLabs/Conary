@@ -113,11 +113,15 @@ pub async fn cmd_ccs_install(
         println!("Skipping dependency check (--no-deps)");
     } else {
         println!("Checking dependencies...");
+        let effective_policy = conary_core::repository::load_effective_policy(
+            &conn,
+            conary_core::repository::resolution_policy::RequestScope::Any,
+        )?;
         let resolution = conary_core::resolver::solve_requirement_groups_with_policy(
             &conn,
             ccs_pkg.requirements(),
             ccs_pkg.version_scheme(),
-            &conary_core::repository::resolution_policy::ResolutionPolicy::new(),
+            &effective_policy.resolution,
         )?;
         if let Some(conflict) = resolution.conflict_message {
             if dry_run {
@@ -160,6 +164,7 @@ pub async fn cmd_ccs_install(
                 quiet: false,
                 sandbox_mode: sandbox,
                 allow_downgrade: false,
+                intent: crate::commands::install::InstallIntent::PackageChange,
                 reinstall,
                 selection_reason: None,
                 selected_manifest_components: Some(selected_components.names.clone()),
@@ -182,6 +187,7 @@ pub async fn cmd_ccs_install(
             quiet: false,
             sandbox_mode: sandbox,
             allow_downgrade: false,
+            intent: crate::commands::install::InstallIntent::PackageChange,
             reinstall,
             selection_reason: None,
             selected_manifest_components: Some(selected_components.names.clone()),

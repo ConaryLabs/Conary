@@ -11,6 +11,7 @@ use anyhow::Result;
 use conary_core::db::models::{
     InstalledRequirementAtom, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide, Trove,
 };
+use conary_core::repository::dependency_model::RepositoryCapabilityKind;
 use std::collections::HashSet;
 use tracing::info;
 
@@ -236,9 +237,11 @@ fn repository_providers_for_capability(
     }
 
     if let Some((kind, typed_capability)) = parse_typed_capability_query(capability) {
-        for provider in
-            RepositoryProvide::find_by_capability_and_kind(conn, typed_capability, kind)?
-        {
+        for provider in RepositoryProvide::find_by_capability_and_kind(
+            conn,
+            typed_capability,
+            capability_kind_name(kind),
+        )? {
             if seen_packages.insert(provider.repository_package_id) {
                 providers.push(provider);
             }
@@ -247,18 +250,36 @@ fn repository_providers_for_capability(
     Ok(providers)
 }
 
-fn parse_typed_capability_query(capability: &str) -> Option<(&str, &str)> {
+const fn capability_kind_name(kind: RepositoryCapabilityKind) -> &'static str {
+    match kind {
+        RepositoryCapabilityKind::PackageName => "package",
+        RepositoryCapabilityKind::Virtual => "virtual",
+        RepositoryCapabilityKind::Soname => "soname",
+        RepositoryCapabilityKind::File => "file",
+        RepositoryCapabilityKind::Path => "path",
+        RepositoryCapabilityKind::Binary => "binary",
+        RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::Generic => "generic",
+    }
+}
+
+fn parse_typed_capability_query(capability: &str) -> Option<(RepositoryCapabilityKind, &str)> {
     let (kind, value) = capability.split_once('(')?;
     let value = value.strip_suffix(')')?;
-    if kind.is_empty() || value.is_empty() {
+    if value.is_empty() {
         return None;
     }
-    if !kind
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return None;
-    }
+    let kind = match kind {
+        "package" => RepositoryCapabilityKind::PackageName,
+        "virtual" => RepositoryCapabilityKind::Virtual,
+        "soname" => RepositoryCapabilityKind::Soname,
+        "file" => RepositoryCapabilityKind::File,
+        "path" => RepositoryCapabilityKind::Path,
+        "binary" => RepositoryCapabilityKind::Binary,
+        "pkgconfig" => RepositoryCapabilityKind::PkgConfig,
+        "generic" => RepositoryCapabilityKind::Generic,
+        _ => return None,
+    };
     Some((kind, value))
 }
 
@@ -270,7 +291,10 @@ mod tests {
     fn parse_typed_capability_query_reads_explicit_wrapper() {
         let parsed = parse_typed_capability_query("soname(libssl.so.3)");
 
-        assert_eq!(parsed, Some(("soname", "libssl.so.3")));
+        assert_eq!(
+            parsed,
+            Some((RepositoryCapabilityKind::Soname, "libssl.so.3"))
+        );
     }
 
     #[test]

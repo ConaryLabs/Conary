@@ -266,7 +266,7 @@ impl SearchEngine {
         let current_conversions = current_conversion_search_keys(&conn)?;
         let mut stmt = conn.prepare(
             "SELECT rp.name, rp.version, rp.package_release,
-                    r.default_strategy_distro as profile_id,
+                    r.source_profile as profile_id,
                     rp.description,
                     GROUP_CONCAT(
                         rr.capability || ' ' || COALESCE(rr.version_constraint, ''),
@@ -322,12 +322,12 @@ impl SearchEngine {
             }
             let architecture: Option<String> = row.get(7)?;
             let converted = current_conversions.contains(&SearchConversionKey {
-                distro: distro.clone(),
+                source_profile: profile_id.clone(),
                 name: name.clone(),
                 version: version.clone(),
                 architecture: architecture.clone(),
             }) || current_conversions.contains(&SearchConversionKey {
-                distro: distro.clone(),
+                source_profile: profile_id,
                 name: name.clone(),
                 version: version.clone(),
                 architecture: None,
@@ -354,28 +354,45 @@ impl SearchEngine {
         }
 
         let mut native_stmt = conn.prepare(
-            "SELECT distro, name, version, package_release, architecture, total_size
+            "SELECT source_profile, name, version, package_release, architecture, total_size
              FROM native_package_publications
              WHERE status = 'public'
              ORDER BY name, version, package_release, architecture",
         )?;
         let native_rows = native_stmt.query_map([], |row| {
-            Ok(PackageSearchDoc {
-                distro: row.get(0)?,
-                name: row.get(1)?,
-                version: row.get(2)?,
-                release: Some(row.get(3)?),
-                architecture: Some(row.get(4)?),
-                description: Some("Native CCS release artifact".to_string()),
-                requirement_terms: None,
-                size: row.get::<_, i64>(5).map(|size| size as u64)?,
-                converted: false,
-                source_kind: Some("native-ccs".to_string()),
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
         })?;
 
         for row in native_rows {
-            let pkg = row.context("Failed to read native package row")?;
+            let (source_profile, name, version, release, architecture, total_size) =
+                row.context("Failed to read native package row")?;
+            let profile =
+                conary_core::repository::supported_profiles::profile_by_public_id(&source_profile)
+                    .with_context(|| {
+                        format!(
+                            "native package publication has unsupported source profile \
+                             '{source_profile}'"
+                        )
+                    })?;
+            let pkg = PackageSearchDoc {
+                distro: profile.remi_route_slug().to_string(),
+                name,
+                version,
+                release: Some(release),
+                architecture: Some(architecture),
+                description: Some("Native CCS release artifact".to_string()),
+                requirement_terms: None,
+                size: u64::try_from(total_size).context("negative native publication size")?,
+                converted: false,
+                source_kind: Some("native-ccs".to_string()),
+            };
             self.write_package(&mut writer, &pkg)?;
             count += 1;
         }
@@ -543,7 +560,7 @@ impl SearchEngine {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SearchConversionKey {
-    distro: String,
+    source_profile: String,
     name: String,
     version: String,
     architecture: Option<String>,
@@ -558,10 +575,10 @@ fn current_conversion_search_keys(
             let artifact = converted.repository_artifact()?;
             converted.scriptlet_summary()?;
             keys.insert(SearchConversionKey {
-                distro: artifact.distro.to_string(),
+                source_profile: artifact.source_profile.to_string(),
                 name: artifact.package_name.to_string(),
                 version: artifact.package_version.to_string(),
-                architecture: artifact.package_architecture.map(str::to_string),
+                architecture: Some(artifact.package_architecture.to_string()),
             });
         }
     }
@@ -627,7 +644,7 @@ mod tests {
         let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
         let mut repo = Repository::new(format!("{distro}-base"), "https://example.com".to_string());
-        repo.default_strategy_distro = Some(profile.id().to_string());
+        repo.source_profile = Some(profile.id().to_string());
         let repo_id = repo.insert(conn).unwrap();
 
         let mut pkg = RepositoryPackage::new(
@@ -650,10 +667,15 @@ mod tests {
         package: &str,
         version: &str,
     ) {
+        let source_profile =
+            conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+                .unwrap_or_else(|| panic!("test route '{distro}' must be supported"))
+                .id();
         let mut converted = ConvertedPackage::new_repository(
-            distro.to_string(),
+            source_profile.to_string(),
             package.to_string(),
             version.to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{package}-{version}-source"),
             &[format!("sha256:{package}-{version}-chunk")],
@@ -661,7 +683,6 @@ mod tests {
             format!("sha256:{package}-{version}-content"),
             format!("/tmp/{package}-{version}.ccs"),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }

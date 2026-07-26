@@ -1,0 +1,2 @@
+#!/bin/sh
+printf 'conary-native-lifecycle-parity-v1\n'

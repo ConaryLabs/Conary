@@ -28,10 +28,10 @@ struct ParsedConversion {
 
 impl ConversionService {
     fn public_feed_for_route(
-        distro: &str,
+        route: &str,
     ) -> Result<&'static conary_core::repository::supported_profiles::SupportedProfile> {
-        conary_core::repository::supported_profiles::profile_for_remi_route(distro).ok_or_else(
-            || anyhow!("release distro {distro} does not map to exactly one repository feed"),
+        conary_core::repository::supported_profiles::profile_for_remi_route(route).ok_or_else(
+            || anyhow!("release route {route} does not map to exactly one repository feed"),
         )
     }
 
@@ -126,7 +126,7 @@ impl ConversionService {
 
         let started = Instant::now();
         if let Some(existing) = self
-            .cached_conversion_result_async(distro, &repo_pkg, &original_checksum)
+            .cached_conversion_result_async(source_feed.id(), &repo_pkg, &original_checksum)
             .await?
         {
             timing.record(ConversionPhase::CacheLookup, started.elapsed());
@@ -136,11 +136,11 @@ impl ConversionService {
         timing.record(ConversionPhase::CacheLookup, started.elapsed());
 
         let parse_service = self.clone();
-        let distro_owned = distro.to_string();
+        let source_profile = source_feed.id().to_string();
         let output_dir = temp_dir.path().join("output");
         let parsed = tokio::task::spawn_blocking(move || {
             parse_service.parse_and_convert_package(
-                &distro_owned,
+                &source_profile,
                 repo_pkg,
                 pkg_path,
                 output_dir,
@@ -155,20 +155,24 @@ impl ConversionService {
         let stored_chunks = self
             .store_chunks_with_timing(&parsed.conversion_result)
             .await?;
+        timing.record(ConversionPhase::Chunking, stored_chunks.chunking_duration);
         timing.record(ConversionPhase::CasWrite, stored_chunks.cas_duration);
         if let Some(duration) = stored_chunks.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
         } else {
             timing.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
         }
-        info!("Stored {} chunks/blobs", stored_chunks.chunk_hashes.len());
+        info!(
+            "Stored {} emitted-artifact chunks",
+            stored_chunks.chunk_hashes.len()
+        );
 
         let persist_service = self.clone();
-        let distro_owned = distro.to_string();
+        let source_profile_owned = source_feed.id().to_string();
         let started = Instant::now();
         tokio::task::spawn_blocking(move || {
             persist_service.persist_conversion_result(PersistConversionInput {
-                distro: distro_owned,
+                source_profile: source_profile_owned,
                 metadata: parsed.metadata,
                 format: parsed.format,
                 original_checksum: parsed.original_checksum,
@@ -187,6 +191,7 @@ impl ConversionService {
             ConversionPhase::ArchiveExtraction,
             ConversionPhase::NativeShellAstExtraction,
             ConversionPhase::AdapterDispatch,
+            ConversionPhase::CcsEmission,
             ConversionPhase::Chunking,
             ConversionPhase::CasWrite,
             ConversionPhase::R2WriteThrough,
@@ -213,7 +218,7 @@ impl ConversionService {
 
     fn parse_and_convert_package(
         &self,
-        distro: &str,
+        source_profile: &str,
         repo_pkg: RepositoryPackage,
         pkg_path: PathBuf,
         output_dir: PathBuf,
@@ -224,7 +229,7 @@ impl ConversionService {
 
         let conn = conary_core::db::open(&self.db_path)?;
         let started = Instant::now();
-        let (mut metadata, files, format) = self.parse_package(&pkg_path, distro)?;
+        let (mut metadata, files, format) = self.parse_package(&pkg_path, source_profile)?;
         phase_timings.push(ConversionPhaseTiming {
             phase: ConversionPhase::ArchiveExtraction,
             duration_ms: started.elapsed().as_millis(),
@@ -237,7 +242,7 @@ impl ConversionService {
             "Parsed: {} v{} ({} files, {} native provides)",
             metadata.name,
             metadata.version,
-            files.len(),
+            files.files().len(),
             metadata.provides.len()
         );
         phase_timings.push(ConversionPhaseTiming {
@@ -248,21 +253,18 @@ impl ConversionService {
         std::fs::create_dir_all(&output_dir)?;
         let output_dir = output_dir.canonicalize().unwrap_or(output_dir);
 
-        let options = ConversionOptions {
-            enable_chunking: true,
-            output_dir,
-        };
+        let options = ConversionOptions { output_dir };
 
         let keys_dir = self.repository_keys_dir.as_ref().context(
             "Remi conversion requires release_publish.repository_keys_dir for CCS authority signing",
         )?;
         let signing_key = conary_core::ccs::SigningKeyPair::load_from_file(
-            &keys_dir.join(distro).join("targets.private"),
+            &keys_dir.join(source_profile).join("targets.private"),
         )
         .map_err(anyhow::Error::from)
-        .with_context(|| format!("load Remi CCS authority key for {distro}"))?;
+        .with_context(|| format!("load Remi CCS authority key for {source_profile}"))?;
         let converter = NativePackageConverter::new(options)
-            .with_source_distro(distro)
+            .with_source_profile(source_profile)
             .with_conversion_tool("remi")
             .with_signing_key(std::sync::Arc::new(signing_key));
         skipped_phases.push(ConversionSkippedPhase {
@@ -272,10 +274,10 @@ impl ConversionService {
 
         let started = Instant::now();
         let conversion_result = converter
-            .convert(&metadata, &files, format, &original_checksum)
+            .convert_payload(&metadata, files.files(), format, &original_checksum)
             .map_err(|e| anyhow!("Conversion failed: {}", e))?;
         phase_timings.push(ConversionPhaseTiming {
-            phase: ConversionPhase::Chunking,
+            phase: ConversionPhase::CcsEmission,
             duration_ms: started.elapsed().as_millis(),
         });
 

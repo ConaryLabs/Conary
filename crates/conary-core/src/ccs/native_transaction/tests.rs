@@ -43,7 +43,7 @@ fn bundle(format: SourceFormat, entries: Vec<NativeLifecycleEntry>) -> NativeLif
         schema_revision: crate::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: format,
         source_family: "fixture".to_string(),
-        source_distro: None,
+        source_profile: None,
         source_release: None,
         source_arch: None,
         source_package: "owner".to_string(),
@@ -94,7 +94,7 @@ fn entry(id: &str) -> NativeLifecycleEntry {
 
 fn lifecycle_entry(id: &str, phase: LifecyclePath) -> NativeLifecycleEntry {
     let mut entry = entry(id);
-    entry.phase = phase.clone();
+    entry.phase = phase;
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry
 }
@@ -169,7 +169,7 @@ fn deb_entry(
                 DebMaintainerInvocationMetadata {
                     mode,
                     arguments,
-                    lifecycle_paths: vec![entry.phase.clone()],
+                    lifecycle_paths: vec![entry.phase],
                 }
             })
             .collect(),

@@ -5,15 +5,14 @@
 //! Package metadata selects the contract. File identities select the action.
 //! Paths, package names, distro names, and script text never select semantics.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use crate::db::models::ConfigSource;
-use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
+use crate::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 
-pub const GENERATION_CONFIG_TRANSACTION_SCHEMA_VERSION: u32 = 2;
+pub const GENERATION_CONFIG_TRANSACTION_SCHEMA_VERSION: u32 = 4;
 
 /// Return whether a package payload entry participates in the exact `/etc`
 /// configuration transaction contract.
@@ -220,8 +219,7 @@ pub fn decide_deb_remove_on_upgrade(
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ConfigArtifact {
     Regular {
-        sha256: String,
-        content_base64: String,
+        content: PayloadContentAuthority,
         node: ResolvedPayloadNode,
     },
     Symlink {
@@ -232,7 +230,10 @@ pub enum ConfigArtifact {
 }
 
 impl ConfigArtifact {
-    pub fn regular(content: &[u8], node: ResolvedPayloadNode) -> crate::Result<Self> {
+    pub fn regular(
+        content: PayloadContentAuthority,
+        node: ResolvedPayloadNode,
+    ) -> crate::Result<Self> {
         if !matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
             return Err(crate::Error::InvalidPath(
                 "regular config artifact requires a regular payload node".to_string(),
@@ -240,11 +241,10 @@ impl ConfigArtifact {
         }
         node.validate()
             .map_err(|error| crate::Error::InvalidPath(error.to_string()))?;
-        Ok(Self::Regular {
-            sha256: crate::hash::sha256(content),
-            content_base64: BASE64.encode(content),
-            node,
-        })
+        content
+            .validate()
+            .map_err(|error| crate::Error::ConfigError(error.to_string()))?;
+        Ok(Self::Regular { content, node })
     }
 
     pub fn symlink(target: String, node: ResolvedPayloadNode) -> crate::Result<Self> {
@@ -273,7 +273,16 @@ impl ConfigArtifact {
     #[must_use]
     pub fn sha256(&self) -> &str {
         match self {
-            Self::Regular { sha256, .. } | Self::Symlink { sha256, .. } => sha256,
+            Self::Regular { content, .. } => &content.sha256,
+            Self::Symlink { sha256, .. } => sha256,
+        }
+    }
+
+    #[must_use]
+    pub fn content_authority(&self) -> Option<&PayloadContentAuthority> {
+        match self {
+            Self::Regular { content, .. } => Some(content),
+            Self::Symlink { .. } => None,
         }
     }
 
@@ -284,34 +293,9 @@ impl ConfigArtifact {
         }
     }
 
-    pub fn regular_content(&self) -> crate::Result<Option<Vec<u8>>> {
-        match self {
-            Self::Regular {
-                sha256,
-                content_base64,
-                ..
-            } => {
-                let content = BASE64.decode(content_base64).map_err(|error| {
-                    crate::Error::ParseError(format!(
-                        "invalid generation config artifact base64: {error}"
-                    ))
-                })?;
-                let actual = crate::hash::sha256(&content);
-                if &actual != sha256 {
-                    return Err(crate::Error::ChecksumMismatch {
-                        expected: sha256.clone(),
-                        actual,
-                    });
-                }
-                Ok(Some(content))
-            }
-            Self::Symlink { .. } => Ok(None),
-        }
-    }
-
     pub fn validate(&self) -> crate::Result<()> {
         match self {
-            Self::Regular { node, .. } => {
+            Self::Regular { content, node } => {
                 node.validate()
                     .map_err(|error| crate::Error::InvalidPath(error.to_string()))?;
                 if !matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
@@ -319,7 +303,9 @@ impl ConfigArtifact {
                         "regular config artifact has non-regular payload authority".to_string(),
                     ));
                 }
-                self.regular_content()?;
+                content
+                    .validate()
+                    .map_err(|error| crate::Error::ConfigError(error.to_string()))?;
             }
             Self::Symlink {
                 sha256,
@@ -350,6 +336,7 @@ impl ConfigArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigPackageState {
     pub source: ConfigSource,
     pub noreplace: bool,
@@ -371,6 +358,7 @@ pub enum ConfigTransactionOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigPathTransaction {
     pub path: String,
     pub operation: ConfigTransactionOperation,
@@ -382,6 +370,7 @@ pub struct ConfigPathTransaction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenerationConfigTransaction {
     pub schema_version: u32,
     pub entries: Vec<ConfigPathTransaction>,
@@ -397,6 +386,27 @@ impl Default for GenerationConfigTransaction {
 }
 
 impl GenerationConfigTransaction {
+    /// Exact CAS-backed regular content referenced by this durable transaction.
+    pub fn regular_content_authorities(&self) -> impl Iterator<Item = &PayloadContentAuthority> {
+        self.entries
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .before
+                    .iter()
+                    .filter_map(|state| state.artifact.as_ref())
+                    .chain(entry.current.iter())
+                    .chain(
+                        entry
+                            .after
+                            .iter()
+                            .filter_map(|state| state.artifact.as_ref()),
+                    )
+                    .chain(entry.auxiliaries.iter().map(|(_, artifact)| artifact))
+            })
+            .filter_map(ConfigArtifact::content_authority)
+    }
+
     /// Build the exact pre-transaction state used to reverse a native upgrade.
     ///
     /// The forward transaction already owns the complete primary and auxiliary
@@ -473,6 +483,30 @@ impl GenerationConfigTransaction {
                     entry.path
                 )));
             }
+            if matches!(
+                entry.operation,
+                ConfigTransactionOperation::Remove | ConfigTransactionOperation::Purge
+            ) && entry.before.is_none()
+            {
+                return Err(crate::Error::ConfigError(format!(
+                    "generation config {:?} for {} has no exact prior package state",
+                    entry.operation, entry.path
+                )));
+            }
+            if entry.operation == ConfigTransactionOperation::RemoveOnUpgrade {
+                let Some(before) = entry.before.as_ref() else {
+                    return Err(crate::Error::ConfigError(format!(
+                        "remove-on-upgrade config transaction for {} has no exact prior package state",
+                        entry.path
+                    )));
+                };
+                if before.source != ConfigSource::Deb {
+                    return Err(crate::Error::ConfigError(format!(
+                        "remove-on-upgrade config transaction for {} has non-Debian prior source {}",
+                        entry.path, before.source
+                    )));
+                }
+            }
             if let Some(current) = &entry.current {
                 current.validate()?;
             }
@@ -490,19 +524,40 @@ impl GenerationConfigTransaction {
                     }
                 }
             }
-            if let Some(after) = &entry.after {
-                if after.ghost {
-                    if after.original_sha256.is_some() || after.artifact.is_some() {
+            for (position, state) in [
+                ("before", entry.before.as_ref()),
+                ("after", entry.after.as_ref()),
+            ] {
+                let Some(state) = state else {
+                    continue;
+                };
+                if state.ghost {
+                    if state.original_sha256.is_some() || state.artifact.is_some() {
                         return Err(crate::Error::ConfigError(format!(
-                            "ghost config transaction for {} carries a payload identity",
+                            "ghost config transaction {position} state for {} carries a payload identity",
+                            entry.path,
+                        )));
+                    }
+                } else {
+                    let hash = state.original_sha256.as_deref().ok_or_else(|| {
+                        crate::Error::ConfigError(format!(
+                            "non-ghost config transaction {position} state for {} has no exact package SHA-256",
+                            entry.path
+                        ))
+                    })?;
+                    validate_canonical_sha256(
+                        hash,
+                        &format!(
+                            "config transaction {position} package identity for {}",
+                            entry.path
+                        ),
+                    )?;
+                    if position == "after" && state.artifact.is_none() {
+                        return Err(crate::Error::ConfigError(format!(
+                            "non-ghost config transaction for {} has no payload artifact",
                             entry.path
                         )));
                     }
-                } else if after.artifact.is_none() {
-                    return Err(crate::Error::ConfigError(format!(
-                        "non-ghost config transaction for {} has no payload artifact",
-                        entry.path
-                    )));
                 }
             }
             let mut auxiliary_paths = BTreeSet::new();
@@ -544,9 +599,10 @@ impl ConfigPathTransaction {
                 paths.insert(format!("{pacsave}.1"));
             } else if let Some(number) = path
                 .strip_prefix(&(pacsave.clone() + "."))
-                .and_then(|number| number.parse::<u64>().ok())
+                .and_then(parse_canonical_positive_decimal)
+                .and_then(|number| number.checked_add(1))
             {
-                paths.insert(format!("{pacsave}.{}", number + 1));
+                paths.insert(format!("{pacsave}.{number}"));
             }
         }
         paths.into_iter().collect()
@@ -574,284 +630,32 @@ fn valid_config_auxiliary_path(primary: &str, candidate: &str) -> bool {
     }
     suffix
         .strip_prefix(".pacsave.")
-        .and_then(|number| number.parse::<u64>().ok())
-        .is_some_and(|number| number > 0)
+        .and_then(parse_canonical_positive_decimal)
+        .is_some()
+}
+
+/// Parse libalpm's canonical positive decimal `.pacsave.N` suffix.
+///
+/// This rejects lookalike spellings such as `00`, `01`, and `+1`.
+#[must_use]
+pub fn parse_canonical_positive_decimal(value: &str) -> Option<u64> {
+    let number = value.parse::<u64>().ok()?;
+    (number > 0 && number.to_string() == value).then_some(number)
+}
+
+fn validate_canonical_sha256(value: &str, context: &str) -> crate::Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(crate::Error::ConfigError(format!(
+            "{context} must be a lowercase raw 64-hex SHA-256 digest"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
-    use std::collections::BTreeMap;
-
-    const OLD: &str = "old";
-    const LOCAL: &str = "local";
-    const NEW: &str = "new";
-
-    fn resolved_node(kind: PayloadNodeKind, mode: u32) -> ResolvedPayloadNode {
-        ResolvedPayloadNode::from_numeric_source(PayloadNode {
-            kind,
-            mode,
-            user: PayloadIdentity::Numeric { id: 0 },
-            group: PayloadIdentity::Numeric { id: 0 },
-            mtime: PayloadTimestamp::UNIX_EPOCH,
-            xattrs: BTreeMap::new(),
-        })
-        .unwrap()
-    }
-
-    fn regular(content: &[u8], mode: u32) -> ConfigArtifact {
-        ConfigArtifact::regular(
-            content,
-            resolved_node(
-                PayloadNodeKind::Regular {
-                    hardlink_identity: None,
-                },
-                mode,
-            ),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn alpm_three_identity_matrix_matches_documented_actions() {
-        assert_eq!(
-            decide_config_install(ConfigSource::Arch, true, Some(OLD), Some(OLD), OLD),
-            ConfigInstallDecision::Install
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Arch, true, Some(OLD), Some(OLD), NEW),
-            ConfigInstallDecision::Install
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Arch, true, Some(OLD), Some(LOCAL), OLD),
-            ConfigInstallDecision::Keep
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Arch, true, Some(OLD), Some(NEW), NEW),
-            ConfigInstallDecision::Install
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Arch, true, Some(OLD), Some(LOCAL), NEW),
-            ConfigInstallDecision::InstallAlternative(ConfigSuffix::PacNew)
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Arch, true, None, Some(LOCAL), NEW),
-            ConfigInstallDecision::InstallAlternative(ConfigSuffix::PacNew)
-        );
-    }
-
-    #[test]
-    fn rpm_distinguishes_noreplace_save_and_first_install_backup() {
-        assert_eq!(
-            decide_config_install(ConfigSource::Rpm, true, Some(OLD), Some(LOCAL), NEW),
-            ConfigInstallDecision::InstallAlternative(ConfigSuffix::RpmNew)
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Rpm, false, Some(OLD), Some(LOCAL), NEW),
-            ConfigInstallDecision::SaveCurrentAndInstall(ConfigSuffix::RpmSave)
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Rpm, false, None, Some(LOCAL), NEW),
-            ConfigInstallDecision::SaveCurrentAndInstall(ConfigSuffix::RpmOrig)
-        );
-    }
-
-    #[test]
-    fn dpkg_default_keeps_dual_edits_and_user_deletions() {
-        assert_eq!(
-            decide_config_install(ConfigSource::Deb, true, Some(OLD), Some(LOCAL), NEW),
-            ConfigInstallDecision::InstallAlternative(ConfigSuffix::DpkgDist)
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Deb, true, Some(OLD), None, OLD),
-            ConfigInstallDecision::Keep
-        );
-        assert_eq!(
-            decide_config_install(ConfigSource::Deb, true, Some(OLD), None, NEW),
-            ConfigInstallDecision::InstallAlternative(ConfigSuffix::DpkgDist)
-        );
-    }
-
-    #[test]
-    fn dpkg_remove_on_upgrade_removes_pristine_and_saves_modified() {
-        assert_eq!(
-            decide_deb_remove_on_upgrade(Some(OLD), Some(OLD)),
-            ConfigRemovalDecision::Remove
-        );
-        assert_eq!(
-            decide_deb_remove_on_upgrade(Some(OLD), Some(LOCAL)),
-            ConfigRemovalDecision::SaveCurrent(ConfigSuffix::DpkgOld)
-        );
-        assert_eq!(
-            decide_deb_remove_on_upgrade(Some(OLD), None),
-            ConfigRemovalDecision::Remove
-        );
-    }
-
-    #[test]
-    fn removal_contracts_cover_residuals_purge_and_native_backups() {
-        assert_eq!(
-            decide_config_removal(ConfigSource::Deb, false, false, Some(OLD), Some(LOCAL)),
-            ConfigRemovalDecision::KeepResidual
-        );
-        assert_eq!(
-            decide_config_removal(ConfigSource::Deb, false, true, Some(OLD), Some(LOCAL)),
-            ConfigRemovalDecision::Remove
-        );
-        assert_eq!(
-            decide_config_removal(ConfigSource::Arch, false, false, Some(OLD), Some(LOCAL)),
-            ConfigRemovalDecision::RotatePacsaveAndSaveCurrent
-        );
-    }
-
-    #[test]
-    fn durable_artifact_round_trip_validates_content_identity() {
-        let artifact = regular(b"local config", 0o100640);
-        let encoded = serde_json::to_string(&artifact).unwrap();
-        let decoded: ConfigArtifact = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded.regular_content().unwrap().unwrap(), b"local config");
-        assert_eq!(decoded.node().source.mode, 0o100640);
-    }
-
-    #[test]
-    fn etc_payload_contract_accepts_only_regular_files_and_symlinks() {
-        assert!(is_etc_config_payload(
-            "/etc/implicit.conf",
-            &PayloadNodeKind::Regular {
-                hardlink_identity: None
-            }
-        ));
-        assert!(is_etc_config_payload(
-            "/etc/implicit-link",
-            &PayloadNodeKind::Symlink {
-                target: "target".to_string()
-            }
-        ));
-        assert!(!is_etc_config_payload(
-            "/etc/directory",
-            &PayloadNodeKind::Directory
-        ));
-        assert!(!is_etc_config_payload("/etc/fifo", &PayloadNodeKind::Fifo));
-        assert!(!is_etc_config_payload(
-            "/usr/lib/implicit.conf",
-            &PayloadNodeKind::Regular {
-                hardlink_identity: None
-            }
-        ));
-    }
-
-    #[test]
-    fn durable_transaction_rejects_unowned_auxiliary_paths() {
-        let artifact = regular(b"new", 0o100640);
-        let transaction = GenerationConfigTransaction {
-            entries: vec![ConfigPathTransaction {
-                path: "/etc/demo.conf".to_string(),
-                operation: ConfigTransactionOperation::Install,
-                before: None,
-                current: None,
-                after: Some(ConfigPackageState {
-                    source: ConfigSource::Auto,
-                    noreplace: false,
-                    ghost: false,
-                    original_sha256: Some(artifact.sha256().to_string()),
-                    artifact: Some(artifact.clone()),
-                }),
-                auxiliaries: vec![("/etc/other.rpmnew".to_string(), artifact)],
-            }],
-            ..Default::default()
-        };
-
-        assert!(transaction.validate().is_err());
-    }
-
-    #[test]
-    fn restore_snapshot_is_a_v2_exact_prechange_contract() {
-        let old = regular(b"local", 0o100600);
-        let saved = regular(b"saved", 0o100640);
-        let new = regular(b"new", 0o100644);
-        let forward = GenerationConfigTransaction {
-            entries: vec![ConfigPathTransaction {
-                path: "/etc/demo.conf".to_string(),
-                operation: ConfigTransactionOperation::Install,
-                before: Some(ConfigPackageState {
-                    source: ConfigSource::Arch,
-                    noreplace: true,
-                    ghost: false,
-                    original_sha256: Some(crate::hash::sha256(b"old")),
-                    artifact: None,
-                }),
-                current: Some(old.clone()),
-                after: Some(ConfigPackageState {
-                    source: ConfigSource::Arch,
-                    noreplace: true,
-                    ghost: false,
-                    original_sha256: Some(new.sha256().to_string()),
-                    artifact: Some(new),
-                }),
-                auxiliaries: vec![("/etc/demo.conf.pacsave".to_string(), saved.clone())],
-            }],
-            ..Default::default()
-        };
-
-        let restore = forward.restore_snapshot().unwrap();
-
-        assert_eq!(restore.schema_version, 2);
-        restore.validate_restore_snapshot().unwrap();
-        assert_eq!(
-            restore.entries[0].operation,
-            ConfigTransactionOperation::Restore
-        );
-        assert_eq!(restore.entries[0].current.as_ref(), Some(&old));
-        assert_eq!(
-            restore.entries[0].auxiliaries,
-            vec![("/etc/demo.conf.pacsave".to_string(), saved)]
-        );
-        assert!(restore.entries[0].after.is_none());
-    }
-
-    #[test]
-    fn restore_owned_paths_cover_exact_suffix_grammar_and_pacsave_rotation() {
-        let entry = ConfigPathTransaction {
-            path: "/etc/demo.conf".to_string(),
-            operation: ConfigTransactionOperation::Restore,
-            before: None,
-            current: None,
-            after: None,
-            auxiliaries: vec![
-                (
-                    "/etc/demo.conf.pacsave".to_string(),
-                    regular(b"zero", 0o100600),
-                ),
-                (
-                    "/etc/demo.conf.pacsave.4".to_string(),
-                    regular(b"four", 0o100600),
-                ),
-            ],
-        };
-
-        let paths = entry.restore_owned_paths();
-
-        for expected in [
-            "/etc/demo.conf",
-            "/etc/demo.conf.rpmnew",
-            "/etc/demo.conf.dpkg-dist",
-            "/etc/demo.conf.pacsave",
-            "/etc/demo.conf.pacsave.1",
-            "/etc/demo.conf.pacsave.4",
-            "/etc/demo.conf.pacsave.5",
-            "/etc/demo.conf.conary-save",
-        ] {
-            assert!(paths.iter().any(|path| path == expected), "{expected}");
-        }
-    }
-
-    #[test]
-    fn schema_v1_is_rejected_without_compatibility_mode() {
-        let transaction = GenerationConfigTransaction {
-            schema_version: 1,
-            entries: Vec::new(),
-        };
-        assert!(transaction.validate().is_err());
-    }
-}
+#[path = "config_transaction/tests.rs"]
+mod tests;

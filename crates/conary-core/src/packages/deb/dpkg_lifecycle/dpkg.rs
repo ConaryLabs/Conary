@@ -925,13 +925,18 @@ fn action_text(name: &[u8]) -> &'static str {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum DpkgValidationStatus {
-    Valid,
-    InvalidButLax,
-    Invalid,
+    Valid = 0,
+    InvalidButLax = 1,
+    Invalid = 2,
 }
 
 impl DpkgValidationStatus {
+    pub const fn exit_code(self) -> u8 {
+        self as u8
+    }
+
     pub fn from_exit_code(status: u8) -> Result<Self, DpkgLifecycleGrammarError> {
         match status {
             0 => Ok(Self::Valid),
@@ -943,13 +948,18 @@ impl DpkgValidationStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum DpkgAssertionStatus {
-    Supported,
-    KnownUnsupported,
-    Unknown,
+    Supported = 0,
+    KnownUnsupported = 1,
+    Unknown = 2,
 }
 
 impl DpkgAssertionStatus {
+    pub const fn exit_code(self) -> u8 {
+        self as u8
+    }
+
     pub fn from_exit_code(status: u8) -> Result<Self, DpkgLifecycleGrammarError> {
         match status {
             0 => Ok(Self::Supported),
@@ -961,13 +971,18 @@ impl DpkgAssertionStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum DpkgComparisonStatus {
-    Satisfied,
-    Unsatisfied,
-    Error,
+    Satisfied = 0,
+    Unsatisfied = 1,
+    Error = 2,
 }
 
 impl DpkgComparisonStatus {
+    pub const fn exit_code(self) -> u8 {
+        self as u8
+    }
+
     pub fn from_exit_code(status: u8) -> Result<Self, DpkgLifecycleGrammarError> {
         match status {
             0 => Ok(Self::Satisfied),

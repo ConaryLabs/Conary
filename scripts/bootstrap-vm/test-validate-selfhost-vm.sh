@@ -100,7 +100,7 @@ bash "$TARGET_SCRIPT" \
     --repo-name remi-fedora-44 \
     --repo-url https://remi.conary.io \
     --remi-endpoint https://remi.conary.io \
-    --remi-distro fedora-44
+    --source-profile fedora-44
 
 assert_contains() {
     local file="$1"
@@ -132,7 +132,7 @@ if bash "$TARGET_SCRIPT" \
     --repo-name remi-fedora-44 \
     --repo-url https://remi.conary.io \
     --remi-endpoint https://remi.conary.io \
-    --remi-distro fedora-44 2>"$STALE_STDERR"; then
+    --source-profile fedora-44 2>"$STALE_STDERR"; then
     echo "expected stale workspace validation to fail before QEMU" >&2
     exit 1
 fi

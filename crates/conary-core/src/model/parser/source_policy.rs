@@ -1,42 +1,59 @@
 // conary-core/src/model/parser/source_policy.rs
 
-//! Source selection and package override policy for system models.
+//! Source selection policy for system models.
 
-use crate::repository::resolution_policy::SelectionMode;
 use serde::{Deserialize, Serialize};
 
-fn default_source_profile() -> Option<String> {
-    Some("balanced/latest-anywhere".to_string())
-}
-
-const DEFAULT_SOURCE_PROFILE: &str = "balanced/latest-anywhere";
-const CONSERVATIVE_POLICY_PROFILE: &str = "conservative/policy-first";
-
-pub(super) fn selection_mode_from_profile(profile: &str) -> Option<SelectionMode> {
-    match profile {
-        DEFAULT_SOURCE_PROFILE => Some(SelectionMode::Latest),
-        CONSERVATIVE_POLICY_PROFILE => Some(SelectionMode::Policy),
-        _ => None,
-    }
-}
-
-pub(super) fn selection_mode_from_string(mode: &str) -> Option<SelectionMode> {
-    match mode {
-        "policy" => Some(SelectionMode::Policy),
-        "latest" => Some(SelectionMode::Latest),
-        _ => None,
-    }
-}
+use crate::repository::resolution_policy::DependencyMixingPolicy;
 
 /// Source pin configuration for package sourcing preferences
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "SourcePinConfigSerde")]
 pub struct SourcePinConfig {
-    /// Preferred distro to pin to (e.g., "arch", "ubuntu-noble")
+    /// Exact supported public distro profile ID.
     pub distro: String,
 
-    /// Pin strength / mixing behavior (e.g., "strict", "guarded", "hard")
-    #[serde(default)]
-    pub strength: Option<String>,
+    /// Typed dependency mixing behavior.
+    #[serde(default = "default_pin_strength")]
+    pub strength: DependencyMixingPolicy,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourcePinConfigSerde {
+    distro: String,
+    #[serde(default = "default_pin_strength")]
+    strength: DependencyMixingPolicy,
+}
+
+impl TryFrom<SourcePinConfigSerde> for SourcePinConfig {
+    type Error = String;
+
+    fn try_from(raw: SourcePinConfigSerde) -> Result<Self, Self::Error> {
+        if crate::repository::supported_profiles::profile_by_public_id(&raw.distro).is_none() {
+            return Err(format!(
+                "unsupported public distro profile '{}'",
+                raw.distro
+            ));
+        }
+        Ok(Self {
+            distro: raw.distro,
+            strength: raw.strength,
+        })
+    }
+}
+
+impl Default for SourcePinConfig {
+    fn default() -> Self {
+        Self {
+            distro: String::new(),
+            strength: default_pin_strength(),
+        }
+    }
+}
+
+const fn default_pin_strength() -> DependencyMixingPolicy {
+    DependencyMixingPolicy::Guarded
 }
 
 /// Convergence intent controls how aggressively the system should migrate
@@ -89,16 +106,9 @@ impl ConvergenceIntent {
 }
 
 /// System-level source policy configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(from = "SystemConfigSerde")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(try_from = "SystemConfigSerde")]
 pub struct SystemConfig {
-    /// Source selection profile (default: balanced/latest-anywhere)
-    pub profile: Option<String>,
-
-    /// Explicit ranking preference override.
-    #[serde(default)]
-    pub selection_mode: Option<String>,
-
     /// Allowed distros for package sourcing
     #[serde(default)]
     pub allowed_distros: Vec<String>,
@@ -111,19 +121,11 @@ pub struct SystemConfig {
     /// Conary-managed state when the preferred source set changes.
     #[serde(default)]
     pub convergence: ConvergenceIntent,
-
-    /// Whether the profile was explicitly present in the parsed model.
-    #[serde(skip)]
-    pub(super) profile_explicit: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SystemConfigSerde {
-    #[serde(default)]
-    profile: Option<String>,
-    #[serde(default)]
-    selection_mode: Option<String>,
     #[serde(default)]
     allowed_distros: Vec<String>,
     #[serde(default)]
@@ -132,64 +134,33 @@ struct SystemConfigSerde {
     convergence: ConvergenceIntent,
 }
 
-impl From<SystemConfigSerde> for SystemConfig {
-    fn from(raw: SystemConfigSerde) -> Self {
-        let profile_explicit = raw.profile.is_some();
-        Self {
-            profile: raw.profile.or_else(default_source_profile),
-            selection_mode: raw.selection_mode,
+impl TryFrom<SystemConfigSerde> for SystemConfig {
+    type Error = String;
+
+    fn try_from(raw: SystemConfigSerde) -> Result<Self, Self::Error> {
+        let mut seen = std::collections::HashSet::with_capacity(raw.allowed_distros.len());
+        for profile in &raw.allowed_distros {
+            if crate::repository::supported_profiles::profile_by_public_id(profile).is_none() {
+                return Err(format!(
+                    "unsupported public distro profile '{profile}' in system.allowed_distros"
+                ));
+            }
+            if !seen.insert(profile) {
+                return Err(format!(
+                    "duplicate public distro profile '{profile}' in system.allowed_distros"
+                ));
+            }
+        }
+
+        Ok(Self {
             allowed_distros: raw.allowed_distros,
             pin: raw.pin,
             convergence: raw.convergence,
-            profile_explicit,
-        }
-    }
-}
-
-impl Default for SystemConfig {
-    fn default() -> Self {
-        Self {
-            profile: default_source_profile(),
-            selection_mode: None,
-            allowed_distros: Vec::new(),
-            pin: None,
-            convergence: ConvergenceIntent::default(),
-            profile_explicit: false,
-        }
+        })
     }
 }
 
 impl SystemConfig {
-    /// Return the effective selection mode, preferring explicit override over
-    /// profile-derived defaults.
-    pub fn effective_selection_mode(&self) -> Option<SelectionMode> {
-        self.selection_mode
-            .as_deref()
-            .and_then(selection_mode_from_string)
-            .or_else(|| {
-                self.profile
-                    .as_deref()
-                    .and_then(selection_mode_from_profile)
-            })
-    }
-
-    /// Return the selection-mode value that should be mirrored into runtime state.
-    ///
-    /// Implicit default profiles do not count as an explicit runtime override.
-    pub fn runtime_selection_mode_mirror(&self) -> Option<SelectionMode> {
-        if self.selection_mode.is_some() {
-            self.selection_mode
-                .as_deref()
-                .and_then(selection_mode_from_string)
-        } else if self.profile_explicit {
-            self.profile
-                .as_deref()
-                .and_then(selection_mode_from_profile)
-        } else {
-            None
-        }
-    }
-
     /// Return the explicit source pin.
     pub fn effective_pin(&self) -> Option<SourcePinConfig> {
         self.pin.clone()
@@ -205,31 +176,8 @@ impl SystemConfig {
     /// When this returns `false`, the system is running with default source
     /// policy and the user may benefit from a configuration hint.
     pub fn is_source_policy_configured(&self) -> bool {
-        let profile_is_non_default = self
-            .profile
-            .as_deref()
-            .is_some_and(|profile| profile != DEFAULT_SOURCE_PROFILE);
-
         self.pin.is_some()
             || self.convergence != ConvergenceIntent::default()
-            || self.selection_mode.is_some()
             || !self.allowed_distros.is_empty()
-            || self.profile_explicit
-            || profile_is_non_default
     }
-}
-
-/// Per-package override to source from a different distro
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PackageOverrideConfig {
-    /// Distro to source this package from (e.g., "fedora-41", "rpmfusion-41")
-    pub from: String,
-
-    /// Override scope such as exact package or package family
-    #[serde(default)]
-    pub scope: Option<String>,
-
-    /// Human-readable reason for the override
-    #[serde(default)]
-    pub reason: Option<String>,
 }

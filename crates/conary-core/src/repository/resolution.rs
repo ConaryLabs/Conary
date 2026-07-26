@@ -55,7 +55,6 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::label::Label;
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::remi::RemiClient;
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
@@ -76,6 +75,8 @@ const MAX_DELEGATE_DEPTH: usize = 10;
 pub struct ResolutionOptions {
     /// Specific version to resolve
     pub version: Option<String>,
+    /// Exact signed CCS build release to resolve.
+    pub package_release: Option<String>,
     /// Specific repository to search
     pub repository: Option<String>,
     /// Specific architecture
@@ -88,8 +89,6 @@ pub struct ResolutionOptions {
     pub policy: Option<ResolutionPolicy>,
     /// Whether this resolution is for a root (user-typed) request.
     pub is_root: bool,
-    /// The primary distro flavor of the system (for mixing policy checks).
-    pub primary_flavor: Option<RepositoryDependencyFlavor>,
 }
 
 impl ResolutionOptions {
@@ -97,11 +96,12 @@ impl ResolutionOptions {
     pub fn to_selection_options(&self) -> SelectionOptions {
         SelectionOptions {
             version: self.version.clone(),
+            package_release: self.package_release.clone(),
             repository: self.repository.clone(),
             architecture: self.architecture.clone(),
+            architecture_scope: crate::repository::selector::ArchitectureScope::Native,
             policy: self.policy.clone(),
             is_root: self.is_root,
-            primary_flavor: self.primary_flavor,
         }
     }
 }
@@ -145,7 +145,7 @@ pub enum RepositorySourceKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySourceMetadata {
     pub repository_id: i64,
-    pub source_distro: Option<String>,
+    pub source_profile: Option<String>,
     pub version_scheme: VersionScheme,
     pub source_kind: RepositorySourceKind,
 }
@@ -323,7 +323,7 @@ impl<'a> PackageResolver<'a> {
                             format!("Repository '{}' has default_strategy=remi but no endpoint configured",
                                 pkg_with_repo.repository.name)
                         ))?;
-                    let distro = pkg_with_repo.repository.default_strategy_distro.clone()
+                    let distro = pkg_with_repo.repository.source_profile.clone()
                         .ok_or_else(|| Error::ConfigError(
                             format!("Repository '{}' has default_strategy=remi but no distro configured",
                                 pkg_with_repo.repository.name)
@@ -421,15 +421,6 @@ impl<'a> PackageResolver<'a> {
         delegate_ctx: &mut DelegateContext,
     ) -> Result<PackageSource> {
         match strategy {
-            ResolutionStrategy::Binary {
-                url,
-                checksum,
-                delta_base,
-            } => {
-                self.try_binary(url, checksum, delta_base.as_deref(), pkg_with_repo, options)
-                    .await
-            }
-
             ResolutionStrategy::Remi {
                 endpoint,
                 distro,
@@ -483,6 +474,7 @@ impl<'a> PackageResolver<'a> {
         for trove in &installed {
             let architecture_matches = options.architecture.as_deref().is_none_or(|requested| {
                 PackageSelector::is_architecture_compatible(
+                    trove.version_scheme,
                     trove.architecture.as_deref(),
                     requested,
                 )
@@ -522,42 +514,6 @@ impl<'a> PackageResolver<'a> {
         Ok(None)
     }
 
-    /// Try binary download strategy
-    async fn try_binary(
-        &self,
-        url: &str,
-        checksum: &str,
-        delta_base: Option<&str>,
-        pkg_with_repo: &PackageWithRepo,
-        options: &ResolutionOptions,
-    ) -> Result<PackageSource> {
-        let (temp_dir, output_dir) = create_output_dir(options)?;
-
-        // TODO: Try delta first if base available
-        if let Some(base) = delta_base {
-            debug!(
-                "Delta base available: {}, but delta fetch not yet implemented",
-                base
-            );
-        }
-
-        // Construct a temporary RepositoryPackage with overridden URL and checksum
-        let temp_pkg = RepositoryPackage {
-            checksum: checksum.to_string(),
-            download_url: url.to_string(),
-            ..pkg_with_repo.package.clone()
-        };
-
-        let trust = build_download_options(self.conn, &pkg_with_repo.repository)?;
-        let path = download_package_verified(&temp_pkg, &output_dir, &trust).await?;
-
-        Ok(PackageSource::Binary {
-            path,
-            _temp_dir: Some(temp_dir),
-            repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
-        })
-    }
-
     /// Try Remi conversion strategy
     async fn try_remi(
         &self,
@@ -589,7 +545,7 @@ impl<'a> PackageResolver<'a> {
         Ok(PackageSource::Ccs {
             path,
             _temp_dir: Some(temp_dir),
-            repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
+            repository_provenance: Some(repository_source_metadata(pkg_with_repo)?),
         })
     }
 
@@ -729,10 +685,18 @@ impl<'a> PackageResolver<'a> {
     /// `pkg_with_repo` from repository selection.
     async fn try_repository_package(
         &self,
-        _repository_package_id: i64,
+        repository_package_id: i64,
         pkg_with_repo: &PackageWithRepo,
         options: &ResolutionOptions,
     ) -> Result<PackageSource> {
+        let selected_id = pkg_with_repo.package.id.ok_or_else(|| {
+            Error::MissingId("selected repository package has no persisted ID".to_string())
+        })?;
+        if repository_package_id != selected_id {
+            return Err(Error::TrustError(format!(
+                "repository routing selected package row {selected_id}, but strategy references row {repository_package_id}"
+            )));
+        }
         let (temp_dir, output_dir) = create_output_dir(options)?;
 
         // Use the package info we already have from repository selection
@@ -747,22 +711,29 @@ impl<'a> PackageResolver<'a> {
         Ok(PackageSource::Binary {
             path,
             _temp_dir: Some(temp_dir),
-            repository_provenance: Some(repository_source_metadata(pkg_with_repo)),
+            repository_provenance: Some(repository_source_metadata(pkg_with_repo)?),
         })
     }
 }
 
-fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> RepositorySourceMetadata {
-    RepositorySourceMetadata {
-        repository_id: pkg_with_repo.package.repository_id,
-        source_distro: pkg_with_repo
-            .package
-            .distro
-            .clone()
-            .or_else(|| pkg_with_repo.repository.default_strategy_distro.clone()),
-        version_scheme: resolve_package_version_scheme(&pkg_with_repo.package),
-        source_kind: selected_repository_source_kind(pkg_with_repo),
+fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> Result<RepositorySourceMetadata> {
+    let version_scheme = resolve_package_version_scheme(&pkg_with_repo.package);
+    let source_profile = crate::repository::selector::candidate_source_profile(
+        &pkg_with_repo.package,
+        &pkg_with_repo.repository,
+    )?;
+    if source_profile.is_none() && version_scheme != VersionScheme::Conary {
+        return Err(Error::ConfigError(format!(
+            "selected repository package '{}-{}' has no exact source profile",
+            pkg_with_repo.package.name, pkg_with_repo.package.version
+        )));
     }
+    Ok(RepositorySourceMetadata {
+        repository_id: pkg_with_repo.package.repository_id,
+        source_profile: source_profile.map(str::to_string),
+        version_scheme,
+        source_kind: selected_repository_source_kind(pkg_with_repo),
+    })
 }
 
 async fn download_verified_repository_package(

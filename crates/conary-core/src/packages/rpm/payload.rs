@@ -7,78 +7,38 @@
 //! numeric uid/gid and inode fields must not override RPM's named ownership or
 //! `FILEDEVICES`/`FILEINODES` hard-link identity.
 
-use crate::compression::{self, CompressionFormat};
 use crate::error::{Error, Result};
-use crate::packages::archive_utils::normalize_path;
-use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
-use crate::packages::traits::ExtractedFile;
+use crate::packages::payload::{
+    PackagePayload, PackagePayloadFile, PayloadSpool, ReopenablePayload,
+};
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
 use md5::Md5;
-use rpm::{DigestAlgorithm, FileFlags, IndexTag, Package};
-use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
-use sha3::{Digest as Sha3Digest, Sha3_256, Sha3_512};
+use rpm::{IndexTag, Package};
+use sha1::{Digest as Digest10, Sha1};
+use sha2::{Digest as Digest11, Sha224, Sha256, Sha384, Sha512};
+use sha3::{Sha3_256, Sha3_512};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{self, Read};
+use std::io::Read;
 
-const CPIO_HEADER_SIZE: usize = 110;
-const CPIO_NEWC_MAGIC: &[u8; 6] = b"070701";
-const CPIO_CRC_MAGIC: &[u8; 6] = b"070702";
-const CPIO_STRIPPED_MAGIC: &[u8; 6] = b"07070X";
-const CPIO_TRAILER: &str = "TRAILER!!!";
-const MAX_CPIO_NAME_SIZE: u64 = 4096;
+mod header;
+mod stream;
 
-#[derive(Debug, Clone)]
-struct HeaderRecord {
-    path: String,
-    mode: u32,
-    user: String,
-    group: String,
-    mtime: u32,
-    size: u64,
-    ghost: bool,
-    digest: Option<DeclaredDigest>,
-    link_target: Option<String>,
-    caps: Option<String>,
-    ima_signature: Option<String>,
-    device: u32,
-    inode: u32,
-    rdev: u16,
-    nlink: Option<u32>,
-}
+use header::{HeaderRecord, RpmFileDigestAlgorithm, header_records};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DeclaredDigest {
-    algorithm: DigestAlgorithm,
-    hex: String,
-}
-
-#[derive(Debug)]
-struct PayloadMember {
-    header_index: usize,
-    content: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArchiveFlavor {
-    Newc,
-    Stripped,
-}
-
-pub(super) fn parse(package: &Package) -> Result<Vec<ExtractedFile>> {
+pub(super) fn parse_stream(package: &Package, payload: Box<dyn Read>) -> Result<PackagePayload> {
     require_cpio_payload(package)?;
     let records = header_records(package)?;
-    let members = payload_members(package, &records)?;
+    let spool = PayloadSpool::new(stream::required_spool_bytes(&records)?)?;
+    let members = stream::parse_members(package, payload, &records, &spool)?;
     let mut payload_by_index = HashMap::with_capacity(members.len());
     for member in members {
-        if payload_by_index
-            .insert(member.header_index, member.content)
-            .is_some()
-        {
+        let header_index = member.header_index;
+        if payload_by_index.insert(header_index, member).is_some() {
             return Err(parse_error(format!(
                 "RPM payload contains header index {} more than once",
-                member.header_index
+                header_index
             )));
         }
     }
@@ -125,10 +85,10 @@ pub(super) fn parse(package: &Package) -> Result<Vec<ExtractedFile>> {
             }
             emit_hardlink_group(group, &records, &mut payload_by_index, &mut output)?;
         } else {
-            let content = payload_by_index
+            let member = payload_by_index
                 .remove(&index)
                 .expect("payload completeness checked");
-            output.push(project_single(record, content)?);
+            output.push(project_single(record, member)?);
         }
     }
     if !payload_by_index.is_empty() {
@@ -136,7 +96,15 @@ pub(super) fn parse(package: &Package) -> Result<Vec<ExtractedFile>> {
             "RPM payload projection left unconsumed header members",
         ));
     }
-    Ok(output)
+    Ok(PackagePayload::new(output))
+}
+
+#[cfg(test)]
+fn parse(package: &Package) -> Result<PackagePayload> {
+    parse_stream(
+        package,
+        Box::new(std::io::Cursor::new(package.payload.clone())),
+    )
 }
 
 fn require_cpio_payload(package: &Package) -> Result<()> {
@@ -151,372 +119,6 @@ fn require_cpio_payload(package: &Package) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn header_records(package: &Package) -> Result<Vec<HeaderRecord>> {
-    let entries = package
-        .metadata
-        .get_file_entries()
-        .map_err(|error| parse_error(format!("read RPM file header: {error}")))?;
-    if entries.is_empty() {
-        return Ok(Vec::new());
-    }
-    let count = entries.len();
-    let devices = required_u32_array(package, IndexTag::RPMTAG_FILEDEVICES, count)?;
-    let inodes = required_u32_array(package, IndexTag::RPMTAG_FILEINODES, count)?;
-    let rdevs = required_u16_array(package, IndexTag::RPMTAG_FILERDEVS, count)?;
-    let nlinks = optional_u32_array(package, IndexTag::RPMTAG_FILENLINKS, count)?;
-    let mut seen_paths = HashSet::with_capacity(count);
-    entries
-        .into_iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let raw_path = entry.path();
-            let raw_path = raw_path.to_str().ok_or_else(|| {
-                parse_error(format!("RPM header path at index {index} is not UTF-8"))
-            })?;
-            let path = normalize_path(raw_path)
-                .map_err(|error| parse_error(format!("invalid RPM header path: {error}")))?;
-            if raw_path != path {
-                return Err(parse_error(format!(
-                    "RPM header path {raw_path:?} is not canonical absolute form {path:?}"
-                )));
-            }
-            if !seen_paths.insert(path.clone()) {
-                return Err(parse_error(format!("duplicate RPM header path {path}")));
-            }
-            let user = exact_identity(entry.user(), "user", &path)?;
-            let group = exact_identity(entry.group(), "group", &path)?;
-            let link_target = entry
-                .linkto()
-                .map(|target| exact_text(target, "symlink target", &path))
-                .transpose()?;
-            let caps = entry
-                .caps()
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let ima_signature = entry
-                .ima_signature()
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let digest = entry.digest().map(|digest| DeclaredDigest {
-                algorithm: digest.algorithm(),
-                hex: digest.as_hex().to_string(),
-            });
-            Ok(HeaderRecord {
-                path,
-                mode: u32::from(entry.mode().raw_mode()),
-                user,
-                group,
-                mtime: entry.modified_at().0,
-                size: entry.size() as u64,
-                ghost: entry.flags().contains(FileFlags::GHOST),
-                digest,
-                link_target,
-                caps,
-                ima_signature,
-                device: devices[index],
-                inode: inodes[index],
-                rdev: rdevs[index],
-                nlink: nlinks.as_ref().map(|values| values[index]),
-            })
-        })
-        .collect()
-}
-
-fn required_u32_array(package: &Package, tag: IndexTag, count: usize) -> Result<Vec<u32>> {
-    let values = package
-        .metadata
-        .header
-        .get_entry_data_as_u32_array(tag)
-        .map_err(|error| parse_error(format!("read RPM {tag}: {error}")))?;
-    require_array_len(tag, values, count)
-}
-
-fn required_u16_array(package: &Package, tag: IndexTag, count: usize) -> Result<Vec<u16>> {
-    let values = package
-        .metadata
-        .header
-        .get_entry_data_as_u16_array(tag)
-        .map_err(|error| parse_error(format!("read RPM {tag}: {error}")))?;
-    require_array_len(tag, values, count)
-}
-
-fn optional_u32_array(package: &Package, tag: IndexTag, count: usize) -> Result<Option<Vec<u32>>> {
-    match package.metadata.header.get_entry_data_as_u32_array(tag) {
-        Ok(values) => require_array_len(tag, values, count).map(Some),
-        Err(rpm::Error::TagNotFound(_)) => Ok(None),
-        Err(error) => Err(parse_error(format!("read RPM {tag}: {error}"))),
-    }
-}
-
-fn require_array_len<T>(tag: IndexTag, values: Vec<T>, count: usize) -> Result<Vec<T>> {
-    if values.len() != count {
-        return Err(parse_error(format!(
-            "RPM {tag} has {} values for {count} file-header entries",
-            values.len()
-        )));
-    }
-    Ok(values)
-}
-
-fn payload_members(package: &Package, records: &[HeaderRecord]) -> Result<Vec<PayloadMember>> {
-    if package.payload.is_empty() {
-        return Ok(Vec::new());
-    }
-    let compressor = package
-        .metadata
-        .get_payload_compressor()
-        .map_err(|error| parse_error(format!("read RPM payload compressor: {error}")))?;
-    let reader = payload_decoder(&package.payload, compressor)?;
-    RpmPayloadReader::new(reader, records).read_all()
-}
-
-fn payload_decoder<'a>(
-    payload: &'a [u8],
-    compressor: rpm::CompressionType,
-) -> Result<Box<dyn Read + 'a>> {
-    let cursor = io::Cursor::new(payload);
-    match compressor {
-        rpm::CompressionType::None => {
-            limited_decoder(cursor, CompressionFormat::None, "uncompressed")
-        }
-        rpm::CompressionType::Gzip => limited_decoder(cursor, CompressionFormat::Gzip, "gzip"),
-        rpm::CompressionType::Xz => limited_decoder(cursor, CompressionFormat::Xz, "xz"),
-        rpm::CompressionType::Zstd => limited_decoder(cursor, CompressionFormat::Zstd, "zstd"),
-        rpm::CompressionType::Bzip2 => Ok(Box::new(
-            bzip2::read::BzDecoder::new(cursor).take(compression::MAX_DECOMPRESS_SIZE + 1),
-        )),
-    }
-}
-
-fn limited_decoder<'a>(
-    cursor: io::Cursor<&'a [u8]>,
-    format: CompressionFormat,
-    label: &str,
-) -> Result<Box<dyn Read + 'a>> {
-    compression::create_decoder_limited(cursor, format, compression::MAX_DECOMPRESS_SIZE)
-        .map_err(|error| parse_error(format!("create RPM {label} payload decoder: {error}")))
-}
-
-struct RpmPayloadReader<'a> {
-    reader: Box<dyn Read + 'a>,
-    records: &'a [HeaderRecord],
-    members: Vec<PayloadMember>,
-    seen: HashSet<usize>,
-    flavor: Option<ArchiveFlavor>,
-    standard_path_indexes: HashMap<&'a str, usize>,
-    total_content: u64,
-}
-
-impl<'a> RpmPayloadReader<'a> {
-    fn new(reader: Box<dyn Read + 'a>, records: &'a [HeaderRecord]) -> Self {
-        Self {
-            reader,
-            records,
-            members: Vec::new(),
-            seen: HashSet::new(),
-            flavor: None,
-            standard_path_indexes: records
-                .iter()
-                .enumerate()
-                .filter(|(_, record)| !record.ghost)
-                .map(|(index, record)| (record.path.as_str(), index))
-                .collect(),
-            total_content: 0,
-        }
-    }
-
-    fn read_all(mut self) -> Result<Vec<PayloadMember>> {
-        loop {
-            let mut magic = [0_u8; 6];
-            self.reader
-                .read_exact(&mut magic)
-                .map_err(|error| parse_error(format!("read RPM CPIO magic: {error}")))?;
-            if &magic == CPIO_STRIPPED_MAGIC {
-                self.require_flavor(ArchiveFlavor::Stripped)?;
-                self.read_stripped_member()?;
-            } else if &magic == CPIO_NEWC_MAGIC || &magic == CPIO_CRC_MAGIC {
-                self.require_flavor(ArchiveFlavor::Newc)?;
-                if self.read_newc_member(magic)? {
-                    break;
-                }
-            } else {
-                return Err(parse_error(format!(
-                    "RPM payload has invalid CPIO magic {:?}",
-                    String::from_utf8_lossy(&magic)
-                )));
-            }
-        }
-        Ok(self.members)
-    }
-
-    fn require_flavor(&mut self, flavor: ArchiveFlavor) -> Result<()> {
-        if let Some(existing) = self.flavor
-            && existing != flavor
-        {
-            return Err(parse_error(
-                "RPM payload mixes standard and stripped CPIO entries",
-            ));
-        }
-        self.flavor = Some(flavor);
-        Ok(())
-    }
-
-    fn read_stripped_member(&mut self) -> Result<()> {
-        let index = self.read_hex_u32("stripped CPIO file index")? as usize;
-        self.read_zero_padding(2, "stripped CPIO header")?;
-        let record = self.records.get(index).ok_or_else(|| {
-            parse_error(format!(
-                "stripped RPM CPIO index {index} is outside {} header entries",
-                self.records.len()
-            ))
-        })?;
-        if record.ghost {
-            return Err(parse_error(format!(
-                "stripped RPM CPIO references ghost path {}",
-                record.path
-            )));
-        }
-        let content = self.read_content(record.size, &record.path)?;
-        self.finish_member(index, content)
-    }
-
-    /// Read a standard newc member. Returns `true` for the trailer.
-    fn read_newc_member(&mut self, magic: [u8; 6]) -> Result<bool> {
-        let _inode = self.read_hex_u32("inode")?;
-        let _mode = self.read_hex_u32("mode")?;
-        let _uid = self.read_hex_u32("uid")?;
-        let _gid = self.read_hex_u32("gid")?;
-        let _nlink = self.read_hex_u32("link count")?;
-        let _mtime = self.read_hex_u32("mtime")?;
-        let size = u64::from(self.read_hex_u32("content size")?);
-        let _device_major = self.read_hex_u32("device major")?;
-        let _device_minor = self.read_hex_u32("device minor")?;
-        let _rdev_major = self.read_hex_u32("rdev major")?;
-        let _rdev_minor = self.read_hex_u32("rdev minor")?;
-        let name_size = u64::from(self.read_hex_u32("name size")?);
-        let checksum = self.read_hex_u32("checksum")?;
-        if name_size == 0 || name_size > MAX_CPIO_NAME_SIZE {
-            return Err(parse_error(format!(
-                "RPM CPIO name size {name_size} is outside 1..={MAX_CPIO_NAME_SIZE}"
-            )));
-        }
-        let mut name = vec![0_u8; name_size as usize];
-        self.reader
-            .read_exact(&mut name)
-            .map_err(|error| parse_error(format!("read RPM CPIO name: {error}")))?;
-        if name.last() != Some(&0) || name[..name.len() - 1].contains(&0) {
-            return Err(parse_error(
-                "RPM CPIO name must contain exactly one trailing NUL",
-            ));
-        }
-        name.pop();
-        let name = String::from_utf8(name)
-            .map_err(|error| parse_error(format!("RPM CPIO name is not UTF-8: {error}")))?;
-        self.read_alignment_padding(CPIO_HEADER_SIZE + name_size as usize, "CPIO name")?;
-        if name == CPIO_TRAILER {
-            if size != 0 {
-                return Err(parse_error("RPM CPIO trailer carries content"));
-            }
-            if checksum != 0 {
-                return Err(parse_error("RPM CPIO trailer carries a checksum"));
-            }
-            return Ok(true);
-        }
-        let path = normalize_path(&name)
-            .map_err(|error| parse_error(format!("invalid RPM CPIO path: {error}")))?;
-        let index = *self
-            .standard_path_indexes
-            .get(path.as_str())
-            .ok_or_else(|| {
-                parse_error(format!(
-                    "RPM CPIO path {path} does not identify a non-ghost header entry"
-                ))
-            })?;
-        let content = self.read_content(size, &path)?;
-        if &magic == CPIO_CRC_MAGIC {
-            let actual = content
-                .iter()
-                .fold(0_u32, |sum, byte| sum.wrapping_add(u32::from(*byte)));
-            if actual != checksum {
-                return Err(parse_error(format!(
-                    "RPM CPIO CRC mismatch for {path}: expected {checksum:#x}, got {actual:#x}"
-                )));
-            }
-        } else if checksum != 0 {
-            return Err(parse_error(format!(
-                "RPM newc entry {path} has a nonzero checksum field"
-            )));
-        }
-        self.finish_member(index, content)?;
-        Ok(false)
-    }
-
-    fn finish_member(&mut self, index: usize, content: Vec<u8>) -> Result<()> {
-        if !self.seen.insert(index) {
-            return Err(parse_error(format!(
-                "RPM payload repeats header path {}",
-                self.records[index].path
-            )));
-        }
-        self.members.push(PayloadMember {
-            header_index: index,
-            content,
-        });
-        Ok(())
-    }
-
-    fn read_content(&mut self, size: u64, path: &str) -> Result<Vec<u8>> {
-        if size > MAX_EXTRACTION_FILE_SIZE {
-            return Err(parse_error(format!(
-                "RPM payload node {path} is {size} bytes; maximum is {MAX_EXTRACTION_FILE_SIZE}"
-            )));
-        }
-        self.total_content = self.total_content.checked_add(size).ok_or_else(|| {
-            parse_error("RPM payload cumulative content size arithmetic overflow")
-        })?;
-        if self.total_content > compression::MAX_DECOMPRESS_SIZE {
-            return Err(parse_error(format!(
-                "RPM payload content exceeds {} bytes",
-                compression::MAX_DECOMPRESS_SIZE
-            )));
-        }
-        let mut content = vec![0_u8; size as usize];
-        self.reader
-            .read_exact(&mut content)
-            .map_err(|error| parse_error(format!("read RPM payload node {path}: {error}")))?;
-        self.read_alignment_padding(size as usize, "CPIO content")?;
-        Ok(content)
-    }
-
-    fn read_hex_u32(&mut self, field: &str) -> Result<u32> {
-        let mut bytes = [0_u8; 8];
-        self.reader
-            .read_exact(&mut bytes)
-            .map_err(|error| parse_error(format!("read RPM CPIO {field}: {error}")))?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|error| parse_error(format!("RPM CPIO {field} is not ASCII: {error}")))?;
-        u32::from_str_radix(text, 16)
-            .map_err(|error| parse_error(format!("RPM CPIO {field} is not hexadecimal: {error}")))
-    }
-
-    fn read_alignment_padding(&mut self, length: usize, field: &str) -> Result<()> {
-        self.read_zero_padding((4 - (length % 4)) % 4, field)
-    }
-
-    fn read_zero_padding(&mut self, count: usize, field: &str) -> Result<()> {
-        let mut padding = [0_u8; 3];
-        self.reader
-            .read_exact(&mut padding[..count])
-            .map_err(|error| parse_error(format!("read RPM {field} padding: {error}")))?;
-        if padding[..count].iter().any(|byte| *byte != 0) {
-            return Err(parse_error(format!(
-                "RPM {field} padding contains nonzero bytes"
-            )));
-        }
-        Ok(())
-    }
 }
 
 fn hardlink_groups(records: &[HeaderRecord]) -> Result<Vec<Vec<usize>>> {
@@ -534,14 +136,8 @@ fn hardlink_groups(records: &[HeaderRecord]) -> Result<Vec<Vec<usize>>> {
         .filter(|group| group.len() > 1)
         .map(|group| {
             for index in &group {
-                if let Some(nlink) = records[*index].nlink
-                    && nlink as usize != group.len()
-                {
-                    return Err(parse_error(format!(
-                        "RPM hardlink {} declares {nlink} links but header identity contains {}",
-                        records[*index].path,
-                        group.len()
-                    )));
+                if let Some(nlink) = records[*index].nlink {
+                    require_partial_hardlink_count(&records[*index].path, nlink, group.len())?;
                 }
             }
             Ok(group)
@@ -549,51 +145,77 @@ fn hardlink_groups(records: &[HeaderRecord]) -> Result<Vec<Vec<usize>>> {
         .collect()
 }
 
+/// RPM's `rpmlib(PartialHardlinkSets)` ABI explicitly permits a package to
+/// contain fewer members than the source inode's link count. It may not claim
+/// fewer links than the members it does contain.
+///
+/// Upstream authority:
+/// <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L995-L997>.
+fn require_partial_hardlink_count(path: &str, declared: u32, packaged: usize) -> Result<()> {
+    if declared as usize >= packaged {
+        return Ok(());
+    }
+    Err(parse_error(format!(
+        "RPM hardlink {path} declares {declared} links but the package contains {packaged} members"
+    )))
+}
+
 fn emit_hardlink_group(
     group: &[usize],
     records: &[HeaderRecord],
-    payload_by_index: &mut HashMap<usize, Vec<u8>>,
-    output: &mut Vec<ExtractedFile>,
+    payload_by_index: &mut HashMap<usize, stream::PayloadMember>,
+    output: &mut Vec<PackagePayloadFile>,
 ) -> Result<()> {
     let anchor_index = group[0];
     let anchor = &records[anchor_index];
     for index in &group[1..] {
         require_same_inode_metadata(anchor, &records[*index])?;
     }
-    let mut effective_content: Option<Vec<u8>> = None;
+    let mut effective_content: Option<(u64, String, ReopenablePayload)> = None;
     for index in group {
-        let content = payload_by_index
+        let member = payload_by_index
             .remove(index)
             .expect("payload completeness checked");
-        if content.is_empty() {
+        let sha256 = member
+            .sha256
+            .ok_or_else(|| parse_error("RPM regular hardlink member has no SHA-256 authority"))?;
+        let source = member
+            .source
+            .ok_or_else(|| parse_error("RPM regular hardlink member has no payload source"))?;
+        if member.content_size == 0 {
+            effective_content.get_or_insert((0, sha256, source));
             continue;
         }
-        if let Some(existing) = &effective_content {
-            if existing != &content {
+        if let Some((size, existing, _)) = &effective_content {
+            if *size != 0 && (*size != member.content_size || existing != &sha256) {
                 return Err(parse_error(format!(
                     "RPM hardlink group anchored at {} carries conflicting payload bytes",
                     anchor.path
                 )));
             }
+            if *size == 0 {
+                effective_content = Some((member.content_size, sha256, source));
+            }
         } else {
-            effective_content = Some(content);
+            effective_content = Some((member.content_size, sha256, source));
         }
     }
-    let content = effective_content.unwrap_or_default();
-    require_regular_content(anchor, &content)?;
+    let (size, sha256, source) =
+        effective_content.ok_or_else(|| parse_error("RPM hardlink group has no payload source"))?;
+    require_regular_content(anchor, size, &source)?;
     let identity = format!("rpm:{}:{}", anchor.device, anchor.inode);
     let mut anchor_node = source_node(anchor)?;
     anchor_node.kind = PayloadNodeKind::Regular {
         hardlink_identity: Some(identity.clone()),
     };
-    let authority = content_authority(&content);
+    let authority = PayloadContentAuthority { sha256, size };
     validate_projected(&anchor.path, &anchor_node, Some(&authority))?;
-    output.push(ExtractedFile {
-        path: anchor.path.clone(),
-        node: anchor_node.clone(),
-        content: content.clone(),
-        content_authority: Some(authority),
-    });
+    output.push(PackagePayloadFile::new(
+        anchor.path.clone(),
+        anchor_node.clone(),
+        Some(authority),
+        Some(source),
+    )?);
     for index in &group[1..] {
         let record = &records[*index];
         let mut node = anchor_node.clone();
@@ -602,12 +224,12 @@ fn emit_hardlink_group(
             identity: identity.clone(),
         };
         validate_projected(&record.path, &node, None)?;
-        output.push(ExtractedFile {
-            path: record.path.clone(),
+        output.push(PackagePayloadFile::new(
+            record.path.clone(),
             node,
-            content: Vec::new(),
-            content_authority: None,
-        });
+            None,
+            None,
+        )?);
     }
     Ok(())
 }
@@ -630,26 +252,122 @@ fn require_same_inode_metadata(anchor: &HeaderRecord, member: &HeaderRecord) -> 
     Ok(())
 }
 
-fn project_single(record: &HeaderRecord, content: Vec<u8>) -> Result<ExtractedFile> {
+fn project_single(
+    record: &HeaderRecord,
+    member: stream::PayloadMember,
+) -> Result<PackagePayloadFile> {
     let node = source_node(record)?;
-    let content_authority = if matches!(node.kind, PayloadNodeKind::Regular { .. }) {
-        require_regular_content(record, &content)?;
-        Some(content_authority(&content))
+    let (content_authority, source) = if matches!(node.kind, PayloadNodeKind::Regular { .. }) {
+        let source = member.source.ok_or_else(|| {
+            parse_error(format!(
+                "RPM regular node {} has no payload source",
+                record.path
+            ))
+        })?;
+        require_regular_content(record, member.content_size, &source)?;
+        let sha256 = member.sha256.ok_or_else(|| {
+            parse_error(format!(
+                "RPM regular node {} has no SHA-256 authority",
+                record.path
+            ))
+        })?;
+        (
+            Some(PayloadContentAuthority {
+                sha256,
+                size: member.content_size,
+            }),
+            Some(source),
+        )
     } else {
-        require_non_regular_content(record, &content)?;
-        None
+        if member.content_size != 0 || member.source.is_some() || member.sha256.is_some() {
+            return Err(parse_error(format!(
+                "non-regular RPM node {} retained ambiguous payload content",
+                record.path
+            )));
+        }
+        (None, None)
     };
     validate_projected(&record.path, &node, content_authority.as_ref())?;
-    Ok(ExtractedFile {
-        path: record.path.clone(),
-        node,
-        content: if content_authority.is_some() {
-            content
-        } else {
-            Vec::new()
-        },
-        content_authority,
+    PackagePayloadFile::new(record.path.clone(), node, content_authority, source)
+}
+
+fn require_regular_content(
+    record: &HeaderRecord,
+    content_size: u64,
+    source: &ReopenablePayload,
+) -> Result<()> {
+    if content_size != record.size {
+        return Err(parse_error(format!(
+            "RPM regular node {} declares {} bytes but payload yields {}",
+            record.path, record.size, content_size
+        )));
+    }
+    let digest = record.digest.as_ref().ok_or_else(|| {
+        parse_error(format!(
+            "RPM regular node {} has no declared file digest",
+            record.path
+        ))
+    })?;
+    let mut reader = source.open()?;
+    let actual = digest_reader(digest.algorithm, reader.as_mut(), content_size)?;
+    if actual != digest.hex {
+        return Err(parse_error(format!(
+            "RPM file digest mismatch for {}: expected {}, got {actual}",
+            record.path, digest.hex
+        )));
+    }
+    let mut trailing = [0_u8; 1];
+    if reader.read(&mut trailing)? != 0 {
+        return Err(parse_error(format!(
+            "RPM payload source for {} exceeds declared size {content_size}",
+            record.path
+        )));
+    }
+    Ok(())
+}
+
+fn digest_reader(
+    algorithm: RpmFileDigestAlgorithm,
+    reader: &mut dyn Read,
+    size: u64,
+) -> Result<String> {
+    macro_rules! hash_exact {
+        ($hasher:expr) => {{
+            let mut hasher = $hasher;
+            let mut remaining = size;
+            let mut buffer = [0_u8; crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE];
+            while remaining > 0 {
+                let wanted = usize::try_from(remaining.min(buffer.len() as u64))
+                    .expect("bounded by the fixed buffer");
+                reader.read_exact(&mut buffer[..wanted]).map_err(|error| {
+                    parse_error(format!("read RPM payload for digest verification: {error}"))
+                })?;
+                hasher.update(&buffer[..wanted]);
+                remaining -= wanted as u64;
+            }
+            hex::encode(hasher.finalize())
+        }};
+    }
+    Ok(match algorithm {
+        RpmFileDigestAlgorithm::Md5 => hash_exact!(Md5::new()),
+        RpmFileDigestAlgorithm::Sha1 => hash_exact!(Sha1::new()),
+        RpmFileDigestAlgorithm::Sha2_224 => hash_exact!(Sha224::new()),
+        RpmFileDigestAlgorithm::Sha2_256 => hash_exact!(Sha256::new()),
+        RpmFileDigestAlgorithm::Sha2_384 => hash_exact!(Sha384::new()),
+        RpmFileDigestAlgorithm::Sha2_512 => hash_exact!(Sha512::new()),
+        RpmFileDigestAlgorithm::Sha3_256 => hash_exact!(Sha3_256::new()),
+        RpmFileDigestAlgorithm::Sha3_512 => hash_exact!(Sha3_512::new()),
     })
+}
+
+#[cfg(test)]
+fn digest_hex(algorithm: RpmFileDigestAlgorithm, content: &[u8]) -> String {
+    digest_reader(
+        algorithm,
+        &mut std::io::Cursor::new(content),
+        content.len() as u64,
+    )
+    .expect("in-memory digest")
 }
 
 fn source_node(record: &HeaderRecord) -> Result<PayloadNode> {
@@ -746,65 +464,6 @@ fn source_node(record: &HeaderRecord) -> Result<PayloadNode> {
     Ok(node)
 }
 
-fn require_regular_content(record: &HeaderRecord, content: &[u8]) -> Result<()> {
-    if content.len() as u64 != record.size {
-        return Err(parse_error(format!(
-            "RPM regular node {} declares {} bytes but payload yields {}",
-            record.path,
-            record.size,
-            content.len()
-        )));
-    }
-    let digest = record.digest.as_ref().ok_or_else(|| {
-        parse_error(format!(
-            "RPM regular node {} has no declared file digest",
-            record.path
-        ))
-    })?;
-    let actual = digest_hex(digest.algorithm, content);
-    if actual != digest.hex {
-        return Err(parse_error(format!(
-            "RPM file digest mismatch for {}: expected {}, got {actual}",
-            record.path, digest.hex
-        )));
-    }
-    Ok(())
-}
-
-fn require_non_regular_content(record: &HeaderRecord, content: &[u8]) -> Result<()> {
-    match mode_type(record.mode) {
-        libc::S_IFLNK => {
-            let target = record
-                .link_target
-                .as_deref()
-                .expect("source_node requires symlink target");
-            if content != target.as_bytes() {
-                return Err(parse_error(format!(
-                    "RPM symlink {} payload target differs from FILELINKTOS",
-                    record.path
-                )));
-            }
-            if content.len() as u64 != record.size {
-                return Err(parse_error(format!(
-                    "RPM symlink {} declares {} bytes but target has {}",
-                    record.path,
-                    record.size,
-                    content.len()
-                )));
-            }
-        }
-        _ if !content.is_empty() => {
-            return Err(parse_error(format!(
-                "non-regular RPM node {} carries {} payload bytes",
-                record.path,
-                content.len()
-            )));
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 fn validate_projected(
     path: &str,
     node: &PayloadNode,
@@ -812,25 +471,6 @@ fn validate_projected(
 ) -> Result<()> {
     node.validate_content(content)
         .map_err(|error| parse_error(format!("invalid RPM payload authority for {path}: {error}")))
-}
-
-fn content_authority(content: &[u8]) -> PayloadContentAuthority {
-    PayloadContentAuthority {
-        sha256: crate::hash::sha256(content),
-        size: content.len() as u64,
-    }
-}
-
-fn digest_hex(algorithm: DigestAlgorithm, content: &[u8]) -> String {
-    match algorithm {
-        DigestAlgorithm::Md5 => hex::encode(Md5::digest(content)),
-        DigestAlgorithm::Sha2_224 => hex::encode(Sha224::digest(content)),
-        DigestAlgorithm::Sha2_256 => hex::encode(Sha256::digest(content)),
-        DigestAlgorithm::Sha2_384 => hex::encode(Sha384::digest(content)),
-        DigestAlgorithm::Sha2_512 => hex::encode(Sha512::digest(content)),
-        DigestAlgorithm::Sha3_256 => hex::encode(<Sha3_256 as Sha3Digest>::digest(content)),
-        DigestAlgorithm::Sha3_512 => hex::encode(<Sha3_512 as Sha3Digest>::digest(content)),
-    }
 }
 
 fn parse_file_capabilities(text: &str, path: &str) -> Result<Vec<u8>> {
@@ -952,7 +592,81 @@ fn parse_error(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_capability_operation, parse_file_capabilities};
+    use super::{
+        RpmFileDigestAlgorithm, apply_capability_operation, digest_hex, parse,
+        parse_file_capabilities, require_partial_hardlink_count,
+    };
+    use rpm::IndexTag;
+    use std::io::Cursor;
+
+    #[test]
+    fn partial_hardlink_set_may_omit_source_inode_members() {
+        require_partial_hardlink_count("/usr/bin/tool", 3, 2).expect("partial source hardlink set");
+        let error = require_partial_hardlink_count("/usr/bin/tool", 1, 2)
+            .expect_err("declared count smaller than packaged members");
+        assert!(error.to_string().contains("package contains 2 members"));
+    }
+
+    #[test]
+    fn sha1_file_digest_uses_rpm_algorithm_code_two_semantics() {
+        assert_eq!(
+            digest_hex(RpmFileDigestAlgorithm::Sha1, b"abc"),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
+    }
+
+    #[test]
+    fn sha1_file_digest_header_projects_payload_without_md5_fallback() {
+        let content = b"SHA-1 RPM payload fixture\n";
+        let mut builder =
+            rpm::PackageBuilder::new("sha1-fixture", "1", "MIT", "noarch", "SHA-1 fixture");
+        builder
+            .with_file_contents(
+                content,
+                rpm::FileOptions::new("/usr/share/sha1-fixture/data"),
+            )
+            .unwrap();
+        let package = builder.build().unwrap();
+        let header_start = package.metadata.get_package_segment_offsets().header as usize;
+        let mut bytes = Vec::new();
+        package.write(&mut bytes).unwrap();
+
+        let algorithm_offset =
+            main_header_value_offset(&bytes, header_start, IndexTag::RPMTAG_FILEDIGESTALGO);
+        bytes[algorithm_offset..algorithm_offset + 4].copy_from_slice(&2_u32.to_be_bytes());
+        let digest_offset =
+            main_header_value_offset(&bytes, header_start, IndexTag::RPMTAG_FILEDIGESTS);
+        let sha1 = digest_hex(RpmFileDigestAlgorithm::Sha1, content);
+        bytes[digest_offset..digest_offset + sha1.len()].copy_from_slice(sha1.as_bytes());
+        bytes[digest_offset + sha1.len()] = 0;
+
+        let patched = rpm::Package::parse(&mut Cursor::new(bytes)).unwrap();
+        let payload = parse(&patched).unwrap();
+        let files = payload.to_extracted_in_memory().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "/usr/share/sha1-fixture/data");
+        assert_eq!(files[0].content, content);
+    }
+
+    fn main_header_value_offset(bytes: &[u8], header_start: usize, wanted: IndexTag) -> usize {
+        let entry_count = u32::from_be_bytes(
+            bytes[header_start + 8..header_start + 12]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let store_start = header_start + 16 + entry_count * 16;
+        for index in 0..entry_count {
+            let entry_start = header_start + 16 + index * 16;
+            let tag = u32::from_be_bytes(bytes[entry_start..entry_start + 4].try_into().unwrap());
+            if tag == wanted as u32 {
+                let offset = i32::from_be_bytes(
+                    bytes[entry_start + 8..entry_start + 12].try_into().unwrap(),
+                );
+                return store_start + usize::try_from(offset).unwrap();
+            }
+        }
+        panic!("missing {wanted} in fixture header");
+    }
 
     #[test]
     fn capability_text_projects_exact_kernel_xattr() {

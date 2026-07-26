@@ -9,8 +9,9 @@ use serde::Serialize;
 pub struct ContentIdentityProjectionV2<'a> {
     pub identity: &'a PackageIdentityV2,
     pub kind: &'a PackageKindV2,
-    pub provides: &'a [DependencyEntryV2],
+    pub provides: &'a [ProvidedCapabilityV2],
     pub requirements: &'a [RepositoryRequirementGroup],
+    pub relations: &'a [RepositoryRequirementGroup],
     pub components: &'a std::collections::BTreeMap<String, ComponentAuthorityV2>,
     pub lifecycle: &'a LifecycleAuthorityV2,
     pub provenance: ProvenanceAuthorityV2,
@@ -24,6 +25,7 @@ pub fn compute_v2_content_identity(authority: &AuthorityDocumentV2) -> Result<St
         kind: &authority.kind,
         provides: &authority.provides,
         requirements: &authority.requirements,
+        relations: &authority.relations,
         components: &authority.components,
         lifecycle: &authority.lifecycle,
         provenance,
@@ -68,6 +70,24 @@ mod tests {
             ),
         );
         let second = compute_v2_content_identity(&authority).unwrap();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn relation_changes_change_identity() {
+        let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("id");
+        let first = compute_v2_content_identity(&authority).unwrap();
+        authority.relations.push(
+            crate::repository::dependency_model::RepositoryRequirementGroup::simple(
+                crate::repository::dependency_model::RepositoryRequirementKind::Conflict,
+                crate::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    "incompatible-package".to_string(),
+                ),
+            ),
+        );
+
+        let second = compute_v2_content_identity(&authority).unwrap();
+
         assert_ne!(first, second);
     }
 }

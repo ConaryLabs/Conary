@@ -1,0 +1,34 @@
+[package]
+name = "native-matrix-root-layout"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "Minimal selected-root layout authority for native lifecycle matrix tests"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["native-matrix-root-layout"]
+binaries = []
+
+[components]
+default = ["runtime"]
+
+[[config.files]]
+path = "/etc/passwd"
+noreplace = true
+ghost = false
+remove_on_upgrade = false
+
+[[config.files]]
+path = "/etc/group"
+noreplace = true
+ghost = false
+remove_on_upgrade = false
+
+[hooks]

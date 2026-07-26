@@ -16,14 +16,13 @@ pub mod types;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::db::models::{RepologyCacheEntry, RepositoryProvide};
+use crate::db::models::RepositoryProvide;
 use crate::error::{Error, Result};
-use crate::repository::LatestSignal;
-use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
+use crate::repository::dependency_model::ProvideVersionRelation;
+use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use crate::repository::versioning::{VersionScheme, validate_repo_version};
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
-use chrono::Utc;
 use resolvo::{
     Condition, ConditionalRequirement, NameId, SolvableId, StringId, VersionSetId,
     VersionSetUnionId,
@@ -37,6 +36,9 @@ use loading::{
 };
 pub(crate) use matching::constraint_matches_package;
 pub use types::{ConaryConstraint, SolverDep, SolverExpression, SolverRelation};
+
+type RemovalProvider = (i64, Option<String>, Option<ProvideVersionRelation>);
+type RemovalProvidesIndex = HashMap<String, Vec<RemovalProvider>>;
 
 /// Bridge between Conary's data model and resolvo's abstract solver interface.
 ///
@@ -95,7 +97,7 @@ pub struct ConaryProvider<'db> {
 
     /// Index of capability name -> list of (trove_id, optional version) providers.
     /// Built by `load_removal_data()` from already-loaded solvable provides.
-    removal_provides_index: HashMap<String, Vec<(i64, Option<String>)>>,
+    removal_provides_index: RemovalProvidesIndex,
 
     /// Reverse map from trove_id to package name, for quick lookup during removal.
     trove_id_to_name: HashMap<i64, String>,
@@ -116,8 +118,11 @@ pub struct ConaryProvider<'db> {
     /// Source-selection policy that should influence SAT candidate ordering.
     policy: ResolutionPolicy,
 
-    /// Cached positive latest-signal keys keyed by canonical_id + distro.
-    latest_positive_keys: HashSet<(i64, String)>,
+    /// Exact root request names. RequestScope applies only to these names.
+    root_request_names: HashSet<String>,
+
+    /// Exact target-native architecture used by source dependency qualifiers.
+    native_architecture: String,
 
     // --- Data source ---
     pub(super) conn: &'db rusqlite::Connection,
@@ -159,9 +164,23 @@ impl<'db> ConaryProvider<'db> {
             canonical_equivalents: HashMap::new(),
             provides_index: None,
             policy,
-            latest_positive_keys: HashSet::new(),
+            root_request_names: HashSet::new(),
+            native_architecture: crate::repository::registry::detect_system_arch(),
             conn,
         }
+    }
+
+    pub fn set_root_request_names(&mut self, names: impl IntoIterator<Item = String>) {
+        self.root_request_names = names.into_iter().collect();
+    }
+
+    pub fn expand_root_request_names_with_canonical_equivalents(&mut self) {
+        let equivalents = self
+            .root_request_names
+            .iter()
+            .flat_map(|name| self.canonical_equivalents(name).iter().cloned())
+            .collect::<Vec<_>>();
+        self.root_request_names.extend(equivalents);
     }
 
     /// Convert a `usize` pool length to a `u32` index, returning
@@ -201,6 +220,11 @@ impl<'db> ConaryProvider<'db> {
         name_id: NameId,
         constraint: ConaryConstraint,
     ) -> Result<VersionSetId> {
+        if matches!(constraint, ConaryConstraint::RpmRuntime(_)) {
+            return Err(Error::ResolutionError(
+                "RPM runtime capability reached package version-set interning".to_string(),
+            ));
+        }
         if name_id.0 as usize >= self.names.len() {
             return Err(Error::ResolutionError(format!(
                 "cannot intern a version set for unknown resolver name ID {}",
@@ -230,7 +254,10 @@ impl<'db> ConaryProvider<'db> {
         let constraint = ConaryConstraint::Repository {
             scheme,
             constraint,
+            capability_kind: None,
             raw,
+            architecture_qualifier: Default::default(),
+            depending_architecture: self.native_architecture.clone(),
         };
         self.intern_conary_version_set(name_id, constraint)
     }
@@ -266,6 +293,17 @@ impl<'db> ConaryProvider<'db> {
 
     /// Register a solvable (package candidate) and return its `SolvableId`.
     pub fn add_solvable(&mut self, pkg: PackageIdentity) -> Result<SolvableId> {
+        if pkg.repo_package_id.is_some()
+            && pkg
+                .architecture
+                .as_deref()
+                .is_none_or(|architecture| architecture.is_empty())
+        {
+            return Err(Error::ConfigError(format!(
+                "repository package '{}-{}' has no architecture authority",
+                pkg.name, pkg.version
+            )));
+        }
         if pkg.installed_pinned && pkg.installed_trove_id.is_none() {
             return Err(Error::ResolutionError(format!(
                 "resolver candidate '{}' is marked installed-pinned without an installed trove identity",
@@ -301,13 +339,18 @@ impl<'db> ConaryProvider<'db> {
         let packages = crate::resolver::requirements::load_installed_package_identities(self.conn)?;
 
         for pkg in packages {
+            let package_architecture = pkg
+                .architecture
+                .clone()
+                .unwrap_or_else(|| self.native_architecture.clone());
             // Intern name for side effect (ensures this name is known to the solver)
             let _name_id = self.intern_name(&pkg.name)?;
             let trove_id = pkg.installed_trove_id;
             let solvable_id = self.add_solvable(pkg)?;
 
             if let Some(tid) = trove_id {
-                let mut dep_list = load_installed_dependency_requests(self.conn, tid)?;
+                let mut dep_list =
+                    load_installed_dependency_requests(self.conn, tid, &package_architecture)?;
                 let relations = load_installed_relations(self.conn, tid)?;
                 dep_list.extend(
                     relations
@@ -328,9 +371,12 @@ impl<'db> ConaryProvider<'db> {
     /// ALL viable candidates (all versions from all repos) so the SAT solver
     /// can backtrack through multiple versions.
     pub fn load_repo_packages_for_names(&mut self, names: &[String]) -> Result<()> {
-        use crate::repository::selector::{PackageSelector, SelectionOptions};
+        use crate::repository::selector::{ArchitectureScope, PackageSelector, SelectionOptions};
 
-        let options = SelectionOptions::default();
+        if self.policy.primary_profile().is_none() {
+            let primary_profile = policy_primary_profile(self.conn, &self.policy)?;
+            self.policy.set_primary_profile(primary_profile);
+        }
         for name in names {
             // Skip if we already have a repo package for this name (O(1) index lookup).
             let already_has_repo =
@@ -346,12 +392,36 @@ impl<'db> ConaryProvider<'db> {
 
             // Load ALL candidates (all versions from all repos), not just the
             // best one. The SAT solver needs multiple candidates to backtrack.
+            let options = SelectionOptions {
+                architecture_scope: ArchitectureScope::All,
+                policy: Some(self.policy.clone()),
+                is_root: self.root_request_names.contains(name),
+                ..SelectionOptions::default()
+            };
             let mut candidates = PackageSelector::search_packages(self.conn, name, &options)?;
 
             // Always include virtual-provide providers alongside exact-name
             // candidates so the solver can consider both. Filtering and ranking
             // determine which are preferred.
-            let virtual_providers = self.find_repo_providers(name)?;
+            let is_root = self.root_request_names.contains(name);
+            let mut virtual_providers = Vec::new();
+            for candidate in self.find_repo_providers(name)? {
+                let candidate_profile = crate::repository::selector::candidate_source_profile(
+                    &candidate.package,
+                    &candidate.repository,
+                )?;
+                if crate::repository::selector::candidate_matches_allowed_distros(
+                    &self.policy,
+                    &candidate.package,
+                    &candidate.repository,
+                )? && self.policy.accepts_candidate(
+                    &candidate.repository.name,
+                    candidate_profile,
+                    is_root,
+                ) {
+                    virtual_providers.push(candidate);
+                }
+            }
             candidates.extend(virtual_providers);
 
             for pkg_with_repo in candidates {
@@ -392,14 +462,15 @@ impl<'db> ConaryProvider<'db> {
                     package_release: (!pkg_with_repo.package.package_release.is_empty())
                         .then(|| pkg_with_repo.package.package_release.clone()),
                     architecture: pkg_with_repo.package.architecture.clone(),
+                    debian_multi_arch: pkg_with_repo.package.debian_multi_arch,
                     version_scheme: scheme,
                     repository_id: Some(repository_id),
                     repository_name: pkg_with_repo.repository.name.clone(),
-                    repository_distro: pkg_with_repo
-                        .package
-                        .distro
-                        .clone()
-                        .or(pkg_with_repo.repository.default_strategy_distro.clone()),
+                    repository_profile: crate::repository::selector::candidate_source_profile(
+                        &pkg_with_repo.package,
+                        &pkg_with_repo.repository,
+                    )?
+                    .map(str::to_string),
                     repository_priority: pkg_with_repo.repository.priority,
                     canonical_id: pkg_with_repo.package.canonical_id,
                     canonical_name: None,
@@ -426,7 +497,6 @@ impl<'db> ConaryProvider<'db> {
             }
         }
 
-        self.refresh_latest_signal_cache()?;
         Ok(())
     }
 
@@ -522,22 +592,6 @@ impl<'db> ConaryProvider<'db> {
         &self.solvables[id.0 as usize]
     }
 
-    pub(super) fn has_positive_latest_signal(&self, pkg: &PackageIdentity) -> bool {
-        if self.policy.selection_mode != SelectionMode::Latest {
-            return false;
-        }
-
-        let Some(canonical_id) = pkg.canonical_id else {
-            return false;
-        };
-        let Some(distro) = pkg.repository_distro.as_ref() else {
-            return false;
-        };
-
-        self.latest_positive_keys
-            .contains(&(canonical_id, distro.clone()))
-    }
-
     /// Get the total number of solvables.
     pub fn solvable_count(&self) -> usize {
         self.solvables.len()
@@ -573,10 +627,17 @@ impl<'db> ConaryProvider<'db> {
         for dep_list in self.dependencies.values() {
             for dep in dep_list {
                 for atom in dep.expression.atoms() {
-                    if let ConaryConstraint::ProviderExpression { expression } = &atom.constraint {
-                        expression.collect_names(known, &mut seen);
-                    } else if !known.contains(atom.name.as_str()) {
-                        seen.insert(atom.name.clone());
+                    match &atom.constraint {
+                        ConaryConstraint::ProviderExpression { expression } => {
+                            expression.collect_names(known, &mut seen);
+                        }
+                        ConaryConstraint::RpmRuntime(_) => {}
+                        ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. }
+                            if !known.contains(atom.name.as_str()) =>
+                        {
+                            seen.insert(atom.name.clone());
+                        }
+                        ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {}
                     }
                 }
             }
@@ -675,12 +736,13 @@ impl<'db> ConaryProvider<'db> {
             ConaryConstraint::Requested(constraint) => {
                 self.intern_version_set(name_id, constraint.clone())?;
             }
-            ConaryConstraint::Repository {
-                scheme,
-                constraint,
-                raw,
-            } => {
-                self.intern_repo_version_set(name_id, *scheme, constraint.clone(), raw.clone())?;
+            ConaryConstraint::Repository { .. } => {
+                self.intern_conary_version_set(name_id, constraint.clone())?;
+            }
+            ConaryConstraint::RpmRuntime(_) => {
+                return Err(Error::ResolutionError(
+                    "RPM runtime capability reached package constraint interning".to_string(),
+                ));
             }
             ConaryConstraint::ProviderExpression { .. } => {
                 self.intern_conary_version_set(name_id, constraint.clone())?;
@@ -749,7 +811,7 @@ impl<'db> ConaryProvider<'db> {
                 self.removal_provides_index
                     .entry(capability.name.clone())
                     .or_default()
-                    .push((tid, capability.version.clone()));
+                    .push((tid, capability.version.clone(), capability.version_relation));
             }
         }
 
@@ -758,7 +820,12 @@ impl<'db> ConaryProvider<'db> {
                 continue;
             };
 
-            let dep_list = load_installed_dependency_requests(self.conn, tid)?;
+            let package_architecture = solvable
+                .architecture
+                .as_deref()
+                .unwrap_or(&self.native_architecture);
+            let dep_list =
+                load_installed_dependency_requests(self.conn, tid, package_architecture)?;
 
             self.removal_deps.insert(sid.0, dep_list);
         }
@@ -768,16 +835,18 @@ impl<'db> ConaryProvider<'db> {
 
     /// Look up which troves provide a given capability.
     ///
-    /// Returns `(trove_id, optional_version)` pairs for exact declared
-    /// capability keys.
-    pub fn find_providers(&self, capability: &str) -> Vec<(i64, Option<String>)> {
-        let mut results: Vec<(i64, Option<String>)> = Vec::new();
+    /// Returns exact installed provider range contracts.
+    pub fn find_providers(
+        &self,
+        capability: &str,
+    ) -> Vec<(i64, Option<String>, Option<ProvideVersionRelation>)> {
+        let mut results = Vec::new();
         let mut seen_ids = HashSet::new();
 
         if let Some(providers) = self.removal_provides_index.get(capability) {
-            for &(tid, ref ver) in providers {
+            for &(tid, ref ver, relation) in providers {
                 if seen_ids.insert(tid) {
-                    results.push((tid, ver.clone()));
+                    results.push((tid, ver.clone(), relation));
                 }
             }
         }
@@ -839,52 +908,43 @@ impl<'db> ConaryProvider<'db> {
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
+}
 
-    fn refresh_latest_signal_cache(&mut self) -> Result<()> {
-        self.latest_positive_keys.clear();
-
-        if self.policy.selection_mode != SelectionMode::Latest {
-            return Ok(());
+fn policy_primary_profile(
+    conn: &rusqlite::Connection,
+    policy: &ResolutionPolicy,
+) -> Result<Option<String>> {
+    match &policy.request_scope {
+        RequestScope::DistroProfile(profile_id) => {
+            let profile = crate::repository::supported_profiles::profile_by_public_id(profile_id)
+                .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "request scope contains unsupported source profile '{profile_id}'"
+                ))
+            })?;
+            Ok(Some(profile.id().to_string()))
         }
-
-        let mut distros_by_canonical: HashMap<i64, HashSet<String>> = HashMap::new();
-        for pkg in &self.solvables {
-            let Some(canonical_id) = pkg.canonical_id else {
-                continue;
-            };
-            let Some(distro) = pkg.repository_distro.as_ref() else {
-                continue;
-            };
-
-            distros_by_canonical
-                .entry(canonical_id)
-                .or_default()
-                .insert(distro.clone());
+        RequestScope::Repository(name) => {
+            let repository = crate::db::models::Repository::find_by_name(conn, name)?
+                .ok_or_else(|| Error::ConfigError(format!("repository '{name}' does not exist")))?;
+            Ok(repository
+                .resolution_source_profile()?
+                .map(|profile| profile.id().to_string()))
         }
-
-        let now = Utc::now();
-        for (canonical_id, distros) in distros_by_canonical {
-            let distro_list = distros.into_iter().collect::<Vec<_>>();
-            let rows = RepologyCacheEntry::find_for_canonical_and_distros(
-                self.conn,
-                canonical_id,
-                &distro_list,
-            )?;
-            for row in rows {
-                let status = row.status.as_deref().unwrap_or("");
-                let signal = LatestSignal::from_repology(
-                    status,
-                    row.version.as_deref(),
-                    &row.fetched_at,
-                    now,
-                )?;
-                if signal.is_positive() {
-                    self.latest_positive_keys.insert((canonical_id, row.distro));
-                }
-            }
+        RequestScope::Any => {
+            let pin = crate::db::models::DistroPin::get_current(conn)?;
+            pin.map(|value| {
+                crate::repository::supported_profiles::profile_by_public_id(&value.distro)
+                    .map(|profile| profile.id().to_string())
+                    .ok_or_else(|| {
+                        Error::ConfigError(format!(
+                            "persisted system pin contains unsupported source profile '{}'",
+                            value.distro
+                        ))
+                    })
+            })
+            .transpose()
         }
-
-        Ok(())
     }
 }
 

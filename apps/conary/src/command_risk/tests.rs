@@ -114,13 +114,6 @@ fn classify_system_adopt_full_package_as_live_db_mutation() {
 }
 
 #[test]
-fn classify_system_adopt_convert_dry_run_as_dry_run_only() {
-    let policy = policy(&["conary", "system", "adopt", "--convert", "--dry-run"]);
-    assert_eq!(policy.risk, CommandRisk::DryRunOnly);
-    assert!(!policy.requires_ack());
-}
-
-#[test]
 fn classify_installed_sync_hook_refresh_as_narrow_hook_refresh() {
     let policy = policy(&[
         "conary",
@@ -250,7 +243,7 @@ fn cook_record_is_local_state_mutation_like_cook() {
 #[test]
 fn classify_system_init_and_repo_sync_as_local_state_mutations() {
     for args in [
-        ["conary", "system", "init", "--profile", "fedora-44"].as_slice(),
+        ["conary", "system", "init"].as_slice(),
         ["conary", "repo", "sync", "remi"].as_slice(),
         ["conary", "publish", "./repo"].as_slice(),
         ["conary", "new", "demo"].as_slice(),
@@ -282,12 +275,6 @@ fn classify_adoption_dry_runs_with_precise_labels() {
     assert_eq!(
         refresh.command_label.as_ref(),
         "conary system adopt --refresh --dry-run"
-    );
-
-    let convert = policy(&["conary", "system", "adopt", "--convert", "--dry-run"]);
-    assert_eq!(
-        convert.command_label.as_ref(),
-        "conary system adopt --convert --dry-run"
     );
 }
 

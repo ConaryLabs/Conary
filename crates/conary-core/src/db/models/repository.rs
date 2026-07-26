@@ -3,6 +3,8 @@
 //! Repository and RepositoryPackage models - remote package sources
 
 use crate::error::{Error, Result};
+use crate::repository::dependency_model::DebianMultiArch;
+use crate::repository::supported_profiles::{ProfilePackageFormat, SupportedProfile};
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -84,8 +86,9 @@ pub struct Repository {
     pub default_strategy: Option<String>,
     /// For "remi" strategy: the Remi server endpoint URL
     pub default_strategy_endpoint: Option<String>,
-    /// For "remi" strategy: the distribution name (fedora, arch, debian, etc.)
-    pub default_strategy_distro: Option<String>,
+    /// Exact public source profile served by this repository. Values are
+    /// profile IDs, never family names, route aliases, or package formats.
+    pub source_profile: Option<String>,
     /// Whether TUF trust verification is enabled for this repository
     pub tuf_enabled: bool,
     /// Current verified TUF root metadata version
@@ -106,7 +109,7 @@ impl Repository {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, name, url, content_url, enabled, priority, \
          trust_policy_json, metadata_expire, last_sync, created_at, \
-         default_strategy, default_strategy_endpoint, default_strategy_distro, \
+         default_strategy, default_strategy_endpoint, source_profile, \
          tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, \
          package_format, parser_config_json, managed_by";
 
@@ -125,7 +128,7 @@ impl Repository {
             created_at: None,
             default_strategy: None,
             default_strategy_endpoint: None,
-            default_strategy_distro: None,
+            source_profile: None,
             tuf_enabled: false,
             tuf_root_version: None,
             tuf_root_url: None,
@@ -210,6 +213,67 @@ impl Repository {
         Ok(config)
     }
 
+    /// Return the exact public source profile served by this repository.
+    pub fn require_source_profile(&self) -> Result<&'static SupportedProfile> {
+        let profile_id = self.source_profile.as_deref().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "repository '{}' has no exact source profile",
+                self.name
+            ))
+        })?;
+        let profile = crate::repository::supported_profiles::profile_by_public_id(profile_id)
+            .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "repository '{}' declares unsupported source profile '{}'",
+                    self.name, profile_id
+                ))
+            })?;
+
+        let compatible = matches!(
+            (self.package_format, profile.package_format()),
+            (RepositoryFormat::Fedora, ProfilePackageFormat::Rpm)
+                | (RepositoryFormat::Debian, ProfilePackageFormat::Deb)
+                | (RepositoryFormat::Arch, ProfilePackageFormat::Arch)
+                | (RepositoryFormat::Json | RepositoryFormat::Unspecified, _)
+        );
+        if !compatible {
+            return Err(Error::ConfigError(format!(
+                "repository '{}' parser format '{}' conflicts with source profile '{}' format '{}'",
+                self.name,
+                self.package_format.as_str(),
+                profile.id(),
+                profile.package_format().as_str()
+            )));
+        }
+        Ok(profile)
+    }
+
+    /// Return the exact profile authority for dependency resolution.
+    ///
+    /// Native CCS repositories are already bound by their signed repository
+    /// identity. A distro-specific CCS repository may additionally carry the
+    /// exact source profile preserved by converted packages; a distro-neutral
+    /// CCS repository has no profile. Every foreign-metadata repository must
+    /// name one exact supported profile.
+    pub fn resolution_source_profile(&self) -> Result<Option<&'static SupportedProfile>> {
+        if self.default_strategy.as_deref() == Some("static") {
+            if self.package_format != RepositoryFormat::Unspecified || self.parser_config.is_some()
+            {
+                return Err(Error::ConfigError(format!(
+                    "static CCS repository '{}' cannot declare a foreign package parser",
+                    self.name
+                )));
+            }
+            return self
+                .source_profile
+                .as_deref()
+                .map(|_| self.require_source_profile())
+                .transpose();
+        }
+
+        self.require_source_profile().map(Some)
+    }
+
     fn parser_config_json(&self) -> Result<Option<String>> {
         self.parser_config
             .as_ref()
@@ -234,7 +298,7 @@ impl Repository {
                         self.name
                     )));
                 }
-                let profile = self.default_strategy_distro.as_deref().ok_or_else(|| {
+                let profile = self.source_profile.as_deref().ok_or_else(|| {
                     Error::ConfigError(format!(
                         "repository '{}' declares Remi resolution without a public profile",
                         self.name
@@ -267,7 +331,12 @@ impl Repository {
                 RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora,
             ) => {
                 self.require_parser_config()?;
-                self.require_trust_policy().map(|_| ())
+                self.require_source_profile()?;
+                match &self.trust_policy {
+                    Some(_) => self.require_trust_policy().map(|_| ()),
+                    None if !self.enabled => Ok(()),
+                    None => self.require_trust_policy().map(|_| ()),
+                }
             }
             (Some(_), RepositoryFormat::Json) => {
                 self.require_parser_config()?;
@@ -292,7 +361,7 @@ impl Repository {
         let parser_config_json = self.parser_config_json()?;
         let trust_policy_json = self.trust_policy_json()?;
         let inserted = conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, default_strategy_distro, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by)
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, source_profile, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(name) DO NOTHING",
             params![
@@ -305,7 +374,7 @@ impl Repository {
                 &self.metadata_expire,
                 &self.default_strategy,
                 &self.default_strategy_endpoint,
-                &self.default_strategy_distro,
+                &self.source_profile,
                 self.tuf_enabled as i32,
                 &self.tuf_root_version,
                 &self.tuf_root_url,
@@ -381,7 +450,7 @@ impl Repository {
         conn.execute(
             "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
              trust_policy_json = ?6, metadata_expire = ?7, last_sync = ?8,
-             default_strategy = ?9, default_strategy_endpoint = ?10, default_strategy_distro = ?11,
+             default_strategy = ?9, default_strategy_endpoint = ?10, source_profile = ?11,
              tuf_enabled = ?12, tuf_root_version = ?13, tuf_root_url = ?14,
              security_advisory_support = ?15, package_format = ?16, parser_config_json = ?17,
              managed_by = ?18
@@ -397,7 +466,7 @@ impl Repository {
                 &self.last_sync,
                 &self.default_strategy,
                 &self.default_strategy_endpoint,
-                &self.default_strategy_distro,
+                &self.source_profile,
                 self.tuf_enabled as i32,
                 &self.tuf_root_version,
                 &self.tuf_root_url,
@@ -480,7 +549,7 @@ impl Repository {
             created_at: row.get(9)?,
             default_strategy: row.get(10)?,
             default_strategy_endpoint: row.get(11)?,
-            default_strategy_distro: row.get(12)?,
+            source_profile: row.get(12)?,
             tuf_enabled: row.get::<_, i32>(13)? != 0,
             tuf_root_version: row.get(14)?,
             tuf_root_url: row.get(15)?,
@@ -503,6 +572,8 @@ pub struct RepositoryPackage {
     pub version: String,
     pub package_release: String,
     pub architecture: Option<String>,
+    /// Exact Debian `Multi-Arch` behavior; absent for non-Debian packages.
+    pub debian_multi_arch: Option<DebianMultiArch>,
     pub description: Option<String>,
     pub checksum: String,
     pub size: i64,
@@ -519,8 +590,8 @@ pub struct RepositoryPackage {
     pub advisory_id: Option<String>,
     /// URL to the advisory
     pub advisory_url: Option<String>,
-    /// Distro identity this package came from (e.g. "fedora", "debian", "arch").
-    pub distro: Option<String>,
+    /// Exact public source-profile identity this package came from.
+    pub source_profile: Option<String>,
     /// Exact native version grammar and comparison authority.
     pub version_scheme: VersionScheme,
     /// Cross-distro canonical identity for this package.
@@ -529,25 +600,25 @@ pub struct RepositoryPackage {
 
 impl RepositoryPackage {
     /// Column list for SELECT queries.
-    pub const COLUMNS: &'static str = "id, repository_id, name, version, package_release, architecture, description, \
+    pub const COLUMNS: &'static str = "id, repository_id, name, version, package_release, architecture, debian_multi_arch, description, \
          checksum, size, download_url, metadata, synced_at, \
          is_security_update, severity, cve_ids, advisory_id, advisory_url, \
-         distro, version_scheme, canonical_id";
+         source_profile, version_scheme, canonical_id";
 
     /// Column list for SELECT queries with table alias prefix (rp.).
     pub const COLUMNS_PREFIXED: &'static str = "rp.id, rp.repository_id, rp.name, rp.version, \
-         rp.package_release, rp.architecture, rp.description, rp.checksum, rp.size, rp.download_url, \
+         rp.package_release, rp.architecture, rp.debian_multi_arch, rp.description, rp.checksum, rp.size, rp.download_url, \
          rp.metadata, rp.synced_at, rp.is_security_update, \
-         rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url, rp.distro, \
+         rp.severity, rp.cve_ids, rp.advisory_id, rp.advisory_url, rp.source_profile, \
          rp.version_scheme, rp.canonical_id";
 
     /// INSERT SQL shared by `batch_insert` and `batch_insert_with_ids`.
     const BATCH_INSERT_SQL: &'static str = "\
          INSERT INTO repository_packages \
-         (repository_id, name, version, package_release, architecture, description, checksum, size, \
+         (repository_id, name, version, package_release, architecture, debian_multi_arch, description, checksum, size, \
           download_url, metadata, is_security_update, severity, cve_ids, \
-          advisory_id, advisory_url, distro, version_scheme, canonical_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+          advisory_id, advisory_url, source_profile, version_scheme, canonical_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
 
     /// Create a new RepositoryPackage
     pub fn new(
@@ -566,6 +637,8 @@ impl RepositoryPackage {
             version,
             package_release: String::new(),
             architecture: None,
+            debian_multi_arch: (version_scheme == VersionScheme::Debian)
+                .then_some(DebianMultiArch::No),
             description: None,
             checksum,
             size,
@@ -577,7 +650,7 @@ impl RepositoryPackage {
             cve_ids: None,
             advisory_id: None,
             advisory_url: None,
-            distro: None,
+            source_profile: None,
             version_scheme,
             canonical_id: None,
         }
@@ -587,15 +660,16 @@ impl RepositoryPackage {
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, package_release, architecture, description, checksum, size, download_url, metadata,
-              is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme, canonical_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+             (repository_id, name, version, package_release, architecture, debian_multi_arch, description, checksum, size, download_url, metadata,
+              is_security_update, severity, cve_ids, advisory_id, advisory_url, source_profile, version_scheme, canonical_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 &self.repository_id,
                 &self.name,
                 &self.version,
                 &self.package_release,
                 &self.architecture,
+                self.debian_multi_arch.map(DebianMultiArch::as_str),
                 &self.description,
                 &self.checksum,
                 &self.size,
@@ -606,7 +680,7 @@ impl RepositoryPackage {
                 &self.cve_ids,
                 &self.advisory_id,
                 &self.advisory_url,
-                &self.distro,
+                &self.source_profile,
                 self.version_scheme.as_str(),
                 &self.canonical_id,
             ],
@@ -770,20 +844,21 @@ impl RepositoryPackage {
             version: row.get(3)?,
             package_release: row.get(4)?,
             architecture: row.get(5)?,
-            description: row.get(6)?,
-            checksum: row.get(7)?,
-            size: row.get(8)?,
-            download_url: row.get(9)?,
-            metadata: row.get(10)?,
-            synced_at: row.get(11)?,
-            is_security_update: row.get::<_, i32>(12)? != 0,
-            severity: row.get(13)?,
-            cve_ids: row.get(14)?,
-            advisory_id: row.get(15)?,
-            advisory_url: row.get(16)?,
-            distro: row.get(17)?,
-            version_scheme: version_scheme_from_row(row, 18)?,
-            canonical_id: row.get(19)?,
+            debian_multi_arch: debian_multi_arch_from_row(row, 6)?,
+            description: row.get(7)?,
+            checksum: row.get(8)?,
+            size: row.get(9)?,
+            download_url: row.get(10)?,
+            metadata: row.get(11)?,
+            synced_at: row.get(12)?,
+            is_security_update: row.get::<_, i32>(13)? != 0,
+            severity: row.get(14)?,
+            cve_ids: row.get(15)?,
+            advisory_id: row.get(16)?,
+            advisory_url: row.get(17)?,
+            source_profile: row.get(18)?,
+            version_scheme: version_scheme_from_row(row, 19)?,
+            canonical_id: row.get(20)?,
         })
     }
 
@@ -854,6 +929,7 @@ impl RepositoryPackage {
             &pkg.version,
             &pkg.package_release,
             &pkg.architecture,
+            pkg.debian_multi_arch.map(DebianMultiArch::as_str),
             &pkg.description,
             &pkg.checksum,
             &pkg.size,
@@ -864,7 +940,7 @@ impl RepositoryPackage {
             &pkg.cve_ids,
             &pkg.advisory_id,
             &pkg.advisory_url,
-            &pkg.distro,
+            &pkg.source_profile,
             pkg.version_scheme.as_str(),
             &pkg.canonical_id,
         ])?;
@@ -884,6 +960,24 @@ pub(crate) fn version_scheme_from_row(
             Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
         )
     })
+}
+
+fn debian_multi_arch_from_row(
+    row: &Row<'_>,
+    index: usize,
+) -> rusqlite::Result<Option<DebianMultiArch>> {
+    let Some(raw) = row.get::<_, Option<String>>(index)? else {
+        return Ok(None);
+    };
+    DebianMultiArch::parse_exact(&raw)
+        .map(Some)
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                index,
+                rusqlite::types::Type::Text,
+                Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
+            )
+        })
 }
 
 #[cfg(test)]

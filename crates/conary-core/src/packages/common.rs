@@ -7,25 +7,15 @@
 
 use crate::db::models::{Trove, TroveType};
 use crate::packages::traits::{
-    ConfigFileInfo, Dependency, DiagnosticScriptletEvidence, NativeScriptletEntry, PackageFile,
+    ConfigFileInfo, DiagnosticScriptletEvidence, NativeScriptletEntry, PackageFile,
+    ProvidedCapability,
 };
-use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::dependency_model::{DebianMultiArch, RepositoryRequirementGroup};
 use crate::repository::versioning::VersionScheme;
 use std::path::{Path, PathBuf};
 
 /// Maximum size for a single file during package extraction (512 MB).
 pub const MAX_EXTRACTION_FILE_SIZE: u64 = 512 * 1024 * 1024;
-
-/// Normalize architecture strings across distros.
-///
-/// Maps Debian "all", Arch "any", and RPM "noarch" to a canonical "noarch".
-/// All other values pass through unchanged.
-pub fn normalize_architecture(arch: &str) -> &str {
-    match arch {
-        "all" | "any" | "noarch" => "noarch",
-        other => other,
-    }
-}
 
 /// Common metadata shared by all package formats
 ///
@@ -42,8 +32,10 @@ pub struct PackageMetadata {
     pub version: String,
     /// Native version algebra for requirements and provides.
     pub version_scheme: VersionScheme,
-    /// Target architecture (e.g., "x86_64", "aarch64", "noarch")
+    /// Exact source-native architecture token.
     pub architecture: Option<String>,
+    /// Exact Debian `Multi-Arch` package behavior, when defined by the source.
+    pub debian_multi_arch: Option<DebianMultiArch>,
     /// Package description/summary
     pub description: Option<String>,
     /// Files contained in the package
@@ -51,7 +43,7 @@ pub struct PackageMetadata {
     /// Exact positive package requirements and sole dependency authority.
     pub requirements: Vec<RepositoryRequirementGroup>,
     /// Native package-provided capabilities.
-    pub provides: Vec<Dependency>,
+    pub provides: Vec<ProvidedCapability>,
     /// Exact source-native conflict and replacement relations.
     pub relations: Vec<RepositoryRequirementGroup>,
     /// Non-authoritative flattened script text for conversion diagnostics only.
@@ -76,6 +68,7 @@ impl PackageMetadata {
             version,
             version_scheme,
             architecture: None,
+            debian_multi_arch: None,
             description: None,
             files: Vec::new(),
             requirements: Vec::new(),
@@ -107,6 +100,11 @@ impl PackageMetadata {
         self.architecture.as_deref()
     }
 
+    /// Get exact Debian `Multi-Arch` behavior.
+    pub fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
+        self.debian_multi_arch
+    }
+
     /// Get the package description
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
@@ -123,7 +121,7 @@ impl PackageMetadata {
     }
 
     /// Get the list of native provides
-    pub fn provides(&self) -> &[Dependency] {
+    pub fn provides(&self) -> &[ProvidedCapability] {
         &self.provides
     }
 
@@ -159,6 +157,7 @@ impl PackageMetadata {
         );
 
         trove.architecture = self.architecture.clone();
+        trove.debian_multi_arch = self.debian_multi_arch;
         trove.description = self.description.clone();
 
         trove
@@ -226,15 +225,5 @@ mod tests {
         assert_eq!(trove.version_scheme, VersionScheme::Debian);
         assert_eq!(trove.architecture, Some("aarch64".to_string()));
         assert_eq!(trove.description, Some("Example package".to_string()));
-    }
-
-    #[test]
-    fn test_normalize_architecture() {
-        use super::normalize_architecture;
-        assert_eq!(normalize_architecture("all"), "noarch");
-        assert_eq!(normalize_architecture("any"), "noarch");
-        assert_eq!(normalize_architecture("noarch"), "noarch");
-        assert_eq!(normalize_architecture("x86_64"), "x86_64");
-        assert_eq!(normalize_architecture("aarch64"), "aarch64");
     }
 }

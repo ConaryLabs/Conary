@@ -532,11 +532,19 @@ fn build_manifest(
     };
 
     let conn = Connection::open(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
     let converted = if let Some(ver) = version {
-        ConvertedPackage::find_by_package_identity(&conn, distro, package, Some(ver))?
+        ConvertedPackage::find_by_package_identity(&conn, source_profile.id(), package, Some(ver))?
     } else {
-        ConvertedPackage::find_by_content_hash_identity(&conn, distro, package, reference)?
+        ConvertedPackage::find_by_content_hash_identity(
+            &conn,
+            source_profile.id(),
+            package,
+            reference,
+        )?
     };
 
     let converted = match converted {
@@ -584,7 +592,7 @@ fn build_manifest(
     let config_json = serde_json::json!({
         "name": artifact.package_name,
         "version": artifact.package_version,
-        "distro": artifact.distro,
+        "distro": distro,
         "format": converted.original_format,
         "total_size": artifact.total_size,
         "content_hash": artifact.content_hash,
@@ -622,8 +630,13 @@ fn build_tags_list(
     package: &str,
 ) -> Result<Vec<String>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
     let mut tags = Vec::new();
-    for converted in ConvertedPackage::find_current_conversions(&conn, distro, Some(package))? {
+    for converted in
+        ConvertedPackage::find_current_conversions(&conn, source_profile.id(), Some(package))?
+    {
         converted.scriptlet_summary()?;
         tags.push(converted.repository_artifact()?.package_version.to_string());
     }
@@ -643,9 +656,19 @@ fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error>
         }
         converted.scriptlet_summary()?;
         let artifact = converted.repository_artifact()?;
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
+            artifact.source_profile,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "converted artifact carries unsupported source profile '{}'",
+                artifact.source_profile
+            )
+        })?;
         repositories.push(format!(
             "conary/{}/{}",
-            artifact.distro, artifact.package_name
+            profile.remi_route_slug(),
+            artifact.package_name
         ));
     }
     repositories.sort();

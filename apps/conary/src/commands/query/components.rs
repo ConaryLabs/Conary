@@ -30,27 +30,27 @@ pub async fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()
 
         // Get components
         let components = conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
+        let payload = conary_core::db::models::PackagePayloadOwnership::load(&conn, trove_id)?;
 
         if components.is_empty() {
-            let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
-            if files.is_empty() {
+            if payload.entries().is_empty() {
                 println!("  Components: (none; metadata-only package)");
             } else {
                 anyhow::bail!(
                     "Installed package '{}' {} has {} files but no persisted component authority",
                     trove.name,
                     trove.version,
-                    files.len()
+                    payload.entries().len()
                 );
             }
         } else {
             println!("  Components:");
             for comp in &components {
-                let file_count = conary_core::db::models::FileEntry::find_by_component(
-                    &conn,
-                    comp.id.unwrap_or(0),
-                )?
-                .len();
+                let file_count = payload
+                    .entries()
+                    .iter()
+                    .filter(|file| file.component_id == comp.id)
+                    .count();
                 let default_marker = if conary_core::components::ComponentType::parse(&comp.name)
                     .map(|ct| ct.is_default())
                     .unwrap_or(false)
@@ -113,7 +113,13 @@ pub async fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<
                 let comp_id = comp
                     .id
                     .ok_or_else(|| anyhow::anyhow!("Component has no ID"))?;
-                let files = conary_core::db::models::FileEntry::find_by_component(&conn, comp_id)?;
+                let payload =
+                    conary_core::db::models::PackagePayloadOwnership::load(&conn, trove_id)?;
+                let files = payload
+                    .entries()
+                    .iter()
+                    .filter(|file| file.component_id == Some(comp_id))
+                    .collect::<Vec<_>>();
 
                 println!(
                     "{}:{} ({} {})",
@@ -133,13 +139,14 @@ pub async fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<
                 let components =
                     conary_core::db::models::Component::find_by_trove(&conn, trove_id)?;
                 if components.is_empty() {
-                    let files = conary_core::db::models::FileEntry::find_by_trove(&conn, trove_id)?;
-                    if !files.is_empty() {
+                    let payload =
+                        conary_core::db::models::PackagePayloadOwnership::load(&conn, trove_id)?;
+                    if !payload.entries().is_empty() {
                         anyhow::bail!(
                             "Installed package '{}' {} has {} files but no persisted component authority",
                             trove.name,
                             trove.version,
-                            files.len()
+                            payload.entries().len()
                         );
                     }
                     return Err(anyhow::anyhow!(

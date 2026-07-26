@@ -3,7 +3,8 @@
 //! Single-package update command execution.
 
 use super::super::install::{
-    OwnershipMode, repository_install_provenance_from_package, verify_ccs_package_authority,
+    CcsEnvelopeAuthority, OwnershipMode, repository_install_provenance_from_package,
+    verify_ccs_package_authority,
 };
 use super::super::progress::{UpdatePhase, UpdateProgress};
 use super::super::{InstallOptions, SandboxMode, cmd_install, open_db};
@@ -13,9 +14,8 @@ use super::adopted_authority::{
 };
 use super::selection::{
     SecurityMetadataUnavailable, SelectedUpdateCandidate, UpdateCandidateSelection,
-    installed_troves_for_update, print_security_metadata_unavailable, print_source_switch_preview,
-    render_security_update_marker, requires_source_switch_confirmation,
-    security_metadata_unavailable_error, select_update_candidate,
+    installed_troves_for_update, print_security_metadata_unavailable,
+    render_security_update_marker, security_metadata_unavailable_error, select_update_candidate,
 };
 use super::source_policy::print_source_policy_update_preview;
 use anyhow::{Context, Result};
@@ -24,8 +24,7 @@ use conary_core::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPa
 use conary_core::db::paths::objects_dir;
 use conary_core::delta::DeltaApplier;
 use conary_core::repository::{
-    self, PackageSource, ResolutionOptions, dependency_model::RepositoryDependencyFlavor,
-    resolution_policy::ResolutionPolicy, resolve_package,
+    self, PackageSource, ResolutionOptions, resolution_policy::ResolutionPolicy, resolve_package,
 };
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -45,22 +44,36 @@ fn resolution_options_for_selected_update(
     temp_dir: &Path,
     _keyring_dir: &Path,
     policy: &ResolutionPolicy,
-    primary_flavor: Option<RepositoryDependencyFlavor>,
-) -> ResolutionOptions {
-    ResolutionOptions {
+) -> Result<ResolutionOptions> {
+    let mut transaction_policy = policy.clone();
+    let exact_profile = conary_core::repository::selector::candidate_source_profile(
+        repo_pkg, repo,
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "selected update package '{}-{}' has no exact source profile",
+            repo_pkg.name,
+            repo_pkg.version
+        )
+    })?;
+    transaction_policy.set_primary_profile(Some(exact_profile.to_string()));
+    transaction_policy
+        .validate_profile_ids()
+        .map_err(anyhow::Error::msg)?;
+    Ok(ResolutionOptions {
         version: Some(repo_pkg.version.clone()),
+        package_release: (!repo_pkg.package_release.is_empty())
+            .then(|| repo_pkg.package_release.clone()),
         repository: Some(repo.name.clone()),
         architecture: repo_pkg.architecture.clone(),
         output_dir: Some(PathBuf::from(temp_dir)),
         // Update has already selected a repository package. Do not let the
-        // generic resolver short-circuit on an installed same-version trove,
-        // because source-switch updates can intentionally reinstall the same
-        // version from a different authority.
+        // generic resolver short-circuit on the installed trove; execution
+        // must consume the exact repository row selected by update planning.
         skip_installed: true,
-        policy: Some(policy.clone()),
+        policy: Some(transaction_policy),
         is_root: false,
-        primary_flavor,
-    }
+    })
 }
 
 fn mark_pending_changeset_rolled_back(
@@ -133,7 +146,6 @@ async fn prepare_full_updates_before_changeset(
     temp_dir: &Path,
     keyring_dir: &Path,
     policy: &ResolutionPolicy,
-    primary_flavor: Option<RepositoryDependencyFlavor>,
 ) -> Result<Vec<PreparedFullUpdate>> {
     let mut prepared = Vec::with_capacity(full_updates.len());
 
@@ -144,8 +156,7 @@ async fn prepare_full_updates_before_changeset(
             temp_dir,
             keyring_dir,
             policy,
-            primary_flavor,
-        );
+        )?;
 
         let source = resolve_package(conn, &trove.name, &options)
             .await
@@ -195,7 +206,12 @@ fn preflight_prepared_full_update_native_lifecycle(
     }
 
     let repository_provenance = repository_install_provenance_from_package(repo_pkg, repo)?;
-    let verified = verify_ccs_package_authority(db_path, pkg_path, Some(&repository_provenance))?;
+    let verified = verify_ccs_package_authority(
+        db_path,
+        pkg_path,
+        &CcsEnvelopeAuthority::Repository,
+        Some(&repository_provenance),
+    )?;
     let pkg = CcsPackage::from_verified_archive(&pkg_path.to_string_lossy(), &verified)
         .with_context(|| format!("failed to parse selected update CCS {}", pkg_path.display()))?;
     if let Some(bundle) = pkg.manifest().native_lifecycle.as_ref() {
@@ -264,7 +280,6 @@ pub async fn cmd_update(
         conary_core::repository::resolution_policy::RequestScope::Any,
     )?;
     let policy = effective_source_policy.resolution.clone();
-    let primary_flavor = effective_source_policy.primary_flavor;
 
     if package.is_none() {
         print_source_policy_update_preview(&conn)?;
@@ -312,20 +327,15 @@ pub async fn cmd_update(
                 Some(AdoptedUpdateDecision::SkipNativeAuthority)
             );
 
-        let selected = match select_update_candidate(
-            &conn,
-            trove,
-            enforce_security_metadata,
-            &policy,
-            primary_flavor,
-        )? {
-            UpdateCandidateSelection::Selected(selected) => *selected,
-            UpdateCandidateSelection::NoEligibleUpdate => continue,
-            UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
-                security_metadata_unavailable.push(unavailable);
-                continue;
-            }
-        };
+        let selected =
+            match select_update_candidate(&conn, trove, enforce_security_metadata, &policy)? {
+                UpdateCandidateSelection::Selected(selected) => *selected,
+                UpdateCandidateSelection::NoEligibleUpdate => continue,
+                UpdateCandidateSelection::SecurityMetadataUnavailable(unavailable) => {
+                    security_metadata_unavailable.push(unavailable);
+                    continue;
+                }
+            };
 
         // For adopted packages, native package-manager authority is preserved
         // unless the user explicitly asks Conary to take ownership.
@@ -444,18 +454,6 @@ pub async fn cmd_update(
         );
     }
 
-    print_source_switch_preview(&updates_available);
-
-    let selected_updates: Vec<_> = updates_available
-        .iter()
-        .map(|(_, selected)| selected.clone())
-        .collect();
-    if requires_source_switch_confirmation(&selected_updates, yes) {
-        anyhow::bail!(
-            "One or more updates would switch package sources. Review the preview above and rerun with --yes to confirm, or use --dry-run first."
-        );
-    }
-
     if dry_run {
         println!("\nDry run: no updates were applied.");
         return Ok(());
@@ -510,7 +508,6 @@ pub async fn cmd_update(
         &temp_dir,
         &keyring_dir,
         &policy,
-        primary_flavor,
     )
     .await?;
     for prepared in prepared_delta_admissions {
@@ -524,7 +521,6 @@ pub async fn cmd_update(
         &temp_dir,
         &keyring_dir,
         &policy,
-        primary_flavor,
     )
     .await?;
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
@@ -714,14 +710,24 @@ pub async fn cmd_update(
                 info!("Resolving {} from {}", trove.name, repo.name);
                 progress.set_phase(&trove.name, UpdatePhase::DownloadingFull);
 
-                let options = resolution_options_for_selected_update(
+                let options = match resolution_options_for_selected_update(
                     &repo_pkg,
                     &repo,
                     &temp_dir,
                     &keyring_dir,
                     &policy,
-                    primary_flavor,
-                );
+                ) {
+                    Ok(options) => options,
+                    Err(error) => {
+                        progress.fail_package(&trove.name, &error.to_string());
+                        required_failures.push(UpdatePackageFailure {
+                            package: trove.name.clone(),
+                            version: repo_pkg.version.clone(),
+                            reason: error.to_string(),
+                        });
+                        continue;
+                    }
+                };
 
                 // Use unified resolver - respects remi/binary/recipe strategies
                 let source = match resolve_package(&conn, &trove.name, &options).await {

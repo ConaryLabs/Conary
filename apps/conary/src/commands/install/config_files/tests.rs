@@ -25,7 +25,7 @@ fn resolved_node(kind: PayloadNodeKind, mode: u32) -> ResolvedPayloadNode {
 fn live_regular(path: &str, content: &[u8], mode: u32) -> LiveRootFile {
     LiveRootFile {
         path: path.to_string(),
-        content: content.to_vec(),
+        content: LiveRootContent::from_in_memory_bytes(content),
         node: resolved_node(
             PayloadNodeKind::Regular {
                 hardlink_identity: None,
@@ -204,7 +204,7 @@ fn prepared_arch_conflict_keeps_local_and_writes_pacnew() {
 
     assert_eq!(plan.files.len(), 1);
     assert_eq!(plan.files[0].path, "/etc/demo.conf.pacnew");
-    assert_eq!(plan.files[0].content, b"new");
+    assert_eq!(plan.files[0].content.to_in_memory().unwrap(), b"new");
 }
 
 #[test]
@@ -229,9 +229,9 @@ fn undeclared_etc_payload_uses_deterministic_conary_suffixes() {
 
     assert_eq!(plan.files.len(), 2);
     assert_eq!(plan.files[0].path, "/etc/demo.conf.conary-save");
-    assert_eq!(plan.files[0].content, b"local");
+    assert_eq!(plan.files[0].content.to_in_memory().unwrap(), b"local");
     assert_eq!(plan.files[1].path, "/etc/demo.conf");
-    assert_eq!(plan.files[1].content, b"new");
+    assert_eq!(plan.files[1].content.to_in_memory().unwrap(), b"new");
 }
 
 #[test]
@@ -295,7 +295,10 @@ fn deb_remove_on_upgrade_removes_pristine_and_saves_modified_conffiles() {
     .unwrap();
     assert_eq!(modified.files.len(), 1);
     assert_eq!(modified.files[0].path, "/etc/obsolete.conf.dpkg-old");
-    assert_eq!(modified.files[0].content, b"locally modified");
+    assert_eq!(
+        modified.files[0].content.to_in_memory().unwrap(),
+        b"locally modified"
+    );
 
     let other_owner = prepare_config_install(
         &conn,
@@ -516,9 +519,14 @@ fn arch_remove_rotates_existing_pacsaves_before_saving_local_file() {
     let files = plan
         .files
         .iter()
-        .map(|file| (file.path.as_str(), file.content.as_slice()))
+        .map(|file| {
+            (
+                file.path.as_str(),
+                file.content.to_in_memory().expect("read test content"),
+            )
+        })
         .collect::<HashMap<_, _>>();
-    assert_eq!(files["/etc/demo.conf.pacsave.3"], b"save-two".as_slice());
-    assert_eq!(files["/etc/demo.conf.pacsave.1"], b"save-zero".as_slice());
-    assert_eq!(files["/etc/demo.conf.pacsave"], b"local".as_slice());
+    assert_eq!(files["/etc/demo.conf.pacsave.3"], b"save-two");
+    assert_eq!(files["/etc/demo.conf.pacsave.1"], b"save-zero");
+    assert_eq!(files["/etc/demo.conf.pacsave"], b"local");
 }

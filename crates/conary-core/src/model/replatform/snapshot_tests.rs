@@ -3,6 +3,52 @@
 use super::*;
 
 #[test]
+fn replatform_target_lookup_overrides_the_current_strict_profile() {
+    let (_temp, conn) = create_test_db();
+    crate::db::models::DistroPin::set(
+        &conn,
+        "fedora-44",
+        crate::repository::resolution_policy::DependencyMixingPolicy::Strict,
+    )
+    .unwrap();
+
+    let mut repository = Repository::new(
+        "arch-core".to_string(),
+        "https://example.test/arch".to_string(),
+    );
+    repository.source_profile = Some("arch".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let mut target = RepositoryPackage::new(
+        repository_id,
+        "vim".to_string(),
+        "9.1.0".to_string(),
+        crate::repository::versioning::VersionScheme::Arch,
+        "sha256:target".to_string(),
+        123,
+        "https://example.test/arch/vim.pkg.tar.zst".to_string(),
+    );
+    target.architecture = Some("x86_64".to_string());
+    let target_id = target.insert(&conn).unwrap();
+
+    let mut installed = Trove::new_with_source(
+        "vim".to_string(),
+        "9.0.1".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        crate::repository::versioning::VersionScheme::Rpm,
+    );
+    installed.architecture = Some("x86_64".to_string());
+    installed.source_profile = Some("fedora-44".to_string());
+
+    let selected = candidate_target_package(&conn, &installed, "arch")
+        .unwrap()
+        .expect("explicit replatform target should replace the current pin");
+
+    assert_eq!(selected.id, Some(target_id));
+}
+
+#[test]
 fn test_visible_realignment_candidates_counts_same_name_target_impls() {
     let (_temp, conn) = create_test_db();
 
@@ -10,12 +56,12 @@ fn test_visible_realignment_candidates_counts_same_name_target_impls() {
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
     let mut arch_repo =
         Repository::new("arch".to_string(), "https://example.test/arch".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut fedora_label = LabelEntry::new(
@@ -88,12 +134,12 @@ fn test_source_policy_replatform_snapshot_combines_estimate_and_candidates() {
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
     let mut arch_repo =
         Repository::new("arch".to_string(), "https://example.test/arch".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut fedora_label = LabelEntry::new(
@@ -176,7 +222,7 @@ fn test_source_policy_replatform_snapshot_uses_native_repo_version_ordering() {
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
     let mut fedora_label = LabelEntry::new(
@@ -202,7 +248,7 @@ fn test_source_policy_replatform_snapshot_uses_native_repo_version_ordering() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
-    ubuntu_repo.default_strategy_distro = Some("ubuntu-26.04".to_string());
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     let ubuntu_repo_id = ubuntu_repo.insert(&conn).unwrap();
 
     let mut prerelease = RepositoryPackage::new(
@@ -247,7 +293,7 @@ fn test_source_policy_replatform_snapshot_uses_shared_selector_priority_ordering
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
     let mut fedora_label = LabelEntry::new(
@@ -273,7 +319,7 @@ fn test_source_policy_replatform_snapshot_uses_shared_selector_priority_ordering
         "arch-priority".to_string(),
         "https://example.test/arch-priority".to_string(),
     );
-    arch_priority_repo.default_strategy_distro = Some("arch".to_string());
+    arch_priority_repo.source_profile = Some("arch".to_string());
     arch_priority_repo.priority = 100;
     let arch_priority_repo_id = arch_priority_repo.insert(&conn).unwrap();
 
@@ -281,7 +327,7 @@ fn test_source_policy_replatform_snapshot_uses_shared_selector_priority_ordering
         "arch-latest".to_string(),
         "https://example.test/arch-latest".to_string(),
     );
-    arch_latest_repo.default_strategy_distro = Some("arch".to_string());
+    arch_latest_repo.source_profile = Some("arch".to_string());
     arch_latest_repo.priority = 10;
     let arch_latest_repo_id = arch_latest_repo.insert(&conn).unwrap();
 

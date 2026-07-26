@@ -41,10 +41,6 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
             post(tuf::refresh_timestamp),
         )
         .route(
-            "/v1/admin/packages/{distro}",
-            post(admin_handlers::upload_package),
-        )
-        .route(
             "/v1/admin/releases/{distro}",
             post(admin_handlers::upload_release_package),
         )
@@ -70,10 +66,6 @@ pub fn create_external_admin_router(
         .route(
             "/v1/admin/test-artifacts/{*path}",
             put(admin_handlers::upload_test_artifact),
-        )
-        .route(
-            "/v1/admin/packages/{distro}",
-            post(admin_handlers::upload_package),
         )
         .route(
             "/v1/admin/releases/{distro}",
@@ -335,8 +327,9 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn retired_scriptlet_review_routes_are_absent() {
+    async fn retired_admin_workflow_routes_are_absent() {
         for (method, path) in [
+            ("POST", "/v1/admin/packages/fedora"),
             ("POST", "/v1/admin/scriptlet-evidence/backfill"),
             ("GET", "/v1/admin/scriptlet-evidence/clusters"),
             ("GET", "/v1/admin/scriptlet-evidence/clusters/example"),

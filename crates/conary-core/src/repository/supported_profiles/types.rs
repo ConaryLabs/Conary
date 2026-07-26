@@ -2,7 +2,6 @@
 
 use serde::Deserialize;
 
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::versioning::VersionScheme;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -28,7 +27,6 @@ pub(super) struct ProfileIdentityDocument {
     pub remi_route_slug: String,
     pub repology_repo: String,
     pub package_format: ProfilePackageFormat,
-    pub dependency_flavor: DependencyFlavorValue,
     pub version_scheme: VersionSchemeValue,
     #[serde(default)]
     pub scriptlet_shell: Option<String>,
@@ -49,24 +47,6 @@ impl ProfilePackageFormat {
             Self::Rpm => "rpm",
             Self::Deb => "deb",
             Self::Arch => "arch",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum DependencyFlavorValue {
-    Rpm,
-    Deb,
-    Arch,
-}
-
-impl From<DependencyFlavorValue> for RepositoryDependencyFlavor {
-    fn from(value: DependencyFlavorValue) -> Self {
-        match value {
-            DependencyFlavorValue::Rpm => RepositoryDependencyFlavor::Rpm,
-            DependencyFlavorValue::Deb => RepositoryDependencyFlavor::Deb,
-            DependencyFlavorValue::Arch => RepositoryDependencyFlavor::Arch,
         }
     }
 }
@@ -127,11 +107,6 @@ impl SupportedProfile {
     #[must_use]
     pub fn package_format(&self) -> ProfilePackageFormat {
         self.document.identity.package_format
-    }
-
-    #[must_use]
-    pub fn dependency_flavor(&self) -> RepositoryDependencyFlavor {
-        self.document.identity.dependency_flavor.into()
     }
 
     #[must_use]

@@ -5,15 +5,18 @@
 use crate::error::{Error, Result};
 use crate::flavor::FlavorSpec;
 use crate::packages::InstalledPackageIdentity;
+use crate::repository::dependency_model::DebianMultiArch;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::{Deserialize, Serialize};
 use strum_macros::{AsRefStr, Display, EnumString};
 
 use super::repository::version_scheme_from_row;
 
 /// Type of trove (package, component, or collection)
-#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString, Serialize, Deserialize)]
 #[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum TroveType {
     Package,
     Component,
@@ -28,8 +31,9 @@ impl TroveType {
 }
 
 /// Source of package installation
-#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString, Serialize, Deserialize)]
 #[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum InstallSource {
     /// Installed from local package file
     File,
@@ -71,8 +75,9 @@ impl InstallSource {
 }
 
 /// Reason why a package was installed
-#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString, Serialize, Deserialize)]
 #[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum InstallReason {
     /// User explicitly requested this package
     Explicit,
@@ -93,8 +98,13 @@ pub struct Trove {
     pub id: Option<i64>,
     pub name: String,
     pub version: String,
+    /// Monotonic signed CCS build release. Native source records without a
+    /// CCS envelope carry no package release.
+    pub package_release: Option<String>,
     pub trove_type: TroveType,
     pub architecture: Option<String>,
+    /// Exact installed Debian `Multi-Arch` behavior, when source-owned.
+    pub debian_multi_arch: Option<DebianMultiArch>,
     pub description: Option<String>,
     pub installed_at: Option<String>,
     pub installed_by_changeset_id: Option<i64>,
@@ -112,7 +122,7 @@ pub struct Trove {
     /// NULL means not orphaned. Used for grace period policies.
     pub orphan_since: Option<String>,
     /// Distro identity the installed package originally came from.
-    pub source_distro: Option<String>,
+    pub source_profile: Option<String>,
     /// Exact version grammar and comparison authority for this installed package.
     pub version_scheme: VersionScheme,
     /// Exact native package-manager record identity for adopted or taken packages.
@@ -123,10 +133,11 @@ pub struct Trove {
 
 impl Trove {
     /// Column list for SELECT queries.
-    pub(crate) const COLUMNS: &'static str = "id, name, version, type, architecture, description, \
+    pub(crate) const COLUMNS: &'static str = "id, name, version, package_release, type, architecture, description, \
          installed_at, installed_by_changeset_id, install_source, install_reason, \
-         flavor_spec, pinned, selection_reason, label_id, orphan_since, source_distro, \
-         version_scheme, native_package_identity_json, installed_from_repository_id";
+         flavor_spec, pinned, selection_reason, label_id, orphan_since, source_profile, \
+         version_scheme, native_package_identity_json, installed_from_repository_id, \
+         debian_multi_arch";
 
     /// Create a new Trove
     pub fn new(
@@ -139,8 +150,10 @@ impl Trove {
             id: None,
             name,
             version,
+            package_release: None,
             trove_type,
             architecture: None,
+            debian_multi_arch: None,
             description: None,
             installed_at: None,
             installed_by_changeset_id: None,
@@ -151,7 +164,7 @@ impl Trove {
             selection_reason: Some("Explicitly installed".to_string()),
             label_id: None,
             orphan_since: None,
-            source_distro: None,
+            source_profile: None,
             version_scheme,
             native_package_identity: None,
             installed_from_repository_id: None,
@@ -175,11 +188,12 @@ impl Trove {
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         let native_package_identity_json = self.validated_native_identity_json()?;
         conn.execute(
-            "INSERT INTO troves (name, version, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, source_distro, version_scheme, native_package_identity_json, installed_from_repository_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT INTO troves (name, version, package_release, type, architecture, description, installed_by_changeset_id, install_source, install_reason, flavor_spec, pinned, selection_reason, label_id, source_profile, version_scheme, native_package_identity_json, installed_from_repository_id, debian_multi_arch)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 &self.name,
                 &self.version,
+                &self.package_release,
                 self.trove_type.as_str(),
                 &self.architecture,
                 &self.description,
@@ -190,10 +204,11 @@ impl Trove {
                 self.pinned,
                 &self.selection_reason,
                 &self.label_id,
-                &self.source_distro,
+                &self.source_profile,
                 self.version_scheme.as_str(),
                 &native_package_identity_json,
                 &self.installed_from_repository_id,
+                self.debian_multi_arch.map(DebianMultiArch::as_str),
             ],
         )?;
 
@@ -203,6 +218,32 @@ impl Trove {
     }
 
     fn validated_native_identity_json(&self) -> Result<Option<String>> {
+        if let Some(release) = self.package_release.as_deref() {
+            crate::repository::versioning::validate_package_release(release).map_err(|error| {
+                Error::ConfigError(format!(
+                    "{} {} has invalid signed CCS release: {error}",
+                    self.name, self.version
+                ))
+            })?;
+        }
+        match (self.version_scheme, self.debian_multi_arch) {
+            (VersionScheme::Debian, Some(_))
+            | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+            (VersionScheme::Debian, None) => {
+                return Err(Error::ConfigError(format!(
+                    "{} {} has Debian version authority without exact Multi-Arch metadata",
+                    self.name, self.version
+                )));
+            }
+            (_, Some(_)) => {
+                return Err(Error::ConfigError(format!(
+                    "{} {} carries Debian Multi-Arch metadata under the {} version scheme",
+                    self.name,
+                    self.version,
+                    self.version_scheme.as_str()
+                )));
+            }
+        }
         let native_source = matches!(
             self.install_source,
             InstallSource::AdoptedTrack | InstallSource::AdoptedFull | InstallSource::Taken
@@ -309,6 +350,7 @@ impl Trove {
         let installed = crate::resolver::requirements::load_installed_package_identities(conn)?;
         let requirements =
             super::installed_requirement_group::InstalledRequirementGroup::list_all(conn)?;
+        let native_architecture = crate::repository::registry::detect_system_arch();
         let mut orphans = Vec::new();
 
         for trove in Self::list_packages(conn)?
@@ -333,16 +375,42 @@ impl Trove {
                             | crate::repository::dependency_model::RepositoryRequirementKind::PreDepends
                     )
             }) {
+                let dependent = installed
+                    .iter()
+                    .find(|package| package.installed_trove_id == Some(group.trove_id))
+                    .ok_or_else(|| {
+                        crate::error::Error::ConfigError(format!(
+                            "installed requirement group {} references missing trove {}",
+                            group
+                                .id
+                                .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string()),
+                            group.trove_id
+                        ))
+                    })?;
+                let depending_architecture = dependent
+                    .architecture
+                    .as_deref()
+                    .filter(|architecture| !architecture.is_empty())
+                    .ok_or_else(|| {
+                        crate::error::Error::ConfigError(format!(
+                            "installed dependent '{}' has no architecture authority",
+                            dependent.name
+                        ))
+                    })?;
                 let satisfied_before =
                     crate::resolver::requirements::requirement_expression_satisfied(
                         &group.requirement.expression,
                         group.version_scheme,
+                        depending_architecture,
+                        &native_architecture,
                         &installed,
                     )?;
                 let satisfied_after =
                     crate::resolver::requirements::requirement_expression_satisfied(
                         &group.requirement.expression,
                         group.version_scheme,
+                        depending_architecture,
+                        &native_architecture,
                         &remaining,
                     )?;
                 if satisfied_before && !satisfied_after {
@@ -374,26 +442,17 @@ impl Trove {
     ///
     /// The current schema epoch guarantees all columns exist.
     pub fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let type_str: String = row.get(3)?;
+        let type_str: String = row.get(4)?;
         let trove_type = type_str.parse::<TroveType>().map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
-                3,
+                4,
                 rusqlite::types::Type::Text,
                 Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             )
         })?;
 
-        let source_str: String = row.get(8)?;
+        let source_str: String = row.get(9)?;
         let install_source = source_str.parse::<InstallSource>().map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                8,
-                rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            )
-        })?;
-
-        let reason_str: String = row.get(9)?;
-        let install_reason = reason_str.parse::<InstallReason>().map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
                 9,
                 rusqlite::types::Type::Text,
@@ -401,14 +460,23 @@ impl Trove {
             )
         })?;
 
-        let native_identity_json: Option<String> = row.get(17)?;
+        let reason_str: String = row.get(10)?;
+        let install_reason = reason_str.parse::<InstallReason>().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                10,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            )
+        })?;
+
+        let native_identity_json: Option<String> = row.get(18)?;
         let native_package_identity = native_identity_json
             .as_deref()
             .map(serde_json::from_str::<InstalledPackageIdentity>)
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    17,
+                    18,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
@@ -416,7 +484,7 @@ impl Trove {
         if let Some(identity) = &native_package_identity {
             identity.validate().map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    17,
+                    18,
                     rusqlite::types::Type::Text,
                     Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -430,26 +498,38 @@ impl Trove {
             id: Some(row.get(0)?),
             name: row.get(1)?,
             version: row.get(2)?,
+            package_release: row.get(3)?,
             trove_type,
-            architecture: row.get(4)?,
-            description: row.get(5)?,
-            installed_at: row.get(6)?,
-            installed_by_changeset_id: row.get(7)?,
+            architecture: row.get(5)?,
+            description: row.get(6)?,
+            installed_at: row.get(7)?,
+            installed_by_changeset_id: row.get(8)?,
             install_source,
             install_reason,
-            flavor_spec: row.get(10)?,
-            pinned: row.get::<_, i32>(11)? != 0,
-            selection_reason: row.get(12)?,
-            label_id: row.get(13)?,
-            orphan_since: row.get(14)?,
-            source_distro: row.get(15)?,
-            version_scheme: version_scheme_from_row(row, 16)?,
+            flavor_spec: row.get(11)?,
+            pinned: row.get::<_, i32>(12)? != 0,
+            selection_reason: row.get(13)?,
+            label_id: row.get(14)?,
+            orphan_since: row.get(15)?,
+            source_profile: row.get(16)?,
+            version_scheme: version_scheme_from_row(row, 17)?,
             native_package_identity,
-            installed_from_repository_id: row.get(18)?,
+            installed_from_repository_id: row.get(19)?,
+            debian_multi_arch: row
+                .get::<_, Option<String>>(20)?
+                .map(|value| DebianMultiArch::parse_exact(&value))
+                .transpose()
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        20,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                    )
+                })?,
         };
         trove.validated_native_identity_json().map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                17,
+                18,
                 rusqlite::types::Type::Text,
                 Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -492,20 +572,20 @@ impl Trove {
     pub fn update_replatform_metadata(
         conn: &Connection,
         id: i64,
-        source_distro: &str,
+        source_profile: &str,
         version_scheme: VersionScheme,
         installed_from_repository_id: i64,
         selection_reason: &str,
     ) -> Result<()> {
         conn.execute(
             "UPDATE troves
-             SET source_distro = ?1,
+             SET source_profile = ?1,
                  version_scheme = ?2,
                  installed_from_repository_id = ?3,
                  selection_reason = ?4
              WHERE id = ?5",
             params![
-                source_distro,
+                source_profile,
                 version_scheme.as_str(),
                 installed_from_repository_id,
                 selection_reason,
@@ -633,31 +713,6 @@ impl Trove {
             ))),
         }
     }
-
-    /// Find adopted troves that have not been converted to CCS format
-    ///
-    /// Returns troves with install_source of 'adopted-track' or 'adopted-full'
-    /// that do not have a corresponding entry in the converted_packages table.
-    pub fn find_adopted_unconverted(conn: &Connection) -> Result<Vec<Self>> {
-        // Prefix each column with `t.` for the JOIN query
-        let prefixed: String = Self::COLUMNS
-            .split(", ")
-            .map(|c| format!("t.{c}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT {prefixed} FROM troves t \
-             LEFT JOIN converted_packages cp ON cp.trove_id = t.id \
-             WHERE t.install_source IN ('adopted-track', 'adopted-full') \
-             AND cp.id IS NULL \
-             ORDER BY t.name"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let troves = stmt
-            .query_map([], Self::from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(troves)
-    }
 }
 
 #[cfg(test)]
@@ -682,7 +737,7 @@ mod tests {
             InstallSource::AdoptedTrack,
             VersionScheme::Arch,
         );
-        trove.source_distro = Some("arch".to_string());
+        trove.source_profile = Some("arch".to_string());
         trove.architecture = Some("x86_64".to_string());
         trove.native_package_identity =
             Some(InstalledPackageIdentity::pacman("bash", "bash", "5.2.37-1", "x86_64").unwrap());
@@ -690,7 +745,7 @@ mod tests {
         let trove_id = trove.insert(&conn).unwrap();
         let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
 
-        assert_eq!(loaded.source_distro.as_deref(), Some("arch"));
+        assert_eq!(loaded.source_profile.as_deref(), Some("arch"));
         assert_eq!(loaded.version_scheme, VersionScheme::Arch);
         assert_eq!(
             loaded
@@ -727,6 +782,7 @@ mod tests {
             VersionScheme::Debian,
         );
         trove.architecture = Some("x86_64".to_string());
+        trove.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
         trove.native_package_identity = Some(
             InstalledPackageIdentity::rpm(
                 "curl-8.8.0-1.x86_64",
@@ -774,6 +830,8 @@ mod tests {
                 VersionScheme::Debian,
             );
             trove.architecture = architecture.map(str::to_string);
+            trove.debian_multi_arch =
+                Some(crate::repository::dependency_model::DebianMultiArch::No);
             trove.native_package_identity = Some(identity.clone());
 
             let error = trove.insert(&conn).unwrap_err().to_string();
@@ -844,7 +902,7 @@ mod tests {
         .unwrap();
 
         let loaded = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
-        assert_eq!(loaded.source_distro.as_deref(), Some("arch"));
+        assert_eq!(loaded.source_profile.as_deref(), Some("arch"));
         assert_eq!(loaded.version_scheme, VersionScheme::Arch);
         assert_eq!(loaded.installed_from_repository_id, Some(repo_id));
         assert_eq!(

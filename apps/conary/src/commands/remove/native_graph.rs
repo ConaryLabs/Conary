@@ -10,9 +10,8 @@ use crate::commands::install::native_graph::{NativePayloadBoundary, drive_native
 use crate::commands::progress::{RemovePhase, RemoveProgress};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::native_transaction::{NativePackageIdentity, NativeTransactionStep};
-use conary_core::db::models::{ActivationRequest, Changeset, ChangesetStatus, FileEntry, Trove};
+use conary_core::db::models::{ActivationRequest, Changeset, ChangesetStatus, Trove};
 use conary_core::scriptlet::ExecutionMode;
-use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::path::PathBuf;
 
 pub(crate) struct GraphRemoveResult {
@@ -34,15 +33,13 @@ pub(crate) fn execute_installed_trove_remove_graph(
         .context("selected package has no installed trove id")?;
     let identity =
         NativePackageIdentity::new(&trove.name, &trove.version, trove.architecture.as_deref());
+    let ownership = super::PackagePayloadOwnership::load(conn, trove_id)?;
     let native_transaction = PreparedNativeTransaction::prepare_remove(
         conn,
         trove_id,
         &trove.name,
         &trove.version,
-        FileEntry::find_by_trove(conn, trove_id)?
-            .into_iter()
-            .map(|file| file.path)
-            .collect(),
+        ownership.lifecycle_paths().to_vec(),
         lifecycle_options.purge_config_files,
     )?;
     let selected = SelectedRootSession::begin(
@@ -52,13 +49,7 @@ pub(crate) fn execute_installed_trove_remove_graph(
     )?;
     native_transaction.preflight(selected.selected_root(), &ExecutionMode::Remove)?;
 
-    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
-        selected.selected_root().to_path_buf(),
-        PathBuf::from(db_path),
-    ))
-    .context("Failed to create transaction engine")?;
-    engine.begin().context("Failed to begin transaction")?;
-    let result = execute_selected_root_graph(
+    execute_selected_root_graph(
         conn,
         &native_transaction,
         &identity,
@@ -68,9 +59,7 @@ pub(crate) fn execute_installed_trove_remove_graph(
         lifecycle_options,
         progress,
         selected,
-    );
-    engine.release_lock();
-    result
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -90,7 +79,10 @@ fn execute_selected_root_graph(
         .context("selected package has no installed trove id")?;
     let runtime_root =
         conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    let rollback_root = selected.capture_rollback_authority()?;
+    let rollback_system = crate::commands::RollbackSystemAuthority::capture(conn)?;
     let selected_path = selected.selected_root().to_path_buf();
+    let cas = selected.cas().clone();
     let selected_root = selected_path
         .to_str()
         .context("selected root is not UTF-8")?
@@ -134,6 +126,7 @@ fn execute_selected_root_graph(
                     crate::commands::generation::config_transaction::capture_removal(
                         conn,
                         &selected_path,
+                        &cas,
                         trove_id,
                         lifecycle_options.purge_config_files,
                     )?;
@@ -142,29 +135,28 @@ fn execute_selected_root_graph(
                         conn,
                         &selected_path,
                         trove_id,
-                        prepared.snapshot.files.iter().map(|file| file.path.clone()),
+                        prepared.materialized_removal_paths().iter().cloned(),
                         lifecycle_options.purge_config_files && !split_debian_purge,
                     )?;
                 native_transaction.mark_remove_payload_started_for(conn, identity)?;
                 progress.set_phase(RemovePhase::RemovingFiles);
-                selected.apply_remove_paths(&config_plan.remove_paths)?;
+                let root_stats = selected.apply_remove_paths(&config_plan.remove_paths)?;
                 selected.apply_install_files(&config_plan.files)?;
 
                 progress.set_phase(RemovePhase::UpdatingDb);
                 config_plan.persist_retained(conn)?;
                 let removal = commit_remove_db(&tx, changeset_id, prepared)?;
-                let snapshot_json =
-                    crate::commands::metadata_with_removed_troves(vec![removal.snapshot.clone()])?;
+                let snapshot_json = crate::commands::metadata_with_removed_troves(
+                    vec![removal.snapshot.clone()],
+                    Vec::new(),
+                    rollback_root.clone(),
+                    rollback_system.clone(),
+                )?;
                 conn.execute(
                     "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
                     rusqlite::params![snapshot_json, changeset_id],
                 )?;
-                let stats = crate::commands::LiveRootStats {
-                    files_removed: removal.removed_count,
-                    dirs_removed: removal.dirs_removed,
-                    ..Default::default()
-                };
-                output = Some((removal, stats));
+                output = Some((removal, root_stats));
                 config_transaction = Some(captured_config);
                 Ok(())
             }

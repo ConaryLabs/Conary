@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use conary_core::ccs::builder::write_signed_current_ccs_package;
+use conary_core::ccs::manifest::{ManifestProvenance, Platform};
 use conary_core::ccs::{CcsBuilder, CcsManifest, SigningKeyPair};
 
 fn output_text(output: &Output) -> String {
@@ -31,21 +32,21 @@ fn build_missing_attestation_ccs(
     std::fs::create_dir_all(source.join("usr/share/m3a")).unwrap();
     std::fs::create_dir_all(package_path.parent().unwrap()).unwrap();
     std::fs::write(source.join("usr/share/m3a/payload"), "hello\n").unwrap();
-    let manifest = CcsManifest::parse(
-        r#"
-[package]
-name = "m3a-missing-attestation"
-version = "1.0"
-description = "missing attestation fixture"
-license = "MIT"
-
-[provenance]
-origin_class = "native-built"
-hardening_level = "hermetic"
-"#,
-    )
-    .unwrap();
-    let result = CcsBuilder::new(manifest, &source).build().unwrap();
+    let mut manifest = CcsManifest::new_minimal("m3a-missing-attestation", "1.0.0");
+    manifest.package.description = "missing attestation fixture".to_string();
+    manifest.package.license = Some("MIT".to_string());
+    manifest.package.platform = Some(Platform {
+        os: "linux".to_string(),
+        arch: Some(std::env::consts::ARCH.to_string()),
+        libc: "gnu".to_string(),
+        abi: None,
+    });
+    manifest.provenance = Some(ManifestProvenance {
+        origin_class: Some("native-built".to_string()),
+        hardening_level: Some("hermetic".to_string()),
+        ..Default::default()
+    });
+    let result = CcsBuilder::new(manifest, &source).unwrap().build().unwrap();
     write_signed_current_ccs_package(&result, &package_path, key, false).unwrap();
     package_path
 }

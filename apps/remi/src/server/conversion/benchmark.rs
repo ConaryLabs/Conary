@@ -25,7 +25,7 @@ impl ConversionService {
                 "SELECT DISTINCT rp.name
                  FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
-                 WHERE r.default_strategy_distro = ?1
+                 WHERE r.source_profile = ?1
                  AND rp.size > 0
                  ORDER BY rp.size DESC
                  LIMIT ?2",

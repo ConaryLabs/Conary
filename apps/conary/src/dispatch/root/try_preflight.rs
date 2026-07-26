@@ -293,8 +293,8 @@ pub(super) fn selected_db_path(command: &Commands) -> &str {
 
 fn selected_repo_db_path(command: &cli::RepoCommands) -> &str {
     match command {
-        cli::RepoCommands::Add { db, .. }
-        | cli::RepoCommands::List { db, .. }
+        cli::RepoCommands::Add { args } => &args.db.db_path,
+        cli::RepoCommands::List { db, .. }
         | cli::RepoCommands::Remove { db, .. }
         | cli::RepoCommands::ResetTrust { db, .. }
         | cli::RepoCommands::Enable { db, .. }
@@ -321,8 +321,7 @@ fn selected_distro_db_path(command: &cli::DistroCommands) -> &str {
         | cli::DistroCommands::Remove { db, .. }
         | cli::DistroCommands::List { db, .. }
         | cli::DistroCommands::Info { db, .. }
-        | cli::DistroCommands::Mixing { db, .. }
-        | cli::DistroCommands::SelectionMode { db, .. } => &db.db_path,
+        | cli::DistroCommands::Mixing { db, .. } => &db.db_path,
     }
 }
 
@@ -383,9 +382,7 @@ fn selected_label_db_path(command: &cli::LabelCommands) -> &str {
 fn selected_ccs_db_path(command: &cli::CcsCommands) -> &str {
     match command {
         cli::CcsCommands::Install { common, .. } => &common.db.db_path,
-        cli::CcsCommands::Shell { db, .. }
-        | cli::CcsCommands::Run { db, .. }
-        | cli::CcsCommands::Enhance { db, .. } => &db.db_path,
+        cli::CcsCommands::Enhance { db, .. } => &db.db_path,
         cli::CcsCommands::Init { .. }
         | cli::CcsCommands::Build { .. }
         | cli::CcsCommands::Lint { .. }
@@ -515,7 +512,6 @@ fn selected_system_db_path(command: &cli::SystemCommands) -> &str {
         | cli::SystemCommands::Adopt { db, .. }
         | cli::SystemCommands::Unadopt { db, .. }
         | cli::SystemCommands::NativeHandoff { db, .. }
-        | cli::SystemCommands::Gc { db, .. }
         | cli::SystemCommands::Sbom { db, .. }
         | cli::SystemCommands::Takeover { db, .. } => &db.db_path,
         cli::SystemCommands::Verify { common, .. }

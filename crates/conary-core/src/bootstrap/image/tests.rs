@@ -89,6 +89,7 @@ fn test_erofs_generation_from_sysroot() {
 
     fs::create_dir_all(sysroot.join("usr/bin")).unwrap();
     fs::create_dir_all(sysroot.join("usr/lib")).unwrap();
+    fs::create_dir_all(sysroot.join("usr/lib/modules/6.12.1-conary")).unwrap();
     fs::create_dir_all(sysroot.join("etc")).unwrap();
     fs::create_dir_all(sysroot.join("boot/EFI/BOOT")).unwrap();
 
@@ -178,7 +179,7 @@ fn test_erofs_generation_from_sysroot() {
         .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
         .unwrap();
     assert_eq!(
-        file_count, 13,
+        file_count, 15,
         "all directories and files are authoritative"
     );
 

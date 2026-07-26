@@ -18,15 +18,18 @@ use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::archive_utils::normalize_path;
 use crate::packages::common::PackageMetadata;
+use crate::packages::payload::{PackagePayload, PayloadSpool};
 use crate::packages::traits::{
-    ArchInstallScriptletMetadata, ArchNativeScriptletMetadata, ConfigFileInfo, Dependency,
-    DependencyType, ExtractedFile, NativeArgumentContract, NativeArgumentValue,
-    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
-    NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
-    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
-    PackageFile, PackageFormat,
+    ArchInstallScriptletMetadata, ArchNativeScriptletMetadata, ConfigFileInfo,
+    NativeArgumentContract, NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
+    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat,
+    NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
+    NativeTransactionOrder, NativeTransactionPosition, PackageFile, PackageFormat,
+    ProvidedCapability,
 };
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
+};
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::versioning::VersionScheme;
 use std::fs::File;
@@ -45,11 +48,29 @@ pub struct ArchPackage {
     groups: Vec<String>,
     packager: Option<String>,
     build_date: Option<String>,
-    payload: Vec<ExtractedFile>,
+    payload: PackagePayload,
 }
 
 /// Arch package metadata files that should be skipped during extraction
 const ARCH_METADATA_FILES: &[&str] = &[".PKGINFO", ".MTREE", ".BUILDINFO", ".INSTALL"];
+const MAX_ARCH_CONTROL_SIZE: u64 = 16 * 1024 * 1024;
+
+fn read_control_entry<R: Read>(entry: &mut tar::Entry<'_, R>, label: &str) -> Result<Vec<u8>> {
+    if entry.size() > MAX_ARCH_CONTROL_SIZE {
+        return Err(Error::ParseError(format!(
+            "ALPM {label} is {} bytes; maximum is {MAX_ARCH_CONTROL_SIZE}",
+            entry.size()
+        )));
+    }
+    let mut content =
+        Vec::with_capacity(usize::try_from(entry.size()).map_err(|_| {
+            Error::ParseError(format!("ALPM {label} cannot be represented in memory"))
+        })?);
+    entry
+        .read_to_end(&mut content)
+        .map_err(|error| Error::InitError(format!("Failed to read {label}: {error}")))?;
+    Ok(content)
+}
 
 impl ArchPackage {
     /// Identify compression from its exact stream header.
@@ -113,10 +134,7 @@ impl ArchPackage {
                             ))
                         })?)
                     }
-                    "arch" => {
-                        info.architecture =
-                            Some(crate::packages::common::normalize_architecture(value).to_string())
-                    }
+                    "arch" => info.architecture = Some(value.to_string()),
                     "license" => info.licenses.push(value.to_string()),
                     "group" => info.groups.push(value.to_string()),
                     "depend" => info.dependencies.push(value.to_string()),
@@ -260,37 +278,65 @@ impl ArchPackage {
         })
     }
 
-    /// Parse dependencies from strings like "glibc>=2.34" or "package: description"
-    fn parse_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
-        deps.iter()
-            .map(|dep| {
-                // For optional dependencies, format is "package: description"
-                let (name, description) = if dep_type == DependencyType::Optional {
-                    if let Some((pkg, desc)) = dep.split_once(':') {
-                        (pkg.trim(), Some(desc.trim().to_string()))
-                    } else {
-                        (dep.as_str(), None)
-                    }
-                } else {
-                    (dep.as_str(), None)
-                };
+    fn parse_provides(
+        package_name: &str,
+        package_version: &str,
+        entries: &[String],
+    ) -> Result<Vec<ProvidedCapability>> {
+        use crate::repository::versioning::{RepoVersionConstraint, parse_repo_constraint};
 
-                // Parse version constraint (e.g., "glibc>=2.34")
-                let (pkg_name, version) = if let Some(pos) = name.find(['>', '<', '=']) {
-                    let (n, v) = name.split_at(pos);
-                    (n.trim(), Some(v.trim().to_string()))
-                } else {
-                    (name, None)
-                };
-
-                Dependency {
-                    name: pkg_name.to_string(),
-                    version,
-                    dep_type,
-                    description,
+        let mut provides = vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::PackageName,
+            name: package_name.to_string(),
+            version: Some(package_version.to_string()),
+            version_relation: Some(
+                crate::repository::dependency_model::ProvideVersionRelation::Equal,
+            ),
+            version_scheme: VersionScheme::Arch,
+            architecture_qualifier: Default::default(),
+        }];
+        for entry in entries {
+            let clause = crate::repository::package_relation::parse_arch_atom(entry)
+                .map_err(Error::ParseError)?;
+            let version =
+                clause
+                    .version_constraint
+                    .as_deref()
+                    .map(|constraint| {
+                        match parse_repo_constraint(VersionScheme::Arch, constraint)? {
+                    RepoVersionConstraint::Exact(version) => Ok(version),
+                    _ => Err(
+                        crate::repository::versioning::VersionComparisonError::InvalidConstraint {
+                            scheme: VersionScheme::Arch.as_str(),
+                            constraint: constraint.to_string(),
+                            reason: "ALPM versioned provides require the exact '=' operator"
+                                .to_string(),
+                        },
+                    ),
                 }
-            })
-            .collect()
+                    })
+                    .transpose()
+                    .map_err(|error| Error::ParseError(error.to_string()))?;
+            let provide = ProvidedCapability {
+                kind: if clause.name == package_name {
+                    RepositoryCapabilityKind::PackageName
+                } else {
+                    RepositoryCapabilityKind::Virtual
+                },
+                name: clause.name,
+                version_relation: version
+                    .as_ref()
+                    .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
+                version,
+                version_scheme: VersionScheme::Arch,
+                architecture_qualifier: Default::default(),
+            };
+            provide.validate()?;
+            if !provides.contains(&provide) {
+                provides.push(provide);
+            }
+        }
+        Ok(provides)
     }
 
     fn parse_relations(
@@ -367,6 +413,7 @@ impl PackageFormat for ArchPackage {
         let mut install_bytes = None;
         let mut alpm_hook_bytes: Vec<(String, Vec<u8>)> = Vec::new();
         let mut payload_entries = Vec::new();
+        let payload_spool = PayloadSpool::new(0)?;
         let mut entries_seen = 0usize;
 
         for entry in archive
@@ -387,38 +434,36 @@ impl PackageFormat for ArchPackage {
 
             match entry_path.as_str() {
                 ".PKGINFO" => {
-                    let mut content = String::new();
-                    entry
-                        .read_to_string(&mut content)
-                        .map_err(|e| Error::InitError(format!("Failed to read .PKGINFO: {}", e)))?;
+                    let content = read_control_entry(&mut entry, ".PKGINFO")?;
+                    let content = String::from_utf8(content).map_err(|error| {
+                        Error::ParseError(format!(".PKGINFO is not UTF-8: {error}"))
+                    })?;
                     pkginfo_content = Some(content);
                 }
                 ".INSTALL" => {
-                    let mut content = Vec::new();
-                    entry
-                        .read_to_end(&mut content)
-                        .map_err(|e| Error::InitError(format!("Failed to read .INSTALL: {}", e)))?;
-                    install_bytes = Some(content);
+                    install_bytes = Some(read_control_entry(&mut entry, ".INSTALL")?);
                 }
                 name if ARCH_METADATA_FILES.contains(&name) => {
                     // Skip other metadata files (.MTREE, .BUILDINFO)
                 }
                 _ => {
-                    let parsed = payload::parse_entry(&mut entry)?;
+                    let parsed = payload::parse_entry(&mut entry, &payload_spool, entries_seen)?;
                     // Only the package-owned system hook directory is
                     // source-package ABI. `/etc/pacman.d/hooks` belongs to
                     // the selected target's explicit Conary hook policy.
                     if alpm_hook::is_package_hook_path(parsed.path())
-                        && let Some(content) = parsed.regular_content()
+                        && let Some(content) =
+                            parsed.read_regular_content_bounded(MAX_ARCH_CONTROL_SIZE)?
                     {
-                        alpm_hook_bytes.push((parsed.path().to_string(), content.to_vec()));
+                        alpm_hook_bytes.push((parsed.path().to_string(), content));
                     }
                     payload_entries.push(parsed);
                 }
             }
         }
-        let payload = payload::resolve_hardlinks(payload_entries)?;
+        let payload = PackagePayload::new(payload::resolve_hardlinks(payload_entries)?);
         let files = payload
+            .files()
             .iter()
             .map(|file| PackageFile {
                 path: file.path.clone(),
@@ -441,7 +486,7 @@ impl PackageFormat for ArchPackage {
             .version
             .ok_or_else(|| Error::InitError("Package version not found in .PKGINFO".to_string()))?;
 
-        let provides = Self::parse_dependencies(&pkginfo.provides, DependencyType::Runtime);
+        let provides = Self::parse_provides(&name, &version, &pkginfo.provides)?;
         let mut requirements =
             Self::parse_requirements(&pkginfo.dependencies, RepositoryRequirementKind::Depends)?;
         requirements.extend(Self::parse_requirements(
@@ -503,6 +548,7 @@ impl PackageFormat for ArchPackage {
             version,
             version_scheme: VersionScheme::Arch,
             architecture: pkginfo.architecture,
+            debian_multi_arch: None,
             description: pkginfo.description,
             files,
             requirements,
@@ -552,7 +598,7 @@ impl PackageFormat for ArchPackage {
         self.meta.requirements()
     }
 
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         self.meta.provides()
     }
 
@@ -560,7 +606,7 @@ impl PackageFormat for ArchPackage {
         self.meta.relations()
     }
 
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
+    fn package_payload(&self) -> Result<PackagePayload> {
         Ok(self.payload.clone())
     }
 

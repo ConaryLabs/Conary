@@ -2,6 +2,7 @@
 
 //! Exact normalized package metadata exchanged by Remi and Conary.
 
+use crate::repository::dependency_model::{ProvideArchitectureQualifier, ProvideVersionRelation};
 use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
@@ -10,9 +11,11 @@ use serde::{Deserialize, Serialize};
 pub struct RemiProvide {
     pub capability: String,
     pub version: Option<String>,
+    pub version_relation: Option<ProvideVersionRelation>,
     pub kind: String,
     pub raw: Option<String>,
     pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
 }
 
 /// A normalized requirement clause.

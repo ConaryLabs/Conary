@@ -109,6 +109,7 @@ async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result
                     db_path,
                     root,
                     version: version.clone(),
+                    package_release: None,
                     repo: None,
                     architecture: architecture.clone(),
                     dry_run: false,
@@ -119,7 +120,7 @@ async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result
                     convert_to_ccs: false,
                     ownership: None,
                     yes: true,
-                    from_distro: None,
+                    from_profile: None,
                     repository_provenance: None,
                 },
             )

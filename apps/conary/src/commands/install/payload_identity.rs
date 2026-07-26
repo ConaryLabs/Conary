@@ -161,7 +161,7 @@ fn parse_identity_database(
     let text = std::str::from_utf8(&bytes)
         .with_context(|| format!("target-root {} database is not UTF-8", kind.label()))?;
     parse_identity_records(text, kind)
-        .with_context(|| format!("invalid target-root {} database", kind.label()))
+        .map_err(|error| anyhow::anyhow!("invalid target-root {} database: {error}", kind.label()))
 }
 
 fn safe_identity_database_path(root: &Path, kind: IdentityDatabaseKind) -> Result<PathBuf> {

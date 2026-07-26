@@ -136,7 +136,7 @@ mod tests {
     fn live_root_file(path: &str) -> LiveRootFile {
         LiveRootFile {
             path: path.to_string(),
-            content: Vec::new(),
+            content: crate::commands::LiveRootContent::from_in_memory_bytes(b""),
             node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
         }
     }
@@ -149,7 +149,7 @@ mod tests {
         node.mode = libc::S_IFLNK | 0o777;
         LiveRootFile {
             path: path.to_string(),
-            content: Vec::new(),
+            content: crate::commands::LiveRootContent::absent(),
             node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
         }
     }

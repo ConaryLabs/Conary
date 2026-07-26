@@ -6,11 +6,25 @@
 //! confmodule shell surface only. Typed argv grammars and state mutations live
 //! in their owning handlers.
 
+use anyhow::{Context, Result};
+use conary_core::packages::deb::debconf::{
+    DebconfEngine, DebconfExecution, DebconfSession, DebconfSessionPolicy, DebconfState,
+    DebconfTemplateLoadError, DebconfTemplateLoader,
+};
+use conary_core::packages::deb::templates::{MAX_DEBCONF_TEMPLATES_SIZE, parse};
+use conary_core::packages::native_abi::DebconfTemplateRecord;
 use conary_core::scriptlet::{
     LifecycleBridgeConfig, LifecycleBridgeEndpoint, LifecycleBridgeHandler,
     LifecycleBridgeHandlerError, LifecycleBridgeRequest, LifecycleBridgeResponse,
     executable_bridge_shim, lifecycle_bridge_shell_library,
 };
+use nix::fcntl::{OFlag, OpenHow, ResolveFlag, open, openat2};
+use nix::sys::stat::Mode;
+use std::fs::File;
+use std::io::Read;
+use std::os::fd::OwnedFd;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 const EXECUTABLE_ENDPOINTS: &[&str] = &[
     "/usr/bin/dpkg-maintscript-helper",
@@ -25,7 +39,62 @@ const EXECUTABLE_ENDPOINTS: &[&str] = &[
 ];
 const CONFMODULE_PATH: &str = "/usr/share/debconf/confmodule";
 
-pub(super) fn config() -> LifecycleBridgeConfig {
+/// One in-memory debconf authority for one native lifecycle graph event.
+///
+/// The owning event thread loads and persists [`DebconfState`]. The bridge
+/// server thread receives only this in-memory handler and never a database
+/// connection.
+pub(crate) struct DebianLifecycleBridge {
+    handler: Arc<DebianLifecycleHandler>,
+}
+
+impl DebianLifecycleBridge {
+    pub(crate) fn new(
+        root: &Path,
+        owner: &str,
+        mut state: DebconfState,
+        package_templates: &[DebconfTemplateRecord],
+    ) -> Result<Self> {
+        state
+            .import_template_records(owner, package_templates)
+            .with_context(|| {
+                format!("cannot preload debconf templates for lifecycle owner {owner:?}")
+            })?;
+        let loader = SelectedRootTemplateLoader::new(root)?;
+        Ok(Self {
+            handler: Arc::new(DebianLifecycleHandler {
+                inner: Mutex::new(DebianDebconfEvent {
+                    engine: DebconfEngine::new(loader),
+                    state,
+                    session: DebconfSession::new(owner, DebconfSessionPolicy::default()),
+                }),
+            }),
+        })
+    }
+
+    pub(crate) fn config(&self) -> LifecycleBridgeConfig {
+        let handler: Arc<dyn LifecycleBridgeHandler> = self.handler.clone();
+        LifecycleBridgeConfig::with_shared_handler(endpoints(), handler)
+    }
+
+    pub(crate) fn state(&self) -> Result<DebconfState> {
+        let mut event = self
+            .handler
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Debian debconf lifecycle state lock is poisoned"))?;
+        let DebianDebconfEvent { state, session, .. } = &mut *event;
+        if !session.stopped {
+            // EOF from a script that did not call db_stop still terminates the
+            // per-event confmodule session. Commit its pending seen changes
+            // before returning the state to the owning transaction thread.
+            session.finish(state);
+        }
+        Ok(state.clone())
+    }
+}
+
+fn endpoints() -> Vec<LifecycleBridgeEndpoint> {
     let mut endpoints = EXECUTABLE_ENDPOINTS
         .iter()
         .map(|path| LifecycleBridgeEndpoint::new(path, executable_bridge_shim()))
@@ -34,21 +103,202 @@ pub(super) fn config() -> LifecycleBridgeConfig {
         CONFMODULE_PATH,
         confmodule_shim(),
     ));
-    LifecycleBridgeConfig::new(endpoints, PendingTypedDebianHandler)
+    endpoints
 }
 
-struct PendingTypedDebianHandler;
+struct DebianLifecycleHandler {
+    inner: Mutex<DebianDebconfEvent>,
+}
 
-impl LifecycleBridgeHandler for PendingTypedDebianHandler {
+struct DebianDebconfEvent {
+    engine: DebconfEngine<SelectedRootTemplateLoader>,
+    state: DebconfState,
+    session: DebconfSession,
+}
+
+impl LifecycleBridgeHandler for DebianLifecycleHandler {
     fn handle(
         &self,
-        _request: &LifecycleBridgeRequest,
+        request: &LifecycleBridgeRequest,
     ) -> std::result::Result<LifecycleBridgeResponse, LifecycleBridgeHandlerError> {
-        Ok(LifecycleBridgeResponse::new(
+        let endpoint = DebianLifecycleEndpoint::parse(request.command()).ok_or_else(|| {
+            LifecycleBridgeHandlerError::new(format!(
+                "request uses an undeclared Debian lifecycle endpoint {:?}",
+                String::from_utf8_lossy(request.command())
+            ))
+        })?;
+        match endpoint {
+            DebianLifecycleEndpoint::Confmodule => self.handle_confmodule(request.arguments()),
+            unsupported => Ok(unsupported.response()),
+        }
+    }
+}
+
+impl DebianLifecycleHandler {
+    fn handle_confmodule(
+        &self,
+        argv: &[Vec<u8>],
+    ) -> std::result::Result<LifecycleBridgeResponse, LifecycleBridgeHandlerError> {
+        let mut event = self.inner.lock().map_err(|_| {
+            LifecycleBridgeHandlerError::new("Debian debconf lifecycle state lock is poisoned")
+        })?;
+        let (command, arguments) = argv
+            .split_first()
+            .map_or((b"".as_slice(), [].as_slice()), |(command, arguments)| {
+                (command.as_slice(), arguments)
+            });
+        let DebianDebconfEvent {
+            engine,
+            state,
+            session,
+        } = &mut *event;
+        match engine.process_argv(state, session, command, arguments) {
+            DebconfExecution::Reply(reply) => {
+                let caller = reply.caller_result();
+                let exit_code = u8::try_from(caller.status.as_u16())
+                    .expect("debconf caller result codes fit the private transport");
+                Ok(LifecycleBridgeResponse::new(
+                    caller.ret,
+                    Vec::new(),
+                    exit_code,
+                ))
+            }
+            // The real shell confmodule sends STOP without reading a reply.
+            // Our private request/response transport still needs a terminal
+            // frame so the sourced shell function can return without hanging.
+            DebconfExecution::Stopped => {
+                Ok(LifecycleBridgeResponse::new(Vec::new(), Vec::new(), 0))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DebianLifecycleEndpoint {
+    DpkgMaintscriptHelper,
+    DpkgQuery,
+    Dpkg,
+    UpdateAlternatives,
+    DebSystemdHelper,
+    DebSystemdInvoke,
+    InvokeRcD,
+    UpdateRcD,
+    Service,
+    Confmodule,
+}
+
+impl DebianLifecycleEndpoint {
+    fn parse(path: &[u8]) -> Option<Self> {
+        Some(match path {
+            b"/usr/bin/dpkg-maintscript-helper" => Self::DpkgMaintscriptHelper,
+            b"/usr/bin/dpkg-query" => Self::DpkgQuery,
+            b"/usr/bin/dpkg" => Self::Dpkg,
+            b"/usr/bin/update-alternatives" => Self::UpdateAlternatives,
+            b"/usr/bin/deb-systemd-helper" => Self::DebSystemdHelper,
+            b"/usr/bin/deb-systemd-invoke" => Self::DebSystemdInvoke,
+            b"/usr/sbin/invoke-rc.d" => Self::InvokeRcD,
+            b"/usr/sbin/update-rc.d" => Self::UpdateRcD,
+            b"/usr/sbin/service" => Self::Service,
+            b"/usr/share/debconf/confmodule" => Self::Confmodule,
+            _ => return None,
+        })
+    }
+
+    fn path(self) -> &'static str {
+        match self {
+            Self::DpkgMaintscriptHelper => "/usr/bin/dpkg-maintscript-helper",
+            Self::DpkgQuery => "/usr/bin/dpkg-query",
+            Self::Dpkg => "/usr/bin/dpkg",
+            Self::UpdateAlternatives => "/usr/bin/update-alternatives",
+            Self::DebSystemdHelper => "/usr/bin/deb-systemd-helper",
+            Self::DebSystemdInvoke => "/usr/bin/deb-systemd-invoke",
+            Self::InvokeRcD => "/usr/sbin/invoke-rc.d",
+            Self::UpdateRcD => "/usr/sbin/update-rc.d",
+            Self::Service => "/usr/sbin/service",
+            Self::Confmodule => "/usr/share/debconf/confmodule",
+        }
+    }
+
+    fn response(self) -> LifecycleBridgeResponse {
+        LifecycleBridgeResponse::new(
             Vec::new(),
-            b"Conary has no typed Debian lifecycle handler for this command\n".to_vec(),
+            format!(
+                "{} has no typed Debian lifecycle implementation\n",
+                self.path()
+            )
+            .into_bytes(),
             127,
-        ))
+        )
+    }
+}
+
+struct SelectedRootTemplateLoader {
+    root: OwnedFd,
+}
+
+impl SelectedRootTemplateLoader {
+    fn new(root: &Path) -> Result<Self> {
+        let root = open(
+            root,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)
+        .with_context(|| {
+            format!(
+                "cannot open selected root {} for debconf template loading",
+                root.display()
+            )
+        })?;
+        Ok(Self { root })
+    }
+
+    fn open_error(message: impl Into<String>) -> DebconfTemplateLoadError {
+        DebconfTemplateLoadError::open(message.into().into_bytes())
+    }
+}
+
+impl DebconfTemplateLoader for SelectedRootTemplateLoader {
+    fn load(
+        &mut self,
+        path: &[u8],
+    ) -> std::result::Result<Vec<DebconfTemplateRecord>, DebconfTemplateLoadError> {
+        if path.is_empty() {
+            return Err(Self::open_error("template path is empty"));
+        }
+        let how = OpenHow::new()
+            .flags(OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK | OFlag::O_NOCTTY)
+            .resolve(ResolveFlag::RESOLVE_IN_ROOT | ResolveFlag::RESOLVE_NO_MAGICLINKS);
+        let file = openat2(&self.root, path, how).map_err(|error| {
+            Self::open_error(format!("selected-root path resolution failed: {error}"))
+        })?;
+        let mut file = File::from(file);
+        let metadata = file
+            .metadata()
+            .map_err(|error| Self::open_error(format!("cannot inspect template file: {error}")))?;
+        if !metadata.is_file() {
+            return Err(Self::open_error("selected-root path is not a regular file"));
+        }
+        if metadata.len() > MAX_DEBCONF_TEMPLATES_SIZE {
+            return Err(Self::open_error(format!(
+                "template file is {} bytes; maximum is {MAX_DEBCONF_TEMPLATES_SIZE}",
+                metadata.len()
+            )));
+        }
+
+        let mut body = Vec::with_capacity(metadata.len() as usize);
+        file.by_ref()
+            .take(MAX_DEBCONF_TEMPLATES_SIZE + 1)
+            .read_to_end(&mut body)
+            .map_err(|error| Self::open_error(format!("cannot read template file: {error}")))?;
+        if body.len() as u64 > MAX_DEBCONF_TEMPLATES_SIZE {
+            return Err(Self::open_error(format!(
+                "template file grew beyond the {MAX_DEBCONF_TEMPLATES_SIZE}-byte maximum"
+            )));
+        }
+        parse(&body)
+            .map(|metadata| metadata.records)
+            .map_err(|error| DebconfTemplateLoadError::parse(error.to_string().into_bytes()))
     }
 }
 
@@ -108,60 +358,5 @@ db_stop () { _db_cmd "STOP"; }
 "#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_debian_endpoint_is_conary_owned() {
-        let config = config();
-        let targets = config
-            .endpoints()
-            .iter()
-            .map(|endpoint| endpoint.target().to_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            targets,
-            [
-                "/usr/bin/dpkg-maintscript-helper",
-                "/usr/bin/dpkg-query",
-                "/usr/bin/dpkg",
-                "/usr/bin/update-alternatives",
-                "/usr/bin/deb-systemd-helper",
-                "/usr/bin/deb-systemd-invoke",
-                "/usr/sbin/invoke-rc.d",
-                "/usr/sbin/update-rc.d",
-                "/usr/sbin/service",
-                "/usr/share/debconf/confmodule",
-            ]
-        );
-        assert!(confmodule_shim().starts_with(b"#!/bin/sh\n"));
-    }
-
-    #[test]
-    fn confmodule_never_executes_a_target_frontend() {
-        let shim = String::from_utf8(confmodule_shim()).unwrap();
-        assert!(!shim.contains("/usr/share/debconf/frontend"));
-        assert!(!shim.contains("/usr/lib/cdebconf"));
-        assert!(shim.contains("DEBIAN_HAS_FRONTEND=1"));
-        assert!(shim.contains("exec 3>&1"));
-    }
-
-    #[test]
-    fn confmodule_is_valid_posix_shell_syntax() {
-        use std::io::Write as _;
-        use std::process::{Command, Stdio};
-
-        let mut child = Command::new("/bin/sh")
-            .args(["-n", "-s"])
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(&confmodule_shim())
-            .unwrap();
-        assert!(child.wait().unwrap().success());
-    }
-}
+#[path = "lifecycle_bridge/tests.rs"]
+mod tests;

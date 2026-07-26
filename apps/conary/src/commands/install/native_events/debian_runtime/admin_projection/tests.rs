@@ -15,7 +15,7 @@ fn bundle_with_interest() -> NativeLifecycleBundle {
         schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Deb,
         source_family: "debian".to_string(),
-        source_distro: Some("debian".to_string()),
+        source_profile: Some("ubuntu-26.04".to_string()),
         source_release: Some("13".to_string()),
         source_arch: Some("amd64".to_string()),
         source_package: "demo".to_string(),

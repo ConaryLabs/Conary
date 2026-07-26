@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-25
-revision: 4
-summary: Document conaryd authorization, package jobs, routes, and daemon boundaries
+revision: 5
+summary: Document conaryd authorization, exact-generation package jobs, routes, and daemon boundaries
 ---
 
 # conaryd
@@ -38,6 +38,14 @@ currently calls the CLI command functions from the `conary` crate
 therefore need both daemon-route/job proof and the owning CLI package-command
 proof; `package_ops.rs` is the adapter boundary, not an independent package
 manager implementation.
+
+A mutating package operation is complete only when its exact selected-root
+generation is published. If the package database commit succeeds but generation
+publication leaves recoverable debt, the daemon reports the job as failed with
+the persisted publication phase, failure detail, and exact retry command. It
+must not label a database-only mutation as a completed package job. Package
+publication never mutates the ambient root passed to the daemon; the new
+generation is the execution result.
 
 ## Route Reference
 

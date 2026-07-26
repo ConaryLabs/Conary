@@ -7,18 +7,24 @@
 //! GNU sparse, and unknown entry types. Keeping this parser explicit prevents
 //! the generic tar library from silently applying unsupported extensions.
 
-use super::DebPackage;
 use crate::compression;
 use crate::error::{Error, Result};
 use crate::hash::{HashAlgorithm, Hasher};
 use crate::packages::archive_utils::normalize_path;
 use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
+use crate::packages::payload::{
+    PAYLOAD_IO_BUFFER_SIZE, PackagePayload, PackagePayloadFile, PayloadSpool, ReopenablePayload,
+};
+#[cfg(test)]
 use crate::packages::traits::{ExtractedFile, PackageFile};
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Write};
+#[cfg(test)]
+use std::sync::Arc;
 
 const TAR_BLOCK_SIZE: usize = 512;
 const TAR_NAME: std::ops::Range<usize> = 0..100;
@@ -74,12 +80,13 @@ struct Header {
 struct ParsedEntry {
     path: String,
     node: PayloadNode,
-    content: Vec<u8>,
     content_authority: Option<PayloadContentAuthority>,
+    source: Option<ReopenablePayload>,
 }
 
+#[cfg(test)]
 pub(super) fn parse_package_files(data_tar_data: &[u8]) -> Result<Vec<PackageFile>> {
-    parse(data_tar_data, false).map(|entries| {
+    parse_reader(open_bytes_decoder(data_tar_data)?, None).map(|entries| {
         entries
             .into_iter()
             .map(|entry| PackageFile {
@@ -91,22 +98,71 @@ pub(super) fn parse_package_files(data_tar_data: &[u8]) -> Result<Vec<PackageFil
     })
 }
 
+#[cfg(test)]
 pub(super) fn extract_files(data_tar_data: &[u8]) -> Result<Vec<ExtractedFile>> {
-    parse(data_tar_data, true).map(|entries| {
-        entries
-            .into_iter()
-            .map(|entry| ExtractedFile {
-                path: entry.path,
-                node: entry.node,
-                content: entry.content,
-                content_authority: entry.content_authority,
-            })
-            .collect()
-    })
+    let source = ReopenablePayload::from_in_memory_bytes(Arc::<[u8]>::from(data_tar_data.to_vec()));
+    parse_package_payload(&source)?.to_extracted_in_memory()
 }
 
-fn parse(data_tar_data: &[u8], capture_content: bool) -> Result<Vec<ParsedEntry>> {
-    let mut reader = DebPackage::create_tar_decoder(data_tar_data)?;
+pub(super) fn parse_package_payload(data_tar: &ReopenablePayload) -> Result<PackagePayload> {
+    let metadata = parse_reader(open_source_decoder(data_tar)?, None)?;
+    let required_bytes = metadata.iter().try_fold(0_u64, |total, entry| {
+        total.checked_add(
+            entry
+                .content_authority
+                .as_ref()
+                .map_or(0, |authority| authority.size),
+        )
+    });
+    let required_bytes =
+        required_bytes.ok_or_else(|| data_tar_error("DEB payload-size arithmetic overflow"))?;
+    let spool = PayloadSpool::new(required_bytes)?;
+    let parsed = parse_reader(open_source_decoder(data_tar)?, Some(&spool))?;
+    if metadata.len() != parsed.len()
+        || metadata.iter().zip(&parsed).any(|(first, second)| {
+            first.path != second.path
+                || first.node != second.node
+                || first.content_authority != second.content_authority
+        })
+    {
+        return Err(data_tar_error(
+            "DEB data tar changed between metadata and payload passes",
+        ));
+    }
+    parsed
+        .into_iter()
+        .map(|entry| {
+            PackagePayloadFile::new(
+                entry.path,
+                entry.node,
+                entry.content_authority,
+                entry.source,
+            )
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(PackagePayload::new)
+}
+
+#[cfg(test)]
+fn open_bytes_decoder(data: &[u8]) -> Result<Box<dyn Read + '_>> {
+    let format = crate::compression::CompressionFormat::from_magic_bytes(data);
+    compression::create_decoder_limited(data, format, compression::MAX_DECOMPRESS_SIZE)
+        .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))
+}
+
+fn open_source_decoder(source: &ReopenablePayload) -> Result<Box<dyn Read>> {
+    let mut probe = source.open()?;
+    let mut magic = [0_u8; 8];
+    let read = probe.read(&mut magic)?;
+    let format = crate::compression::CompressionFormat::from_magic_bytes(&magic[..read]);
+    compression::create_decoder_limited(source.open()?, format, compression::MAX_DECOMPRESS_SIZE)
+        .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))
+}
+
+fn parse_reader(
+    mut reader: Box<dyn Read + '_>,
+    spool: Option<&PayloadSpool>,
+) -> Result<Vec<ParsedEntry>> {
     let mut entries = Vec::<ParsedEntry>::new();
     let mut paths = BTreeSet::<String>::new();
     let mut pending_long_name: Option<Vec<u8>> = None;
@@ -159,14 +215,14 @@ fn parse(data_tar_data: &[u8], capture_content: bool) -> Result<Vec<ParsedEntry>
         }
 
         let permissions = header.mode & 0o7777;
-        let mut content = Vec::new();
         let mut content_authority = None;
+        let mut source = None;
         let kind = match header.entry_type {
             TYPE_REGULAR_OLD | TYPE_REGULAR if !directory_from_trailing_slash => {
-                let (bytes, authority) =
-                    read_regular_content(&mut reader, &path, header.size, capture_content)?;
-                content = bytes;
+                let (authority, payload_source) =
+                    read_regular_content(&mut reader, &path, header.size, spool, entries.len())?;
                 content_authority = Some(authority);
+                source = payload_source;
                 PayloadNodeKind::Regular {
                     hardlink_identity: None,
                 }
@@ -240,8 +296,8 @@ fn parse(data_tar_data: &[u8], capture_content: bool) -> Result<Vec<ParsedEntry>
         entries.push(ParsedEntry {
             path,
             node,
-            content,
             content_authority,
+            source,
         });
     }
 
@@ -622,43 +678,46 @@ fn read_long_value(reader: &mut dyn Read, size: u64, entry_type: u8) -> Result<V
 
 fn read_regular_content(
     reader: &mut dyn Read,
-    path: &str,
+    _path: &str,
     size: u64,
-    capture_content: bool,
-) -> Result<(Vec<u8>, PayloadContentAuthority)> {
-    if size > MAX_EXTRACTION_FILE_SIZE {
-        return Err(data_tar_error(format!(
-            "regular payload {path:?} is {size} bytes, exceeding the {} byte extraction limit",
-            MAX_EXTRACTION_FILE_SIZE
-        )));
-    }
-
-    let mut content = if capture_content {
-        Vec::with_capacity(size as usize)
-    } else {
-        Vec::new()
-    };
+    spool: Option<&PayloadSpool>,
+    index: usize,
+) -> Result<(PayloadContentAuthority, Option<ReopenablePayload>)> {
+    let mut output = spool
+        .map(|spool| {
+            let output_path = spool.indexed_path(index);
+            File::create(&output_path).map(|file| (file, output_path))
+        })
+        .transpose()?;
     let mut hasher = Hasher::new(HashAlgorithm::Sha256);
     let mut remaining = size;
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = [0u8; PAYLOAD_IO_BUFFER_SIZE];
     while remaining > 0 {
         let chunk_size = usize::try_from(remaining.min(buffer.len() as u64))
             .expect("bounded regular payload chunk size");
         read_exact(reader, &mut buffer[..chunk_size], "regular payload")?;
         hasher.update(&buffer[..chunk_size]);
-        if capture_content {
-            content.extend_from_slice(&buffer[..chunk_size]);
+        if let Some((file, _)) = &mut output {
+            file.write_all(&buffer[..chunk_size])?;
         }
         remaining -= chunk_size as u64;
     }
     discard_padding(reader, size)?;
+    if let Some((file, _)) = &mut output {
+        file.sync_all()?;
+    }
+    let source = output.map(|(_, path)| {
+        spool
+            .expect("output exists only when a spool was supplied")
+            .source(path)
+    });
 
     Ok((
-        content,
         PayloadContentAuthority {
             sha256: hasher.finalize().value,
             size,
         },
+        source,
     ))
 }
 

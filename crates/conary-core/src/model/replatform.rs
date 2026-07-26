@@ -107,14 +107,17 @@ fn candidate_target_package(
     trove: &Trove,
     target_distro: &str,
 ) -> Result<Option<RepositoryPackage>> {
-    let mut effective_policy = load_effective_policy(conn, RequestScope::Any)?;
+    // Replatform planning is an explicit lookup in the desired profile. The
+    // current system pin describes the source state and must not remain the
+    // transaction authority while selecting the target replacement.
+    let mut effective_policy =
+        load_effective_policy(conn, RequestScope::DistroProfile(target_distro.to_string()))?;
     effective_policy.resolution.allowed_distros = vec![target_distro.to_string()];
 
     let options = SelectionOptions {
         architecture: trove.architecture.clone(),
         policy: Some(effective_policy.resolution),
         is_root: false,
-        primary_flavor: None,
         ..SelectionOptions::default()
     };
 
@@ -394,10 +397,26 @@ fn unresolved_target_dependencies(
     };
 
     let target_scheme = target_pkg.version_scheme;
+    let depending_architecture = target_pkg
+        .architecture
+        .as_deref()
+        .filter(|architecture| !architecture.is_empty())
+        .ok_or_else(|| {
+            Error::ConfigError(format!(
+                "repository package '{}' has no architecture authority",
+                target_pkg.name
+            ))
+        })?;
+    let native_architecture = architecture
+        .filter(|architecture| !architecture.is_empty())
+        .ok_or_else(|| {
+            Error::ConfigError(format!(
+                "replatform target '{}' has no native architecture authority",
+                target_pkg.name
+            ))
+        })?;
     let groups =
         RepositoryRequirementGroup::find_by_repository_package(conn, repository_package_id)?;
-    let detected_arch = PackageSelector::detect_architecture();
-    let target_arch = architecture.unwrap_or(&detected_arch);
     let mut unresolved = Vec::new();
 
     for group in groups {
@@ -427,8 +446,14 @@ fn unresolved_target_dependencies(
                             .map_or_else(|| "<unpersisted>".to_string(), |id| id.to_string())
                     ))
                 })?;
-        let candidates = load_requirement_candidate_identities(conn, &expression, target_arch)?;
-        if !requirement_expression_satisfied(&expression, target_scheme, &candidates)? {
+        let candidates = load_requirement_candidate_identities(conn, &expression, target_scheme)?;
+        if !requirement_expression_satisfied(
+            &expression,
+            target_scheme,
+            depending_architecture,
+            native_architecture,
+            &candidates,
+        )? {
             unresolved.push(requirement_group_label(&group, &expression));
         }
     }
@@ -464,7 +489,7 @@ fn current_package_distro(conn: &Connection, trove: &Trove) -> Result<Option<Str
     let Some(repo_id) = label.repository_id else {
         return Ok(None);
     };
-    Ok(Repository::find_by_id(conn, repo_id)?.and_then(|repo| repo.default_strategy_distro))
+    Ok(Repository::find_by_id(conn, repo_id)?.and_then(|repo| repo.source_profile))
 }
 
 pub fn visible_realignment_candidates(

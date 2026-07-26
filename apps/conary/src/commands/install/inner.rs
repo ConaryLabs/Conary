@@ -12,18 +12,17 @@ use anyhow::{Context, Result, anyhow};
 use conary_core::components::ComponentType;
 use conary_core::config_transaction::{is_config_artifact_kind, is_etc_config_payload};
 use conary_core::db::models::{
-    Component, ConfigFile, ConfigSource, FileEntry, InstallSource, InstalledCcsRemoveHook,
-    InstalledFileCapability, InstalledNativeLifecycleBundle, InstalledRequirementGroup,
-    ProvideEntry, Trove,
+    Component, ConfigFile, ConfigSource, ExistingDirectoryMaterialization, FileEntry,
+    InstallSource, InstalledCcsRemoveHook, InstalledFileCapability, InstalledNativeLifecycleBundle,
+    InstalledRequirementGroup, Trove,
 };
-use conary_core::dependencies::DependencyClass;
 use conary_core::filesystem::CasStore;
 use conary_core::hash::HashAlgorithm;
 use conary_core::payload::{
     PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
 };
-use conary_core::repository::dependency_model::PackageRelationRemovalMode;
 use conary_core::transaction::PackageRelationRemoval;
+#[cfg(test)]
 use conary_core::transaction::TransactionEngine;
 use rusqlite::{OptionalExtension, Transaction};
 use std::collections::{HashMap, HashSet};
@@ -31,11 +30,11 @@ use std::path::Path;
 use tracing::{info, warn};
 
 use super::file_capabilities::is_regular_file_capability_payload;
-use super::{ExtractionResult, TransactionContext, mark_upgraded_parent_deriveds_stale};
+use super::{
+    ExtractionResult, InstallSemantics, TransactionContext, mark_upgraded_parent_deriveds_stale,
+};
 #[cfg(test)]
 use super::{InstallPhase, InstallProgress};
-
-const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
 
 /// Result from `install_inner` -- the trove ID of the installed package.
 pub struct InnerInstallResult {
@@ -64,6 +63,11 @@ pub(super) struct ResolvedInstallFile {
     pub cas_hash: Option<String>,
 }
 
+pub(super) struct InsertedFileAuthority {
+    pub(super) file_id: i64,
+    pub(super) materialized: bool,
+}
+
 /// Execute the install DB operations using a caller-owned DB transaction.
 ///
 /// Stores files in CAS via the provided engine, then inserts the trove,
@@ -80,31 +84,47 @@ pub fn install_inner(
     progress: &InstallProgress,
 ) -> Result<InnerInstallResult> {
     progress.set_phase(pkg.name(), InstallPhase::Deploying);
-    let stored_files = store_install_files_in_cas(engine, extraction)?;
+    let stored_files = store_install_files_in_cas(engine.cas(), extraction)?;
     info!(
         "Stored {} files in CAS for {}",
         stored_files.len(),
         pkg.name()
     );
     let resolved_files = resolve_stored_install_files(Path::new(ctx.root), &stored_files)?;
-    install_inner_with_stored_files(tx, changeset_id, pkg, extraction, ctx, &resolved_files)
+    let directory_plan = preflight_resolved_file_ownership(
+        tx,
+        Path::new(ctx.root),
+        &resolved_files,
+        pkg.name(),
+        ctx.relation_removals,
+        ctx.semantics,
+    )?;
+    install_inner_with_stored_files(
+        tx,
+        changeset_id,
+        pkg,
+        extraction,
+        ctx,
+        &resolved_files,
+        &directory_plan,
+    )
 }
 
 pub(super) fn store_install_files_in_cas(
-    engine: &TransactionEngine,
+    cas: &CasStore,
     extraction: &ExtractionResult,
 ) -> Result<Vec<StoredInstallFile>> {
-    store_extracted_files_in_cas(engine, &extraction.extracted_files)
+    store_extracted_files_in_cas(cas, &extraction.extracted_files)
 }
 
 pub(super) fn store_extracted_files_in_cas(
-    engine: &TransactionEngine,
-    extracted_files: &[conary_core::packages::traits::ExtractedFile],
+    cas: &CasStore,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<Vec<StoredInstallFile>> {
-    if engine.cas().algorithm() != HashAlgorithm::Sha256 {
+    if cas.algorithm() != HashAlgorithm::Sha256 {
         anyhow::bail!(
             "installed payload authority requires a SHA-256 CAS, found {}",
-            engine.cas().algorithm()
+            cas.algorithm()
         );
     }
     let mut stored_files: Vec<StoredInstallFile> = Vec::with_capacity(extracted_files.len());
@@ -117,26 +137,11 @@ pub(super) fn store_extracted_files_in_cas(
                 let authority = file.content_authority.as_ref().ok_or_else(|| {
                     anyhow!("regular payload {} has no content authority", file.path)
                 })?;
-                if file.content.len() as u64 != authority.size {
-                    anyhow::bail!(
-                        "payload content size mismatch for {}: expected {}, got {}",
-                        file.path,
-                        authority.size,
-                        file.content.len()
-                    );
-                }
-                let actual = CasStore::compute_sha256(&file.content);
-                if actual != authority.sha256 {
-                    anyhow::bail!(
-                        "payload content digest mismatch for {}: expected {}, got {}",
-                        file.path,
-                        authority.sha256,
-                        actual
-                    );
-                }
-                let stored = engine
-                    .cas()
-                    .store(&file.content)
+                let mut reader = file
+                    .open_content()
+                    .with_context(|| format!("Failed to open payload source for {}", file.path))?;
+                let stored = cas
+                    .store_reader_expected(reader.as_mut(), authority.size, &authority.sha256)
                     .with_context(|| format!("Failed to store {} in CAS", file.path))?;
                 if stored != authority.sha256 {
                     anyhow::bail!(
@@ -148,34 +153,16 @@ pub(super) fn store_extracted_files_in_cas(
                 }
                 Some(stored)
             }
-            PayloadNodeKind::Symlink { target } => {
-                if !file.content.is_empty() {
-                    anyhow::bail!(
-                        "symlink payload {} carries ambiguous archive content",
-                        file.path
-                    );
-                }
-                Some(
-                    engine
-                        .cas()
-                        .store_symlink(target)
-                        .with_context(|| format!("Failed to store symlink {} in CAS", file.path))?,
-                )
-            }
+            PayloadNodeKind::Symlink { target } => Some(
+                cas.store_symlink(target)
+                    .with_context(|| format!("Failed to store symlink {} in CAS", file.path))?,
+            ),
             PayloadNodeKind::Directory
             | PayloadNodeKind::Hardlink { .. }
             | PayloadNodeKind::BlockDevice { .. }
             | PayloadNodeKind::CharacterDevice { .. }
             | PayloadNodeKind::Fifo
-            | PayloadNodeKind::Socket => {
-                if !file.content.is_empty() {
-                    anyhow::bail!(
-                        "non-content payload node {} carries ambiguous archive bytes",
-                        file.path
-                    );
-                }
-                None
-            }
+            | PayloadNodeKind::Socket => None,
         };
         stored_files.push(StoredInstallFile {
             path: file.path.clone(),
@@ -221,6 +208,7 @@ pub(super) fn install_inner_with_stored_files(
     extraction: &ExtractionResult,
     ctx: &TransactionContext<'_>,
     stored_files: &[ResolvedInstallFile],
+    directory_plan: &super::shared_directory::DirectoryInstallPlan,
 ) -> Result<InnerInstallResult> {
     let package_scheme = pkg.version_scheme();
     if package_scheme != ctx.semantics.version_scheme {
@@ -245,7 +233,6 @@ pub(super) fn install_inner_with_stored_files(
 
     let selection_reason = ctx.selection_reason;
     let classified = &extraction.classified;
-    let language_provides = &extraction.language_provides;
     let trove_id = {
         if let Some(old_trove) = ctx.old_trove_to_upgrade
             && let Some(old_id) = old_trove.id
@@ -261,7 +248,7 @@ pub(super) fn install_inner_with_stored_files(
         if let Some(provenance) = ctx.repository_provenance.as_ref() {
             trove.install_source = InstallSource::Repository;
             trove.installed_from_repository_id = Some(provenance.repository_id);
-            trove.source_distro = provenance.source_distro.clone();
+            trove.source_profile = provenance.source_profile.clone();
         }
 
         if let Some(reason) = selection_reason {
@@ -277,7 +264,7 @@ pub(super) fn install_inner_with_stored_files(
                      WHERE rp.name = ?1 AND rp.version = ?2
                        AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)
                      ORDER BY
-                         (r.default_strategy_distro = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
+                         (r.source_profile = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
                          r.priority DESC, r.id ASC
                      LIMIT 1",
                     rusqlite::params![pkg.name(), pkg.version(), pkg.architecture()],
@@ -374,24 +361,30 @@ pub(super) fn install_inner_with_stored_files(
                 trove_id,
             );
             file_entry.component_id = component_id;
-            let file_id = insert_file_entry_claiming_live_root_overlap(
+            directory_plan.reconcile_through_symlink_target(tx, file)?;
+            let inserted = insert_file_entry_claiming_live_root_overlap(
                 tx,
                 &mut file_entry,
                 pkg.name(),
                 ctx.relation_removals,
+                directory_plan.materialization_for_path(path),
+                directory_plan.leaf_before(path),
             )?;
-            installed_file_metadata.insert(path.clone(), (file_id, file.cas_hash.clone()));
+            directory_plan.persist_through_symlink_target(tx, file, trove_id)?;
+            installed_file_metadata.insert(path.clone(), (inserted.file_id, file.cas_hash.clone()));
 
-            let action = if is_upgrade { "modify" } else { "add" };
-            tx.execute(
-                "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    changeset_id,
-                    path,
-                    file.content.as_ref().map(|content| &content.sha256),
-                    action
-                ],
-            )?;
+            if inserted.materialized {
+                let action = if is_upgrade { "modify" } else { "add" };
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        changeset_id,
+                        path,
+                        file.content.as_ref().map(|content| &content.sha256),
+                        action
+                    ],
+                )?;
+            }
         }
 
         persist_config_files(
@@ -417,26 +410,7 @@ pub(super) fn install_inner_with_stored_files(
                 .insert_or_replace(tx)?;
         }
 
-        for lang_dep in language_provides {
-            let kind = match lang_dep.class {
-                DependencyClass::Package => "package",
-                _ => lang_dep.class.prefix(),
-            };
-            let mut provide = ProvideEntry::new_typed(
-                trove_id,
-                kind,
-                lang_dep.name.clone(),
-                lang_dep.version_constraint.clone(),
-            );
-            provide.insert_or_ignore(tx)?;
-        }
-
-        let mut pkg_provide = ProvideEntry::new(
-            trove_id,
-            pkg.name().to_string(),
-            Some(pkg.version().to_string()),
-        );
-        pkg_provide.insert_or_ignore(tx)?;
+        super::transaction::persist_package_provides(tx, trove_id, pkg)?;
 
         trove_id
     };
@@ -447,7 +421,7 @@ pub(super) fn install_inner_with_stored_files(
             pkg.name(),
             Some(&old_trove.version),
             pkg.version(),
-        );
+        )?;
     }
 
     let mut retained_relation_trove_ids = ctx
@@ -474,7 +448,7 @@ fn persist_config_files(
     ctx: &TransactionContext<'_>,
     installed_file_metadata: &HashMap<String, (i64, Option<String>)>,
     stored_files: &[ResolvedInstallFile],
-    extracted_files: &[conary_core::packages::traits::ExtractedFile],
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
     let declared_source = config_source_for_context(ctx);
     let mut declarations = HashMap::new();
@@ -565,11 +539,11 @@ fn persist_config_files(
                     pkg.name()
                 )
             })?;
-        config.original_md5 = super::config_files::debian_original_md5(
+        config.original_md5 = super::config_files::debian_original_md5_payload(
             declared_source,
             declaration.is_some(),
-            &extracted.content,
-        );
+            extracted,
+        )?;
         config.file_id = Some(*file_id);
         config.source = declaration.map_or(ConfigSource::Auto, |_| declared_source);
         config.upsert(tx)?;
@@ -672,6 +646,20 @@ pub(super) fn preflight_file_ownership(
             continue;
         };
 
+        // Raw package identities are not authoritative until they have been
+        // resolved against the selected root. Defer existing directories to
+        // the definitive resolved-node preflight before root mutation.
+        if matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+            || super::shared_directory::owner_allows_replacement(
+                conn,
+                &existing,
+                package_name,
+                relation_removals,
+            )?
+        {
+            continue;
+        }
+
         let owner = Trove::find_by_id(conn, existing.trove_id)?.ok_or_else(|| {
             anyhow!(
                 "Path {} is already tracked by missing trove {}",
@@ -679,21 +667,6 @@ pub(super) fn preflight_file_ownership(
                 existing.trove_id
             )
         })?;
-
-        if owner.name == LIVE_ROOT_PACKAGE_NAME
-            || owner.name == package_name
-            || relation_removals.iter().any(|removal| {
-                removal.trove_id == existing.trove_id
-                    && removal.mode == PackageRelationRemovalMode::OwnershipTransfer
-                    && removal
-                        .ownership_transfer_packages
-                        .iter()
-                        .any(|incoming| incoming == package_name)
-            })
-        {
-            continue;
-        }
-
         return Err(anyhow!(
             "Path {} is already tracked by package {}",
             path,
@@ -704,15 +677,97 @@ pub(super) fn preflight_file_ownership(
     Ok(())
 }
 
+pub(super) fn preflight_resolved_file_ownership(
+    conn: &rusqlite::Connection,
+    selected_root: &Path,
+    files: &[ResolvedInstallFile],
+    package_name: &str,
+    relation_removals: &[PackageRelationRemoval],
+    semantics: InstallSemantics,
+) -> Result<super::shared_directory::DirectoryInstallPlan> {
+    super::shared_directory::preflight_resolved_file_ownership(
+        conn,
+        selected_root,
+        files,
+        package_name,
+        relation_removals,
+        semantics,
+    )
+}
+
 pub(super) fn insert_file_entry_claiming_live_root_overlap(
     tx: &Transaction<'_>,
     file_entry: &mut FileEntry,
     package_name: &str,
     relation_removals: &[PackageRelationRemoval],
-) -> Result<i64> {
+    directory_materialization: ExistingDirectoryMaterialization,
+    selected_root_leaf_before: Option<&ResolvedPayloadNode>,
+) -> Result<InsertedFileAuthority> {
+    if let Some(leaf_before) = selected_root_leaf_before {
+        if let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? {
+            let shared_directory_anchor =
+                matches!(file_entry.node.source.kind, PayloadNodeKind::Directory)
+                    && (matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+                        || directory_materialization
+                            .accepts_anchor_kind(&existing.node.source.kind));
+            if !shared_directory_anchor
+                && !super::shared_directory::owner_allows_replacement(
+                    tx,
+                    &existing,
+                    package_name,
+                    relation_removals,
+                )?
+            {
+                let owner = Trove::find_by_id(tx, existing.trove_id)?.ok_or_else(|| {
+                    anyhow!(
+                        "Path {} is already tracked by missing trove {}",
+                        file_entry.path,
+                        existing.trove_id
+                    )
+                })?;
+                return Err(anyhow!(
+                    "Path {} is already tracked by package {}",
+                    file_entry.path,
+                    owner.name
+                ));
+            }
+            FileEntry::reconcile_directory_materialization(
+                tx,
+                &file_entry.path,
+                leaf_before,
+                directory_materialization,
+            )?;
+        } else {
+            let mut anchor = FileEntry::new(
+                file_entry.path.clone(),
+                leaf_before.clone(),
+                None,
+                file_entry.trove_id,
+            );
+            anchor.component_id = file_entry.component_id;
+            anchor.insert(tx)?;
+        }
+    }
     let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? else {
-        return Ok(file_entry.insert(tx)?);
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert(tx)?,
+            materialized: true,
+        });
     };
+
+    if matches!(file_entry.node.source.kind, PayloadNodeKind::Directory)
+        && (matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+            || directory_materialization.accepts_anchor_kind(&existing.node.source.kind))
+    {
+        info!(
+            "Recording shared directory claim {} for {}",
+            file_entry.path, package_name
+        );
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            materialized: directory_materialization.applies_incoming(),
+        });
+    }
 
     let owner = Trove::find_by_id(tx, existing.trove_id)?.ok_or_else(|| {
         anyhow!(
@@ -722,22 +777,20 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
         )
     })?;
 
-    if owner.name == LIVE_ROOT_PACKAGE_NAME
-        || owner.name == package_name
-        || relation_removals.iter().any(|removal| {
-            removal.trove_id == existing.trove_id
-                && removal.mode == PackageRelationRemovalMode::OwnershipTransfer
-                && removal
-                    .ownership_transfer_packages
-                    .iter()
-                    .any(|incoming| incoming == package_name)
-        })
-    {
+    if super::shared_directory::owner_allows_replacement(
+        tx,
+        &existing,
+        package_name,
+        relation_removals,
+    )? {
         info!(
             "Claiming {} from tracked package {} for {}",
             file_entry.path, owner.name, package_name
         );
-        return Ok(file_entry.insert_or_replace(tx)?);
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            materialized: true,
+        });
     }
 
     Err(anyhow!(

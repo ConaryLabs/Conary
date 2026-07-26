@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use conary_core::ccs::builder::write_signed_current_ccs_package;
+use conary_core::ccs::manifest::{ManifestProvenance, Platform};
 use conary_core::ccs::{CcsBuilder, CcsManifest, SigningKeyPair};
 
 fn output_text(output: &Output) -> String {
@@ -59,21 +60,21 @@ fn build_recorded_draft_ccs(temp: &tempfile::TempDir, key: &SigningKeyPair) -> P
     std::fs::create_dir_all(source.join("usr/share/m3d")).unwrap();
     std::fs::create_dir_all(package_path.parent().unwrap()).unwrap();
     std::fs::write(source.join("usr/share/m3d/payload"), "hello\n").unwrap();
-    let manifest = CcsManifest::parse(
-        r#"
-[package]
-name = "m3d-recorded-draft"
-version = "1.0"
-description = "recorded draft fixture"
-license = "MIT"
-
-[provenance]
-origin_class = "recorded-draft"
-hardening_level = "host"
-"#,
-    )
-    .unwrap();
-    let result = CcsBuilder::new(manifest, &source).build().unwrap();
+    let mut manifest = CcsManifest::new_minimal("m3d-recorded-draft", "1.0.0");
+    manifest.package.description = "recorded draft fixture".to_string();
+    manifest.package.license = Some("MIT".to_string());
+    manifest.package.platform = Some(Platform {
+        os: "linux".to_string(),
+        arch: Some(std::env::consts::ARCH.to_string()),
+        libc: "gnu".to_string(),
+        abi: None,
+    });
+    manifest.provenance = Some(ManifestProvenance {
+        origin_class: Some("recorded-draft".to_string()),
+        hardening_level: Some("host".to_string()),
+        ..Default::default()
+    });
+    let result = CcsBuilder::new(manifest, &source).unwrap().build().unwrap();
     write_signed_current_ccs_package(&result, &package_path, key, false).unwrap();
     package_path
 }

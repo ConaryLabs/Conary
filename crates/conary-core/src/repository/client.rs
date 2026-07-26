@@ -53,7 +53,7 @@ impl Default for TimeoutConfig {
 ///
 /// Fedora metadata can exceed 100 MB once Remi includes enough native
 /// package metadata for capability-aware dependency resolution.
-const MAX_BYTES_RESPONSE_SIZE: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_BYTES_RESPONSE_SIZE: u64 = 256 * 1024 * 1024;
 
 fn byte_download_timeout(timeouts: &TimeoutConfig) -> Duration {
     // In-memory downloads cover more than tiny signatures and keys: Remi and
@@ -81,7 +81,7 @@ fn append_limited_chunk(
     Ok(())
 }
 
-async fn read_response_bytes_with_limit(
+pub(crate) async fn read_response_bytes_with_limit(
     mut response: reqwest::Response,
     limit: u64,
     url: &str,
@@ -496,6 +496,19 @@ impl RepositoryClient {
     /// Returns the response body as bytes, or an error if the download fails.
     /// This method does NOT retry - if the URL returns 404, it returns an error immediately.
     pub async fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        self.download_to_bytes_with_headers(url)
+            .await
+            .map(|(_, body)| body)
+    }
+
+    /// Download a URL to response headers and bounded body bytes.
+    ///
+    /// Authority contracts whose body integrity is declared by a response
+    /// header must validate both from the same HTTP response.
+    pub(crate) async fn download_to_bytes_with_headers(
+        &self,
+        url: &str,
+    ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
 
         let response = self
@@ -511,7 +524,9 @@ impl RepositoryClient {
             return Err(http_status_error(response.status(), url));
         }
 
-        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url).await
+        let headers = response.headers().clone();
+        let body = read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url).await?;
+        Ok((headers, body))
     }
 
     /// Fetch and decompress data from a URL

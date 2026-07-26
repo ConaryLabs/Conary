@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::ccs::manifest::FileCapability;
-use crate::db::models::{FileEntry, InstallSource, InstalledFileCapability, Trove};
+use crate::db::models::{DirectoryClaim, FileEntry, InstallSource, InstalledFileCapability, Trove};
 use crate::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
     MutableStateManifest, RootPathDomain, capture_root_node, classify_root_path,
@@ -76,16 +76,28 @@ pub(super) fn collect_runtime_generation_inputs(
     let mut state_entries = Vec::new();
 
     for file in files {
-        let Some((package_name, source)) = trove_map.get(&file.trove_id) else {
+        let Some((anchor_package_name, anchor_source)) = trove_map.get(&file.trove_id) else {
             return Err(crate::Error::InternalError(format!(
                 "orphaned file entry in generation input: path {} references missing trove_id {}",
                 file.path, file.trove_id
             )));
         };
-        if **source == InstallSource::AdoptedTrack || !is_generation_input_source((*source).clone())
-        {
-            continue;
+        let mut generation_owner = is_generation_input_source((*anchor_source).clone())
+            .then_some((*anchor_package_name, file.trove_id));
+        for claim in DirectoryClaim::find_retaining_path(conn, &file.path)? {
+            let Some((claim_package_name, claim_source)) = trove_map.get(&claim.trove_id) else {
+                return Err(crate::Error::InternalError(format!(
+                    "orphaned directory claim in generation input: path {} references missing trove_id {}",
+                    file.path, claim.trove_id
+                )));
+            };
+            if generation_owner.is_none() && is_generation_input_source((*claim_source).clone()) {
+                generation_owner = Some((*claim_package_name, claim.trove_id));
+            }
         }
+        let Some((package_name, _generation_trove_id)) = generation_owner else {
+            continue;
+        };
 
         let domain = classify_root_path(&file.path)?;
         if domain == RootPathDomain::EphemeralMountOrUser {
@@ -275,7 +287,7 @@ fn capability_input_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{FileEntry, Trove, TroveType};
+    use crate::db::models::{DirectoryClaimAnchorPolicy, FileEntry, Trove, TroveType};
     use crate::db::testing::create_test_db;
     use crate::payload::{
         PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
@@ -434,6 +446,91 @@ mod tests {
         let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
         assert_eq!(inputs.adopted_track_count, 1);
         assert!(inputs.generation.entries.is_empty());
+    }
+
+    #[test]
+    fn generation_claimant_keeps_a_non_generation_anchor_in_the_root() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let mut anchor_trove = Trove::new_with_source(
+            "tracked-anchor".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+            crate::repository::versioning::VersionScheme::Arch,
+        );
+        anchor_trove.architecture = Some("x86_64".to_string());
+        anchor_trove.native_package_identity = Some(
+            crate::packages::InstalledPackageIdentity::pacman(
+                "tracked-anchor",
+                "tracked-anchor",
+                "1",
+                "x86_64",
+            )
+            .unwrap(),
+        );
+        let anchor_trove_id = anchor_trove.insert(&conn).unwrap();
+        let mut claimant_trove = Trove::new_with_source(
+            "repository-claimant".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+            crate::repository::versioning::VersionScheme::Conary,
+        );
+        let claimant_trove_id = claimant_trove.insert(&conn).unwrap();
+
+        let directory_node = directory("/shared-directory", anchor_trove_id).node;
+        let mut directory_anchor = FileEntry::new(
+            "/shared-directory".to_string(),
+            directory_node.clone(),
+            None,
+            anchor_trove_id,
+        );
+        directory_anchor.insert(&conn).unwrap();
+        DirectoryClaim::new(
+            "/shared-directory".to_string(),
+            claimant_trove_id,
+            directory_node,
+        )
+        .unwrap()
+        .insert(&conn)
+        .unwrap();
+
+        let symlink_node = symlink("/shared-link", "shared-directory", anchor_trove_id).node;
+        let mut symlink_anchor = FileEntry::new(
+            "/shared-link".to_string(),
+            symlink_node,
+            None,
+            anchor_trove_id,
+        );
+        symlink_anchor.insert(&conn).unwrap();
+        DirectoryClaim::new(
+            "/shared-link".to_string(),
+            claimant_trove_id,
+            directory("/shared-link", claimant_trove_id).node,
+        )
+        .unwrap()
+        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .insert(&conn)
+        .unwrap();
+
+        let inputs = collect_runtime_generation_inputs(
+            &conn,
+            &Trove::list_packages(&conn).unwrap(),
+            FileEntry::find_all_ordered(&conn).unwrap(),
+            root.path(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/shared-directory", "/shared-link"]
+        );
     }
 
     #[test]

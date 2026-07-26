@@ -27,7 +27,10 @@ fn phase2_pruning_index_gen_help_lists_only_supported_public_targets() {
     let output = run_remi(&["index-gen", "--help"]);
 
     assert!(output.status.success(), "{}", output_text(&output));
-    assert_supported_public_targets_only(&String::from_utf8_lossy(&output.stdout));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_supported_public_targets_only(&stdout);
+    assert!(stdout.contains("--source-profile"), "{stdout}");
+    assert!(!stdout.contains("--distro"), "{stdout}");
 }
 
 #[test]

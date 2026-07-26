@@ -17,7 +17,7 @@ mod query_scripts {
             schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
-            source_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora-44".to_string()),
             source_release: Some("44".to_string()),
             source_arch: Some("x86_64".to_string()),
             source_package: "nginx".to_string(),
@@ -119,6 +119,7 @@ mod query_scripts {
             conary_core::ccs::CcsManifest::new_minimal("query-demo", "1.0.0"),
             &source,
         )
+        .unwrap()
         .build()
         .unwrap();
         let package_path = temp.path().join("query-demo.ccs");

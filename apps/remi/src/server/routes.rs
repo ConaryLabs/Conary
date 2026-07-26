@@ -543,9 +543,10 @@ mod tests {
 
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut converted = conary_core::db::models::ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "qemu-img".to_string(),
             "2:10.1.0-7.fc44".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:native".to_string(),
             &[],
@@ -553,7 +554,6 @@ mod tests {
             "sha256:ccs".to_string(),
             ccs_path.to_string_lossy().to_string(),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.insert(&conn).unwrap();
         drop(conn);
 

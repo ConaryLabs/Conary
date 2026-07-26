@@ -5,23 +5,25 @@
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::common::PackageMetadata;
+use crate::packages::payload::PackagePayload;
 use crate::packages::traits::{
-    ConfigFileInfo, Dependency, DependencyType, ExtractedFile, NativeArgumentContract,
-    NativeArgumentValue, NativeEnvironmentFact, NativeInvocationContract, NativeLifecyclePath,
-    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat,
-    NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
-    NativeTransactionOrder, NativeTransactionPosition, PackageFile, PackageFormat,
-    RpmHeaderContextMetadata, RpmHeaderFactMetadata, RpmHeaderFactSource, RpmHeaderValueMetadata,
-    RpmMacroContextMetadata, RpmMacroDefinitionMetadata, RpmMacroDefinitionSource,
-    RpmNativeScriptletMetadata, RpmScriptletCriticality, RpmScriptletFlagsMetadata,
-    RpmScriptletProgram, RpmScriptletRuntimeMetadata, RpmScriptletSlot, RpmSysusersDirective,
-    RpmSysusersMetadata, RpmTriggerAction, RpmTriggerCondition, RpmTriggerFamily,
-    RpmTriggerMetadata,
+    ConfigFileInfo, NativeArgumentContract, NativeArgumentValue, NativeEnvironmentFact,
+    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
+    NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
+    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
+    PackageFile, PackageFormat, ProvidedCapability, RpmHeaderContextMetadata,
+    RpmHeaderFactMetadata, RpmHeaderFactSource, RpmHeaderValueMetadata, RpmMacroContextMetadata,
+    RpmMacroDefinitionMetadata, RpmMacroDefinitionSource, RpmNativeScriptletMetadata,
+    RpmScriptletCriticality, RpmScriptletFlagsMetadata, RpmScriptletProgram,
+    RpmScriptletRuntimeMetadata, RpmScriptletSlot, RpmSysusersDirective, RpmSysusersMetadata,
+    RpmTriggerAction, RpmTriggerCondition, RpmTriggerFamily, RpmTriggerMetadata,
 };
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::dependency_model::{
+    RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
+};
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::versioning::VersionScheme;
-use rpm::{DependencyFlags, Package};
+use rpm::{DependencyFlags, Package, PackageMetadata as RpmMetadata};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -40,7 +42,7 @@ pub struct RpmPackage {
     vendor: Option<String>,
     license: Option<String>,
     url: Option<String>,
-    payload: Vec<ExtractedFile>,
+    payload: PackagePayload,
 }
 
 impl RpmPackage {
@@ -67,16 +69,31 @@ impl RpmPackage {
 
     /// Parse RPM Requires into the formal Boolean requirement grammar.
     fn extract_requirements(pkg: &Package) -> Result<Vec<RepositoryRequirementGroup>> {
-        pkg.metadata
+        // RPMSENSE_CONFIG is not disposable annotation. RPM generates paired
+        // config(NAME) requires/provides for packages containing %config files:
+        // https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/build/rpmfc.cc#L1748-L1762
+        // Conary installs those files, so preserve the exact package
+        // capability instead of silently discarding the flag.
+        let groups = pkg
+            .metadata
             .get_requires()
             .map_err(|error| Error::ParseError(format!("Failed to read RPM requires: {error}")))?
             .into_iter()
-            .filter(|requirement| {
-                !requirement
-                    .flags
-                    .intersects(DependencyFlags::RPMLIB | DependencyFlags::CONFIG)
-            })
             .map(|requirement| {
+                let runtime_feature =
+                    crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(
+                        &requirement.name,
+                    )
+                    .map_err(|error| Error::ParseError(error.to_string()))?;
+                if requirement.flags.intersects(DependencyFlags::RPMLIB)
+                    && runtime_feature.is_none()
+                {
+                    return Err(Error::ParseError(format!(
+                        "RPM requirement '{}' carries RPMLIB sense outside the rpmlib(Feature) grammar",
+                        requirement.name
+                    )));
+                }
+                validate_rpm_config_sense(&requirement.name, requirement.flags)?;
                 let native_text = if requirement.name.starts_with('(') {
                     if !requirement.version.is_empty()
                         || requirement.flags.intersects(
@@ -98,45 +115,66 @@ impl RpmPackage {
                         requirement.flags,
                     )?
                 };
-                crate::repository::requirement::parse_native_requirement(
+                let group = crate::repository::requirement::parse_native_requirement(
                     RepositoryRequirementKind::Depends,
                     VersionScheme::Rpm,
                     &native_text,
                 )
-                .map_err(Error::ParseError)
+                .map_err(Error::ParseError)?;
+                crate::repository::rpm_runtime::simplify_runtime_requirement_group(
+                    group,
+                    VersionScheme::Rpm,
+                )
+                .map_err(|error| Error::ParseError(error.to_string()))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(groups.into_iter().flatten().collect())
     }
 
     /// Extract native provides from RPM package metadata.
-    fn extract_provides(pkg: &Package) -> Result<Vec<Dependency>> {
+    fn extract_provides(pkg: &Package) -> Result<Vec<ProvidedCapability>> {
         let mut provides = Vec::new();
+        let package_name = pkg
+            .metadata
+            .get_name()
+            .map_err(|error| Error::ParseError(format!("Failed to read RPM name: {error}")))?;
 
         for entry in pkg
             .metadata
             .get_provides()
             .map_err(|error| Error::ParseError(format!("Failed to read RPM provides: {error}")))?
         {
-            if entry
-                .flags
-                .intersects(DependencyFlags::RPMLIB | DependencyFlags::CONFIG)
-            {
-                continue;
+            // rpmlib provides are synthesized by the package-manager runtime,
+            // not supplied by an installable package:
+            // https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L1039-L1063
+            let reserved_runtime =
+                crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(&entry.name)
+                    .map_err(|error| Error::ParseError(error.to_string()))?;
+            if entry.flags.intersects(DependencyFlags::RPMLIB) || reserved_runtime.is_some() {
+                return Err(Error::ParseError(format!(
+                    "RPM package header cannot provide package-manager runtime capability '{}'; Conary's typed runtime ledger is the sole authority",
+                    entry.name
+                )));
             }
+            validate_rpm_config_sense(&entry.name, entry.flags)?;
 
-            let version = if !entry.version.is_empty() {
-                let operator = flags_to_operator(entry.flags);
-                Some(format!("{}{}", operator, entry.version))
-            } else {
-                None
-            };
+            let version_relation = rpm_provide_relation(&entry.name, &entry.version, entry.flags)?;
+            let version = version_relation.map(|_| entry.version.to_string());
 
-            provides.push(Dependency {
+            let provide = ProvidedCapability {
+                kind: if entry.name == package_name {
+                    RepositoryCapabilityKind::PackageName
+                } else {
+                    RepositoryCapabilityKind::Generic
+                },
                 name: entry.name.to_string(),
                 version,
-                dep_type: DependencyType::Runtime,
-                description: None,
-            });
+                version_relation,
+                version_scheme: VersionScheme::Rpm,
+                architecture_qualifier: Default::default(),
+            };
+            provide.validate()?;
+            provides.push(provide);
         }
 
         Ok(provides)
@@ -181,6 +219,60 @@ impl RpmPackage {
         }
         Ok(relations)
     }
+}
+
+fn validate_rpm_config_sense(name: &str, flags: DependencyFlags) -> Result<()> {
+    if !flags.intersects(DependencyFlags::CONFIG) {
+        return Ok(());
+    }
+    let Some(inner) = name
+        .strip_prefix("config(")
+        .and_then(|name| name.strip_suffix(')'))
+    else {
+        return Err(Error::ParseError(format!(
+            "RPM capability '{name}' carries CONFIG sense outside the config(Name) grammar"
+        )));
+    };
+    if inner.is_empty() || inner.contains('(') || inner.contains(')') {
+        return Err(Error::ParseError(format!(
+            "RPM CONFIG capability '{name}' has an invalid package name"
+        )));
+    }
+    Ok(())
+}
+
+fn rpm_provide_relation(
+    name: &str,
+    version: &str,
+    flags: DependencyFlags,
+) -> Result<Option<crate::repository::dependency_model::ProvideVersionRelation>> {
+    use crate::repository::dependency_model::ProvideVersionRelation;
+
+    let sense = flags & (DependencyFlags::LESS | DependencyFlags::GREATER | DependencyFlags::EQUAL);
+    if version.is_empty() {
+        if !sense.is_empty() {
+            return Err(Error::ParseError(format!(
+                "RPM provide '{name}' has comparison flags but no version"
+            )));
+        }
+        return Ok(None);
+    }
+    let relation = if sense == DependencyFlags::LESS {
+        ProvideVersionRelation::LessThan
+    } else if sense == (DependencyFlags::LESS | DependencyFlags::EQUAL) {
+        ProvideVersionRelation::LessOrEqual
+    } else if sense == DependencyFlags::EQUAL {
+        ProvideVersionRelation::Equal
+    } else if sense == (DependencyFlags::GREATER | DependencyFlags::EQUAL) {
+        ProvideVersionRelation::GreaterOrEqual
+    } else if sense == DependencyFlags::GREATER {
+        ProvideVersionRelation::GreaterThan
+    } else {
+        return Err(Error::ParseError(format!(
+            "RPM provide '{name}' has version '{version}' with unsupported comparison flags {sense:?}"
+        )));
+    };
+    Ok(Some(relation))
 }
 
 fn rpm_relation_text(name: &str, version: &str, flags: DependencyFlags) -> Result<String> {
@@ -233,8 +325,12 @@ impl PackageFormat for RpmPackage {
 
         let mut buf_reader = BufReader::new(file);
 
-        let pkg = Package::parse(&mut buf_reader)
+        let metadata = RpmMetadata::parse(&mut buf_reader)
             .map_err(|e| Error::InitError(format!("Failed to parse RPM: {}", e)))?;
+        let pkg = Package {
+            metadata,
+            payload: Vec::new(),
+        };
 
         // Extract basic metadata
         let name = pkg
@@ -249,20 +345,36 @@ impl PackageFormat for RpmPackage {
             .map_err(|e| Error::InitError(format!("Failed to get package version: {}", e)))?
             .to_string();
 
-        // Combine version and release (e.g., "2.2.1" + "2.fc44" -> "2.2.1-2.fc44")
+        // Preserve the exact RPM EVR identity. A non-zero epoch participates in
+        // RPM ordering and must agree with repository metadata for the same
+        // downloaded artifact.
         let release = pkg
             .metadata
             .get_release()
             .map_err(|error| Error::ParseError(format!("Failed to get RPM release: {error}")))?;
-        let version = format!("{}-{}", version, release);
+        let epoch = if pkg
+            .metadata
+            .header
+            .entry_is_present(rpm::IndexTag::RPMTAG_EPOCH)
+        {
+            pkg.metadata
+                .get_epoch()
+                .map_err(|error| Error::ParseError(format!("Failed to get RPM epoch: {error}")))?
+        } else {
+            0
+        };
+        let version = if epoch == 0 {
+            format!("{version}-{release}")
+        } else {
+            format!("{epoch}:{version}-{release}")
+        };
 
         let architecture = Some(
             pkg.metadata
                 .get_arch()
                 .map_err(|error| {
                     Error::ParseError(format!("Failed to get RPM architecture: {error}"))
-                })
-                .map(crate::packages::common::normalize_architecture)?
+                })?
                 .to_string(),
         );
         let description =
@@ -275,8 +387,9 @@ impl PackageFormat for RpmPackage {
         let license = Self::optional_header_string(pkg.metadata.get_license(), "license")?;
         let url = Self::optional_header_string(pkg.metadata.get_url(), "URL")?;
 
-        let payload = payload::parse(&pkg)?;
+        let payload = payload::parse_stream(&pkg, Box::new(buf_reader))?;
         let files: Vec<PackageFile> = payload
+            .files()
             .iter()
             .map(|file| PackageFile {
                 path: file.path.clone(),
@@ -308,6 +421,7 @@ impl PackageFormat for RpmPackage {
             version,
             version_scheme: VersionScheme::Rpm,
             architecture,
+            debian_multi_arch: None,
             description,
             files,
             requirements,
@@ -357,7 +471,7 @@ impl PackageFormat for RpmPackage {
         self.meta.requirements()
     }
 
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         self.meta.provides()
     }
 
@@ -365,7 +479,7 @@ impl PackageFormat for RpmPackage {
         self.meta.relations()
     }
 
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
+    fn package_payload(&self) -> Result<PackagePayload> {
         Ok(self.payload.clone())
     }
 

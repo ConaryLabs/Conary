@@ -8,14 +8,20 @@
 //! repositories, and canonical_packages.
 
 use crate::error::Result;
+use crate::repository::dependency_model::{
+    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+};
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, params};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvidedCapability {
+    pub kind: RepositoryCapabilityKind,
     pub name: String,
     pub version: Option<String>,
+    pub version_relation: Option<ProvideVersionRelation>,
     pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
 }
 
 /// Full package identity for resolution, replacing ConaryPackage and ResolverCandidate.
@@ -27,12 +33,13 @@ pub struct PackageIdentity {
     pub version: String,
     pub package_release: Option<String>,
     pub architecture: Option<String>,
+    pub debian_multi_arch: Option<DebianMultiArch>,
     pub version_scheme: VersionScheme,
 
     // From repositories (via join; absent for installed-only troves)
     pub repository_id: Option<i64>,
     pub repository_name: String,
-    pub repository_distro: Option<String>,
+    pub repository_profile: Option<String>,
     pub repository_priority: i32,
 
     // From canonical_packages (via canonical_id join, nullable)
@@ -51,8 +58,8 @@ impl PackageIdentity {
     /// Load all candidates for a package name across all enabled repos.
     pub fn find_all_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.name, rp.version, rp.package_release, rp.architecture, rp.version_scheme,
-                    rp.repository_id, r.name, r.default_strategy_distro, r.priority,
+            "SELECT rp.id, rp.name, rp.version, rp.package_release, rp.architecture, rp.debian_multi_arch, rp.version_scheme,
+                    rp.repository_id, r.name, r.source_profile, r.priority,
                     rp.canonical_id, cp.name
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
@@ -62,9 +69,14 @@ impl PackageIdentity {
 
         let rows = stmt.query_and_then(params![name], |row| -> Result<PackageIdentity> {
             let package_name: String = row.get(1)?;
-            let repository_name: String = row.get(7)?;
-            let scheme = crate::db::models::version_scheme_from_row(row, 5)?;
+            let repository_name: String = row.get(8)?;
+            let scheme = crate::db::models::version_scheme_from_row(row, 6)?;
             let package_release: String = row.get(3)?;
+            let debian_multi_arch = row
+                .get::<_, Option<String>>(5)?
+                .map(|value| DebianMultiArch::parse_exact(&value))
+                .transpose()
+                .map_err(crate::error::Error::ConfigError)?;
 
             Ok(PackageIdentity {
                 repo_package_id: row.get(0)?,
@@ -72,13 +84,14 @@ impl PackageIdentity {
                 version: row.get(2)?,
                 package_release: (!package_release.is_empty()).then_some(package_release),
                 architecture: row.get(4)?,
+                debian_multi_arch,
                 version_scheme: scheme,
-                repository_id: Some(row.get(6)?),
+                repository_id: Some(row.get(7)?),
                 repository_name,
-                repository_distro: row.get(8)?,
-                repository_priority: row.get(9)?,
-                canonical_id: row.get(10)?,
-                canonical_name: row.get(11)?,
+                repository_profile: row.get(9)?,
+                repository_priority: row.get(10)?,
+                canonical_id: row.get(11)?,
+                canonical_name: row.get(12)?,
                 installed_trove_id: None,
                 installed_pinned: false,
                 provided_capabilities: Vec::new(),
@@ -111,7 +124,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+            "INSERT INTO repositories (name, url, enabled, priority, source_profile)
              VALUES ('fedora-44', 'https://example.com', 1, 10, 'fedora-44')",
             [],
         )
@@ -134,7 +147,7 @@ mod tests {
         assert_eq!(id.architecture.as_deref(), Some("x86_64"));
         assert_eq!(id.version_scheme, VersionScheme::Rpm);
         assert_eq!(id.repository_name, "fedora-44");
-        assert_eq!(id.repository_distro.as_deref(), Some("fedora-44"));
+        assert_eq!(id.repository_profile.as_deref(), Some("fedora-44"));
         assert_eq!(id.repository_priority, 10);
         assert!(id.canonical_id.is_none());
     }
@@ -197,7 +210,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+            "INSERT INTO repositories (name, url, enabled, priority, source_profile)
              VALUES ('ubuntu-main', 'https://example.com', 1, 10, 'ubuntu-26.04')",
             [],
         )
@@ -205,8 +218,13 @@ mod tests {
         let repo_id = conn.last_insert_rowid();
 
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
-             VALUES (?1, 'nginx', '1.22.1', 'sha256:def', 2048, 'https://example.com/nginx.deb', 'debian')",
+            "INSERT INTO repository_packages (
+                 repository_id, name, version, debian_multi_arch, checksum, size,
+                 download_url, version_scheme
+             ) VALUES (
+                 ?1, 'nginx', '1.22.1', 'no', 'sha256:def', 2048,
+                 'https://example.com/nginx.deb', 'debian'
+             )",
             [repo_id],
         )
         .unwrap();
@@ -251,8 +269,13 @@ mod tests {
         .unwrap();
 
         conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, canonical_id, version_scheme)
-             VALUES (?1, 'apache2', '2.4', 'sha256:b', 100, 'https://d.com/apache2', ?2, 'debian')",
+            "INSERT INTO repository_packages (
+                 repository_id, name, version, debian_multi_arch, checksum, size,
+                 download_url, canonical_id, version_scheme
+             ) VALUES (
+                 ?1, 'apache2', '2.4', 'no', 'sha256:b', 100,
+                 'https://d.com/apache2', ?2, 'debian'
+             )",
             rusqlite::params![deb_repo, canonical_id],
         )
         .unwrap();

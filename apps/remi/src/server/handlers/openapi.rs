@@ -140,21 +140,6 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Artifact uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
-            "/v1/admin/packages/{distro}": {
-                "post": {
-                    "operationId": "uploadPackage",
-                    "summary": "Upload a package artifact",
-                    "description": "Uploads a package artifact for the named distro so test harnesses and package workflows can publish inputs.",
-                    "tags": ["packages"],
-                    "security": [{ "bearerAuth": [] }],
-                    "parameters": [{ "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key for the uploaded package" }],
-                    "requestBody": {
-                        "required": true,
-                        "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
-                    },
-                    "responses": { "200": { "description": "Package uploaded" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
-                }
-            },
             "/v1/admin/releases/{distro}": {
                 "post": {
                     "operationId": "uploadReleasePackage",
@@ -658,7 +643,6 @@ mod tests {
             ("/v1/admin/tokens/{id}", &["delete"][..]),
             ("/v1/admin/test-fixtures/{path}", &["put"][..]),
             ("/v1/admin/test-artifacts/{path}", &["put"][..]),
-            ("/v1/admin/packages/{distro}", &["post"][..]),
             ("/v1/admin/releases/{distro}", &["post"][..]),
             ("/v1/admin/repos", &["get", "post"][..]),
             ("/v1/admin/repos/{name}", &["get", "put", "delete"][..]),
@@ -735,7 +719,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn openapi_spec_has_no_retired_scriptlet_review_workflow() {
+    async fn openapi_spec_has_no_retired_admin_publication_or_review_workflow() {
         let resp = openapi_spec().await;
         assert_eq!(resp.status(), StatusCode::OK);
 
@@ -744,6 +728,10 @@ mod tests {
             .unwrap();
         let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let paths = spec["paths"].as_object().unwrap();
+        assert!(
+            paths.get("/v1/admin/packages/{distro}").is_none(),
+            "retired package-upload publication bypass must not remain in OpenAPI"
+        );
         assert!(
             paths.keys().all(|path| {
                 !path.contains("scriptlet-evidence") && !path.contains("scriptlet-review")

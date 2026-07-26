@@ -3,8 +3,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::capability::CapabilityDeclaration;
 use crate::payload::{PayloadContentAuthority, PayloadNode};
-use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::dependency_model::{
+    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RepositoryRequirementGroup,
+};
 use crate::repository::versioning::VersionScheme;
 
 pub const FORMAT_VERSION_V2: u16 = 2;
@@ -15,11 +19,13 @@ pub struct AuthorityDocumentV2 {
     pub identity: PackageIdentityV2,
     pub kind: PackageKindV2,
     #[serde(default)]
-    pub provides: Vec<DependencyEntryV2>,
+    pub provides: Vec<ProvidedCapabilityV2>,
     #[serde(default)]
     pub requirements: Vec<RepositoryRequirementGroup>,
     #[serde(default)]
     pub relations: Vec<RepositoryRequirementGroup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilityDeclaration>,
     #[serde(default)]
     pub components: BTreeMap<String, ComponentAuthorityV2>,
     #[serde(default)]
@@ -38,6 +44,8 @@ pub struct PackageIdentityV2 {
     pub release: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub architecture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debian_multi_arch: Option<DebianMultiArch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
     pub kind: PackageKindTagV2,
@@ -114,6 +122,23 @@ pub struct DependencyEntryV2 {
     pub component: Option<String>,
 }
 
+/// Exact capability supplied by this signed package authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProvidedCapabilityV2 {
+    pub kind: DependencyKindV2,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_relation: Option<ProvideVersionRelation>,
+    pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DependencyKindV2 {
@@ -133,8 +158,8 @@ pub struct FileAuthorityV2 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<PayloadContentAuthority>,
     pub component: String,
-    #[serde(default)]
-    pub config: Option<ConfigPolicyV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<ConfigSemanticsV2>,
     #[serde(default)]
     pub conflict: ConflictPolicyV2,
 }
@@ -147,18 +172,19 @@ pub struct ComponentAuthorityV2 {
     pub total_size: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConfigAuthorityV2 {
-    pub path: String,
-    pub policy: ConfigPolicyV2,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSemanticsV2 {
+    pub noreplace: bool,
+    pub ghost: bool,
+    pub remove_on_upgrade: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ConfigPolicyV2 {
-    Replace,
-    NoReplace,
-    Merge,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigAuthorityV2 {
+    pub path: String,
+    pub semantics: ConfigSemanticsV2,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -424,13 +450,24 @@ impl AuthorityDocumentV2 {
                 version_scheme: VersionScheme::Conary,
                 release: "1".to_string(),
                 architecture: Some("x86_64".to_string()),
+                debian_multi_arch: None,
                 platform: Some("linux".to_string()),
                 kind: PackageKindTagV2::Package,
             },
             kind: PackageKindV2::Package(PackageDataV2::default()),
-            provides: Vec::new(),
+            provides: vec![ProvidedCapabilityV2 {
+                kind: DependencyKindV2::Package,
+                name: name.to_string(),
+                provider_version: Some("1.0.0".to_string()),
+                version_relation: Some(ProvideVersionRelation::Equal),
+                version_scheme: VersionScheme::Conary,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                target: None,
+                component: None,
+            }],
             requirements: Vec::new(),
             relations: Vec::new(),
+            capabilities: None,
             components: BTreeMap::new(),
             lifecycle: LifecycleAuthorityV2::default(),
             provenance: ProvenanceAuthorityV2 {
@@ -462,6 +499,7 @@ mod tests {
     fn typed_relations_round_trip_in_signed_v2_authority() {
         let mut authority = AuthorityDocumentV2::package_for_tests("replacement");
         authority.identity.version_scheme = VersionScheme::Rpm;
+        authority.provides[0].version_scheme = VersionScheme::Rpm;
         authority.relations.push(
             crate::repository::package_relation::parse_native_relation(
                 crate::repository::dependency_model::RepositoryRequirementKind::Obsolete,
@@ -475,6 +513,25 @@ mod tests {
         let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
 
         assert_eq!(decoded.relations, authority.relations);
+        super::super::validation::validate_authority(&decoded).unwrap();
+    }
+
+    #[test]
+    fn package_capabilities_round_trip_in_signed_v2_authority() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("capable");
+        authority.capabilities = Some(crate::capability::CapabilityDeclaration {
+            rationale: Some("needs repository access".to_string()),
+            network: crate::capability::NetworkCapabilities {
+                connect_tcp: vec![443],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let bytes = authority.to_cbor().unwrap();
+        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
+
+        assert_eq!(decoded.capabilities, authority.capabilities);
         super::super::validation::validate_authority(&decoded).unwrap();
     }
 

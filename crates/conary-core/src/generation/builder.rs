@@ -18,7 +18,7 @@ mod runtime_inputs;
 mod sysroot;
 
 #[cfg(test)]
-pub(super) mod test_support;
+pub(crate) mod test_support;
 
 pub use activation::GenerationActivation;
 pub use create::{

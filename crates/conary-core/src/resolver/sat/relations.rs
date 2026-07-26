@@ -364,6 +364,14 @@ fn sat_package(package: &PackageIdentity) -> SatPackage {
     SatPackage {
         name: package.name.clone(),
         version: package.version.clone(),
+        package_release: package.package_release.clone(),
+        architecture: package.architecture.clone(),
+        version_scheme: package.version_scheme,
+        repo_package_id: package.repo_package_id,
+        repository_id: package.repository_id,
+        repository_name: (!package.repository_name.is_empty())
+            .then(|| package.repository_name.clone()),
+        installed_trove_id: package.installed_trove_id,
         source: if package.installed_trove_id.is_some() {
             SatSource::Installed
         } else {

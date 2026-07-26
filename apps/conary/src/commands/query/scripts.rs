@@ -74,7 +74,7 @@ struct BundleQuerySummary {
     schema_revision: u16,
     source_format: String,
     source_family: String,
-    source_distro: Option<String>,
+    source_profile: Option<String>,
     source_release: Option<String>,
     source_arch: Option<String>,
     source_package: String,
@@ -409,7 +409,7 @@ fn render_ccs_bundle_text(
     output.push_str(&format!(
         "Source: {}{}{}{}\n",
         bundle.source_format.as_str(),
-        optional_prefixed(" ", bundle.source_distro.as_deref()),
+        optional_prefixed(" ", bundle.source_profile.as_deref()),
         optional_prefixed(" ", bundle.source_release.as_deref()),
         optional_prefixed(" ", bundle.source_arch.as_deref())
     ));
@@ -505,7 +505,7 @@ fn bundle_summary(bundle: &NativeLifecycleBundle) -> BundleQuerySummary {
         schema_revision: bundle.schema_revision,
         source_format: bundle.source_format.as_str().to_string(),
         source_family: bundle.source_family.clone(),
-        source_distro: bundle.source_distro.clone(),
+        source_profile: bundle.source_profile.clone(),
         source_release: bundle.source_release.clone(),
         source_arch: bundle.source_arch.clone(),
         source_package: bundle.source_package.clone(),

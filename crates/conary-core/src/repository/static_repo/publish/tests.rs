@@ -832,7 +832,10 @@ arch = "{arch}"
 "#
         ))
         .unwrap();
-        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+        let result = CcsBuilder::new(manifest, &source_dir)
+            .unwrap()
+            .build()
+            .unwrap();
         let package_path = self
             .package_dir
             .join(format!("{name}-{version}-{arch}-input.ccs"));

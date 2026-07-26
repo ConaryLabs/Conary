@@ -182,8 +182,8 @@ fn repository_package_rejects_missing_persisted_version_scheme() {
     let id = package.insert(&conn).unwrap();
 
     let columns = RepositoryPackage::COLUMNS.replace(
-        "distro, version_scheme, canonical_id",
-        "distro, NULL AS version_scheme, canonical_id",
+        "source_profile, version_scheme, canonical_id",
+        "source_profile, NULL AS version_scheme, canonical_id",
     );
     let sql = format!("SELECT {columns} FROM repository_packages WHERE id = ?1");
     let error = conn
@@ -192,7 +192,7 @@ fn repository_package_rejects_missing_persisted_version_scheme() {
 
     assert!(matches!(
         error,
-        rusqlite::Error::InvalidColumnType(18, _, rusqlite::types::Type::Null)
+        rusqlite::Error::InvalidColumnType(19, _, rusqlite::types::Type::Null)
     ));
 }
 
@@ -211,4 +211,45 @@ fn repository_package_schema_has_no_flat_dependency_payload() {
         .unwrap();
 
     assert!(!columns.iter().any(|column| column == "dependencies"));
+}
+
+#[test]
+fn repository_schema_rejects_package_format_as_source_profile() {
+    let conn = Connection::open_in_memory().unwrap();
+    crate::db::schema::ensure_current(&conn).unwrap();
+
+    let error = conn
+        .execute(
+            "INSERT INTO repositories (name, url, source_profile)
+             VALUES ('invalid-profile', 'https://example.test', 'rpm')",
+            [],
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("CHECK constraint failed"));
+}
+
+#[test]
+fn repository_package_schema_rejects_route_alias_as_source_profile() {
+    let conn = Connection::open_in_memory().unwrap();
+    crate::db::schema::ensure_current(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO repositories (name, url, source_profile)
+         VALUES ('fedora', 'https://example.test', 'fedora-44')",
+        [],
+    )
+    .unwrap();
+
+    let error = conn
+        .execute(
+            "INSERT INTO repository_packages (
+                repository_id, name, version, architecture, checksum, size,
+                download_url, source_profile, version_scheme
+             ) VALUES (1, 'demo', '1-1', 'x86_64', 'sha256:demo', 1,
+                       'https://example.test/demo.rpm', 'fedora', 'rpm')",
+            [],
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("CHECK constraint failed"));
 }

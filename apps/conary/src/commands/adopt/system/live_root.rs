@@ -6,10 +6,11 @@ use super::{
     FileInfoTuple, LIVE_ROOT_PACKAGE_NAME, capture_package_files, create_state_snapshot, open_db,
     write_db_checkpoint,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, InstallSource, ProvideEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, ProvideEntry,
+    Trove, TroveType,
 };
 use std::path::Path;
 use walkdir::WalkDir;
@@ -79,13 +80,14 @@ pub(super) fn adopt_live_root_as_full_package(
 
         for captured in &captured_files {
             let mut file_entry = captured.file_entry(trove_id);
-            file_entry.insert_or_replace(tx)?;
+            file_entry.insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)?;
         }
 
         let mut provide = ProvideEntry::new(
             trove_id,
             LIVE_ROOT_PACKAGE_NAME.to_string(),
             Some(live_root_adoption_version()),
+            trove.version_scheme,
         );
         provide.insert_or_ignore(tx)?;
 
@@ -114,18 +116,24 @@ fn live_root_adoption_version() -> String {
 
 fn collect_live_root_file_info(root: &Path) -> Result<Vec<FileInfoTuple>> {
     let mut files = Vec::new();
-    let walker = WalkDir::new(root).follow_links(false).into_iter();
+    let mut walker = WalkDir::new(root).follow_links(false).into_iter();
 
-    for entry in walker.filter_entry(|entry| should_visit_live_root_path(entry.path())) {
+    while let Some(entry) = walker.next() {
         let entry = entry?;
         let path = entry.path();
-        if path == root || !should_visit_live_root_path(path) {
+        if !should_visit_live_root_path(path)? {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if path == root {
             continue;
         }
 
         let metadata = std::fs::symlink_metadata(path)?;
         let link_target = if metadata.file_type().is_symlink() {
-            Some(std::fs::read_link(path)?.to_string_lossy().to_string())
+            Some(read_live_root_link_target(path)?)
         } else {
             None
         };
@@ -149,6 +157,17 @@ fn collect_live_root_file_info(root: &Path) -> Result<Vec<FileInfoTuple>> {
     Ok(files)
 }
 
+fn read_live_root_link_target(path: &Path) -> Result<String> {
+    let target = std::fs::read_link(path)?;
+    target.into_os_string().into_string().map_err(|target| {
+        anyhow::anyhow!(
+            "Cannot adopt symlink {} because its target is not valid UTF-8: {:?}",
+            path.display(),
+            target
+        )
+    })
+}
+
 #[cfg(unix)]
 fn live_root_file_mode(metadata: &std::fs::Metadata) -> i32 {
     use std::os::unix::fs::PermissionsExt;
@@ -166,15 +185,67 @@ fn live_root_file_mode(_metadata: &std::fs::Metadata) -> i32 {
 
 pub(super) fn live_root_db_path(root: &Path, path: &Path) -> Result<String> {
     if root == Path::new("/") {
-        return Ok(path.to_string_lossy().to_string());
+        return path.to_str().map(str::to_string).with_context(|| {
+            format!(
+                "Cannot adopt live-root path {} because it is not valid UTF-8",
+                path.display()
+            )
+        });
     }
     let rel = path.strip_prefix(root)?;
-    Ok(format!("/{}", rel.to_string_lossy()))
+    let rel = rel.to_str().with_context(|| {
+        format!(
+            "Cannot adopt live-root path {} because it is not valid UTF-8",
+            path.display()
+        )
+    })?;
+    Ok(format!("/{rel}"))
 }
 
-pub(super) fn should_visit_live_root_path(path: &Path) -> bool {
-    let path = path.to_string_lossy();
-    !conary_core::generation::metadata::is_excluded(&path)
+pub(super) fn should_visit_live_root_path(path: &Path) -> Result<bool> {
+    let path = path.to_str().with_context(|| {
+        format!(
+            "Cannot classify live-root path {} because it is not valid UTF-8",
+            path.display()
+        )
+    })?;
+    Ok(!conary_core::generation::metadata::is_excluded(path)
         && path != "/conary"
-        && !path.starts_with("/conary/")
+        && !path.starts_with("/conary/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn live_root_paths_with_distinct_invalid_bytes_fail_closed() {
+        let root = Path::new("/captured");
+        let first = root.join(OsString::from_vec(vec![b'n', b'a', b'm', b'e', 0x80]));
+        let second = root.join(OsString::from_vec(vec![b'n', b'a', b'm', b'e', 0x81]));
+
+        assert!(live_root_db_path(root, &first).is_err());
+        assert!(live_root_db_path(root, &second).is_err());
+    }
+
+    #[test]
+    fn live_root_symlink_with_invalid_byte_target_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        symlink(
+            OsString::from_vec(vec![b't', b'a', b'r', b'g', b'e', b't', 0x80]),
+            root.path().join("link"),
+        )
+        .unwrap();
+
+        let error = read_live_root_link_target(&root.path().join("link")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("because its target is not valid UTF-8"),
+            "{error:#}"
+        );
+    }
 }

@@ -1,7 +1,6 @@
 // conary-core/src/repository/supported_profiles/tests.rs
 
 use super::*;
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::versioning::VersionScheme;
 
 #[test]
@@ -31,10 +30,9 @@ fn catalog_rejects_unsupported_public_ids() {
 }
 
 #[test]
-fn ubuntu_profile_uses_deb_flavor_and_debian_version_scheme() {
+fn ubuntu_profile_uses_deb_format_and_debian_version_scheme() {
     let profile = profile_by_public_id("ubuntu-26.04").expect("ubuntu profile");
     assert_eq!(profile.package_format(), ProfilePackageFormat::Deb);
-    assert_eq!(profile.dependency_flavor(), RepositoryDependencyFlavor::Deb);
     assert_eq!(profile.version_scheme(), VersionScheme::Debian);
 }
 
@@ -59,15 +57,6 @@ fn route_lookup_returns_route_metadata_and_matching_profile_ids() {
 }
 
 #[test]
-fn family_slug_lookup_does_not_accept_public_ids() {
-    assert!(profile_by_family_slug("fedora-44").is_none());
-    assert!(profile_by_family_slug("ubuntu-26.04").is_none());
-    assert!(profile_by_family_slug("fedora").is_some());
-    assert!(profile_by_family_slug("ubuntu").is_some());
-    assert!(profile_by_family_slug("arch").is_some());
-}
-
-#[test]
 fn remi_target_lookup_requires_exact_public_ids() {
     assert_eq!(
         profile_for_remi_target("fedora-44").map(SupportedProfile::id),
@@ -80,11 +69,9 @@ fn remi_target_lookup_requires_exact_public_ids() {
 
 #[test]
 fn arch_profile_owns_exact_build_time_scriptlet_shell() {
-    let profile = arch_source_profile(Some("arch")).expect("Arch source profile");
+    let profile = alpm_source_profile("arch").expect("Arch source profile");
     assert_eq!(profile.scriptlet_shell(), Some("/usr/bin/bash"));
-    assert_eq!(
-        arch_source_profile(None).map(SupportedProfile::id),
-        Some("arch")
-    );
-    assert!(arch_source_profile(Some("ubuntu")).is_none());
+    assert!(alpm_source_profile("ubuntu-26.04").is_none());
+    assert!(alpm_source_profile("ubuntu").is_none());
+    assert!(alpm_source_profile("").is_none());
 }

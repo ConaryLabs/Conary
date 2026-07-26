@@ -68,7 +68,7 @@ pub fn materialize_captured_selected_root(
 /// nodes. Leaf nodes replace any existing node at the same path. Exact
 /// ownership, mode, timestamps, xattrs, hardlinks, and special-node kinds are
 /// then restored from the typed entries.
-pub(crate) fn overlay_payload_entries(
+pub fn overlay_payload_entries(
     entries: &[GenerationRootEntry],
     cas: &CasStore,
     destination: &Path,
@@ -481,6 +481,8 @@ fn set_mtime(path: &Path, seconds: i64, nanoseconds: u32) -> crate::Result<()> {
             tv_nsec: libc::c_long::from(nanoseconds),
         },
     ];
+    // SAFETY: `c_path` is NUL-terminated, `times` contains two initialized
+    // entries as required by `utimensat`, and both buffers outlive the call.
     let result = unsafe {
         libc::utimensat(
             libc::AT_FDCWD,

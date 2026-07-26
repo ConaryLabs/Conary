@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 pub(super) struct PersistConversionInput {
-    pub(super) distro: String,
+    pub(super) source_profile: String,
     pub(super) metadata: PackageMetadata,
     pub(super) format: &'static str,
     pub(super) original_checksum: String,
@@ -22,18 +22,22 @@ pub(super) struct PersistConversionInput {
 impl ConversionService {
     pub(super) async fn cached_conversion_result_async(
         &self,
-        distro: &str,
+        source_profile: &str,
         repo_pkg: &RepositoryPackage,
         original_checksum: &str,
     ) -> Result<Option<ServerConversionResult>> {
         let service = self.clone();
-        let distro = distro.to_string();
+        let source_profile = source_profile.to_string();
         let repo_pkg = repo_pkg.clone();
         let original_checksum = original_checksum.to_string();
 
         tokio::task::spawn_blocking(move || {
             let conn = conary_core::db::open(&service.db_path)?;
-            let Some(existing) = ConvertedPackage::find_by_checksum(&conn, &original_checksum)?
+            let Some(existing) = ConvertedPackage::find_repository_by_checksum(
+                &conn,
+                &source_profile,
+                &original_checksum,
+            )?
             else {
                 return Ok(None);
             };
@@ -50,14 +54,18 @@ impl ConversionService {
                     original_checksum
                 );
                 return service
-                    .build_result_from_existing(&existing, &distro, &repo_pkg)
+                    .build_result_from_existing(&existing, &repo_pkg)
                     .map(Some);
             }
 
             info!(
                 "Stale conversion record (CCS file missing or needs reconversion), re-converting"
             );
-            ConvertedPackage::delete_by_checksum(&conn, &original_checksum)?;
+            ConvertedPackage::delete_repository_by_checksum(
+                &conn,
+                &source_profile,
+                &original_checksum,
+            )?;
             Ok(None)
         })
         .await
@@ -69,7 +77,7 @@ impl ConversionService {
         input: PersistConversionInput,
     ) -> Result<ServerConversionResult> {
         let PersistConversionInput {
-            distro,
+            source_profile,
             metadata,
             format,
             original_checksum,
@@ -90,11 +98,12 @@ impl ConversionService {
         let package_architecture = repo_pkg
             .architecture
             .clone()
-            .or_else(|| metadata.architecture.clone());
+            .or_else(|| metadata.architecture.clone())
+            .ok_or_else(|| anyhow!("converted package has no exact architecture identity"))?;
         let ccs_filename = Self::safe_ccs_filename_with_arch(
             &metadata.name,
             &metadata.version,
-            package_architecture.as_deref(),
+            Some(&package_architecture),
         )?;
         let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
 
@@ -104,9 +113,10 @@ impl ConversionService {
         std::fs::copy(ccs_path, &final_ccs_path)?;
 
         let mut converted = ConvertedPackage::new_repository(
-            distro.clone(),
+            source_profile.clone(),
             metadata.name.clone(),
             metadata.version.clone(),
+            package_architecture.clone(),
             format.to_string(),
             original_checksum,
             &chunk_hashes,
@@ -115,19 +125,18 @@ impl ConversionService {
             final_ccs_path.to_string_lossy().to_string(),
         );
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
-        converted.package_architecture = package_architecture;
         converted.insert(&conn)?;
 
         info!(
-            "Recorded conversion in database (distro={}, name={}, version={})",
-            distro, metadata.name, metadata.version
+            "Recorded conversion in database (source_profile={}, name={}, version={})",
+            source_profile, metadata.name, metadata.version
         );
 
         let scriptlet_summary = converted.scriptlet_summary()?;
         Ok(ServerConversionResult {
             name: metadata.name,
             version: metadata.version,
-            distro,
+            source_profile: Some(source_profile),
             chunk_hashes,
             total_size,
             content_hash,
@@ -142,7 +151,6 @@ impl ConversionService {
     fn build_result_from_existing(
         &self,
         existing: &ConvertedPackage,
-        _distro: &str,
         _repo_pkg: &RepositoryPackage,
     ) -> Result<ServerConversionResult> {
         let artifact = existing.repository_artifact()?;
@@ -151,7 +159,7 @@ impl ConversionService {
         Ok(ServerConversionResult {
             name: artifact.package_name.to_string(),
             version: artifact.package_version.to_string(),
-            distro: artifact.distro.to_string(),
+            source_profile: Some(artifact.source_profile.to_string()),
             chunk_hashes: artifact.chunk_hashes,
             total_size: artifact.total_size,
             content_hash: artifact.content_hash.to_string(),

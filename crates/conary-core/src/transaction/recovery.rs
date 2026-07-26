@@ -2,7 +2,7 @@
 
 use super::TransactionEngine;
 use crate::Result;
-use crate::db::models::{GenerationPublication, GenerationPublicationPhase, SystemState};
+use crate::db::models::{GenerationPublication, SystemState};
 use crate::generation::artifact::{GenerationArtifact, load_generation_artifact_for_activation};
 use rusqlite::Connection;
 use std::path::Path;
@@ -58,17 +58,10 @@ impl TransactionEngine {
             match load_generation_artifact_for_number(current_num, &gen_dir) {
                 Ok(artifact) => {
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
-                        if complete_selected_current_publication_debt(
-                            conn,
-                            current_num,
-                            &pending_debt,
-                        )? {
-                            return Ok(());
-                        }
                         if !pending_debt.is_empty() {
                             tracing::warn!(
                                 count = pending_debt.len(),
-                                "Recovery found pending generation publication debt; continuing with valid selected generation so a later publish or package mutation can flush current DB state"
+                                "Recovery found pending generation publication debt; the selected link does not prove configuration projection or generation DB backup completion"
                             );
                         }
                         tracing::debug!(
@@ -77,12 +70,6 @@ impl TransactionEngine {
                         );
                         return mark_generation_state_active_if_present(conn, current_num);
                     }
-
-                    let _ = complete_selected_current_publication_debt(
-                        conn,
-                        current_num,
-                        &pending_debt,
-                    )?;
 
                     let (required_verity, expected_digest) = artifact_mount_policy(&artifact);
                     let is_mounted = crate::generation::mount::is_generation_mounted(
@@ -286,44 +273,6 @@ fn pending_publication_debt(conn: &Connection) -> Result<Vec<GenerationPublicati
     GenerationPublication::pending_recoverable(conn)
 }
 
-fn debt_matches_selected_current(debt: &GenerationPublication, current_num: i64) -> bool {
-    debt.generation_number == Some(current_num)
-        && matches!(
-            debt.phase,
-            GenerationPublicationPhase::ArtifactReady
-                | GenerationPublicationPhase::CurrentPublished
-        )
-}
-
-fn complete_selected_current_publication_debt(
-    conn: &Connection,
-    current_num: i64,
-    pending_debt: &[GenerationPublication],
-) -> Result<bool> {
-    if pending_debt.is_empty() {
-        return Ok(false);
-    }
-    if !pending_debt
-        .iter()
-        .all(|debt| debt_matches_selected_current(debt, current_num))
-    {
-        return Ok(false);
-    }
-
-    mark_generation_state_active_if_present(conn, current_num)?;
-    let completed = GenerationPublication::mark_complete_through(
-        conn,
-        GenerationPublication::applied_high_water_changeset_id(conn)?,
-        current_num,
-        current_num,
-    )?;
-    tracing::info!(
-        completed,
-        "Recovery completed publication debt for durably selected generation {current_num}"
-    );
-    Ok(completed > 0)
-}
-
 fn mark_generation_state_active_if_present(conn: &Connection, gen_num: i64) -> Result<()> {
     match SystemState::find_by_number(conn, gen_num)? {
         Some(state) => state.set_active(conn),
@@ -405,63 +354,5 @@ mod tests {
         let debts = pending_publication_debt(&conn).unwrap();
         assert_eq!(debts.len(), 1);
         assert_eq!(debts[0].status, GenerationPublicationStatus::Failed);
-    }
-
-    #[test]
-    fn debt_matches_selected_current_accepts_artifact_ready_and_current_published() {
-        let mut debt = GenerationPublication {
-            id: Some(1),
-            trigger_changeset_id: Some(1),
-            published_through_changeset_id: None,
-            tx_uuid: None,
-            db_path: "/tmp/db".to_string(),
-            runtime_root: "/tmp/root".to_string(),
-            phase: GenerationPublicationPhase::ArtifactReady,
-            status: GenerationPublicationStatus::Failed,
-            state_number: Some(7),
-            generation_number: Some(7),
-            summary: "fixture".to_string(),
-            config_transaction: Default::default(),
-            last_error: None,
-            retry_count: 1,
-            recoverable: true,
-            created_at: None,
-            updated_at: None,
-            completed_at: None,
-        };
-        assert!(debt_matches_selected_current(&debt, 7));
-        debt.phase = GenerationPublicationPhase::CurrentPublished;
-        assert!(debt_matches_selected_current(&debt, 7));
-        debt.phase = GenerationPublicationPhase::PendingBuild;
-        assert!(!debt_matches_selected_current(&debt, 7));
-        debt.phase = GenerationPublicationPhase::CurrentPublished;
-        debt.generation_number = Some(8);
-        assert!(!debt_matches_selected_current(&debt, 7));
-    }
-
-    #[test]
-    fn selected_generation_recovery_leaves_nonmatching_debt_visible() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().to_path_buf();
-        let db_path = root.join("conary.db");
-        crate::db::init(&db_path).unwrap();
-        let conn = crate::db::open(&db_path).unwrap();
-
-        conn.execute(
-            "INSERT INTO generation_publications (
-                db_path, runtime_root, phase, status, summary
-             ) VALUES (?1, ?2, 'pending_build', 'failed', 'fixture')",
-            (db_path.display().to_string(), root.display().to_string()),
-        )
-        .unwrap();
-
-        let debts = pending_publication_debt(&conn).unwrap();
-        assert!(!complete_selected_current_publication_debt(&conn, 7, &debts).unwrap());
-        assert_eq!(
-            GenerationPublication::pending_recoverable(&conn)
-                .unwrap()
-                .len(),
-            1
-        );
     }
 }

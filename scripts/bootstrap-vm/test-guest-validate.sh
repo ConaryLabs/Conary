@@ -101,7 +101,7 @@ bash "$TARGET_SCRIPT" \
     --repo-name remi-fedora-44 \
     --repo-url https://remi.conary.io \
     --remi-endpoint https://remi.conary.io \
-    --remi-distro fedora-44
+    --source-profile fedora-44
 
 assert_contains() {
     local file="$1"

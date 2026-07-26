@@ -8,7 +8,9 @@ use crate::commands::adopt::{
 };
 use crate::commands::open_db;
 use anyhow::{Result, anyhow};
-use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, InstallSource, Trove};
+use conary_core::db::models::{
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallSource, Trove,
+};
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
 use conary_core::packages::{
@@ -115,7 +117,7 @@ pub(super) fn upgrade_to_cas_backed(
                     .is_some_and(|file| file.trove_id == trove_id)
                 {
                     let mut file = captured.file_entry(trove_id);
-                    file.insert_or_replace(tx)?;
+                    file.insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)?;
                 }
             }
 
@@ -202,7 +204,10 @@ pub(super) fn take_ownership(
                             .is_some_and(|file| file.trove_id == trove_id)
                         {
                             let mut file = captured.file_entry(trove_id);
-                            file.insert_or_replace(tx)?;
+                            file.insert_or_replace(
+                                tx,
+                                ExistingDirectoryMaterialization::ApplyIncoming,
+                            )?;
                         }
                     }
                 }
@@ -450,6 +455,8 @@ mod tests {
                 conary_core::repository::versioning::VersionScheme::Debian,
             );
             amd64.architecture = Some("amd64".into());
+            amd64.debian_multi_arch =
+                Some(conary_core::repository::dependency_model::DebianMultiArch::Same);
             amd64.installed_by_changeset_id = Some(changeset_id);
             amd64.native_package_identity = Some(amd64_identity);
             let amd64_id = amd64.insert(tx)?;
@@ -462,6 +469,8 @@ mod tests {
                 conary_core::repository::versioning::VersionScheme::Debian,
             );
             i386.architecture = Some("i386".into());
+            i386.debian_multi_arch =
+                Some(conary_core::repository::dependency_model::DebianMultiArch::Same);
             i386.installed_by_changeset_id = Some(changeset_id);
             i386.native_package_identity = Some(i386_identity.clone());
             let i386_id = i386.insert(tx)?;

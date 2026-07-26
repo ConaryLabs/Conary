@@ -168,7 +168,7 @@ conary repo add remi http://your-remi-host:8080 \
     --package-format json \
     --default-strategy remi \
     --remi-endpoint http://your-remi-host:8080 \
-    --remi-distro fedora-44
+    --source-profile fedora-44
 conary repo sync
 conary install curl --dry-run
 ```

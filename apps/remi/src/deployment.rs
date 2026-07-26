@@ -232,13 +232,9 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         if packages > 0 {
             populated_sources += 1;
         }
-        let profile =
-            conary_core::repository::supported_profiles::profile_by_public_id(&definition.profile)
-                .context("validated repository profile disappeared")?;
-        let route = profile.remi_route_slug();
         let converted_packages: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM converted_packages WHERE distro = ?1",
-            [route],
+            "SELECT COUNT(*) FROM converted_packages WHERE source_profile = ?1",
+            [&definition.profile],
             |row| row.get(0),
         )?;
         sources.push(DeploymentSourceState {

@@ -3,7 +3,7 @@
 pub mod distro;
 pub mod manifest;
 
-pub use distro::{DistroConfig, GlobalConfig, TestPackage};
+pub use distro::{DistroBuildContext, DistroConfig, GlobalConfig, TestPackage};
 pub use manifest::{Assertion, StepType, TestDef, TestManifest};
 
 use anyhow::{Result, bail};

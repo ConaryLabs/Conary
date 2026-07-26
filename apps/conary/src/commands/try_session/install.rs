@@ -19,7 +19,6 @@ pub(super) struct TryInstallPlan {
     pub(super) install_root: PathBuf,
     pub(super) copied_db_path: PathBuf,
     pub(super) runtime_root: ConaryRuntimeRoot,
-    pub(super) transaction_config: TransactionConfig,
 }
 
 pub(super) fn install_try_package(
@@ -52,12 +51,12 @@ pub(super) fn install_try_package(
             quiet: true,
             sandbox_mode: conary_core::scriptlet::SandboxMode::Always,
             allow_downgrade: false,
+            intent: crate::commands::install::InstallIntent::PackageChange,
             reinstall: false,
             selection_reason: Some("conary try"),
             selected_manifest_components: None,
             repository_provenance: None,
         },
-        plan.transaction_config.clone(),
         &mut selected,
     )?;
     let (_, captured) = selected.capture_preserving_root(&plan.runtime_root)?;
@@ -72,9 +71,8 @@ pub(super) fn build_try_install_plan(
 ) -> TryInstallPlan {
     TryInstallPlan {
         install_root: work_dir.join("selected-root-session/root"),
-        copied_db_path: copied_db_path.clone(),
+        copied_db_path,
         runtime_root: runtime_root.clone(),
-        transaction_config: build_try_transaction_config(runtime_root, copied_db_path),
     }
 }
 

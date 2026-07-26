@@ -10,7 +10,6 @@ family_slug = "fedora"
 remi_route_slug = "fedora"
 repology_repo = "fedora_44"
 package_format = "rpm"
-dependency_flavor = "rpm"
 version_scheme = "rpm"
 
 [[profiles]]
@@ -25,7 +24,6 @@ family_slug = "ubuntu"
 remi_route_slug = "ubuntu"
 repology_repo = "ubuntu_26_04"
 package_format = "deb"
-dependency_flavor = "deb"
 version_scheme = "debian"
 
 [[profiles]]
@@ -38,6 +36,5 @@ family_slug = "arch"
 remi_route_slug = "arch"
 repology_repo = "arch"
 package_format = "arch"
-dependency_flavor = "arch"
 version_scheme = "arch"
 scriptlet_shell = "/usr/bin/bash"

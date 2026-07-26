@@ -6,6 +6,8 @@ use conary_core::model::{
     DiffAction, ModelDiff, ModelDiffSummary, ReplatformEstimate, ReplatformStatus,
     VisibleRealignmentProposal, replatform_execution_plan,
 };
+#[cfg(test)]
+use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use rusqlite::Connection;
 
 pub(super) fn is_source_policy_action(action: &DiffAction) -> bool {
@@ -13,8 +15,6 @@ pub(super) fn is_source_policy_action(action: &DiffAction) -> bool {
         action,
         DiffAction::SetSourcePin { .. }
             | DiffAction::ClearSourcePin
-            | DiffAction::SetSelectionMode { .. }
-            | DiffAction::ClearSelectionMode
             | DiffAction::SetAllowedDistros { .. }
             | DiffAction::ClearAllowedDistros
     )
@@ -185,7 +185,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
 
         let summary = source_policy_summary(&diff).unwrap();
@@ -199,7 +199,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
         diff.actions.push(DiffAction::Install {
             package: "kernel".to_string(),
@@ -228,7 +228,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
 
         let note = source_policy_replatform_note(&diff).unwrap();
@@ -241,7 +241,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
         diff.replatform_estimate = Some(ReplatformEstimate {
             target_distro: "arch".to_string(),
@@ -272,7 +272,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
         diff.visible_realignment_candidates =
             Some(conary_core::model::VisibleRealignmentCandidates {
@@ -291,7 +291,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
         diff.actions.push(DiffAction::Install {
             package: "kernel".to_string(),

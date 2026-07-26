@@ -5,34 +5,66 @@ use super::common::{
     render_with_operands, require_arity,
 };
 
-/// Source-supported dpkg-query options. Repeated value options use dpkg's
-/// last-one-wins semantics.
+/// One source-ordered dpkg-query option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DpkgQueryOption {
+    AdministrativeDirectory(Vec<u8>),
+    Root(Vec<u8>),
+    LoadAvailable,
+    NoPager,
+    ShowFormat(Vec<u8>),
+}
+
+impl DpkgQueryOption {
+    fn append_argv(&self, argv: &mut Vec<Vec<u8>>) {
+        match self {
+            Self::AdministrativeDirectory(value) => {
+                push_long_value(argv, b"--admindir", value);
+            }
+            Self::Root(value) => push_long_value(argv, b"--root", value),
+            Self::LoadAvailable => argv.push(b"--load-avail".to_vec()),
+            Self::NoPager => argv.push(b"--no-pager".to_vec()),
+            Self::ShowFormat(value) => push_long_value(argv, b"--showformat", value),
+        }
+    }
+}
+
+/// Source-ordered dpkg-query options.
+///
+/// `--root` resets the administrative directory, so a collapsed option map
+/// cannot preserve the semantics of `--root … --admindir …`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DpkgQueryOptions {
-    pub admindir: Option<Vec<u8>>,
-    pub root: Option<Vec<u8>>,
-    pub load_available: bool,
-    pub no_pager: bool,
-    pub show_format: Option<Vec<u8>>,
+    pub occurrences: Vec<DpkgQueryOption>,
 }
 
 impl DpkgQueryOptions {
+    pub fn load_available(&self) -> bool {
+        self.occurrences
+            .iter()
+            .any(|option| matches!(option, DpkgQueryOption::LoadAvailable))
+    }
+
+    pub fn no_pager(&self) -> bool {
+        self.occurrences
+            .iter()
+            .any(|option| matches!(option, DpkgQueryOption::NoPager))
+    }
+
+    pub fn show_format(&self) -> Option<&[u8]> {
+        self.occurrences
+            .iter()
+            .rev()
+            .find_map(|option| match option {
+                DpkgQueryOption::ShowFormat(value) => Some(value.as_slice()),
+                _ => None,
+            })
+    }
+
     fn argv(&self) -> Vec<Vec<u8>> {
         let mut argv = Vec::new();
-        if let Some(admindir) = &self.admindir {
-            push_long_value(&mut argv, b"--admindir", admindir);
-        }
-        if let Some(root) = &self.root {
-            push_long_value(&mut argv, b"--root", root);
-        }
-        if self.load_available {
-            argv.push(b"--load-avail".to_vec());
-        }
-        if self.no_pager {
-            argv.push(b"--no-pager".to_vec());
-        }
-        if let Some(format) = &self.show_format {
-            push_long_value(&mut argv, b"--showformat", format);
+        for option in &self.occurrences {
+            option.append_argv(&mut argv);
         }
         argv
     }
@@ -213,63 +245,39 @@ impl DpkgQueryInvocation {
             if let Some(name) = parsed_action {
                 set_action(&mut action, &mut action_spelling, name, argument)?;
             } else if argument == b"--load-avail" {
-                options.load_available = true;
+                options.occurrences.push(DpkgQueryOption::LoadAvailable);
             } else if argument == b"--no-pager" {
-                options.no_pager = true;
+                options.occurrences.push(DpkgQueryOption::NoPager);
             } else if argument == b"--admindir" {
-                options.admindir = Some(option_value(
-                    argv,
-                    &mut index,
-                    DPKG_QUERY,
-                    "--admindir",
-                    None,
-                )?);
+                let value = option_value(argv, &mut index, DPKG_QUERY, "--admindir", None)?;
+                options
+                    .occurrences
+                    .push(DpkgQueryOption::AdministrativeDirectory(value));
             } else if let Some(value) = long_value(argument, b"--admindir") {
-                options.admindir = Some(option_value(
-                    argv,
-                    &mut index,
-                    DPKG_QUERY,
-                    "--admindir",
-                    Some(value),
-                )?);
+                let value = option_value(argv, &mut index, DPKG_QUERY, "--admindir", Some(value))?;
+                options
+                    .occurrences
+                    .push(DpkgQueryOption::AdministrativeDirectory(value));
             } else if argument == b"--root" {
-                options.root = Some(option_value(argv, &mut index, DPKG_QUERY, "--root", None)?);
+                let value = option_value(argv, &mut index, DPKG_QUERY, "--root", None)?;
+                options.occurrences.push(DpkgQueryOption::Root(value));
             } else if let Some(value) = long_value(argument, b"--root") {
-                options.root = Some(option_value(
-                    argv,
-                    &mut index,
-                    DPKG_QUERY,
-                    "--root",
-                    Some(value),
-                )?);
+                let value = option_value(argv, &mut index, DPKG_QUERY, "--root", Some(value))?;
+                options.occurrences.push(DpkgQueryOption::Root(value));
             } else if argument == b"--showformat" || argument == b"-f" {
-                options.show_format = Some(option_value(
-                    argv,
-                    &mut index,
-                    DPKG_QUERY,
-                    "--showformat",
-                    None,
-                )?);
+                let value = option_value(argv, &mut index, DPKG_QUERY, "--showformat", None)?;
+                options.occurrences.push(DpkgQueryOption::ShowFormat(value));
             } else if let Some(value) = long_value(argument, b"--showformat") {
-                options.show_format = Some(option_value(
-                    argv,
-                    &mut index,
-                    DPKG_QUERY,
-                    "--showformat",
-                    Some(value),
-                )?);
+                let value =
+                    option_value(argv, &mut index, DPKG_QUERY, "--showformat", Some(value))?;
+                options.occurrences.push(DpkgQueryOption::ShowFormat(value));
             } else if let Some(value) = argument
                 .strip_prefix(b"-f")
                 .filter(|value| !value.is_empty())
             {
                 let value = value.strip_prefix(b"=").unwrap_or(value);
-                options.show_format = Some(option_value(
-                    argv,
-                    &mut index,
-                    DPKG_QUERY,
-                    "-f",
-                    Some(value),
-                )?);
+                let value = option_value(argv, &mut index, DPKG_QUERY, "-f", Some(value))?;
+                options.occurrences.push(DpkgQueryOption::ShowFormat(value));
             } else {
                 return Err(DpkgLifecycleGrammarError::UnknownOption {
                     tool: DPKG_QUERY,

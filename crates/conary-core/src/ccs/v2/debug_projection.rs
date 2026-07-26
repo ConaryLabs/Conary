@@ -1,6 +1,6 @@
 // conary-core/src/ccs/v2/debug_projection.rs
 
-use super::schema::{AuthorityDocumentV2, ConfigPolicyV2, PackageDataV2, PackageKindV2};
+use super::schema::{AuthorityDocumentV2, ConfigSemanticsV2, PackageDataV2, PackageKindV2};
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
@@ -63,12 +63,23 @@ fn validate_config_projection(
     }
 
     if let PackageKindV2::Package(package) = &authority.kind {
-        for (path, policy) in &debug_config {
-            let Some(file) = package.files.iter().find(|file| file.path == *path) else {
-                bail!("debug TOML config path {path} missing from signed file authority");
-            };
-            if file.config != Some(*policy) {
-                bail!("debug TOML config path {path} policy does not match signed file authority");
+        for (path, semantics) in &debug_config {
+            let signed_file = package.files.iter().find(|file| file.path == *path);
+            if semantics.ghost || semantics.remove_on_upgrade {
+                if signed_file.is_some() {
+                    bail!(
+                        "debug TOML config path {path} must be absent from signed file authority"
+                    );
+                }
+            } else {
+                let Some(file) = signed_file else {
+                    bail!("debug TOML config path {path} missing from signed file authority");
+                };
+                if file.config != Some(*semantics) {
+                    bail!(
+                        "debug TOML config path {path} semantics do not match signed file authority"
+                    );
+                }
             }
         }
         for file in &package.files {
@@ -86,25 +97,29 @@ fn validate_config_projection(
 
 fn debug_config_projection(
     manifest: &crate::ccs::manifest::CcsManifest,
-) -> BTreeMap<String, ConfigPolicyV2> {
-    let policy = if manifest.config.noreplace {
-        ConfigPolicyV2::NoReplace
-    } else {
-        ConfigPolicyV2::Replace
-    };
+) -> BTreeMap<String, ConfigSemanticsV2> {
     manifest
         .config
         .files
         .iter()
-        .map(|path| (path.clone(), policy))
+        .map(|entry| {
+            (
+                entry.path.clone(),
+                ConfigSemanticsV2 {
+                    noreplace: entry.noreplace,
+                    ghost: entry.ghost,
+                    remove_on_upgrade: entry.remove_on_upgrade,
+                },
+            )
+        })
         .collect()
 }
 
-fn signed_config_projection(package: &PackageDataV2) -> BTreeMap<String, ConfigPolicyV2> {
+fn signed_config_projection(package: &PackageDataV2) -> BTreeMap<String, ConfigSemanticsV2> {
     package
         .config
         .iter()
-        .map(|entry| (entry.path.clone(), entry.policy))
+        .map(|entry| (entry.path.clone(), entry.semantics))
         .collect()
 }
 
@@ -122,7 +137,7 @@ fn validate_lifecycle_projection(
     Ok(())
 }
 
-fn joined_keys(map: &BTreeMap<String, ConfigPolicyV2>) -> String {
+fn joined_keys(map: &BTreeMap<String, ConfigSemanticsV2>) -> String {
     map.keys().cloned().collect::<Vec<_>>().join(", ")
 }
 
@@ -141,9 +156,11 @@ release = "1"
 kind = "package"
 description = "demo package"
 
-[config]
-files = ["/etc/conary-example/config.toml"]
+[[config.files]]
+path = "/etc/conary-example/config.toml"
 noreplace = true
+ghost = false
+remove_on_upgrade = false
 "#;
         let authority = AuthorityDocumentV2::package_for_tests("demo");
         let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();

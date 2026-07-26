@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 34
-summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, and service boundaries
+last_updated: 2026-07-26
+revision: 36
+summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, typed generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -123,7 +123,7 @@ crates/conary-core/      Core library crate
     |   +-- mount.rs     composefs mount/unmount, current symlink
     |   +-- metadata.rs  Generation metadata (JSON)
     |   +-- composefs.rs composefs detection and feature probing
-    |   +-- gc.rs        Old generation garbage collection
+    |   +-- gc.rs        Typed local CAS reachability and object collection
     |   +-- delta.rs     EROFS image delta computation
     |   +-- composefs_rs_eval.rs composefs-rs evaluation (feature-gated)
     +-- activation/      Exact runtime work projected onto immutable generations
@@ -160,9 +160,8 @@ crates/conary-core/      Core library crate
     |   +-- resolution.rs Per-package routing strategies
     |   +-- dependency_model.rs Cross-distro dependency model (provides/requires/groups)
     |   +-- versioning.rs Cross-distro version scheme awareness
-    |   +-- resolution_policy.rs Candidate eligibility and ranking policy types
+    |   +-- resolution_policy.rs Exact source scope, mixing, and eligibility policy
     |   +-- effective_policy.rs Shared runtime source-policy loading from pins + settings
-    |   +-- latest_signal.rs Repology-backed latest-signal scoring for ranking
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
@@ -301,7 +300,8 @@ This is the primary operation. The flow from
 ```
 1. RESOLVE
    +-- Parse package specifier (name, version constraint, repo)
-   +-- Check per-package routing strategy (binary, remi, recipe, delegate)
+   +-- Check per-package routing strategy (Remi, delegate, or one exact
+       authenticated repository-package row)
    +-- Query repositories or Remi server for package metadata
    |   +-- Static indexes carry typed provides and requirement expressions
    |   +-- String dependency lists are not resolution authority
@@ -432,9 +432,10 @@ Generation-aware package mutation
 3. **Record**: Capture exact immutable and mutable-state manifests, persist the selected-root candidate, and record recoverable publication debt before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
 5. **Materialize state**: Seed the generation-local mutable-state tree from its exact manifest, then apply the ordered typed config transactions
-6. **Switch**: Validate the complete artifact, update `/conary/current`, write boot entries, and mark publication debt complete
-7. **Recover**: Retry from the persisted cumulative candidate; rollback records a new exact compensating selected root and removes terminal candidates
-8. **GC**: Remove old generations, keeping N most recent
+6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
+7. **Recover**: Under the runtime mutation lock, resume at the persisted phase and replay each remaining idempotent effect. A matching `/conary/current` link proves only link publication; it never implies configuration projection or database backup completion
+8. **Compensate**: Rollback records a new exact compensating selected root and removes terminal candidates
+9. **GC**: Remove old generations only after retaining every recoverable publication candidate and its typed CAS roots
 
 ### Generation Module (`crates/conary-core/src/generation/`)
 
@@ -454,7 +455,8 @@ root_manifest/composefs.rs (exact typed-root EROFS serialization). artifact.rs
 owns the exportable generation contract and boot assets; export.rs owns
 raw/qcow2 disk export from validated artifacts; mount.rs owns composefs
 mount/unmount; metadata.rs owns JSON
-metadata), gc.rs (old generation cleanup), delta.rs (EROFS image deltas), and
+metadata), gc.rs (typed CAS reachability and object collection), delta.rs
+(EROFS image deltas), and
 composefs.rs (runtime feature detection). Exact config policy and persisted
 snapshot types live in `crates/conary-core/src/config_transaction.rs`;
 `apps/conary/src/commands/generation/config_transaction.rs` captures live

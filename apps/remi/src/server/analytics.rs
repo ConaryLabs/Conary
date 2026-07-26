@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 
 /// A single download event to be recorded
 struct DownloadEvent {
-    distro: String,
+    source_profile: String,
     package_name: String,
     package_version: Option<String>,
     client_ip_hash: Option<String>,
@@ -46,16 +46,22 @@ impl AnalyticsRecorder {
     /// automatically flushes to the database.
     pub async fn record(
         &self,
-        distro: &str,
+        route_slug: &str,
         package: &str,
         version: Option<&str>,
         ip_hash: Option<&str>,
         ua: Option<&str>,
     ) {
+        let Some(source_profile) =
+            conary_core::repository::supported_profiles::profile_for_remi_route(route_slug)
+        else {
+            tracing::error!("refusing analytics event for unsupported public route '{route_slug}'");
+            return;
+        };
         let should_flush = {
             let mut buffer = self.buffer.lock().await;
             buffer.push(DownloadEvent {
-                distro: distro.to_string(),
+                source_profile: source_profile.id().to_string(),
                 package_name: package.to_string(),
                 package_version: version.map(String::from),
                 client_ip_hash: ip_hash.map(String::from),
@@ -89,7 +95,7 @@ impl AnalyticsRecorder {
         let stats: Vec<DownloadStat> = events
             .into_iter()
             .map(|e| {
-                let mut stat = DownloadStat::new(e.distro, e.package_name);
+                let mut stat = DownloadStat::new(e.source_profile, e.package_name);
                 stat.package_version = e.package_version;
                 stat.client_ip_hash = e.client_ip_hash;
                 stat.user_agent = e.user_agent;
@@ -242,12 +248,12 @@ mod tests {
 
         // Verify aggregated counts
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count = DownloadCount::find_by_package(&conn, "fedora", "nginx")
+        let count = DownloadCount::find_by_package(&conn, "fedora-44", "nginx")
             .unwrap()
             .unwrap();
         assert_eq!(count.total_count, 2);
 
-        let count = DownloadCount::find_by_package(&conn, "fedora", "curl")
+        let count = DownloadCount::find_by_package(&conn, "fedora-44", "curl")
             .unwrap()
             .unwrap();
         assert_eq!(count.total_count, 1);

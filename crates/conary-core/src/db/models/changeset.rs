@@ -6,6 +6,20 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use strum_macros::{AsRefStr, Display, EnumString};
 
+/// Semantic role of a changeset in the effective mutation lineage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum ChangesetKind {
+    Mutation,
+    Rollback,
+}
+
+impl ChangesetKind {
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
 /// Changeset status
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString)]
 #[strum(serialize_all = "snake_case")]
@@ -26,11 +40,14 @@ impl ChangesetStatus {
 pub struct Changeset {
     pub id: Option<i64>,
     pub description: String,
+    pub kind: ChangesetKind,
     pub status: ChangesetStatus,
     pub created_at: Option<String>,
     pub applied_at: Option<String>,
     pub rolled_back_at: Option<String>,
     pub reversed_by_changeset_id: Option<i64>,
+    /// The exact forward mutation reversed by a rollback changeset.
+    pub reverts_changeset_id: Option<i64>,
     /// Transaction UUID for crash recovery correlation
     pub tx_uuid: Option<String>,
     /// Serialized trove metadata snapshot stored before removal operations,
@@ -41,19 +58,21 @@ pub struct Changeset {
 
 impl Changeset {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, description, status, created_at, applied_at, \
-         rolled_back_at, reversed_by_changeset_id, tx_uuid, metadata";
+    const COLUMNS: &'static str = "id, description, kind, status, created_at, applied_at, \
+         rolled_back_at, reversed_by_changeset_id, reverts_changeset_id, tx_uuid, metadata";
 
     /// Create a new Changeset
     pub fn new(description: String) -> Self {
         Self {
             id: None,
             description,
+            kind: ChangesetKind::Mutation,
             status: ChangesetStatus::Pending,
             created_at: None,
             applied_at: None,
             rolled_back_at: None,
             reversed_by_changeset_id: None,
+            reverts_changeset_id: None,
             tx_uuid: None,
             metadata: None,
         }
@@ -64,12 +83,31 @@ impl Changeset {
         Self {
             id: None,
             description,
+            kind: ChangesetKind::Mutation,
             status: ChangesetStatus::Pending,
             created_at: None,
             applied_at: None,
             rolled_back_at: None,
             reversed_by_changeset_id: None,
+            reverts_changeset_id: None,
             tx_uuid: Some(tx_uuid),
+            metadata: None,
+        }
+    }
+
+    /// Create a typed rollback changeset for one exact forward mutation.
+    pub fn new_rollback(description: String, reverts_changeset_id: i64) -> Self {
+        Self {
+            id: None,
+            description,
+            kind: ChangesetKind::Rollback,
+            status: ChangesetStatus::Pending,
+            created_at: None,
+            applied_at: None,
+            rolled_back_at: None,
+            reversed_by_changeset_id: None,
+            reverts_changeset_id: Some(reverts_changeset_id),
+            tx_uuid: None,
             metadata: None,
         }
     }
@@ -77,8 +115,16 @@ impl Changeset {
     /// Insert this changeset into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO changesets (description, status, tx_uuid) VALUES (?1, ?2, ?3)",
-            params![&self.description, self.status.as_str(), &self.tx_uuid],
+            "INSERT INTO changesets
+             (description, kind, status, reverts_changeset_id, tx_uuid)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &self.description,
+                self.kind.as_str(),
+                self.status.as_str(),
+                self.reverts_changeset_id,
+                &self.tx_uuid
+            ],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -153,21 +199,27 @@ impl Changeset {
 
     /// Convert a database row to a Changeset
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let status_str: String = row.get(2)?;
-        let status = status_str.parse::<ChangesetStatus>().map_err(|e| {
+        let kind_str: String = row.get(2)?;
+        let kind = kind_str.parse::<ChangesetKind>().map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        let status_str: String = row.get(3)?;
+        let status = status_str.parse::<ChangesetStatus>().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
         Ok(Self {
             id: Some(row.get(0)?),
             description: row.get(1)?,
+            kind,
             status,
-            created_at: row.get(3)?,
-            applied_at: row.get(4)?,
-            rolled_back_at: row.get(5)?,
-            reversed_by_changeset_id: row.get(6)?,
-            tx_uuid: row.get(7)?,
-            metadata: row.get(8)?,
+            created_at: row.get(4)?,
+            applied_at: row.get(5)?,
+            rolled_back_at: row.get(6)?,
+            reversed_by_changeset_id: row.get(7)?,
+            reverts_changeset_id: row.get(8)?,
+            tx_uuid: row.get(9)?,
+            metadata: row.get(10)?,
         })
     }
 }

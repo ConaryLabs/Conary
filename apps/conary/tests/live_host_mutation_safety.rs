@@ -60,7 +60,7 @@ fn tree_snapshot(root: &Path, db_name: &str) -> Vec<(PathBuf, String, Vec<u8>)> 
 }
 
 #[test]
-fn install_refuses_without_live_mutation_flag() {
+fn install_with_yes_needs_no_retired_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();
 
@@ -76,7 +76,11 @@ fn install_refuses_without_live_mutation_flag() {
         "--yes",
     ]);
 
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "install with explicit apply intent failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
     assert!(!stderr.contains("may change packages"));
@@ -104,29 +108,6 @@ fn install_refuses_without_apply_intent_and_mentions_yes() {
     assert!(stderr.contains("--dry-run"));
     assert!(stderr.contains("--yes"));
     assert!(!stderr.contains("--allow-live-system-mutation"));
-}
-
-#[test]
-fn install_with_yes_reaches_underlying_package_resolution() {
-    let (_tmp, db_path) = common::setup_command_test_db();
-    let root = tempfile::tempdir().unwrap();
-
-    let output = run_conary(&[
-        "install",
-        "nginx",
-        "--db-path",
-        &db_path,
-        "--root",
-        root.path().to_str().unwrap(),
-        "--sandbox",
-        "always",
-        "--yes",
-    ]);
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("--allow-live-system-mutation"));
-    assert!(!stderr.contains("may mutate"));
 }
 
 #[test]
@@ -383,23 +364,12 @@ fn removed_global_flag_is_rejected_before_restore() {
 }
 
 #[test]
-fn excluded_system_gc_is_not_gated() {
-    let (_tmp, db_path) = common::setup_command_test_db();
-    let missing_objects = tempfile::tempdir().unwrap().path().join("objects");
+fn removed_system_gc_surface_is_rejected() {
+    let output = run_conary(&["system", "gc"]);
 
-    let output = run_conary(&[
-        "system",
-        "gc",
-        "--db-path",
-        &db_path,
-        "--objects-dir",
-        missing_objects.to_str().unwrap(),
-        "--dry-run",
-    ]);
-
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("--allow-live-system-mutation"));
+    assert!(stderr.contains("unrecognized subcommand 'gc'"));
 }
 
 #[test]
@@ -438,17 +408,6 @@ fn system_adopt_refresh_refuses_without_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
 
     let output = run_conary(&["system", "adopt", "--refresh", "--db-path", &db_path]);
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("--allow-live-system-mutation"));
-    assert!(!stderr.contains("may update Conary DB"));
-}
-
-#[test]
-fn system_adopt_convert_refuses_without_live_mutation_flag() {
-    let (_tmp, db_path) = common::setup_command_test_db();
-
-    let output = run_conary(&["system", "adopt", "--convert", "--db-path", &db_path]);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("--allow-live-system-mutation"));
@@ -500,13 +459,13 @@ if [ \"$1\" = \"--version\" ]; then
 fi
 case \"$3\" in
     *Description*)
-        printf 'fixture\\0361.2.3\\036amd64\\036Fixture package\\036Test maintainer\\036\\036utils\\036optional\\0361\\n'
+        printf 'fixture\\036fixture\\0361.2.3\\036amd64\\036Fixture package\\036Test maintainer\\036\\036utils\\036optional\\0361\\037'
         ;;
     *Depends*)
-        printf 'libc6 (>= 2.0)\\n'
+        printf '\\036libc6 (>= 2.0)\\037'
         ;;
     *Provides*)
-        printf 'fixture\\nfixture-capability\\n'
+        printf 'fixture\\036fixture\\036fixture-capability\\037'
         ;;
     *)
         exit 1
@@ -552,7 +511,8 @@ exit 1
 
     assert!(
         output.status.success(),
-        "preview failed: {}",
+        "preview failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);

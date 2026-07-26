@@ -361,6 +361,20 @@ impl ConfigFile {
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let status_str: String = row.get(10)?;
         let source_str: String = row.get(12)?;
+        let status = ConfigStatus::from_str(&status_str).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                10,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        let source = ConfigSource::from_str(&source_str).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                12,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
 
         Ok(Self {
             id: Some(row.get(0)?),
@@ -373,9 +387,9 @@ impl ConfigFile {
             noreplace: row.get::<_, i32>(7)? != 0,
             ghost: row.get::<_, i32>(8)? != 0,
             remove_on_upgrade: row.get::<_, i32>(9)? != 0,
-            status: ConfigStatus::parse(&status_str).unwrap_or(ConfigStatus::Pristine),
+            status,
             modified_at: row.get(11)?,
-            source: ConfigSource::parse(&source_str).unwrap_or(ConfigSource::Auto),
+            source,
         })
     }
 }

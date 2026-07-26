@@ -78,7 +78,7 @@ Pinned release candidate:
 https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
 
 Privacy-safe feedback form:
-https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
+https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md
 
 Adoption still exists as a migration path for systems already owned by another
 package manager, but it is not this test. The feedback I care about here is
@@ -170,7 +170,7 @@ native format. Conary owns packages it installs. Native package-manager
 adoption and explicit takeover remain migration features, not part of this
 tester ask.
 
-When finished or blocked, file privacy-safe feedback using the beta-feedback
+When finished or blocked, file privacy-safe feedback using the pre-alpha tester-feedback
 template. Record whether the full loop completed, the distro, source and host
 formats, pinned release, exact failing command, and exact contract error.
 Review any support bundle before attaching it. Do not include credentials,

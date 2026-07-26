@@ -216,7 +216,7 @@ run_setup() {
             --package-format json \
             --default-strategy remi \
             --remi-endpoint "$remi_endpoint" \
-            --remi-distro "$remi_distro" \
+            --source-profile "$remi_distro" \
             --db-path "$db_path" || return
     fi
     "$conary_bin" repo sync "$repo_name" --force --db-path "$db_path" || return

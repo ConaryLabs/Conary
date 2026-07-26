@@ -461,8 +461,16 @@ impl StaticPlanFixture {
 [package]
 name = "{name}"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "M3b fixture package"
 license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
 
 [provenance]
 origin_class = "native-built"
@@ -470,7 +478,7 @@ hardening_level = "hermetic"
 "#
         ))
         .unwrap();
-        let result = CcsBuilder::new(manifest, &source).build().unwrap();
+        let result = CcsBuilder::new(manifest, &source).unwrap().build().unwrap();
         write_signed_current_ccs_package(&result, &package, &self.key, false).unwrap();
         package
     }

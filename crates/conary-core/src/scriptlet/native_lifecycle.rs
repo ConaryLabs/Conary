@@ -527,6 +527,7 @@ mod tests {
         RpmBodyTransform, RpmCriticality, RpmHeaderContext, RpmHeaderFact, RpmHeaderFactSource,
         RpmHeaderValue, RpmMacroContext, RpmProgram, RpmRuntimeMetadata,
     };
+    use crate::scriptlet::test_support::materialized_root;
     use std::path::Path;
 
     fn native_lifecycle_execution_with_contracts(
@@ -725,9 +726,14 @@ mod tests {
 
     #[test]
     fn native_lifecycle_preflight_rejects_body_hash_mismatch() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::Always);
+        let Some(root) = materialized_root(
+            "scriptlet::native_lifecycle::tests::native_lifecycle_preflight_rejects_body_hash_mismatch",
+            &["/bin/sh"],
+        ) else {
+            return;
+        };
+        let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Rpm)
+            .with_sandbox_mode(SandboxMode::Always);
         let mode = ExecutionMode::Install;
         let runtime = NativeInvocationRuntime {
             mode: &mode,
@@ -759,9 +765,14 @@ mod tests {
 
     #[test]
     fn native_lifecycle_execution_uses_safe_path_and_derived_args() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb)
-                .with_sandbox_mode(SandboxMode::Always);
+        let Some(root) = materialized_root(
+            "scriptlet::native_lifecycle::tests::native_lifecycle_execution_uses_safe_path_and_derived_args",
+            &["/bin/sh"],
+        ) else {
+            return;
+        };
+        let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Deb)
+            .with_sandbox_mode(SandboxMode::Always);
         let contracts = vec![
             "1:old-version=old-version".to_string(),
             "2:new-version=new-version".to_string(),
@@ -796,9 +807,14 @@ mod tests {
     fn debian_binary_maintainer_body_executes_as_exact_bytes() {
         use base64::Engine as _;
 
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Deb)
-                .with_sandbox_mode(SandboxMode::Always);
+        let Some(root) = materialized_root(
+            "scriptlet::native_lifecycle::tests::debian_binary_maintainer_body_executes_as_exact_bytes",
+            &["/bin/sh"],
+        ) else {
+            return;
+        };
+        let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Deb)
+            .with_sandbox_mode(SandboxMode::Always);
         let bytes = b"exit 0\n# binary suffix: \xff\n";
         let execution = NativeLifecycleExecution {
             body: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -860,9 +876,14 @@ mod tests {
 
     #[test]
     fn rpm_native_lifecycle_executes_query_format_and_embedded_lua_programs() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Rpm)
-                .with_sandbox_mode(SandboxMode::Always);
+        let Some(root) = materialized_root(
+            "scriptlet::native_lifecycle::tests::rpm_native_lifecycle_executes_query_format_and_embedded_lua_programs",
+            &["/bin/sh"],
+        ) else {
+            return;
+        };
+        let executor = ScriptletExecutor::new(root.path(), "test-pkg", "1.0.0", PackageFormat::Rpm)
+            .with_sandbox_mode(SandboxMode::Always);
         let mode = ExecutionMode::Install;
         let args = ["1".to_string()];
         let invocation = NativeInvocationRuntime {

@@ -21,7 +21,7 @@ fn test_to_trove_conversion() {
         vendor: Some("Test Vendor".to_string()),
         license: Some("MIT".to_string()),
         url: Some("https://example.com".to_string()),
-        payload: Vec::new(),
+        payload: PackagePayload::default(),
     };
 
     let trove = rpm.to_trove();
@@ -44,7 +44,7 @@ fn test_provenance_accessors() {
         vendor: Some("Vendor".to_string()),
         license: Some("GPL".to_string()),
         url: Some("https://test.com".to_string()),
-        payload: Vec::new(),
+        payload: PackagePayload::default(),
     };
 
     assert_eq!(rpm.source_rpm(), Some("test-1.0.src.rpm"));
@@ -59,6 +59,25 @@ fn test_parse_nonexistent_file() {
     // Test that parsing a nonexistent file returns an error
     let result = RpmPackage::parse("/nonexistent/file.rpm");
     assert!(result.is_err());
+}
+
+#[test]
+fn rpm_artifact_parser_preserves_nonzero_epoch_in_version_identity() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let package_path = temp_dir.path().join("epoch-fixture.rpm");
+    let mut builder = rpm::PackageBuilder::new(
+        "epoch-fixture",
+        "2.0",
+        "MIT",
+        "x86_64",
+        "RPM epoch identity fixture",
+    );
+    builder.epoch(7).release("3.fc44");
+    builder.build().unwrap().write_file(&package_path).unwrap();
+
+    let parsed = RpmPackage::parse(package_path.to_str().unwrap()).unwrap();
+
+    assert_eq!(parsed.version(), "7:2.0-3.fc44");
 }
 
 #[test]
@@ -112,26 +131,166 @@ fn rpm_header_relation_rejects_comparison_without_version() {
 }
 
 #[test]
-fn rpm_package_manager_features_are_consumed_before_requirement_authority() {
+fn rpm_runtime_features_are_validated_without_becoming_package_requirements() {
     let mut builder =
         rpm::PackageBuilder::new("feature-consumer", "1", "MIT", "x86_64", "feature fixture");
     builder
         .requires(rpm::Dependency {
             name: "rpmlib(CompressedFileNames)".to_string(),
-            flags: DependencyFlags::RPMLIB,
+            flags: DependencyFlags::RPMLIB | DependencyFlags::LESS | DependencyFlags::EQUAL,
             version: "3.0.4-1".to_string(),
         })
         .requires(rpm::Dependency {
             name: "config(feature-consumer)".to_string(),
-            flags: DependencyFlags::CONFIG,
-            version: String::new(),
+            flags: DependencyFlags::CONFIG | DependencyFlags::EQUAL,
+            version: "1-1".to_string(),
         });
     let package = builder.build().unwrap();
 
+    let requirements = RpmPackage::extract_requirements(&package).unwrap();
+    assert_eq!(requirements.len(), 1);
+    assert_eq!(
+        requirements[0].native_text.as_deref(),
+        Some("config(feature-consumer) = 1-1")
+    );
     assert!(
-        RpmPackage::extract_requirements(&package)
-            .unwrap()
-            .is_empty()
+        requirements
+            .iter()
+            .flat_map(|group| group.expression.atoms())
+            .all(|clause| !clause.name.starts_with("rpmlib("))
+    );
+}
+
+#[test]
+fn rpm_artifact_rejects_unimplemented_runtime_feature() {
+    let mut builder = rpm::PackageBuilder::new(
+        "feature-consumer",
+        "1",
+        "MIT",
+        "x86_64",
+        "unsupported feature fixture",
+    );
+    builder.requires(rpm::Dependency {
+        name: "rpmlib(ConcurrentAccess)".to_string(),
+        flags: DependencyFlags::RPMLIB | DependencyFlags::LESS | DependencyFlags::EQUAL,
+        version: "4.1-1".to_string(),
+    });
+
+    let error = RpmPackage::extract_requirements(&builder.build().unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not implement RPM runtime capability"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rpm_artifact_rejects_short_circuited_build_marker() {
+    let mut builder = rpm::PackageBuilder::new(
+        "short-circuited",
+        "1",
+        "MIT",
+        "x86_64",
+        "invalid short-circuit build fixture",
+    );
+    builder.requires(rpm::Dependency {
+        name: "rpmlib(ShortCircuited)".to_string(),
+        flags: DependencyFlags::RPMLIB | DependencyFlags::LESS | DependencyFlags::EQUAL,
+        version: "4.9.0-1".to_string(),
+    });
+
+    let error = RpmPackage::extract_requirements(&builder.build().unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("packaged without completing an RPM build phase"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rpm_runtime_true_short_circuits_a_mixed_rich_or_requirement() {
+    let mut builder = rpm::PackageBuilder::new(
+        "feature-consumer",
+        "1",
+        "MIT",
+        "x86_64",
+        "mixed rich runtime fixture",
+    );
+    builder.requires(rpm::Dependency::any(
+        "(missing-provider or rpmlib(CompressedFileNames) <= 3.0.4-1)",
+    ));
+
+    let requirements = RpmPackage::extract_requirements(&builder.build().unwrap()).unwrap();
+
+    assert!(requirements.is_empty());
+}
+
+#[test]
+fn rpm_config_dependency_and_provide_remain_package_capability_authority() {
+    let mut builder =
+        rpm::PackageBuilder::new("config-owner", "1", "MIT", "x86_64", "config fixture");
+    builder
+        .requires(rpm::Dependency::config("config-owner", "1-1"))
+        .provides(rpm::Dependency::config("config-owner", "1-1"));
+    let package = builder.build().unwrap();
+
+    let requirements = RpmPackage::extract_requirements(&package).unwrap();
+    let provides = RpmPackage::extract_provides(&package).unwrap();
+
+    assert!(requirements.iter().any(|requirement| {
+        requirement.native_text.as_deref() == Some("config(config-owner) = 1-1")
+    }));
+    assert!(provides.iter().any(|provide| {
+        provide.name == "config(config-owner)" && provide.version.as_deref() == Some("1-1")
+    }));
+}
+
+#[test]
+fn rpm_package_cannot_forge_package_manager_runtime_provides() {
+    let mut builder =
+        rpm::PackageBuilder::new("forger", "1", "MIT", "x86_64", "runtime forgery fixture");
+    builder.provides(rpm::Dependency::rpmlib("CompressedFileNames", "3.0.4-1"));
+
+    let error = RpmPackage::extract_provides(&builder.build().unwrap()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("typed runtime ledger is the sole authority"),
+        "{error}"
+    );
+}
+
+#[test]
+fn rpm_reserved_sense_bits_require_their_exact_namespaces() {
+    let mut bad_runtime =
+        rpm::PackageBuilder::new("bad-runtime", "1", "MIT", "x86_64", "bad runtime sense");
+    bad_runtime.requires(rpm::Dependency {
+        name: "ordinary-package".to_string(),
+        flags: DependencyFlags::RPMLIB,
+        version: String::new(),
+    });
+    assert!(
+        RpmPackage::extract_requirements(&bad_runtime.build().unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("outside the rpmlib(Feature) grammar")
+    );
+
+    let mut bad_config =
+        rpm::PackageBuilder::new("bad-config", "1", "MIT", "x86_64", "bad config sense");
+    bad_config.provides(rpm::Dependency {
+        name: "ordinary-capability".to_string(),
+        flags: DependencyFlags::CONFIG,
+        version: String::new(),
+    });
+    assert!(
+        RpmPackage::extract_provides(&bad_config.build().unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("outside the config(Name) grammar")
     );
 }
 

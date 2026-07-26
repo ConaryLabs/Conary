@@ -15,6 +15,21 @@ fn setup_test_db() -> (tempfile::TempDir, Connection) {
     (temp_dir, conn)
 }
 
+/// SAT algebra tests deliberately remove source-selection constraints. Strict
+/// transaction-profile behavior is covered by the policy and app transaction
+/// tests; these fixtures exercise version, relation, and Boolean semantics.
+fn solve_install(
+    conn: &Connection,
+    requests: &[(String, VersionConstraint)],
+) -> Result<SatResolution> {
+    solve_install_with_policy(
+        conn,
+        requests,
+        &ResolutionPolicy::new()
+            .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
+    )
+}
+
 fn insert_repo_requirement_group(
     conn: &Connection,
     repository_package_id: i64,
@@ -49,6 +64,56 @@ fn insert_repo_requirement_group(
     )
     .insert(conn)
     .unwrap();
+}
+
+fn insert_typed_repo_requirement_group(
+    conn: &Connection,
+    repository_package_id: i64,
+    requirement: &crate::repository::dependency_model::RepositoryRequirementGroup,
+) {
+    let mut group = RepositoryRequirementGroup::new(
+        repository_package_id,
+        requirement.kind.as_str().to_string(),
+        "hard".to_string(),
+        serde_json::to_string(&requirement.expression).unwrap(),
+    );
+    group.native_text = requirement.native_text.clone();
+    let group_id = group.insert(conn).unwrap();
+    for clause in &requirement.alternatives {
+        RepositoryRequirement::new(
+            repository_package_id,
+            group_id,
+            clause.name.clone(),
+            clause.version_constraint.clone(),
+            "package".to_string(),
+            "runtime".to_string(),
+            clause.native_text.clone(),
+        )
+        .insert(conn)
+        .unwrap();
+    }
+}
+
+fn insert_debian_repo_package(
+    conn: &Connection,
+    repository_id: i64,
+    name: &str,
+    version: &str,
+    architecture: &str,
+    multi_arch: crate::repository::dependency_model::DebianMultiArch,
+) -> i64 {
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        name.to_string(),
+        version.to_string(),
+        VersionScheme::Debian,
+        format!("sha256:{name}-{version}-{architecture}"),
+        1,
+        format!("https://debian.invalid/{name}_{version}_{architecture}.deb"),
+    );
+    package.architecture = Some(architecture.to_string());
+    package.debian_multi_arch = Some(multi_arch);
+    package.insert(conn).unwrap()
 }
 
 #[test]
@@ -88,6 +153,7 @@ fn insert_rpm_trove(
         TroveType::Package,
         VersionScheme::Rpm,
     );
+    trove.architecture = Some("x86_64".to_string());
     let trove_id = trove.insert(conn).unwrap();
 
     let requirements = deps
@@ -275,6 +341,7 @@ fn test_sat_install_uses_repo_native_debian_constraints_via_provider() {
         1,
         "https://archive.ubuntu.com/ubuntu/pool/main/m/myapp.deb".to_string(),
     );
+    app.architecture = Some("amd64".to_string());
     app.insert(&conn).unwrap();
     let app_id = app.id.unwrap();
 
@@ -295,6 +362,7 @@ fn test_sat_install_uses_repo_native_debian_constraints_via_provider() {
         1,
         "https://archive.ubuntu.com/ubuntu/pool/main/libf/libfoo.deb".to_string(),
     );
+    libfoo.architecture = Some("amd64".to_string());
     libfoo.insert(&conn).unwrap();
 
     let result = solve_install(&conn, &[("myapp".to_string(), VersionConstraint::Any)]).unwrap();
@@ -328,6 +396,7 @@ fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
         1,
         "https://geo.mirror.pkgbuild.com/core/os/x86_64/ripgrep.pkg.tar.zst".to_string(),
     );
+    app.architecture = Some("x86_64".to_string());
     app.insert(&conn).unwrap();
     let app_id = app.id.unwrap();
 
@@ -348,6 +417,7 @@ fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
         1,
         "https://geo.mirror.pkgbuild.com/core/os/x86_64/glibc.pkg.tar.zst".to_string(),
     );
+    glibc.architecture = Some("x86_64".to_string());
     glibc.insert(&conn).unwrap();
 
     let result = solve_install(&conn, &[("ripgrep".to_string(), VersionConstraint::Any)]).unwrap();
@@ -360,6 +430,171 @@ fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
         .collect();
     assert!(names.contains(&"ripgrep"));
     assert!(names.contains(&"glibc"));
+}
+
+#[test]
+fn debian_multi_arch_qualifiers_reach_sat_without_name_suffix_matching() {
+    use crate::repository::dependency_model::{DebianMultiArch, RepositoryRequirementKind};
+
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "debian-multiarch".to_string(),
+        "https://debian.invalid".to_string(),
+    );
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let any_consumer = insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "any-consumer",
+        "1",
+        "amd64",
+        DebianMultiArch::No,
+    );
+    let any_requirement = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Debian,
+        "liballowed:any",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(&conn, any_consumer, &any_requirement);
+    insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "liballowed",
+        "1",
+        "arm64",
+        DebianMultiArch::Allowed,
+    );
+
+    let any_result = solve_install(
+        &conn,
+        &[("any-consumer".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(any_result.conflict_message.is_none(), "{any_result:?}");
+    assert!(
+        any_result
+            .install_order
+            .iter()
+            .any(|package| package.name == "liballowed")
+    );
+
+    let native_consumer = insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "native-consumer",
+        "1",
+        "all",
+        DebianMultiArch::No,
+    );
+    let native_requirement = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Debian,
+        "libnative:native",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(&conn, native_consumer, &native_requirement);
+    insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "libnative",
+        "1",
+        "amd64",
+        DebianMultiArch::No,
+    );
+    insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "libnative",
+        "2",
+        "arm64",
+        DebianMultiArch::No,
+    );
+
+    let native_result = solve_install(
+        &conn,
+        &[("native-consumer".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(
+        native_result.conflict_message.is_none(),
+        "{native_result:?}"
+    );
+    assert!(
+        native_result
+            .install_order
+            .iter()
+            .any(|package| { package.name == "libnative" && package.version == "1" })
+    );
+    assert!(
+        !native_result
+            .install_order
+            .iter()
+            .any(|package| { package.name == "libnative" && package.version == "2" })
+    );
+}
+
+#[test]
+fn debian_explicit_any_provide_reaches_sat_as_architecture_authority() {
+    use crate::repository::dependency_model::{
+        DebianMultiArch, ProvideArchitectureQualifier, RepositoryRequirementKind,
+    };
+
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "debian-provides".to_string(),
+        "https://debian.invalid".to_string(),
+    );
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let consumer = insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "mail-client",
+        "1",
+        "amd64",
+        DebianMultiArch::No,
+    );
+    let requirement = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Debian,
+        "mail-api:any",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(&conn, consumer, &requirement);
+
+    let provider = insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "mail-provider",
+        "1",
+        "arm64",
+        DebianMultiArch::No,
+    );
+    let mut provide = RepositoryProvide::new(
+        provider,
+        "mail-api".to_string(),
+        None,
+        "virtual".to_string(),
+        Some("mail-api:any".to_string()),
+        VersionScheme::Debian,
+    )
+    .with_architecture_qualifier(ProvideArchitectureQualifier::Any);
+    provide.insert(&conn).unwrap();
+
+    let result = solve_install(
+        &conn,
+        &[("mail-client".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert!(
+        result
+            .install_order
+            .iter()
+            .any(|package| package.name == "mail-provider")
+    );
 }
 
 // ==========================================================================
@@ -413,8 +648,12 @@ fn insert_virtual_provide(
 
 fn insert_provide(conn: &Connection, trove_id: i64, capability: &str, version: Option<&str>) {
     use crate::db::models::ProvideEntry;
-    let mut provide =
-        ProvideEntry::new(trove_id, capability.to_string(), version.map(String::from));
+    let mut provide = ProvideEntry::new(
+        trove_id,
+        capability.to_string(),
+        version.map(String::from),
+        VersionScheme::Rpm,
+    );
     provide.insert_or_ignore(conn).unwrap();
 }
 

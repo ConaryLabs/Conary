@@ -160,8 +160,31 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     // Write control file
     fs::write(control_dir.join("control"), &control)?;
 
-    // Write conffiles if any
-    let conffiles: Vec<_> = manifest.config.files.iter().map(String::as_str).collect();
+    // Write only semantics that Debian's exact conffile grammar can express.
+    let conffiles = manifest
+        .config
+        .files
+        .iter()
+        .map(|config| {
+            if config.ghost {
+                anyhow::bail!(
+                    "Debian export cannot represent ghost config path {}",
+                    config.path
+                );
+            }
+            if !config.noreplace {
+                anyhow::bail!(
+                    "Debian export cannot represent replacing config path {}",
+                    config.path
+                );
+            }
+            Ok(if config.remove_on_upgrade {
+                format!("remove-on-upgrade {}", config.path)
+            } else {
+                config.path.clone()
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     if !conffiles.is_empty() {
         fs::write(control_dir.join("conffiles"), conffiles.join("\n") + "\n")?;
     }

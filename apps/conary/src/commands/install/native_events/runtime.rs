@@ -15,19 +15,46 @@ struct EntryRuntimeContext {
     package_instance_count: Option<u32>,
 }
 
+pub(super) struct EntryInvocation<'a> {
+    entry_id: &'a str,
+    mode: &'a ExecutionMode,
+    args: &'a [String],
+    stdin: &'a [u8],
+    deb_package_refcount: Option<u32>,
+}
+
+impl<'a> EntryInvocation<'a> {
+    pub(super) const fn new(
+        entry_id: &'a str,
+        mode: &'a ExecutionMode,
+        args: &'a [String],
+        stdin: &'a [u8],
+        deb_package_refcount: Option<u32>,
+    ) -> Self {
+        Self {
+            entry_id,
+            mode,
+            args,
+            stdin,
+            deb_package_refcount,
+        }
+    }
+}
+
 pub(super) fn execute_entry(
     owner: &NativeBundleOwner,
     executor: &ScriptletExecutor,
-    entry_id: &str,
-    mode: &ExecutionMode,
-    args: &[String],
-    stdin: &[u8],
-    deb_package_refcount: Option<u32>,
+    invocation: EntryInvocation<'_>,
 ) -> Result<()> {
-    let entry = bundle_entry_for_event(owner, entry_id)?;
-    let context = entry_runtime_context(owner, entry, deb_package_refcount)?;
+    let entry = bundle_entry_for_event(owner, invocation.entry_id)?;
+    let context = entry_runtime_context(owner, entry, invocation.deb_package_refcount)?;
     let execution = native_lifecycle_execution(entry, &context.environment);
-    let runtime = native_invocation_runtime(mode, context.package_instance_count, args, stdin);
+    let runtime = native_invocation_runtime(
+        invocation.mode,
+        context.package_instance_count,
+        invocation.args,
+        invocation.stdin,
+    );
     let outcome = if let Some(rpm) = &entry.rpm_runtime {
         executor.execute_rpm_native_lifecycle_entry_with_outcome(&execution, &runtime, rpm)
     } else {
@@ -39,17 +66,18 @@ pub(super) fn execute_entry(
 pub(super) fn preflight_entry(
     owner: &NativeBundleOwner,
     executor: &ScriptletExecutor,
-    entry_id: &str,
-    mode: &ExecutionMode,
-    args: &[String],
-    stdin: &[u8],
+    invocation: EntryInvocation<'_>,
     interpreter_availability: NativeInterpreterAvailability,
-    deb_package_refcount: Option<u32>,
 ) -> Result<()> {
-    let entry = bundle_entry_for_event(owner, entry_id)?;
-    let context = entry_runtime_context(owner, entry, deb_package_refcount)?;
+    let entry = bundle_entry_for_event(owner, invocation.entry_id)?;
+    let context = entry_runtime_context(owner, entry, invocation.deb_package_refcount)?;
     let execution = native_lifecycle_execution(entry, &context.environment);
-    let runtime = native_invocation_runtime(mode, context.package_instance_count, args, stdin);
+    let runtime = native_invocation_runtime(
+        invocation.mode,
+        context.package_instance_count,
+        invocation.args,
+        invocation.stdin,
+    );
     if let Some(rpm) = &entry.rpm_runtime {
         executor.preflight_rpm_native_lifecycle_entry(
             &execution,

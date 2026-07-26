@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Component, Path, PathBuf};
 
+mod content;
 mod recovery;
+pub(crate) use content::LiveRootContent;
 pub(crate) use recovery::recover_pending_journals;
 #[cfg(test)]
 pub(crate) use recovery::recover_pending_journals_with_changesets;
@@ -23,7 +25,7 @@ const JOURNAL_SCHEMA: &str = "conary.live-root-journal.v2";
 #[derive(Debug, Clone)]
 pub(crate) struct LiveRootFile {
     pub path: String,
-    pub content: Vec<u8>,
+    pub content: LiveRootContent,
     pub node: ResolvedPayloadNode,
 }
 
@@ -507,10 +509,13 @@ fn preflight_install_files(files: &[LiveRootFile]) -> Result<()> {
             .validate()
             .with_context(|| format!("Invalid payload node {}", file.path))?;
         match file.node.source.kind {
+            PayloadNodeKind::Regular { .. } if file.content.is_absent() => {
+                bail!("regular payload node {} has no content stream", file.path);
+            }
             PayloadNodeKind::Regular { .. } => {}
-            _ if !file.content.is_empty() => {
+            _ if !file.content.is_absent() => {
                 bail!(
-                    "non-regular payload node {} carries content bytes",
+                    "non-regular payload node {} carries a content stream",
                     file.path
                 );
             }
@@ -604,8 +609,8 @@ fn create_live_root_leaf(root: &Path, path: &Path, file: &LiveRootFile) -> Resul
                 .create_new(true)
                 .open(path)
                 .with_context(|| format!("Failed to create {}", path.display()))?;
-            output
-                .write_all(&file.content)
+            file.content
+                .copy_verified_to(&mut output)
                 .with_context(|| format!("Failed to write {}", path.display()))?;
             output
                 .sync_all()

@@ -11,8 +11,10 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
-    ConditionalRequirementBehavior, RepositoryRequirementExpression, RepositoryRequirementKind,
+    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryRequirementExpression,
+    RepositoryRequirementKind,
 };
+use crate::repository::rpm_runtime::RpmRuntimeRequirement;
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint};
 use crate::resolver::identity::ProvidedCapability;
 
@@ -27,6 +29,12 @@ pub(super) fn load_repo_dependency_requests(
     _repo: &crate::db::models::Repository,
 ) -> Result<Vec<SolverDep>> {
     let package_scheme = pkg.version_scheme;
+    let package_architecture = pkg.architecture.as_deref().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "repository package '{}-{}' has no architecture authority",
+            pkg.name, pkg.version
+        ))
+    })?;
     let repository_package_id = pkg.id.ok_or_else(|| {
         Error::MissingId(format!(
             "repository package '{}-{}' has no persisted ID while loading dependencies",
@@ -48,7 +56,7 @@ pub(super) fn load_repo_dependency_requests(
         )));
     }
 
-    load_grouped_dependency_requests(conn, &groups, package_scheme)
+    load_grouped_dependency_requests(conn, &groups, package_scheme, package_architecture)
 }
 
 /// Load dependency requests using the group-based model.
@@ -59,6 +67,7 @@ fn load_grouped_dependency_requests(
     _conn: &rusqlite::Connection,
     groups: &[RepositoryRequirementGroup],
     package_scheme: VersionScheme,
+    package_architecture: &str,
 ) -> Result<Vec<SolverDep>> {
     let mut deps = Vec::new();
 
@@ -79,7 +88,11 @@ fn load_grouped_dependency_requests(
                     ))
                 })?;
         deps.push(SolverDep {
-            expression: repository_expression_to_solver(&expression, package_scheme)?,
+            expression: repository_expression_to_solver_for_architecture(
+                &expression,
+                package_scheme,
+                package_architecture,
+            )?,
         });
     }
 
@@ -90,10 +103,30 @@ pub(crate) fn repository_expression_to_solver(
     expression: &RepositoryRequirementExpression,
     scheme: VersionScheme,
 ) -> Result<SolverExpression> {
+    let native_architecture = crate::repository::registry::detect_system_arch();
+    repository_expression_to_solver_for_architecture(expression, scheme, &native_architecture)
+}
+
+fn repository_expression_to_solver_for_architecture(
+    expression: &RepositoryRequirementExpression,
+    scheme: VersionScheme,
+    depending_architecture: &str,
+) -> Result<SolverExpression> {
     use RepositoryRequirementExpression as Source;
 
     match expression {
         Source::Atom(clause) => {
+            if let Some(requirement) = RpmRuntimeRequirement::from_clause(clause, scheme)
+                .map_err(|error| Error::ConfigError(error.to_string()))?
+            {
+                requirement
+                    .ensure_supported()
+                    .map_err(|error| Error::ConfigError(error.to_string()))?;
+                return Ok(SolverExpression::atom(
+                    requirement.feature.capability().to_string(),
+                    ConaryConstraint::RpmRuntime(requirement),
+                ));
+            }
             let raw = clause.version_constraint.clone();
             let constraint = match raw.as_deref() {
                 Some(value) => parse_repo_constraint(scheme, value).map_err(|error| {
@@ -109,20 +142,35 @@ pub(crate) fn repository_expression_to_solver(
                 ConaryConstraint::Repository {
                     scheme,
                     constraint,
+                    capability_kind: clause.capability_kind,
                     raw,
+                    architecture_qualifier: clause.architecture_qualifier.clone(),
+                    depending_architecture: depending_architecture.to_string(),
                 },
             ))
         }
         Source::And(operands) => Ok(SolverExpression::And(
             operands
                 .iter()
-                .map(|operand| repository_expression_to_solver(operand, scheme))
+                .map(|operand| {
+                    repository_expression_to_solver_for_architecture(
+                        operand,
+                        scheme,
+                        depending_architecture,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?,
         )),
         Source::Or(operands) => Ok(SolverExpression::Or(
             operands
                 .iter()
-                .map(|operand| repository_expression_to_solver(operand, scheme))
+                .map(|operand| {
+                    repository_expression_to_solver_for_architecture(
+                        operand,
+                        scheme,
+                        depending_architecture,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?,
         )),
         Source::If {
@@ -130,8 +178,16 @@ pub(crate) fn repository_expression_to_solver(
             condition,
             otherwise,
         } => {
-            let requirement = repository_expression_to_solver(requirement, scheme)?;
-            let condition = repository_expression_to_solver(condition, scheme)?;
+            let requirement = repository_expression_to_solver_for_architecture(
+                requirement,
+                scheme,
+                depending_architecture,
+            )?;
+            let condition = repository_expression_to_solver_for_architecture(
+                condition,
+                scheme,
+                depending_architecture,
+            )?;
             let first = SolverExpression::Or(vec![
                 SolverExpression::Not(Box::new(condition.clone())),
                 requirement,
@@ -141,7 +197,11 @@ pub(crate) fn repository_expression_to_solver(
                     first,
                     SolverExpression::Or(vec![
                         condition,
-                        repository_expression_to_solver(otherwise, scheme)?,
+                        repository_expression_to_solver_for_architecture(
+                            otherwise,
+                            scheme,
+                            depending_architecture,
+                        )?,
                     ]),
                 ]),
                 None => first,
@@ -152,15 +212,27 @@ pub(crate) fn repository_expression_to_solver(
             condition,
             otherwise,
         } => {
-            let requirement = repository_expression_to_solver(requirement, scheme)?;
-            let condition = repository_expression_to_solver(condition, scheme)?;
+            let requirement = repository_expression_to_solver_for_architecture(
+                requirement,
+                scheme,
+                depending_architecture,
+            )?;
+            let condition = repository_expression_to_solver_for_architecture(
+                condition,
+                scheme,
+                depending_architecture,
+            )?;
             let first = SolverExpression::Or(vec![condition.clone(), requirement]);
             Ok(match otherwise {
                 Some(otherwise) => SolverExpression::And(vec![
                     first,
                     SolverExpression::Or(vec![
                         SolverExpression::Not(Box::new(condition)),
-                        repository_expression_to_solver(otherwise, scheme)?,
+                        repository_expression_to_solver_for_architecture(
+                            otherwise,
+                            scheme,
+                            depending_architecture,
+                        )?,
                     ]),
                 ]),
                 None => first,
@@ -273,6 +345,7 @@ pub(super) fn load_installed_relations(
 pub(super) fn load_installed_dependency_requests(
     conn: &rusqlite::Connection,
     trove_id: i64,
+    package_architecture: &str,
 ) -> Result<Vec<SolverDep>> {
     InstalledRequirementGroup::find_by_trove(conn, trove_id)?
         .into_iter()
@@ -284,16 +357,17 @@ pub(super) fn load_installed_dependency_requests(
         })
         .map(|record| {
             Ok(SolverDep {
-                expression: repository_expression_to_solver(
+                expression: repository_expression_to_solver_for_architecture(
                     &record.requirement.expression,
                     record.version_scheme,
+                    package_architecture,
                 )?,
             })
         })
         .collect()
 }
 
-/// Load provided capabilities for a repository package as simple (name, version) pairs.
+/// Load exact typed provided capabilities for a repository package.
 pub(super) fn load_repo_provided_capabilities(
     conn: &rusqlite::Connection,
     pkg: &RepositoryPackage,
@@ -311,28 +385,34 @@ pub(super) fn load_repo_provided_capabilities(
         return Ok(Vec::new());
     }
 
-    let mut capabilities = Vec::new();
-    for row in rows {
-        let typed = if row.kind == "package" || row.kind.is_empty() {
-            row.capability.clone()
-        } else {
-            format!("{}({})", row.kind, row.capability)
-        };
-        capabilities.push(ProvidedCapability {
-            name: row.capability.clone(),
-            version: row.version.clone(),
-            version_scheme: row.version_scheme,
-        });
-        if typed != row.capability {
-            capabilities.push(ProvidedCapability {
-                name: typed,
+    rows.into_iter()
+        .map(|row| {
+            Ok(ProvidedCapability {
+                kind: capability_kind_from_db(&row.kind)?,
+                name: row.capability,
                 version: row.version,
+                version_relation: row.version_relation,
                 version_scheme: row.version_scheme,
-            });
-        }
-    }
+                architecture_qualifier: row.architecture_qualifier,
+            })
+        })
+        .collect()
+}
 
-    Ok(capabilities)
+fn capability_kind_from_db(kind: &str) -> Result<RepositoryCapabilityKind> {
+    match kind {
+        "package" => Ok(RepositoryCapabilityKind::PackageName),
+        "virtual" => Ok(RepositoryCapabilityKind::Virtual),
+        "soname" => Ok(RepositoryCapabilityKind::Soname),
+        "file" => Ok(RepositoryCapabilityKind::File),
+        "path" => Ok(RepositoryCapabilityKind::Path),
+        "binary" => Ok(RepositoryCapabilityKind::Binary),
+        "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "generic" => Ok(RepositoryCapabilityKind::Generic),
+        other => Err(Error::ConfigError(format!(
+            "unsupported persisted repository capability kind '{other}'"
+        ))),
+    }
 }
 
 /// Find a repository package by its ID.

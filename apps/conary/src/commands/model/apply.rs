@@ -9,18 +9,19 @@ use super::presentation::{
     is_replatform_action, is_source_policy_action, print_source_policy_and_replatform,
     render_replatform_summary, source_policy_replatform_note, source_policy_summary,
 };
+use crate::commands::install::cmd_install_replatform;
 use crate::commands::replatform_rendering::{
     render_replatform_blocked_reason, render_replatform_execution_plan,
 };
 use crate::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove};
-use anyhow::{Result, anyhow};
-use conary_core::db::models::{DistroPin, Repository, Trove, settings};
+use anyhow::{Context, Result, anyhow};
+use conary_core::db::models::{
+    DistroPin, Repository, RepositoryPackage, Trove, TroveType, settings,
+};
 use conary_core::filesystem::CasStore;
 use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, replatform_execution_plan};
-use conary_core::repository::{
-    SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE, resolution_policy::SelectionMode,
-};
+use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
 use derived::{build_derived_package, create_derived_from_model};
 use rusqlite::Connection;
 #[cfg(test)]
@@ -248,8 +249,7 @@ pub(super) fn apply_source_policy_changes(
     for action in actions {
         match action {
             DiffAction::SetSourcePin { distro, strength } => {
-                let strength = strength.as_deref().unwrap_or("guarded");
-                DistroPin::set(conn, distro, strength)?;
+                DistroPin::set(conn, distro, *strength)?;
                 println!("Updated source policy pin: {} ({})", distro, strength);
                 count += 1;
             }
@@ -258,48 +258,24 @@ pub(super) fn apply_source_policy_changes(
                 println!("Cleared source policy pin");
                 count += 1;
             }
-            DiffAction::SetSelectionMode { mode } => {
-                settings::set(
-                    conn,
-                    SETTINGS_KEY_SELECTION_MODE,
-                    selection_mode_value(*mode),
-                )?;
-                println!(
-                    "Updated source policy selection mode: {}",
-                    selection_mode_value(*mode)
-                );
-                count += 1;
-            }
-            DiffAction::ClearSelectionMode => {
-                settings::delete(conn, SETTINGS_KEY_SELECTION_MODE)?;
-                println!("Cleared source policy selection mode");
-                count += 1;
-            }
             DiffAction::SetAllowedDistros { distros } => {
                 settings::set(
                     conn,
                     SETTINGS_KEY_ALLOWED_DISTROS,
                     &serde_json::to_string(distros)?,
                 )?;
-                println!("Updated allowed source distros: {}", distros.join(", "));
+                println!("Updated allowed source profiles: {}", distros.join(", "));
                 count += 1;
             }
             DiffAction::ClearAllowedDistros => {
                 settings::delete(conn, SETTINGS_KEY_ALLOWED_DISTROS)?;
-                println!("Cleared allowed source distros");
+                println!("Cleared allowed source profiles");
                 count += 1;
             }
             _ => {}
         }
     }
     Ok(count)
-}
-
-fn selection_mode_value(mode: SelectionMode) -> &'static str {
-    match mode {
-        SelectionMode::Policy => "policy",
-        SelectionMode::Latest => "latest",
-    }
 }
 
 /// Apply executable replatform transactions through the shared install path.
@@ -366,13 +342,29 @@ pub(super) async fn apply_replatform_changes(
             "Replatformed from {} to {} by model apply",
             current_source, transaction.target_distro
         );
+        let exact_release = {
+            let repository_package_id = transaction
+                .install_repository_package_id
+                .context("executable replatform plan has no exact repository package id")?;
+            let conn = rusqlite::Connection::open(db_path)?;
+            let package = RepositoryPackage::find_by_id(&conn, repository_package_id)?
+                .context("exact replatform repository package row disappeared")?;
+            if package.name != transaction.package
+                || package.version != transaction.target_version
+                || package.architecture != transaction.architecture
+            {
+                anyhow::bail!("exact replatform repository package row drifted after planning");
+            }
+            package.package_release
+        };
 
-        match cmd_install(
+        match cmd_install_replatform(
             &transaction.package,
             InstallOptions {
                 db_path,
                 root,
                 version: Some(transaction.target_version.clone()),
+                package_release: Some(exact_release),
                 repo: Some(repository),
                 architecture: transaction.architecture.clone(),
                 dry_run: false,
@@ -383,7 +375,7 @@ pub(super) async fn apply_replatform_changes(
                 convert_to_ccs: false,
                 ownership: None,
                 yes: true,
-                from_distro: None,
+                from_profile: None,
                 repository_provenance: None,
             },
         )
@@ -472,29 +464,23 @@ fn find_installed_replatform_trove(
 ) -> Result<Trove> {
     let matches = Trove::find_by_name(conn, &transaction.package)?
         .into_iter()
-        .filter(|trove| trove.version == transaction.target_version)
+        .filter(|trove| {
+            trove.version == transaction.target_version && trove.trove_type == TroveType::Package
+        })
         .collect::<Vec<_>>();
 
-    if let Some(expected_arch) = transaction.architecture.as_deref()
-        && let Some(installed) = matches.iter().find(|trove| {
-            trove.architecture.as_deref() == Some(expected_arch)
-                || trove.architecture.as_deref().is_none()
-        })
-    {
-        return Ok(installed.clone());
-    }
-
-    match matches.as_slice() {
-        [installed] => Ok(installed.clone()),
-        [] => Err(anyhow!(
+    select_replatform_variant(
+        &matches,
+        transaction.architecture.as_deref(),
+        &transaction.package,
+    )?
+    .cloned()
+    .ok_or_else(|| {
+        anyhow!(
             "installed replatform trove '{}' not found",
             transaction.package
-        )),
-        _ => Err(anyhow!(
-            "installed replatform trove '{}' is ambiguous after install",
-            transaction.package
-        )),
-    }
+        )
+    })
 }
 
 fn find_current_replatform_source(
@@ -503,22 +489,70 @@ fn find_current_replatform_source(
 ) -> Result<Option<String>> {
     let matches = Trove::find_by_name(conn, &transaction.package)?
         .into_iter()
-        .filter(|trove| trove.version == transaction.current_version)
+        .filter(|trove| {
+            trove.version == transaction.current_version && trove.trove_type == TroveType::Package
+        })
         .collect::<Vec<_>>();
 
-    if let Some(expected_arch) = transaction.current_architecture.as_deref()
-        && let Some(installed) = matches.iter().find(|trove| {
-            trove.architecture.as_deref() == Some(expected_arch)
-                || trove.architecture.as_deref().is_none()
-        })
-    {
-        return Ok(installed.source_distro.clone());
+    Ok(select_replatform_variant(
+        &matches,
+        transaction.current_architecture.as_deref(),
+        &transaction.package,
+    )?
+    .and_then(|trove| trove.source_profile.clone()))
+}
+
+fn select_replatform_variant<'a>(
+    matches: &'a [Trove],
+    expected_architecture: Option<&str>,
+    package: &str,
+) -> Result<Option<&'a Trove>> {
+    let exact = matches
+        .iter()
+        .filter(|trove| trove.architecture.as_deref() == expected_architecture)
+        .collect::<Vec<_>>();
+    match exact.as_slice() {
+        [trove] => return Ok(Some(*trove)),
+        [] => {}
+        _ => {
+            return Err(anyhow!(
+                "replatform package '{}' has multiple exact architecture matches for {}",
+                package,
+                format_replatform_architecture(expected_architecture),
+            ));
+        }
     }
 
-    Ok(matches
-        .into_iter()
-        .next()
-        .and_then(|trove| trove.source_distro))
+    if expected_architecture.is_none() {
+        return match matches {
+            [] => Ok(None),
+            [trove] => Ok(Some(trove)),
+            _ => Err(anyhow!(
+                "replatform package '{}' has multiple installed variants but no architecture selector",
+                package,
+            )),
+        };
+    }
+
+    let architecture_independent = matches
+        .iter()
+        .filter(|trove| trove.architecture.is_none())
+        .collect::<Vec<_>>();
+    match architecture_independent.as_slice() {
+        [trove] => Ok(Some(*trove)),
+        [] => Ok(None),
+        _ => Err(anyhow!(
+            "replatform package '{}' has multiple architecture-independent matches for {}",
+            package,
+            format_replatform_architecture(expected_architecture),
+        )),
+    }
+}
+
+fn format_replatform_architecture(architecture: Option<&str>) -> String {
+    architecture
+        .map(|architecture| format!("architecture '{architecture}'"))
+        .unwrap_or_else(|| "architecture-independent identity".to_string())
 }
 
 fn mark_replatform_partial_failure(
@@ -637,6 +671,7 @@ pub(super) async fn apply_package_changes(
                         db_path,
                         root,
                         version: pin.clone(),
+                        package_release: None,
                         repo: None,
                         architecture: None,
                         dry_run: false,
@@ -647,7 +682,7 @@ pub(super) async fn apply_package_changes(
                         convert_to_ccs: false,
                         ownership: None,
                         yes: true,
-                        from_distro: None,
+                        from_profile: None,
                         repository_provenance: None,
                     },
                 )
@@ -682,6 +717,7 @@ pub(super) async fn apply_package_changes(
                         db_path,
                         root,
                         version: Some(target_version.clone()),
+                        package_release: None,
                         repo: None,
                         architecture: None,
                         dry_run: false,
@@ -692,7 +728,7 @@ pub(super) async fn apply_package_changes(
                         convert_to_ccs: false,
                         ownership: None,
                         yes: true,
-                        from_distro: None,
+                        from_profile: None,
                         repository_provenance: None,
                     },
                 )

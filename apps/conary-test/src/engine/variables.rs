@@ -238,6 +238,7 @@ mod tests {
             DistroConfig {
                 remi_distro: "fedora-44".to_string(),
                 repo_name: "remi-fedora-44".to_string(),
+                build_context: crate::config::DistroBuildContext::Binary,
                 containerfile: None,
                 test_packages: vec![TestPackage {
                     package: "conary-test-fixture".to_string(),

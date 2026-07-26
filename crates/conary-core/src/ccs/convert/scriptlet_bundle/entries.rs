@@ -45,7 +45,7 @@ fn build_native_entry(
         arch_install,
         arch_hook,
     } = project_format_metadata(native);
-    let interpreter = native_interpreter(native, input.source_distro)?;
+    let interpreter = native_interpreter(native, input.source_profile)?;
 
     Ok(NativeLifecycleEntry {
         id: native.id.clone(),
@@ -77,7 +77,7 @@ fn build_native_entry(
 
 fn native_interpreter(
     native: &NativeScriptletEntry,
-    source_profile_or_route: Option<&str>,
+    source_profile_id: Option<&str>,
 ) -> anyhow::Result<String> {
     if native.kind == crate::packages::native_abi::NativeScriptletKind::ControlArtifact {
         anyhow::ensure!(
@@ -96,11 +96,18 @@ fn native_interpreter(
         native.metadata,
         NativeScriptletMetadata::Arch(ArchNativeScriptletMetadata::Install(_))
     ) {
+        let source_profile_id = source_profile_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Arch .INSTALL entry '{}' requires an exact ALPM source profile ID",
+                native.id
+            )
+        })?;
         let profile =
-            supported_profiles::arch_source_profile(source_profile_or_route).ok_or_else(|| {
+            supported_profiles::alpm_source_profile(source_profile_id).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Arch .INSTALL entry '{}' has no unambiguous source profile runtime",
-                    native.id
+                    "Arch .INSTALL entry '{}' names unsupported ALPM source profile '{}'",
+                    native.id,
+                    source_profile_id
                 )
             })?;
         return profile

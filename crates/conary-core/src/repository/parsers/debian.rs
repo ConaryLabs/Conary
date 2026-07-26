@@ -11,8 +11,8 @@ use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
-    RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
+    DebianMultiArch, RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
 };
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::trust::TrustRole;
@@ -133,37 +133,6 @@ impl DebianParser {
         }
     }
 
-    fn parse_provides(&self, provides_str: &str) -> Vec<String> {
-        let mut provides = Vec::new();
-
-        for provide in provides_str.split(',') {
-            let provide = provide.trim();
-            if provide.is_empty() {
-                continue;
-            }
-
-            if let Some(paren_pos) = provide.find('(') {
-                let name = provide[..paren_pos].trim();
-                let constraint = provide[paren_pos + 1..].trim_end_matches(')').trim();
-                if constraint.is_empty() {
-                    provides.push(name.to_string());
-                } else {
-                    provides.push(format!("{name} {constraint}"));
-                }
-            } else {
-                provides.push(provide.to_string());
-            }
-        }
-
-        provides
-    }
-
-    /// Parse a single dependency string
-    /// Format: "package (>= 1.0)" or "package (= 1.0-1)" or "package"
-    fn parse_dependency(&self, dep: &str) -> Option<(String, String)> {
-        Some(common::split_dependency(dep))
-    }
-
     /// Parse a Debian dependency field into structured requirement groups.
     ///
     /// Each comma-separated entry becomes one group. OR alternatives (`a | b`)
@@ -172,42 +141,32 @@ impl DebianParser {
         &self,
         deps_str: &str,
         kind: RepositoryRequirementKind,
-    ) -> Vec<RepositoryRequirementGroup> {
+    ) -> Result<Vec<RepositoryRequirementGroup>> {
         let mut groups = Vec::new();
 
         for dep_group in deps_str.split(',') {
             let dep_group = dep_group.trim();
             if dep_group.is_empty() {
-                continue;
+                return Err(Error::ParseError(format!(
+                    "invalid Debian dependency field with an empty comma-separated entry: {deps_str}"
+                )));
             }
-
-            let alternatives: Vec<&str> = dep_group.split('|').map(str::trim).collect();
-            let clauses: Vec<RepositoryRequirementClause> = alternatives
-                .iter()
-                .filter_map(|alt| {
-                    let (name, constraint) = self.parse_dependency(alt)?;
-                    if constraint.is_empty() {
-                        Some(RepositoryRequirementClause::name_only(name))
-                    } else {
-                        Some(RepositoryRequirementClause::versioned(name, constraint))
-                    }
-                })
-                .collect();
-
-            if clauses.is_empty() {
-                continue;
-            }
-
-            let group = if clauses.len() == 1 {
-                RepositoryRequirementGroup::simple(kind, clauses.into_iter().next().unwrap())
-            } else {
-                RepositoryRequirementGroup::alternatives(kind, clauses)
-            };
-
-            groups.push(group.with_native_text(dep_group.to_string()));
+            groups.push(
+                crate::repository::requirement::parse_native_requirement(
+                    kind,
+                    VersionScheme::Debian,
+                    dep_group,
+                )
+                .map_err(|error| {
+                    Error::ParseError(format!(
+                        "invalid Debian {} dependency '{dep_group}': {error}",
+                        kind.as_str()
+                    ))
+                })?,
+            );
         }
 
-        groups
+        Ok(groups)
     }
 
     /// Parse transaction-authoritative package relations with the native
@@ -218,11 +177,15 @@ impl DebianParser {
         relations: &str,
         kind: RepositoryRequirementKind,
     ) -> Result<Vec<RepositoryRequirementGroup>> {
-        relations
-            .split(',')
-            .map(str::trim)
-            .filter(|entry| !entry.is_empty())
-            .map(|entry| {
+        let mut groups = Vec::new();
+        for entry in relations.split(',').map(str::trim) {
+            if entry.is_empty() {
+                return Err(Error::ParseError(format!(
+                    "invalid Debian {} field with an empty comma-separated entry: {relations}",
+                    kind.as_str()
+                )));
+            }
+            groups.push(
                 parse_native_relation(kind, VersionScheme::Debian, entry).map_err(|error| {
                     Error::ParseError(format!(
                         "invalid Debian {} relation '{entry}': {error}",
@@ -233,38 +196,35 @@ impl DebianParser {
                             _ => "package",
                         }
                     ))
-                })
-            })
-            .collect()
+                })?,
+            );
+        }
+        Ok(groups)
     }
 
     /// Parse a Provides field into structured `RepositoryProvide` entries.
-    fn parse_structured_provides(&self, provides_str: &str) -> Vec<RepositoryProvide> {
+    fn parse_structured_provides(&self, provides_str: &str) -> Result<Vec<RepositoryProvide>> {
         let mut result = Vec::new();
 
         for provide in provides_str.split(',') {
             let provide = provide.trim();
             if provide.is_empty() {
-                continue;
+                return Err(Error::ParseError(format!(
+                    "invalid Debian Provides field with an empty comma-separated entry: {provides_str}"
+                )));
             }
-
-            let (name, version) = if let Some(paren_pos) = provide.find('(') {
-                let pname = provide[..paren_pos].trim();
-                let constraint = provide[paren_pos + 1..].trim_end_matches(')').trim();
-                (pname, common::extract_version_from_constraint(constraint))
-            } else {
-                (provide, None)
-            };
-
-            result.push(RepositoryProvide {
-                name: name.to_string(),
-                kind: RepositoryCapabilityKind::Virtual,
-                version,
-                native_text: Some(provide.to_string()),
-            });
+            result.push(
+                crate::repository::package_relation::parse_debian_provide(provide).map_err(
+                    |error| {
+                        Error::ParseError(format!(
+                            "invalid Debian Provides atom '{provide}': {error}"
+                        ))
+                    },
+                )?,
+            );
         }
 
-        result
+        Ok(result)
     }
 
     fn package_from_entry(
@@ -272,6 +232,13 @@ impl DebianParser {
         repo_url: &str,
         entry: DebianPackageEntry,
     ) -> Result<PackageMetadata> {
+        let debian_multi_arch = entry
+            .multi_arch
+            .as_deref()
+            .map(DebianMultiArch::parse_exact)
+            .transpose()
+            .map_err(Error::ParseError)?
+            .unwrap_or_default();
         let size: u64 = entry
             .size
             .parse()
@@ -295,11 +262,11 @@ impl DebianParser {
         let mut requirements = Vec::new();
         if let Some(deps) = &entry.depends {
             requirements
-                .extend(self.parse_requirement_groups(deps, RepositoryRequirementKind::Depends));
+                .extend(self.parse_requirement_groups(deps, RepositoryRequirementKind::Depends)?);
         }
         if let Some(pre_deps) = &entry.pre_depends {
             requirements.extend(
-                self.parse_requirement_groups(pre_deps, RepositoryRequirementKind::PreDepends),
+                self.parse_requirement_groups(pre_deps, RepositoryRequirementKind::PreDepends)?,
             );
         }
         if let Some(conflicts) = &entry.conflicts {
@@ -317,13 +284,17 @@ impl DebianParser {
         }
 
         // Build structured provides
+        let parsed_provides = entry
+            .provides
+            .as_deref()
+            .map(|provides| self.parse_structured_provides(provides))
+            .transpose()?
+            .unwrap_or_default();
         let mut structured_provides = vec![RepositoryProvide::package_name(
             entry.package.clone(),
             Some(entry.version.clone()),
         )];
-        if let Some(provides_str) = &entry.provides {
-            structured_provides.extend(self.parse_structured_provides(provides_str));
-        }
+        structured_provides.extend(parsed_provides.iter().cloned());
 
         // Preserve source metadata that is not represented by typed columns.
         let mut extra = serde_json::Map::new();
@@ -339,13 +310,19 @@ impl DebianParser {
                 serde_json::Value::String(installed_size),
             );
         }
-        if let Some(provides) = entry.provides {
+        if !parsed_provides.is_empty() {
             extra.insert(
                 "deb_provides".to_string(),
                 serde_json::Value::Array(
-                    self.parse_provides(&provides)
+                    parsed_provides
                         .into_iter()
-                        .map(serde_json::Value::String)
+                        .map(|provide| {
+                            serde_json::Value::String(
+                                provide
+                                    .native_text
+                                    .expect("parsed Debian provide retains native text"),
+                            )
+                        })
                         .collect(),
                 ),
             );
@@ -367,13 +344,14 @@ impl DebianParser {
             name: entry.package,
             version: entry.version,
             architecture: Some(entry.architecture),
+            debian_multi_arch: Some(debian_multi_arch),
             description: entry.description,
             checksum: entry.sha256,
             checksum_type: ChecksumType::Sha256,
             size,
             download_url,
             extra_metadata: serde_json::Value::Object(extra),
-            source_distro: RepositoryDependencyFlavor::Deb,
+            dependency_flavor: RepositoryDependencyFlavor::Deb,
             version_scheme: VersionScheme::Debian,
             requirements,
             provides: structured_provides,
@@ -468,6 +446,8 @@ struct DebianPackageEntry {
     package: String,
     version: String,
     architecture: String,
+    #[serde(rename = "Multi-Arch", default)]
+    multi_arch: Option<String>,
     #[serde(default)]
     description: Option<String>,
     #[serde(rename = "SHA256")]
@@ -524,6 +504,7 @@ impl RepositoryParser for DebianParser {
 mod tests {
     use super::*;
     use crate::repository::RepositoryTrustPolicy;
+    use crate::repository::dependency_model::RepositoryCapabilityKind;
 
     fn parser() -> DebianParser {
         let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Debian {
@@ -542,16 +523,21 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dependency() {
+    fn repository_dependency_uses_canonical_debian_parser() {
         let parser = parser();
 
-        let (name, constraint) = parser.parse_dependency("libc6 (>= 2.34)").unwrap();
-        assert_eq!(name, "libc6");
-        assert_eq!(constraint, ">= 2.34");
-
-        let (name2, constraint2) = parser.parse_dependency("bash").unwrap();
-        assert_eq!(name2, "bash");
-        assert_eq!(constraint2, "");
+        let groups = parser
+            .parse_requirement_groups("libc6:any (>= 2.34)", RepositoryRequirementKind::Depends)
+            .unwrap();
+        assert_eq!(groups[0].alternatives[0].name, "libc6");
+        assert_eq!(
+            groups[0].alternatives[0].version_constraint.as_deref(),
+            Some(">= 2.34")
+        );
+        assert_eq!(
+            groups[0].alternatives[0].architecture_qualifier,
+            crate::repository::dependency_model::RequirementArchitectureQualifier::Any
+        );
     }
 
     #[test]
@@ -560,6 +546,7 @@ mod tests {
             package: "mail-transport-agent".to_string(),
             version: "1.0-1".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: Some("Test package".to_string()),
             sha256: "d".repeat(64),
             size: "123".to_string(),
@@ -587,7 +574,7 @@ mod tests {
         let provides: Vec<&str> = provides.iter().filter_map(|value| value.as_str()).collect();
 
         assert!(provides.contains(&"mail-transport-agent"));
-        assert!(provides.contains(&"smtp-server = 1.0-1"));
+        assert!(provides.contains(&"smtp-server (= 1.0-1)"));
     }
 
     #[test]
@@ -596,6 +583,7 @@ mod tests {
             package: "test".to_string(),
             version: "1.0-1".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: Some("foreign".to_string()),
             description: None,
             sha256: "d".repeat(64),
             size: "100".to_string(),
@@ -614,8 +602,36 @@ mod tests {
         let pkg = parser
             .package_from_entry("https://example.test", entry)
             .unwrap();
-        assert_eq!(pkg.source_distro, RepositoryDependencyFlavor::Deb);
+        assert_eq!(pkg.dependency_flavor, RepositoryDependencyFlavor::Deb);
         assert_eq!(pkg.version_scheme, VersionScheme::Debian);
+        assert_eq!(pkg.debian_multi_arch, Some(DebianMultiArch::Foreign));
+    }
+
+    #[test]
+    fn repository_rejects_unknown_debian_multi_arch_value() {
+        let entry = DebianPackageEntry {
+            package: "test".to_string(),
+            version: "1.0-1".to_string(),
+            architecture: "amd64".to_string(),
+            multi_arch: Some("sometimes".to_string()),
+            description: None,
+            sha256: "d".repeat(64),
+            size: "100".to_string(),
+            filename: "pool/main/t/test.deb".to_string(),
+            depends: None,
+            pre_depends: None,
+            conflicts: None,
+            breaks: None,
+            replaces: None,
+            provides: None,
+            homepage: None,
+            section: None,
+            installed_size: None,
+        };
+        let error = parser()
+            .package_from_entry("https://example.test", entry)
+            .unwrap_err();
+        assert!(error.to_string().contains("Multi-Arch"), "{error}");
     }
 
     #[test]
@@ -624,6 +640,7 @@ mod tests {
             package: "curl".to_string(),
             version: "8.0-1".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: None,
             sha256: "a".repeat(64),
             size: "200".to_string(),
@@ -661,6 +678,7 @@ mod tests {
             package: "newpkg".to_string(),
             version: "2".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: None,
             sha256: "a".repeat(64),
             size: "200".to_string(),
@@ -713,6 +731,7 @@ mod tests {
             package: "newpkg".to_string(),
             version: "2".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: None,
             sha256: "a".repeat(64),
             size: "200".to_string(),
@@ -742,6 +761,7 @@ mod tests {
             package: "postfix".to_string(),
             version: "3.8-1".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: None,
             sha256: "a".repeat(64),
             size: "300".to_string(),
@@ -780,6 +800,7 @@ mod tests {
             package: "exim4".to_string(),
             version: "4.97-1".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: None,
             sha256: "a".repeat(64),
             size: "400".to_string(),
@@ -827,11 +848,40 @@ mod tests {
     }
 
     #[test]
+    fn structured_provides_preserve_explicit_architecture_qualifiers() {
+        let provides = parser()
+            .parse_structured_provides("mail-api:any (= 2), helper:arm64")
+            .unwrap();
+        assert_eq!(provides[0].name, "mail-api");
+        assert_eq!(provides[0].version.as_deref(), Some("2"));
+        assert_eq!(
+            provides[0].architecture_qualifier,
+            crate::repository::dependency_model::ProvideArchitectureQualifier::Any
+        );
+        assert_eq!(provides[1].name, "helper");
+        assert_eq!(
+            provides[1].architecture_qualifier,
+            crate::repository::dependency_model::ProvideArchitectureQualifier::Exact(
+                "arm64".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn structured_provides_reject_non_exact_versions_and_empty_atoms() {
+        for invalid in ["mail-api (>= 2)", "mail-api,,helper"] {
+            let error = parser().parse_structured_provides(invalid).unwrap_err();
+            assert!(error.to_string().contains("Provides"), "{error}");
+        }
+    }
+
+    #[test]
     fn test_structured_pre_depends() {
         let entry = DebianPackageEntry {
             package: "libc6".to_string(),
             version: "2.39-1".to_string(),
             architecture: "amd64".to_string(),
+            multi_arch: None,
             description: None,
             sha256: "a".repeat(64),
             size: "500".to_string(),

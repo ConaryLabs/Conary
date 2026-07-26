@@ -9,7 +9,7 @@
 //!   - RPM: Integer count ($1=1 install, $1=2 upgrade, $1=0 remove)
 //!   - DEB: Action words per Debian Policy ($1=install/configure/remove/upgrade)
 //!   - Arch: Version strings ($1=new_version, $2=old_version for upgrades)
-//! - Arch .INSTALL function wrapper generation
+//! - Exact libalpm-style `.INSTALL` function invocation
 //! - Timeout protection (60 seconds)
 //! - stdin nullification to prevent hangs
 //! - One mandatory selected-root execution boundary
@@ -37,6 +37,8 @@ mod process;
 mod rpm_runtime;
 mod runtime;
 mod sandbox;
+#[cfg(test)]
+mod test_support;
 mod types;
 
 pub use crate::activation::SystemdActivationInvocation;

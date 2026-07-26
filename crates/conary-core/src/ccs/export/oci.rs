@@ -18,6 +18,7 @@ use tar::Builder;
 use crate::ccs::package::CcsPackage;
 use crate::ccs::verify::{TrustPolicy, verify_package};
 use crate::hash;
+use crate::packages::payload::PackagePayloadFile;
 use crate::payload::{PayloadIdentity, PayloadNode, PayloadNodeKind};
 
 /// OCI image layout version
@@ -157,9 +158,7 @@ struct OciLayout {
 
 /// One exact CCS payload node projected into an OCI layer.
 struct OciFileEntry {
-    path: String,
-    node: PayloadNode,
-    content: Option<Vec<u8>>,
+    payload: PackagePayloadFile,
 }
 
 /// Export CCS packages to OCI image format
@@ -194,43 +193,32 @@ pub fn export_oci(packages: &[String], output: &Path, trust_policy: &TrustPolicy
             container_config.cmd = vec!["/bin/sh".to_string()];
         }
 
-        // Extract file contents
-        let mut blobs = pkg.extract_all_content()?;
-        let files = pkg.file_entries();
-
-        for file in files {
-            let content = file
-                .content
-                .as_ref()
-                .map(|authority| {
-                    blobs.remove(&authority.sha256).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "content blob {} is missing for {}",
-                            authority.sha256,
-                            file.path
-                        )
-                    })
-                })
-                .transpose()?;
-            file.node.validate_content(file.content.as_ref())?;
+        for payload in pkg.payload().files() {
             all_files.push(OciFileEntry {
-                path: file.path.clone(),
-                node: file.node.clone(),
-                content,
+                payload: payload.clone(),
             });
         }
     }
 
     // Sort files for deterministic layer
-    all_files.sort_by(|a, b| a.path.cmp(&b.path));
+    all_files.sort_by(|a, b| a.payload.path.cmp(&b.payload.path));
 
-    // Create layer tarball
-    let layer_data = create_layer_tarball(&all_files)?;
-    let layer_digest = hash::sha256_prefixed(&layer_data);
-    let layer_diff_id = format!("sha256:{}", sha256_hex_uncompressed(&all_files)?);
-
-    // Write layer blob
-    fs::write(blobs_dir.join(&layer_digest[7..]), &layer_data)?;
+    // Create and hash the layer through bounded-memory files.
+    let compressed_layer = temp_dir.path().join(".layer.tar.gz");
+    write_layer_tarball(&all_files, &compressed_layer)?;
+    let layer_digest = format!(
+        "sha256:{}",
+        hash_file(&compressed_layer, hash::HashAlgorithm::Sha256)?
+    );
+    let layer_size = fs::metadata(&compressed_layer)?.len();
+    let uncompressed_layer = temp_dir.path().join(".layer.tar");
+    write_uncompressed_layer(&all_files, &uncompressed_layer)?;
+    let layer_diff_id = format!(
+        "sha256:{}",
+        hash_file(&uncompressed_layer, hash::HashAlgorithm::Sha256)?
+    );
+    fs::remove_file(&uncompressed_layer)?;
+    fs::rename(&compressed_layer, blobs_dir.join(&layer_digest[7..]))?;
 
     // Create config
     let config = create_config(&container_config, &layer_diff_id, &package_names);
@@ -252,7 +240,7 @@ pub fn export_oci(packages: &[String], output: &Path, trust_policy: &TrustPolicy
         layers: vec![OciDescriptor {
             media_type: LAYER_MEDIA_TYPE.to_string(),
             digest: layer_digest.clone(),
-            size: layer_data.len() as u64,
+            size: layer_size,
             annotations: None,
             platform: None,
         }],
@@ -318,7 +306,7 @@ pub fn export_oci(packages: &[String], output: &Path, trust_policy: &TrustPolicy
 
     println!("Exported OCI image: {}", output.display());
     println!("  Packages: {}", package_names.join(", "));
-    println!("  Layer size: {} bytes", layer_data.len());
+    println!("  Layer size: {layer_size} bytes");
     println!();
     println!("To load the image:");
     println!("  podman load < {}", output.display());
@@ -338,38 +326,42 @@ fn write_tar_entries<W: std::io::Write>(
     files: &[OciFileEntry],
 ) -> Result<()> {
     for entry in files {
-        let clean_path = entry.path.trim_start_matches('/');
+        let clean_path = entry.payload.path.trim_start_matches('/');
         if clean_path.is_empty() {
             anyhow::bail!("OCI payload node path must not resolve to archive root");
         }
-        let mut header = exact_tar_header(&entry.node)?;
-        append_node_pax_extensions(archive, &entry.node)?;
-        match (&entry.node.kind, &entry.content) {
-            (PayloadNodeKind::Regular { .. }, Some(content)) => {
-                header.set_size(content.len() as u64);
+        let mut header = exact_tar_header(&entry.payload.node)?;
+        append_node_pax_extensions(archive, &entry.payload.node)?;
+        match &entry.payload.node.kind {
+            PayloadNodeKind::Regular { .. } => {
+                let authority = entry.payload.content_authority.as_ref().with_context(|| {
+                    format!(
+                        "regular OCI payload {} has no content authority",
+                        entry.payload.path
+                    )
+                })?;
+                let mut content = entry.payload.open_content()?;
+                header.set_size(authority.size);
                 header.set_cksum();
-                archive.append_data(&mut header, clean_path, content.as_slice())?;
+                archive.append_data(&mut header, clean_path, content.as_mut())?;
             }
-            (PayloadNodeKind::Symlink { target }, None) => {
+            PayloadNodeKind::Symlink { target } => {
                 header.set_cksum();
                 archive.append_link(&mut header, clean_path, target)?;
             }
-            (PayloadNodeKind::Hardlink { target, .. }, None) => {
+            PayloadNodeKind::Hardlink { target, .. } => {
                 header.set_cksum();
                 archive.append_link(&mut header, clean_path, target.trim_start_matches('/'))?;
             }
-            (PayloadNodeKind::Socket, None) => {
+            PayloadNodeKind::Socket => {
                 anyhow::bail!(
                     "OCI tar layers cannot encode socket payload node {}",
-                    entry.path
+                    entry.payload.path
                 );
             }
-            (_, None) => {
+            _ => {
                 header.set_cksum();
                 archive.append_data(&mut header, clean_path, std::io::empty())?;
-            }
-            (_, Some(_)) => {
-                anyhow::bail!("non-regular OCI node {} carries content", entry.path);
             }
         }
     }
@@ -445,28 +437,25 @@ fn exact_pax_timestamp(seconds: i64, nanoseconds: u32) -> String {
     format!("-{whole}.{fractional:09}")
 }
 
-/// Create a gzipped tar layer from files
-fn create_layer_tarball(files: &[OciFileEntry]) -> Result<Vec<u8>> {
-    let mut output = Vec::new();
-    {
-        let encoder = GzEncoder::new(&mut output, Compression::default());
-        let mut archive = Builder::new(encoder);
-        write_tar_entries(&mut archive, files)?;
-        let encoder = archive.into_inner()?;
-        encoder.finish()?;
-    }
-    Ok(output)
+fn write_layer_tarball(files: &[OciFileEntry], output: &Path) -> Result<()> {
+    let encoder = GzEncoder::new(File::create(output)?, Compression::default());
+    let mut archive = Builder::new(encoder);
+    write_tar_entries(&mut archive, files)?;
+    let encoder = archive.into_inner()?;
+    encoder.finish()?;
+    Ok(())
 }
 
-/// Calculate SHA256 of uncompressed layer content (for diff_id)
-fn sha256_hex_uncompressed(files: &[OciFileEntry]) -> Result<String> {
-    let mut output = Vec::new();
-    {
-        let mut archive = Builder::new(&mut output);
-        write_tar_entries(&mut archive, files)?;
-        archive.finish()?;
-    }
-    Ok(hash::sha256(&output))
+fn write_uncompressed_layer(files: &[OciFileEntry], output: &Path) -> Result<()> {
+    let mut archive = Builder::new(File::create(output)?);
+    write_tar_entries(&mut archive, files)?;
+    archive.finish()?;
+    Ok(())
+}
+
+fn hash_file(path: &Path, algorithm: hash::HashAlgorithm) -> Result<String> {
+    let mut file = File::open(path)?;
+    Ok(hash::hash_reader(algorithm, &mut file)?.value)
 }
 /// Create OCI image config
 fn create_config(container: &ContainerConfig, diff_id: &str, packages: &[String]) -> OciConfig {
@@ -533,6 +522,7 @@ mod tests {
         fs::write(source.join("usr/bin/demo"), b"demo\n").unwrap();
         let manifest = crate::ccs::manifest::CcsManifest::new_minimal("demo", "1.0.0");
         let result = crate::ccs::builder::CcsBuilder::new(manifest, &source)
+            .unwrap()
             .build()
             .unwrap();
         let package_path = temp.path().join("demo.ccs");

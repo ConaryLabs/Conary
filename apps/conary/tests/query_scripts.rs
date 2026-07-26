@@ -91,7 +91,10 @@ fn build_ccs_fixture(
     }
     manifest.native_lifecycle = bundle;
 
-    let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+    let result = CcsBuilder::new(manifest, &source_dir)
+        .unwrap()
+        .build()
+        .unwrap();
     let package_path = temp.path().join(format!("{name}.ccs"));
     let policy_path = temp.path().join("ccs-trust-policy.toml");
     let signer = conary_core::ccs::SigningKeyPair::generate().with_key_id("query-integration");
@@ -123,7 +126,10 @@ fn build_rpm_fixture() -> (TempDir, PathBuf) {
         arch: Some("x86_64".to_string()),
         ..Default::default()
     });
-    let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+    let result = CcsBuilder::new(manifest, &source_dir)
+        .unwrap()
+        .build()
+        .unwrap();
     let package_path = temp.path().join("native-query-fixture.rpm");
     conary_core::ccs::native_export::rpm::generate(&result, &package_path)
         .expect("generate native RPM query fixture");
@@ -138,7 +144,7 @@ fn bundle_fixture() -> NativeLifecycleBundle {
         schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
-        source_distro: Some("fedora".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         source_release: Some("44".to_string()),
         source_arch: Some("x86_64".to_string()),
         source_package: "nginx".to_string(),

@@ -206,17 +206,10 @@ pub enum Action {
 }
 
 /// Authorization checker
+#[derive(Default)]
 pub struct AuthChecker {
     /// Exact GIDs authorized by the Unix socket contract.
     trusted_gids: Vec<u32>,
-}
-
-impl Default for AuthChecker {
-    fn default() -> Self {
-        Self {
-            trusted_gids: Vec::new(),
-        }
-    }
 }
 
 impl AuthChecker {

@@ -95,7 +95,7 @@ pub async fn initialize_container_state(
         && config.remi.endpoint.trim_end_matches('/') != "https://remi.conary.io"
     {
         let replace_repo_cmd = format!(
-            "{} repo remove {} --db-path {} && {} repo add {} {} --package-format json --default-strategy remi --remi-endpoint {} --remi-distro {} --db-path {}",
+            "{} repo remove {} --db-path {} && {} repo add {} {} --package-format json --default-strategy remi --remi-endpoint {} --source-profile {} --db-path {}",
             config.paths.conary_bin,
             distro_config.repo_name,
             config.paths.db,

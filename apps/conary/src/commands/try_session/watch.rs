@@ -833,7 +833,7 @@ async fn run_refresh_loop(
             session_id: &session_id,
             expected_try_generation_id: state.last_good_generation_id,
             package_path: &artifact_path,
-            trust_policy: &trust_policy,
+            trust_policy,
         }) {
             Ok(refreshed) => refreshed,
             Err(error) => {

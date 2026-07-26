@@ -9,6 +9,8 @@ use conary_core::model::{
     DiffAction, capture_current_state, planned_replatform_actions, replatform_execution_plan,
     source_policy_replatform_snapshot,
 };
+#[cfg(test)]
+use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use rusqlite::Connection;
 
 pub(super) fn print_source_policy_update_preview(conn: &Connection) -> Result<()> {
@@ -45,7 +47,7 @@ fn source_policy_update_context(
     realignment_candidates: Option<usize>,
 ) -> Option<String> {
     let pin = pin?;
-    let strength = pin.mixing_policy.as_str();
+    let strength = pin.mixing_policy;
 
     if affinities.is_empty() {
         return Some(format!(
@@ -138,7 +140,7 @@ mod tests {
         let pin = DistroPin {
             id: Some(1),
             distro: "arch".to_string(),
-            mixing_policy: "strict".to_string(),
+            mixing_policy: DependencyMixingPolicy::Strict,
             created_at: "2026-03-12".to_string(),
         };
         let affinities = vec![
@@ -168,7 +170,7 @@ mod tests {
         let pin = DistroPin {
             id: Some(1),
             distro: "arch".to_string(),
-            mixing_policy: "strict".to_string(),
+            mixing_policy: DependencyMixingPolicy::Strict,
             created_at: "2026-03-12".to_string(),
         };
 
@@ -183,7 +185,7 @@ mod tests {
         let (_temp, db_path) = create_test_db();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         seed_mixed_replatform_fixture(&conn);
-        DistroPin::set(&conn, "arch", "strict").unwrap();
+        DistroPin::set(&conn, "arch", DependencyMixingPolicy::Strict).unwrap();
 
         let pin = DistroPin::get_current(&conn)
             .unwrap()
@@ -203,7 +205,10 @@ mod tests {
             .find(|transaction| transaction.package == "bash")
             .expect("expected bash transaction");
         assert!(!bash.executable);
-        assert_eq!(bash.install_route.as_deref(), Some("resolution:binary"));
+        assert_eq!(
+            bash.install_route.as_deref(),
+            Some("resolution:repository_package")
+        );
         assert_eq!(
             bash.blocked_reason,
             Some(ReplatformBlockedReason::AnyVersionRouteOnly)
@@ -215,7 +220,10 @@ mod tests {
             .find(|transaction| transaction.package == "vim")
             .expect("expected vim transaction");
         assert!(vim.executable);
-        assert_eq!(vim.install_route.as_deref(), Some("resolution:binary"));
+        assert_eq!(
+            vim.install_route.as_deref(),
+            Some("resolution:repository_package")
+        );
         assert_eq!(vim.blocked_reason, None);
 
         let zsh = plan

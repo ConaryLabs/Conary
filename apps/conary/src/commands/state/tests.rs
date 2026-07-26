@@ -1,23 +1,19 @@
-// conary/src/commands/state/tests.rs
+// apps/conary/src/commands/state/tests.rs
 
-use super::execute_restore_plan_with_root;
+use super::{execute_restore_plan_with_root, find_installed_trove_for_member};
 use conary_core::ccs::native_lifecycle::{
     LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,
     NativeLifecycleEntry, NativeLifecycleEntryKind, RpmCriticality, RpmProgram, RpmRuntimeMetadata,
     ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
 };
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, PackageResolution, PrimaryStrategy,
-    Repository, RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+    Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, RepositoryPackage, StateMember,
+    Trove, TroveType,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-
-fn build_test_ccs_package(dir: &Path, name: &str, version: &str) -> PathBuf {
-    build_test_ccs_package_with_bundle(dir, name, version, None)
-}
 
 fn build_test_ccs_package_with_bundle(
     dir: &Path,
@@ -25,16 +21,26 @@ fn build_test_ccs_package_with_bundle(
     version: &str,
     native_lifecycle: Option<NativeLifecycleBundle>,
 ) -> PathBuf {
+    build_test_ccs_package_with_manifest(dir, name, version, native_lifecycle, |_| {})
+}
+
+fn build_test_ccs_package_with_manifest(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    native_lifecycle: Option<NativeLifecycleBundle>,
+    configure: impl FnOnce(&mut conary_core::ccs::CcsManifest),
+) -> PathBuf {
     use conary_core::ccs::builder::write_signed_current_ccs_package;
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry};
     use conary_core::hash;
-    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+    use conary_core::payload::PayloadContentAuthority;
 
     let binary_content = format!("#!/bin/sh\necho {name} {version}\n").into_bytes();
     let binary_hash = hash::sha256(&binary_content);
     let files = vec![FileEntry {
         path: format!("/usr/bin/{name}"),
-        node: PayloadNode::regular(0o755),
+        node: crate::commands::test_helpers::test_regular_payload_node(0o755),
         content: Some(PayloadContentAuthority {
             sha256: binary_hash.clone(),
             size: binary_content.len() as u64,
@@ -48,6 +54,7 @@ fn build_test_ccs_package_with_bundle(
         manifest.package.version_scheme = conary_core::repository::versioning::VersionScheme::Rpm;
     }
     manifest.native_lifecycle = native_lifecycle;
+    configure(&mut manifest);
     let result = BuildResult {
         manifest,
         components: HashMap::from([(
@@ -168,7 +175,7 @@ fn typed_rpm_bundle(
         schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora".to_string(),
-        source_distro: Some("fedora".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         source_release: Some("44".to_string()),
         source_arch: Some("x86_64".to_string()),
         source_package: package.to_string(),
@@ -201,7 +208,7 @@ fn insert_typed_rpm_restore_fixture(
             conary_core::repository::versioning::VersionScheme::Rpm,
         );
         trove.architecture = Some("x86_64".to_string());
-        trove.source_distro = Some("fedora".to_string());
+        trove.source_profile = Some("fedora-44".to_string());
         trove.installed_by_changeset_id = Some(cs_id);
         let trove_id = trove.insert(tx)?;
         let bundle = typed_rpm_post_remove_bundle(package, version);
@@ -221,6 +228,49 @@ fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
         row.get(0)
     })
     .unwrap()
+}
+
+#[test]
+fn restore_state_member_requires_exact_optional_architecture() {
+    let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
+    let conn = crate::commands::open_db(&db_path).unwrap();
+
+    let mut installed = Trove::new(
+        "glibc".to_string(),
+        "2.40".to_string(),
+        TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    );
+    installed.architecture = Some("x86_64".to_string());
+    installed.insert(&conn).unwrap();
+
+    let architecture_independent = StateMember::new(1, "glibc".to_string(), "2.40".to_string());
+    let error = find_installed_trove_for_member(&conn, &architecture_independent)
+        .expect_err("absent architecture must not wildcard-match a concrete variant");
+    assert!(error.to_string().contains("expected installed package"));
+
+    let mut exact = architecture_independent;
+    exact.architecture = Some("x86_64".to_string());
+    let matched = find_installed_trove_for_member(&conn, &exact).unwrap();
+    assert_eq!(matched.architecture.as_deref(), Some("x86_64"));
+}
+
+fn active_generation_has_path(db_path: &Path, path: &str) -> bool {
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
+    let generation = conary_core::generation::mount::current_generation(runtime_root.root())
+        .unwrap()
+        .expect("state restore should publish an active generation");
+    let artifact = conary_core::generation::artifact::load_generation_artifact(
+        &runtime_root.generation_path(generation),
+    )
+    .unwrap();
+    artifact
+        .generation_root
+        .entries
+        .iter()
+        .chain(&artifact.mutable_state.entries)
+        .any(|entry| entry.path == path)
 }
 
 fn serve_test_file(file_path: PathBuf) -> (String, std::thread::JoinHandle<()>) {
@@ -343,8 +393,11 @@ async fn state_restore_executes_typed_rpm_install_lifecycle_and_commits() {
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    let mut repo = Repository::new("arch-test".to_string(), package_url.clone());
-    let repo_id = repo.insert(&conn).unwrap();
+    let repo_id = crate::commands::test_helpers::insert_test_static_ccs_repository(
+        &conn,
+        "arch-test",
+        &package_url,
+    );
 
     let mut repo_pkg = RepositoryPackage::new(
         repo_id,
@@ -360,21 +413,8 @@ async fn state_restore_executes_typed_rpm_install_lifecycle_and_commits() {
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
-    repo_pkg.distro = Some("fedora".to_string());
+    repo_pkg.source_profile = Some("fedora-44".to_string());
     repo_pkg.insert(&conn).unwrap();
-
-    let mut resolution = PackageResolution::new(
-        repo_id,
-        "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
-        }],
-    );
-    resolution.version = Some("9.1.0".to_string());
-    resolution.primary_strategy = PrimaryStrategy::Binary;
-    resolution.insert(&conn).unwrap();
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut cs = Changeset::new("Install vim-9.1.0".to_string());
@@ -427,6 +467,12 @@ async fn state_restore_executes_typed_rpm_install_lifecycle_and_commits() {
     let restored = Trove::find_one_by_name(&conn, "vim")
         .unwrap()
         .expect("restored trove");
+    assert_eq!(restored.installed_from_repository_id, Some(repo_id));
+    assert_eq!(restored.source_profile.as_deref(), Some("fedora-44"));
+    assert_eq!(
+        restored.version_scheme,
+        conary_core::repository::versioning::VersionScheme::Rpm
+    );
     assert!(
         InstalledNativeLifecycleBundle::find_by_trove(
             &conn,
@@ -509,6 +555,98 @@ async fn test_state_restore_remove_only_executes_and_creates_one_changeset_and_s
             .unwrap(),
         before_states + 1
     );
+}
+
+#[tokio::test]
+async fn state_restore_rolls_back_every_package_after_mid_graph_database_failure() {
+    let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
+    let root = tempfile::tempdir().unwrap();
+    let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
+
+    let mut conn = crate::commands::open_db(&db_path).unwrap();
+    let baseline = conary_core::db::models::StateEngine::new(&conn)
+        .create_snapshot("baseline", None, None)
+        .unwrap();
+    conary_core::db::transaction(&mut conn, |tx| {
+        let mut changeset = Changeset::new("Install atomic restore fixtures".to_string());
+        let changeset_id = changeset.insert(tx)?;
+        for name in ["alpha-state-fixture", "omega-state-fixture"] {
+            let mut trove = Trove::new(
+                name.to_string(),
+                "1.0.0".to_string(),
+                TroveType::Package,
+                conary_core::repository::versioning::VersionScheme::Conary,
+            );
+            trove.installed_by_changeset_id = Some(changeset_id);
+            trove.insert(tx)?;
+        }
+        changeset.update_status(tx, ChangesetStatus::Applied)?;
+        Ok::<_, conary_core::Error>(())
+    })
+    .unwrap();
+    let drifted = conary_core::db::models::StateEngine::new(&conn)
+        .create_snapshot("drifted", None, None)
+        .unwrap();
+
+    // State members are ordered by package name. Failing omega only after
+    // alpha disappeared proves the graph had already mutated the first
+    // package inside the caller-owned transaction.
+    conn.execute_batch(
+        "CREATE TRIGGER fail_restore_after_first_delete
+         BEFORE DELETE ON troves
+         WHEN OLD.name = 'omega-state-fixture'
+          AND NOT EXISTS (
+              SELECT 1 FROM troves WHERE name = 'alpha-state-fixture'
+          )
+         BEGIN
+             SELECT RAISE(ABORT, 'forced restore failure after first package');
+         END;",
+    )
+    .unwrap();
+    let before_changesets = table_count(&conn, "changesets");
+    let before_states = table_count(&conn, "system_states");
+    drop(conn);
+
+    let error = execute_restore_plan_with_root(
+        &db_path,
+        root.path().to_str().unwrap(),
+        baseline.state_number,
+        false,
+    )
+    .await
+    .expect_err("second package deletion should abort the entire restore");
+    assert!(
+        format!("{error:#}").contains("forced restore failure after first package"),
+        "{error:#}"
+    );
+
+    let conn = crate::commands::open_db(&db_path).unwrap();
+    for name in ["alpha-state-fixture", "omega-state-fixture"] {
+        assert!(
+            Trove::find_one_by_name(&conn, name).unwrap().is_some(),
+            "{name} must remain installed after wrapper rollback"
+        );
+    }
+    assert_eq!(table_count(&conn, "changesets"), before_changesets);
+    assert_eq!(table_count(&conn, "system_states"), before_states);
+    assert_eq!(
+        conary_core::db::models::SystemState::get_active(&conn)
+            .unwrap()
+            .unwrap()
+            .state_number,
+        drifted.state_number
+    );
+    let wrapper_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM changesets WHERE description = ?1",
+            [format!(
+                "Restore state {} -> {}",
+                drifted.state_number, baseline.state_number
+            )],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(wrapper_count, 0);
 }
 
 #[tokio::test]
@@ -677,13 +815,38 @@ async fn test_state_restore_install_plan_executes_under_wrapping_changeset() {
     let package_dir = tempfile::tempdir().unwrap();
     let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
 
-    let package_path = build_test_ccs_package(package_dir.path(), "vim", "9.1.0");
+    let package_path = build_test_ccs_package_with_manifest(
+        package_dir.path(),
+        "vim",
+        "9.1.0",
+        None,
+        |manifest| {
+            manifest.provides.binaries.push("state-vim".to_string());
+            let mut capabilities = conary_core::capability::CapabilityDeclaration::default();
+            capabilities.network.none = true;
+            manifest.capabilities = Some(capabilities);
+            manifest
+                .hooks
+                .directories
+                .push(conary_core::ccs::manifest::DirectoryHook {
+                    path: "/var/lib/state-vim".to_string(),
+                    mode: "0750".to_string(),
+                    owner: "root".to_string(),
+                    group: "root".to_string(),
+                    cleanup: None,
+                    reversible: Some(true),
+                });
+        },
+    );
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    let mut repo = Repository::new("arch-test".to_string(), package_url.clone());
-    let repo_id = repo.insert(&conn).unwrap();
+    let repo_id = crate::commands::test_helpers::insert_test_static_ccs_repository(
+        &conn,
+        "arch-test",
+        &package_url,
+    );
 
     let mut repo_pkg = RepositoryPackage::new(
         repo_id,
@@ -700,19 +863,6 @@ async fn test_state_restore_install_plan_executes_under_wrapping_changeset() {
     );
     repo_pkg.architecture = Some("x86_64".to_string());
     repo_pkg.insert(&conn).unwrap();
-
-    let mut resolution = PackageResolution::new(
-        repo_id,
-        "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
-        }],
-    );
-    resolution.version = Some("9.1.0".to_string());
-    resolution.primary_strategy = PrimaryStrategy::Binary;
-    resolution.insert(&conn).unwrap();
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut cs = Changeset::new("Install vim-9.1.0".to_string());
@@ -766,6 +916,26 @@ async fn test_state_restore_install_plan_executes_under_wrapping_changeset() {
         .unwrap()
         .expect("vim should be restored");
     assert_eq!(vim.version, "9.1.0");
+    let vim_id = vim.id.unwrap();
+    assert_eq!(
+        conary_core::db::models::ProvideEntry::find_by_trove_and_kind(
+            &conn,
+            vim_id,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::Binary,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|provide| provide.capability)
+        .collect::<Vec<_>>(),
+        vec!["state-vim"]
+    );
+    assert!(
+        conary_core::capability::load_capabilities(&conn, vim_id)
+            .unwrap()
+            .unwrap()
+            .network
+            .none
+    );
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM changesets", [], |r| r
             .get::<_, i64>(0))
@@ -778,4 +948,8 @@ async fn test_state_restore_install_plan_executes_under_wrapping_changeset() {
             .unwrap(),
         before_states + 1
     );
+    assert!(active_generation_has_path(
+        Path::new(&db_path),
+        "/var/lib/state-vim"
+    ));
 }

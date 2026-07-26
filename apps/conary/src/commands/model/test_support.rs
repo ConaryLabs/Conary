@@ -11,14 +11,11 @@ use conary_core::ccs::native_lifecycle::{
     ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
 };
 
-pub(super) fn build_test_ccs_package(dir: &Path, name: &str, version: &str) -> PathBuf {
-    build_test_ccs_package_with_bundle(dir, name, version, None)
-}
-
-pub(super) fn build_test_ccs_package_with_bundle(
+pub(super) fn build_test_ccs_package(
     dir: &Path,
     name: &str,
     version: &str,
+    version_scheme: conary_core::repository::versioning::VersionScheme,
     native_lifecycle: Option<NativeLifecycleBundle>,
 ) -> PathBuf {
     use conary_core::ccs::builder::write_signed_current_ccs_package;
@@ -56,9 +53,7 @@ pub(super) fn build_test_ccs_package_with_bundle(
     let component_size = (binary_content.len() + init_content.len()) as u64;
     let package_path = dir.join(format!("{name}-{version}.ccs"));
     let mut manifest = CcsManifest::new_minimal(name, version);
-    if native_lifecycle.is_some() {
-        manifest.package.version_scheme = conary_core::repository::versioning::VersionScheme::Rpm;
-    }
+    manifest.package.version_scheme = version_scheme;
     manifest.package.platform = Some(Platform {
         os: "linux".to_string(),
         arch: Some("x86_64".to_string()),
@@ -88,6 +83,43 @@ pub(super) fn build_test_ccs_package_with_bundle(
     package_path
 }
 
+pub(super) fn insert_test_static_ccs_repository(
+    conn: &rusqlite::Connection,
+    name: &str,
+    url: &str,
+    source_profile: &str,
+) -> i64 {
+    let repository_id =
+        crate::commands::test_helpers::insert_test_static_ccs_repository(conn, name, url);
+    let mut repository = conary_core::db::models::Repository::find_by_id(conn, repository_id)
+        .unwrap()
+        .expect("inserted static repository");
+    repository.source_profile = Some(source_profile.to_string());
+    repository.update(conn).unwrap();
+    repository_id
+}
+
+pub(super) fn insert_test_repository_package_resolution(
+    conn: &rusqlite::Connection,
+    repository_id: i64,
+    repository_package_id: i64,
+    package: &str,
+    version: &str,
+) {
+    use conary_core::db::models::{PackageResolution, PrimaryStrategy, ResolutionStrategy};
+
+    let mut resolution = PackageResolution::new(
+        repository_id,
+        package.to_string(),
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id,
+        }],
+    );
+    resolution.version = Some(version.to_string());
+    resolution.primary_strategy = PrimaryStrategy::RepositoryPackage;
+    resolution.insert(conn).unwrap();
+}
+
 pub(super) fn typed_rpm_replatform_upgrade_bundle(
     package: &str,
     version: &str,
@@ -98,7 +130,7 @@ pub(super) fn typed_rpm_replatform_upgrade_bundle(
         schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
-        source_distro: Some("fedora".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         source_release: Some("44".to_string()),
         source_arch: Some("x86_64".to_string()),
         source_package: package.to_string(),

@@ -1,315 +1,316 @@
 # Critical cross-distro canonical mappings
 # Covers the most important packages that differ between Fedora, Arch, and Ubuntu.
-# Format: Repology-compatible rules (evaluated in order, first match wins).
+# Format: versioned exact canonical-map contract; conflicts are rejected.
 
-rules:
+version: 1
+mappings:
   # Kernel
-  - setname: linux-kernel
-    name: kernel
-    repo: fedora
-  - setname: linux-kernel
-    name: linux
-    repo: arch
-  - setname: linux-kernel
-    name: linux-image-generic
-    repo: ubuntu
+  - canonical: linux-kernel
+    package: kernel
+    profiles: fedora-44
+  - canonical: linux-kernel
+    package: linux
+    profiles: arch
+  - canonical: linux-kernel
+    package: linux-image-generic
+    profiles: ubuntu-26.04
 
   # SSL/TLS runtime
-  - setname: openssl
-    name: openssl
-    repo: [fedora, arch]
-  - setname: openssl
-    name: libssl3
-    repo: ubuntu
+  - canonical: openssl
+    package: openssl
+    profiles: [fedora-44, arch]
+  - canonical: openssl
+    package: libssl3
+    profiles: ubuntu-26.04
 
   # SSL/TLS development
-  - setname: openssl-devel
-    name: openssl-devel
-    repo: fedora
-  - setname: openssl-devel
-    name: openssl
-    repo: arch
-  - setname: openssl-devel
-    name: libssl-dev
-    repo: ubuntu
+  - canonical: openssl-devel
+    package: openssl-devel
+    profiles: fedora-44
+  - canonical: openssl-devel
+    package: openssl
+    profiles: arch
+  - canonical: openssl-devel
+    package: libssl-dev
+    profiles: ubuntu-26.04
 
   # Python
-  - setname: python
-    name: python3
-    repo: [fedora, ubuntu]
-  - setname: python
-    name: python
-    repo: arch
+  - canonical: python
+    package: python3
+    profiles: [fedora-44, ubuntu-26.04]
+  - canonical: python
+    package: python
+    profiles: arch
 
   # zlib
-  - setname: zlib
-    name: zlib
-    repo: [fedora, arch]
-  - setname: zlib
-    name: zlib1g
-    repo: ubuntu
+  - canonical: zlib
+    package: zlib
+    profiles: [fedora-44, arch]
+  - canonical: zlib
+    package: zlib1g
+    profiles: ubuntu-26.04
 
   # zlib development
-  - setname: zlib-devel
-    name: zlib-devel
-    repo: fedora
-  - setname: zlib-devel
-    name: zlib
-    repo: arch
-  - setname: zlib-devel
-    name: zlib1g-dev
-    repo: ubuntu
+  - canonical: zlib-devel
+    package: zlib-devel
+    profiles: fedora-44
+  - canonical: zlib-devel
+    package: zlib
+    profiles: arch
+  - canonical: zlib-devel
+    package: zlib1g-dev
+    profiles: ubuntu-26.04
 
   # glibc
-  - setname: glibc
-    name: glibc
-    repo: [fedora, arch]
-  - setname: glibc
-    name: libc6
-    repo: ubuntu
+  - canonical: glibc
+    package: glibc
+    profiles: [fedora-44, arch]
+  - canonical: glibc
+    package: libc6
+    profiles: ubuntu-26.04
 
   # ncurses
-  - setname: ncurses
-    name: ncurses
-    repo: [fedora, arch]
-  - setname: ncurses
-    name: libncurses6
-    repo: ubuntu
+  - canonical: ncurses
+    package: ncurses
+    profiles: [fedora-44, arch]
+  - canonical: ncurses
+    package: libncurses6
+    profiles: ubuntu-26.04
 
   # ncurses development
-  - setname: ncurses-devel
-    name: ncurses-devel
-    repo: fedora
-  - setname: ncurses-devel
-    name: ncurses
-    repo: arch
-  - setname: ncurses-devel
-    name: libncurses-dev
-    repo: ubuntu
+  - canonical: ncurses-devel
+    package: ncurses-devel
+    profiles: fedora-44
+  - canonical: ncurses-devel
+    package: ncurses
+    profiles: arch
+  - canonical: ncurses-devel
+    package: libncurses-dev
+    profiles: ubuntu-26.04
 
   # readline
-  - setname: readline
-    name: readline
-    repo: [fedora, arch]
-  - setname: readline
-    name: libreadline8
-    repo: ubuntu
+  - canonical: readline
+    package: readline
+    profiles: [fedora-44, arch]
+  - canonical: readline
+    package: libreadline8
+    profiles: ubuntu-26.04
 
   # readline development
-  - setname: readline-devel
-    name: readline-devel
-    repo: fedora
-  - setname: readline-devel
-    name: readline
-    repo: arch
-  - setname: readline-devel
-    name: libreadline-dev
-    repo: ubuntu
+  - canonical: readline-devel
+    package: readline-devel
+    profiles: fedora-44
+  - canonical: readline-devel
+    package: readline
+    profiles: arch
+  - canonical: readline-devel
+    package: libreadline-dev
+    profiles: ubuntu-26.04
 
   # systemd
-  - setname: systemd
-    name: systemd
-    repo: [fedora, arch, ubuntu]
+  - canonical: systemd
+    package: systemd
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # dbus
-  - setname: dbus
-    name: dbus
-    repo: [fedora, arch, ubuntu]
+  - canonical: dbus
+    package: dbus
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # HTTP servers
-  - setname: apache-httpd
-    name: httpd
-    repo: fedora
-  - setname: apache-httpd
-    name: apache
-    repo: arch
-  - setname: apache-httpd
-    name: apache2
-    repo: ubuntu
+  - canonical: apache-httpd
+    package: httpd
+    profiles: fedora-44
+  - canonical: apache-httpd
+    package: apache
+    profiles: arch
+  - canonical: apache-httpd
+    package: apache2
+    profiles: ubuntu-26.04
 
   # nginx
-  - setname: nginx
-    name: nginx
-    repo: [fedora, arch, ubuntu]
+  - canonical: nginx
+    package: nginx
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # PostgreSQL
-  - setname: postgresql
-    name: postgresql
-    repo: [fedora, arch, ubuntu]
+  - canonical: postgresql
+    package: postgresql
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # PostgreSQL development
-  - setname: postgresql-devel
-    name: libpq-devel
-    repo: fedora
-  - setname: postgresql-devel
-    name: postgresql-libs
-    repo: arch
-  - setname: postgresql-devel
-    name: libpq-dev
-    repo: ubuntu
+  - canonical: postgresql-devel
+    package: libpq-devel
+    profiles: fedora-44
+  - canonical: postgresql-devel
+    package: postgresql-libs
+    profiles: arch
+  - canonical: postgresql-devel
+    package: libpq-dev
+    profiles: ubuntu-26.04
 
   # SQLite
-  - setname: sqlite
-    name: sqlite
-    repo: [fedora, arch]
-  - setname: sqlite
-    name: sqlite3
-    repo: ubuntu
+  - canonical: sqlite
+    package: sqlite
+    profiles: [fedora-44, arch]
+  - canonical: sqlite
+    package: sqlite3
+    profiles: ubuntu-26.04
 
   # SQLite development
-  - setname: sqlite-devel
-    name: sqlite-devel
-    repo: fedora
-  - setname: sqlite-devel
-    name: sqlite
-    repo: arch
-  - setname: sqlite-devel
-    name: libsqlite3-dev
-    repo: ubuntu
+  - canonical: sqlite-devel
+    package: sqlite-devel
+    profiles: fedora-44
+  - canonical: sqlite-devel
+    package: sqlite
+    profiles: arch
+  - canonical: sqlite-devel
+    package: libsqlite3-dev
+    profiles: ubuntu-26.04
 
   # util-linux
-  - setname: util-linux
-    name: util-linux
-    repo: [fedora, arch, ubuntu]
+  - canonical: util-linux
+    package: util-linux
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # shadow (user/group management)
-  - setname: shadow
-    name: shadow-utils
-    repo: fedora
-  - setname: shadow
-    name: shadow
-    repo: [arch, ubuntu]
+  - canonical: shadow
+    package: shadow-utils
+    profiles: fedora-44
+  - canonical: shadow
+    package: shadow
+    profiles: [arch, ubuntu-26.04]
 
   # PAM
-  - setname: pam
-    name: pam
-    repo: [fedora, arch]
-  - setname: pam
-    name: libpam0g
-    repo: ubuntu
+  - canonical: pam
+    package: pam
+    profiles: [fedora-44, arch]
+  - canonical: pam
+    package: libpam0g
+    profiles: ubuntu-26.04
 
   # PAM development
-  - setname: pam-devel
-    name: pam-devel
-    repo: fedora
-  - setname: pam-devel
-    name: pam
-    repo: arch
-  - setname: pam-devel
-    name: libpam0g-dev
-    repo: ubuntu
+  - canonical: pam-devel
+    package: pam-devel
+    profiles: fedora-44
+  - canonical: pam-devel
+    package: pam
+    profiles: arch
+  - canonical: pam-devel
+    package: libpam0g-dev
+    profiles: ubuntu-26.04
 
   # sudo
-  - setname: sudo
-    name: sudo
-    repo: [fedora, arch, ubuntu]
+  - canonical: sudo
+    package: sudo
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # bash
-  - setname: bash
-    name: bash
-    repo: [fedora, arch, ubuntu]
+  - canonical: bash
+    package: bash
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # coreutils
-  - setname: coreutils
-    name: coreutils
-    repo: [fedora, arch, ubuntu]
+  - canonical: coreutils
+    package: coreutils
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # grep
-  - setname: grep
-    name: grep
-    repo: [fedora, arch, ubuntu]
+  - canonical: grep
+    package: grep
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # sed
-  - setname: sed
-    name: sed
-    repo: [fedora, arch, ubuntu]
+  - canonical: sed
+    package: sed
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # gawk
-  - setname: gawk
-    name: gawk
-    repo: [fedora, arch, ubuntu]
+  - canonical: gawk
+    package: gawk
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # findutils
-  - setname: findutils
-    name: findutils
-    repo: [fedora, arch, ubuntu]
+  - canonical: findutils
+    package: findutils
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # tar
-  - setname: tar
-    name: tar
-    repo: [fedora, arch, ubuntu]
+  - canonical: tar
+    package: tar
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # gzip
-  - setname: gzip
-    name: gzip
-    repo: [fedora, arch, ubuntu]
+  - canonical: gzip
+    package: gzip
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # xz
-  - setname: xz
-    name: xz
-    repo: [fedora, arch]
-  - setname: xz
-    name: xz-utils
-    repo: ubuntu
+  - canonical: xz
+    package: xz
+    profiles: [fedora-44, arch]
+  - canonical: xz
+    package: xz-utils
+    profiles: ubuntu-26.04
 
   # bzip2
-  - setname: bzip2
-    name: bzip2
-    repo: [fedora, arch, ubuntu]
+  - canonical: bzip2
+    package: bzip2
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # file
-  - setname: file
-    name: file
-    repo: [fedora, arch, ubuntu]
+  - canonical: file
+    package: file
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # less
-  - setname: less
-    name: less
-    repo: [fedora, arch, ubuntu]
+  - canonical: less
+    package: less
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # man-db
-  - setname: man-db
-    name: man-db
-    repo: [fedora, arch, ubuntu]
+  - canonical: man-db
+    package: man-db
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # curl
-  - setname: curl
-    name: curl
-    repo: [fedora, arch, ubuntu]
+  - canonical: curl
+    package: curl
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # curl development
-  - setname: curl-devel
-    name: libcurl-devel
-    repo: fedora
-  - setname: curl-devel
-    name: curl
-    repo: arch
-  - setname: curl-devel
-    name: libcurl4-openssl-dev
-    repo: ubuntu
+  - canonical: curl-devel
+    package: libcurl-devel
+    profiles: fedora-44
+  - canonical: curl-devel
+    package: curl
+    profiles: arch
+  - canonical: curl-devel
+    package: libcurl4-openssl-dev
+    profiles: ubuntu-26.04
 
   # wget
-  - setname: wget
-    name: wget
-    repo: [fedora, arch, ubuntu]
+  - canonical: wget
+    package: wget
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # git
-  - setname: git
-    name: git
-    repo: [fedora, arch, ubuntu]
+  - canonical: git
+    package: git
+    profiles: [fedora-44, arch, ubuntu-26.04]
 
   # openssh
-  - setname: openssh
-    name: openssh
-    repo: [fedora, arch]
-  - setname: openssh
-    name: openssh-client
-    repo: ubuntu
+  - canonical: openssh
+    package: openssh
+    profiles: [fedora-44, arch]
+  - canonical: openssh
+    package: openssh-client
+    profiles: ubuntu-26.04
 
   # openssh server
-  - setname: openssh-server
-    name: openssh-server
-    repo: [fedora, ubuntu]
-  - setname: openssh-server
-    name: openssh
-    repo: arch
+  - canonical: openssh-server
+    package: openssh-server
+    profiles: [fedora-44, ubuntu-26.04]
+  - canonical: openssh-server
+    package: openssh
+    profiles: arch

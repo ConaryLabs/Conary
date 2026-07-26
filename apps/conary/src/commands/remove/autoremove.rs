@@ -1,7 +1,7 @@
 // apps/conary/src/commands/remove/autoremove.rs
 
 use anyhow::Result;
-use conary_core::db::models::{FileEntry, Trove};
+use conary_core::db::models::{PackagePayloadOwnership, Trove};
 use conary_core::scriptlet::ExecutionMode;
 use std::collections::HashSet;
 use tracing::info;
@@ -152,10 +152,9 @@ fn preflight_autoremove_round(
                 trove.version
             );
         };
-        let paths = FileEntry::find_by_trove(conn, trove_id)?
-            .into_iter()
-            .map(|file| file.path)
-            .collect();
+        let paths = PackagePayloadOwnership::load(conn, trove_id)?
+            .lifecycle_paths()
+            .to_vec();
         let native_transaction =
             crate::commands::install::native_events::PreparedNativeTransaction::prepare_remove(
                 conn,
@@ -349,16 +348,32 @@ mod tests {
 
     #[tokio::test]
     async fn autoremove_automatically_replays_native_remove_lifecycle() {
-        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_clear_guard();
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        conary_core::db::models::DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-        seed_dependency_trove(&conn, "aa-plain-orphan");
-        let native_trove_id = seed_dependency_trove(&conn, "zz-native-orphan");
+        conary_core::db::models::DistroPin::set(
+            &conn,
+            "fedora-44",
+            conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
+        )
+        .unwrap();
+        seed_dependency_trove(
+            &conn,
+            "aa-plain-orphan",
+            "1.0.0",
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        let native_trove_id = seed_dependency_trove(
+            &conn,
+            "zz-native-orphan",
+            "1.0.0-1.fc44",
+            conary_core::repository::versioning::VersionScheme::Rpm,
+        );
         seed_installed_native_lifecycle_bundle(&conn, native_trove_id, "zz-native-orphan");
         drop(conn);
 
@@ -371,26 +386,60 @@ mod tests {
         .unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        assert_eq!(table_count(&conn, "troves"), 0);
+        assert_eq!(table_count(&conn, "troves"), 1);
+        assert!(
+            Trove::find_one_by_name(&conn, "test-runtime-base")
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(table_count(&conn, "installed_native_lifecycle_bundles"), 0);
         assert_eq!(table_count(&conn, "changesets"), 2);
-        let metadata = changeset_metadata_by_description(&conn, "Remove zz-native-orphan-1.0.0");
-        let planned_entries = metadata["native_lifecycle_replay"]["planned_entries"]
-            .as_array()
-            .expect("planned entries array");
-        assert_eq!(planned_entries.len(), 1);
-        assert_eq!(planned_entries[0]["entry_id"], "rpm:%postun");
-        assert_eq!(planned_entries[0]["phase"], "post-remove");
-        assert!(planned_entries[0].get("outcome").is_some());
+        let metadata =
+            changeset_metadata_by_description(&conn, "Remove zz-native-orphan-1.0.0-1.fc44");
+        assert!(
+            metadata["removed_troves"][0]["native_lifecycle"]["bundle_toml"]
+                .as_str()
+                .unwrap()
+                .contains("rpm:%postun")
+        );
+
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+        let generation = conary_core::generation::mount::current_generation(runtime_root.root())
+            .unwrap()
+            .expect("autoremove should publish a generation");
+        let artifact = conary_core::generation::artifact::load_generation_artifact(
+            &runtime_root.generation_path(generation),
+        )
+        .unwrap();
+        let marker = artifact
+            .generation_root
+            .entries
+            .iter()
+            .find(|entry| entry.path == "/autoremove-native-lifecycle-ran")
+            .expect("RPM remove lifecycle marker in published root");
+        let content = marker.content.as_ref().expect("marker content authority");
+        assert_eq!(
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+                .unwrap()
+                .retrieve(&content.sha256)
+                .unwrap(),
+            b"zz-native-orphan"
+        );
     }
 
-    fn seed_dependency_trove(conn: &rusqlite::Connection, name: &str) -> i64 {
+    fn seed_dependency_trove(
+        conn: &rusqlite::Connection,
+        name: &str,
+        version: &str,
+        version_scheme: conary_core::repository::versioning::VersionScheme,
+    ) -> i64 {
         let mut trove = Trove::new_with_source(
             name.to_string(),
-            "1.0.0".to_string(),
+            version.to_string(),
             TroveType::Package,
             InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Conary,
+            version_scheme,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.install_reason = InstallReason::Dependency;
@@ -415,7 +464,7 @@ mod tests {
             schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
             source_format: SourceFormat::Rpm,
             source_family: "fedora-rhel".to_string(),
-            source_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora-44".to_string()),
             source_release: Some("44".to_string()),
             source_arch: Some("x86_64".to_string()),
             source_package: package.to_string(),
@@ -434,15 +483,19 @@ mod tests {
     }
 
     fn native_post_remove_entry() -> NativeLifecycleEntry {
-        let body = "echo replay-post-remove\n";
+        let body = r#"
+local marker = assert(io.open("/autoremove-native-lifecycle-ran", "w"))
+marker:write("zz-native-orphan")
+marker:close()
+"#;
         NativeLifecycleEntry {
             id: "rpm:%postun".to_string(),
             native_slot: "%postun".to_string(),
             kind: NativeLifecycleEntryKind::Executable,
             phase: LifecyclePath::PostRemove,
             lifecycle_paths: vec!["remove:post".to_string()],
-            interpreter: "/bin/sh".to_string(),
-            interpreter_args: vec!["-e".to_string()],
+            interpreter: "<lua>".to_string(),
+            interpreter_args: Vec::new(),
             body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
             body: body.to_string(),
             body_encoding: None,
@@ -461,12 +514,12 @@ mod tests {
             sandbox: None,
             capabilities: Vec::new(),
             evidence_digest: Some(conary_core::hash::sha256_prefixed(
-                b"rpm:%postun:echo replay-post-remove",
+                b"rpm:%postun:print replay-post-remove",
             )),
             source_evidence_refs: vec!["capture:rpm:%postun".to_string()],
             rpm_trigger: None,
             rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
-                program: conary_core::ccs::native_lifecycle::RpmProgram::External,
+                program: conary_core::ccs::native_lifecycle::RpmProgram::EmbeddedLua,
                 body_transforms: Vec::new(),
                 critical: false,
                 criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,

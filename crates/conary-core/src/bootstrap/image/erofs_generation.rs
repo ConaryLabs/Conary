@@ -3,7 +3,7 @@
 //! Exact composefs-native bootstrap generation output.
 
 use super::{ImageBuilder, ImageError, ImageFormat, ImageResult, dir_size};
-use crate::db::models::{FileEntry, Trove, TroveType};
+use crate::db::models::{ExistingDirectoryMaterialization, FileEntry, Trove, TroveType};
 use crate::db::schema::ensure_current;
 use crate::filesystem::CasStore;
 use crate::generation::artifact::{
@@ -85,7 +85,12 @@ impl ImageBuilder {
                 )
             })
             .collect::<Vec<_>>();
-        FileEntry::batch_insert(&conn, &installed_entries).map_err(|e| {
+        FileEntry::batch_insert(
+            &conn,
+            &installed_entries,
+            ExistingDirectoryMaterialization::ApplyIncoming,
+        )
+        .map_err(|e| {
             ImageError::CreationFailed(format!("Failed to insert exact file entries: {e}"))
         })?;
 

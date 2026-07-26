@@ -4,9 +4,11 @@
 
 use super::{NativeBundleOwner, PreparedNativeTransaction, executor_for_owner, runtime};
 use anyhow::{Context, Result};
+use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::{
     DebRecoveryDisposition, DebRecoveryResult, NativeEventProgram, NativeTransactionEvent,
 };
+use conary_core::db::models::DebianDebconfState;
 use conary_core::scriptlet::{ExecutionMode, SandboxMode, ScriptletExecutor};
 use std::path::Path;
 use tracing::warn;
@@ -20,10 +22,15 @@ impl PreparedNativeTransaction {
         mode: &ExecutionMode,
     ) -> Result<std::result::Result<(), anyhow::Error>> {
         let snapshot = self.materialize_debian_admin(conn, Some(event), root)?;
-        let execution = self.execute_event(event, root, mode);
+        let bridge = self.prepare_debian_lifecycle_bridge(conn, event, root)?;
+        let execution = self.execute_event(event, root, mode, bridge.as_ref());
+        let debconf_settlement = settle_debian_lifecycle_event(conn, bridge.as_ref(), execution);
+        let mut admin_capture = Ok(());
         if let Some(snapshot) = snapshot.as_ref() {
-            self.capture_debian_admin_mutations(conn, snapshot, root, event)?;
+            admin_capture = self.capture_debian_admin_mutations(conn, snapshot, root, event);
         }
+        let execution = debconf_settlement?;
+        admin_capture?;
         Ok(execution)
     }
 
@@ -32,19 +39,25 @@ impl PreparedNativeTransaction {
         event: &NativeTransactionEvent,
         root: &Path,
         mode: &ExecutionMode,
+        bridge: Option<&super::debian_runtime::DebianLifecycleBridge>,
     ) -> Result<()> {
         let owner = self.owner_for_event(event)?;
-        let executor = executor_for_owner(owner, root)?;
+        let mut executor = executor_for_owner(owner, root)?;
+        if let Some(bridge) = bridge {
+            executor = executor.with_lifecycle_bridge(bridge.config());
+        }
 
         let result = match &event.program {
             NativeEventProgram::BundleEntry { entry_id } => runtime::execute_entry(
                 owner,
                 &executor,
-                entry_id,
-                mode,
-                &event.args,
-                &event.stdin,
-                event.deb_package_refcount,
+                runtime::EntryInvocation::new(
+                    entry_id,
+                    mode,
+                    &event.args,
+                    &event.stdin,
+                    event.deb_package_refcount,
+                ),
             ),
             NativeEventProgram::Command { argv } => executor
                 .execute_native_command("native-transaction-hook", argv, &event.stdin)
@@ -70,6 +83,43 @@ impl PreparedNativeTransaction {
                 );
         }
         result
+    }
+
+    fn prepare_debian_lifecycle_bridge(
+        &self,
+        conn: &rusqlite::Connection,
+        event: &NativeTransactionEvent,
+        root: &Path,
+    ) -> Result<Option<super::debian_runtime::DebianLifecycleBridge>> {
+        let owner = self.owner_for_event(event)?;
+        if owner.bundle.source_format != SourceFormat::Deb {
+            return Ok(None);
+        }
+        let state = DebianDebconfState::load(conn)
+            .context("cannot load normalized Debian debconf state before lifecycle event")?;
+        let templates = owner.bundle.debconf_templates().with_context(|| {
+            format!(
+                "cannot resolve debconf templates authority for {} {}",
+                owner.package_name, owner.package_version
+            )
+        })?;
+        if let Some(authority) = &templates
+            && (authority.source_package != owner.package_name
+                || authority.source_version != owner.package_version)
+        {
+            anyhow::bail!(
+                "debconf templates authority {} {} does not match lifecycle event owner {} {}",
+                authority.source_package,
+                authority.source_version,
+                owner.package_name,
+                owner.package_version
+            );
+        }
+        let records = templates
+            .as_ref()
+            .map_or([].as_slice(), |authority| authority.records.as_slice());
+        super::debian_runtime::DebianLifecycleBridge::new(root, &owner.package_name, state, records)
+            .map(Some)
     }
 
     pub(super) fn execute_deb_recovery(
@@ -188,4 +238,17 @@ impl PreparedNativeTransaction {
                 .to_string(),
         ]))
     }
+}
+
+pub(super) fn settle_debian_lifecycle_event(
+    conn: &rusqlite::Connection,
+    bridge: Option<&super::debian_runtime::DebianLifecycleBridge>,
+    execution: Result<()>,
+) -> Result<Result<()>> {
+    if let Some(bridge) = bridge {
+        let state = bridge.state()?;
+        DebianDebconfState::replace(conn, &state)
+            .context("cannot persist Debian debconf state after lifecycle event")?;
+    }
+    Ok(execution)
 }

@@ -61,10 +61,8 @@ fn package_format_trait_exposes_native_abi_default_empty_for_test_double() {
             &[]
         }
 
-        fn extract_file_contents(
-            &self,
-        ) -> conary_core::Result<Vec<conary_core::packages::traits::ExtractedFile>> {
-            Ok(Vec::new())
+        fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
+            Ok(conary_core::packages::PackagePayload::default())
         }
 
         fn to_trove(&self) -> Trove {
@@ -370,15 +368,15 @@ fn conversion_preserves_upstream_native_entries_in_ccs_scriptlet_bundle() {
 
     let rpm_path = write_rpm_fixture(temp.path());
     let rpm = RpmPackage::parse(rpm_path.to_str().expect("utf8 rpm path")).expect("parse rpm");
-    assert_conversion_preserves_native_entries(&rpm, &rpm_path, "rpm");
+    assert_conversion_preserves_native_entries(&rpm, &rpm_path, "rpm", "fedora-44");
 
     let deb_path = write_deb_fixture(temp.path());
     let deb = DebPackage::parse(deb_path.to_str().expect("utf8 deb path")).expect("parse deb");
-    assert_conversion_preserves_native_entries(&deb, &deb_path, "deb");
+    assert_conversion_preserves_native_entries(&deb, &deb_path, "deb", "ubuntu-26.04");
 
     let arch_path = write_arch_fixture(temp.path());
     let arch = ArchPackage::parse(arch_path.to_str().expect("utf8 arch path")).expect("parse arch");
-    assert_conversion_preserves_native_entries(&arch, &arch_path, "arch");
+    assert_conversion_preserves_native_entries(&arch, &arch_path, "arch", "arch");
 }
 
 fn native_slots(package: &impl PackageFormat) -> BTreeSet<&str> {
@@ -449,24 +447,25 @@ fn assert_conversion_preserves_native_entries(
     package: &impl PackageFormat,
     package_path: &Path,
     format: &str,
+    source_profile: &str,
 ) {
     let output = TempDir::new().expect("converter output tempdir");
     let converter = NativePackageConverter::new(ConversionOptions {
         output_dir: output.path().to_path_buf(),
-        ..ConversionOptions::default()
     })
     .with_signing_key(Arc::new(
         SigningKeyPair::generate().with_key_id("native-abi-test"),
-    ));
+    ))
+    .with_source_profile(source_profile);
     let metadata = metadata_from_package(package, package_path);
-    let files = package
-        .extract_file_contents()
-        .expect("extract package file contents");
+    let payload = package
+        .package_payload()
+        .expect("open package payload sources");
 
     let result = converter
-        .convert(
+        .convert_payload(
             &metadata,
-            &files,
+            payload.files(),
             format,
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
@@ -567,6 +566,7 @@ fn metadata_from_package(package: &impl PackageFormat, package_path: &Path) -> P
         version: package.version().to_string(),
         version_scheme: package.version_scheme(),
         architecture: package.architecture().map(str::to_string),
+        debian_multi_arch: package.debian_multi_arch(),
         description: package.description().map(str::to_string),
         files: package.files().to_vec(),
         requirements: package.requirements().to_vec(),

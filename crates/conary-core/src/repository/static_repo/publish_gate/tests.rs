@@ -137,6 +137,47 @@ fn artifact_gate_accepts_attested_v2_package() {
 }
 
 #[test]
+fn artifact_gate_does_not_require_command_risk_diagnostics() {
+    let signer = SigningKeyPair::generate().with_key_id("publish");
+    let temp = tempfile::tempdir().unwrap();
+    let package_path = temp.path().join("attested-v2-no-command-diagnostics.ccs");
+    let authority =
+        crate::ccs::v2::test_support::package_authority_with_one_file("no-command-diagnostics");
+    let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+    let mut envelope = crate::ccs::attestation::test_support::sample_v2_envelope_for_tests(
+        &authority,
+        &signer,
+        STATIC_PUBLISH_POLICY_DIGEST_V1,
+    );
+    envelope.payload.build_command_risk_report_hash.clear();
+    envelope.payload.command_risk_classifier_version.clear();
+    let envelope = sign_build_attestation(envelope.payload, &signer).unwrap();
+    crate::ccs::builder::write_v2_ccs_package(
+        &authority,
+        &payloads,
+        &package_path,
+        &signer,
+        None,
+        Some(&envelope),
+        None,
+    )
+    .unwrap();
+
+    let report = verify_static_artifact_publish_eligibility(
+        &package_path,
+        &accepted_signers_for_key(&signer),
+        STATIC_PUBLISH_POLICY_DIGEST_V1,
+    )
+    .unwrap();
+
+    assert!(
+        report.is_passed(),
+        "diagnostic absence must not decide publication: {:?}",
+        report.failures
+    );
+}
+
+#[test]
 fn artifact_gate_candidate_returns_verified_v2_package_for_native_intake() {
     let signer = SigningKeyPair::generate().with_key_id("publish");
     let temp = tempfile::tempdir().unwrap();
@@ -223,7 +264,6 @@ fn m4a_preserves_active_publish_gate_failure_codes() {
         PublishGateFailureCode::UnacceptedSignerKey,
         PublishGateFailureCode::NonHermeticHardeningLevel,
         PublishGateFailureCode::StaleOrUnknownPolicy,
-        PublishGateFailureCode::InvalidDiagnosticEvidence,
         PublishGateFailureCode::ForeignConversionMissingBoundary,
         PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
         PublishGateFailureCode::RecordedDraftArtifact,
@@ -432,6 +472,37 @@ fn foreign_converted_publish_treats_classifier_severity_as_diagnostic_only() {
     );
 }
 
+#[test]
+fn foreign_converted_publish_does_not_require_command_risk_reports() {
+    let signer = SigningKeyPair::generate().with_key_id("publish");
+    let (_temp, package_path) = foreign_attested_artifact_with_signed_boundary_for_tests(
+        &signer,
+        |boundary| {
+            boundary.build_risk_report_hash = None;
+            boundary.build_risk_report = None;
+            boundary.scriptlet_risk_report_hash = None;
+            boundary.scriptlet_risk_report = None;
+        },
+        |payload| {
+            payload.build_command_risk_report_hash.clear();
+            payload.command_risk_classifier_version.clear();
+        },
+    );
+
+    let report = verify_static_artifact_publish_eligibility(
+        &package_path,
+        &accepted_signers_for_key(&signer),
+        STATIC_PUBLISH_POLICY_DIGEST_V1,
+    )
+    .unwrap();
+
+    assert!(
+        report.is_passed(),
+        "diagnostic report absence must not decide publication: {:?}",
+        report.failures
+    );
+}
+
 fn accepted_signers_for_key(key: &SigningKeyPair) -> AcceptedStaticSignerSet {
     AcceptedStaticSignerSet::from_initial_key(
         key.key_id().unwrap_or("publish"),
@@ -449,7 +520,6 @@ fn active_failure_codes_for_tests() -> Vec<PublishGateFailureCode> {
         PublishGateFailureCode::UnacceptedSignerKey,
         PublishGateFailureCode::NonHermeticHardeningLevel,
         PublishGateFailureCode::StaleOrUnknownPolicy,
-        PublishGateFailureCode::InvalidDiagnosticEvidence,
         PublishGateFailureCode::ForeignConversionMissingBoundary,
         PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
         PublishGateFailureCode::RecordedDraftArtifact,

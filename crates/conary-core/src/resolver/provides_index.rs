@@ -9,8 +9,11 @@
 //! 3. `appstream_provides` (cross-distro provides from AppStream)
 
 use crate::error::Result;
+use crate::repository::dependency_model::ProvideVersionRelation;
 use crate::repository::distro::require_version_scheme_from_db;
-use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
+use crate::repository::versioning::{
+    RepoVersionConstraint, VersionScheme, provided_range_matches_requirement,
+};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -25,6 +28,8 @@ pub struct ProviderEntry {
     pub canonical_id: Option<i64>,
     /// Version of the provide (e.g., "3.2.0" for libssl.so.3)
     pub provide_version: Option<String>,
+    /// Ordered relation associated with `provide_version`.
+    pub version_relation: Option<ProvideVersionRelation>,
     /// Version comparison scheme
     pub version_scheme: Option<VersionScheme>,
 }
@@ -44,7 +49,8 @@ impl ProvidesIndex {
         // 1. Repository provides (from sync)
         {
             let mut stmt = conn.prepare(
-                "SELECT rp.capability, rp.version, rp.version_scheme, rp.repository_package_id
+                "SELECT rp.capability, rp.version, rp.version_relation, rp.version_scheme,
+                        rp.repository_package_id
                  FROM repository_provides rp
                  JOIN repository_packages pkg ON rp.repository_package_id = pkg.id
                  JOIN repositories r ON pkg.repository_id = r.id
@@ -53,17 +59,13 @@ impl ProvidesIndex {
             let rows = stmt.query_and_then([], |row| -> Result<(String, ProviderEntry)> {
                 let cap: String = row.get(0)?;
                 let version: Option<String> = row.get(1)?;
-                let scheme_str: Option<String> = row.get(2)?;
-                let pkg_id: i64 = row.get(3)?;
-                let version_scheme = version
-                    .as_ref()
-                    .map(|_| {
-                        require_version_scheme_from_db(
-                            scheme_str.as_deref(),
-                            format!("repository provide '{cap}' for package row {pkg_id}"),
-                        )
-                    })
-                    .transpose()?;
+                let relation = provider_relation(row.get::<_, Option<String>>(2)?, &version)?;
+                let scheme_str: Option<String> = row.get(3)?;
+                let pkg_id: i64 = row.get(4)?;
+                let version_scheme = Some(require_version_scheme_from_db(
+                    scheme_str.as_deref(),
+                    format!("repository provide '{cap}' for package row {pkg_id}"),
+                )?);
                 Ok((
                     cap,
                     ProviderEntry {
@@ -71,6 +73,7 @@ impl ProvidesIndex {
                         installed_trove_id: None,
                         canonical_id: None,
                         provide_version: version,
+                        version_relation: relation,
                         version_scheme,
                     },
                 ))
@@ -84,16 +87,17 @@ impl ProvidesIndex {
         // 2. Installed provides
         {
             let mut stmt = conn.prepare(
-                "SELECT p.capability, p.version, t.version_scheme, p.trove_id
+                "SELECT p.capability, p.version, p.version_relation, p.version_scheme, p.trove_id
                  FROM provides p
                  JOIN troves t ON p.trove_id = t.id",
             )?;
             let rows = stmt.query_and_then([], |row| -> Result<(String, ProviderEntry)> {
                 let cap: String = row.get(0)?;
                 let version: Option<String> = row.get(1)?;
-                let installed_scheme = crate::db::models::version_scheme_from_row(row, 2)?;
-                let trove_id: i64 = row.get(3)?;
-                let version_scheme = version.as_ref().map(|_| installed_scheme);
+                let relation = provider_relation(row.get::<_, Option<String>>(2)?, &version)?;
+                let installed_scheme = crate::db::models::version_scheme_from_row(row, 3)?;
+                let trove_id: i64 = row.get(4)?;
+                let version_scheme = Some(installed_scheme);
                 Ok((
                     cap,
                     ProviderEntry {
@@ -101,6 +105,7 @@ impl ProvidesIndex {
                         installed_trove_id: Some(trove_id),
                         canonical_id: None,
                         provide_version: version,
+                        version_relation: relation,
                         version_scheme,
                     },
                 ))
@@ -125,6 +130,7 @@ impl ProvidesIndex {
                         installed_trove_id: None,
                         canonical_id: Some(canonical_id),
                         provide_version: None,
+                        version_relation: None,
                         version_scheme: None,
                     },
                 ))
@@ -155,9 +161,14 @@ impl ProvidesIndex {
     ) -> Result<Vec<&ProviderEntry>> {
         let mut matches = Vec::new();
         for provider in self.find_providers(capability) {
-            let matched = match &provider.provide_version {
-                Some(version) if provider.version_scheme == Some(scheme) => {
-                    repo_version_satisfies(scheme, version, constraint)?
+            let matched = match provider.version_scheme {
+                Some(provider_scheme) if provider_scheme == scheme => {
+                    provided_range_matches_requirement(
+                        scheme,
+                        provider.version_relation,
+                        provider.provide_version.as_deref(),
+                        constraint,
+                    )?
                 }
                 Some(_) => false,
                 None => matches!(constraint, RepoVersionConstraint::Any),
@@ -177,6 +188,32 @@ impl ProvidesIndex {
     /// Total number of provider entries across all capabilities.
     pub fn provider_count(&self) -> usize {
         self.providers.values().map(|v| v.len()).sum()
+    }
+}
+
+fn provider_relation(
+    relation: Option<String>,
+    version: &Option<String>,
+) -> rusqlite::Result<Option<ProvideVersionRelation>> {
+    match (relation, version) {
+        (None, None) => Ok(None),
+        (Some(relation), Some(_)) => ProvideVersionRelation::parse_exact(&relation)
+            .map(Some)
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                )
+            }),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "provider range relation and version must be paired",
+            )),
+        )),
     }
 }
 
@@ -206,8 +243,10 @@ mod tests {
         let pkg_id = conn.last_insert_rowid();
 
         conn.execute(
-            "INSERT INTO repository_provides (repository_package_id, capability, version, kind, version_scheme)
-             VALUES (?1, 'libssl.so.3', '3.2.0', 'library', 'rpm')",
+            "INSERT INTO repository_provides
+             (repository_package_id, capability, version, version_relation, kind, version_scheme,
+              architecture_qualifier_kind)
+             VALUES (?1, 'libssl.so.3', '3.2.0', 'eq', 'soname', 'rpm', 'implicit')",
             [pkg_id],
         )
         .unwrap();
@@ -233,8 +272,9 @@ mod tests {
         let trove_id = conn.last_insert_rowid();
 
         conn.execute(
-            "INSERT INTO provides (trove_id, capability, kind)
-             VALUES (?1, 'libssl.so.3', 'library')",
+            "INSERT INTO provides (
+                 trove_id, capability, kind, version_scheme, architecture_qualifier_kind
+             ) VALUES (?1, 'libssl.so.3', 'soname', 'rpm', 'implicit')",
             [trove_id],
         )
         .unwrap();
@@ -300,8 +340,10 @@ mod tests {
             .unwrap();
             let pkg_id = conn.last_insert_rowid();
             conn.execute(
-                "INSERT INTO repository_provides (repository_package_id, capability, version, kind, version_scheme)
-                 VALUES (?1, 'libfoo.so', ?2, 'library', 'rpm')",
+                "INSERT INTO repository_provides
+                 (repository_package_id, capability, version, version_relation, kind, version_scheme,
+                  architecture_qualifier_kind)
+                 VALUES (?1, 'libfoo.so', ?2, 'eq', 'soname', 'rpm', 'implicit')",
                 rusqlite::params![pkg_id, version],
             )
             .unwrap();
@@ -346,8 +388,9 @@ mod tests {
 
         conn.execute(
             "INSERT INTO repository_provides
-             (repository_package_id, capability, version, kind, version_scheme)
-             VALUES (?1, 'libfoo.so', '1.0', 'library', 'rpm')",
+             (repository_package_id, capability, version, version_relation, kind, version_scheme,
+              architecture_qualifier_kind)
+             VALUES (?1, 'libfoo.so', '1.0', 'eq', 'soname', 'rpm', 'implicit')",
             [pkg_id],
         )
         .unwrap();

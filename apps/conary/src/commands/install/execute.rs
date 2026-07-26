@@ -7,7 +7,7 @@
 
 use super::ExtractionResult;
 use super::inner;
-use crate::commands::LiveRootFile;
+use crate::commands::{LiveRootContent, LiveRootFile};
 use anyhow::{Context, Result};
 use conary_core::filesystem::CasStore;
 use conary_core::packages::PackageFormat;
@@ -48,18 +48,8 @@ pub(super) fn live_root_files_from_stored_files(
                     let hash = file.cas_hash.as_deref().ok_or_else(|| {
                         anyhow::anyhow!("regular payload {} has no CAS identity", file.path)
                     })?;
-                    let content = cas
-                        .retrieve(hash)
-                        .with_context(|| format!("Failed to read {} from CAS", file.path))?;
-                    if content.len() as u64 != authority.size {
-                        anyhow::bail!(
-                            "CAS object size mismatch for {}: expected {}, got {}",
-                            file.path,
-                            authority.size,
-                            content.len()
-                        );
-                    }
-                    content
+                    LiveRootContent::from_cas(cas, authority.clone(), hash)
+                        .with_context(|| format!("Failed to open {} from CAS", file.path))?
                 }
                 PayloadNodeKind::Symlink { target } => {
                     let hash = file.cas_hash.as_deref().ok_or_else(|| {
@@ -76,14 +66,14 @@ pub(super) fn live_root_files_from_stored_files(
                             stored_target
                         );
                     }
-                    Vec::new()
+                    LiveRootContent::absent()
                 }
                 PayloadNodeKind::Directory
                 | PayloadNodeKind::Hardlink { .. }
                 | PayloadNodeKind::BlockDevice { .. }
                 | PayloadNodeKind::CharacterDevice { .. }
                 | PayloadNodeKind::Fifo
-                | PayloadNodeKind::Socket => Vec::new(),
+                | PayloadNodeKind::Socket => LiveRootContent::absent(),
             };
             Ok(LiveRootFile {
                 path: file.path.clone(),
@@ -153,6 +143,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].content, b"from cas");
+        assert_eq!(files[0].content.to_in_memory().unwrap(), b"from cas");
     }
 }

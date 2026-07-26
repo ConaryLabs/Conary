@@ -20,7 +20,7 @@ use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus};
 use conary_core::packages::traits::ConfigFileInfo;
 use rusqlite::Connection;
 
-use crate::commands::{LiveRootFile, live_root};
+use crate::commands::{LiveRootContent, LiveRootFile, live_root};
 
 use super::{InstallSemantics, PackageFormatType, PreparedSourceKind};
 
@@ -79,6 +79,7 @@ pub(super) fn source_for_semantics(semantics: InstallSemantics) -> ConfigSource 
 /// Compute dpkg's exact shipped `Conffiles` digest for a declared Debian
 /// conffile. This compatibility digest never replaces Conary's SHA-256
 /// content authority.
+#[cfg(test)]
 pub(crate) fn debian_original_md5(
     source: ConfigSource,
     declared: bool,
@@ -87,6 +88,34 @@ pub(crate) fn debian_original_md5(
     (source == ConfigSource::Deb && declared).then(|| {
         conary_core::hash::hash_bytes(conary_core::hash::HashAlgorithm::Md5, content).value
     })
+}
+
+/// Stream dpkg's shipped conffile digest from a reopenable payload source.
+pub(crate) fn debian_original_md5_reader(
+    source: ConfigSource,
+    declared: bool,
+    reader: &mut dyn std::io::Read,
+) -> Result<Option<String>> {
+    if source != ConfigSource::Deb || !declared {
+        return Ok(None);
+    }
+    Ok(Some(
+        conary_core::hash::hash_reader(conary_core::hash::HashAlgorithm::Md5, reader)?.value,
+    ))
+}
+
+pub(crate) fn debian_original_md5_payload(
+    source: ConfigSource,
+    declared: bool,
+    file: &conary_core::packages::payload::PackagePayloadFile,
+) -> Result<Option<String>> {
+    if source != ConfigSource::Deb || !declared {
+        return Ok(None);
+    }
+    let mut reader = file
+        .open_content()
+        .with_context(|| format!("Failed to open Debian conffile payload {}", file.path))?;
+    debian_original_md5_reader(source, declared, reader.as_mut())
 }
 
 /// Transfer an incoming `remove-on-upgrade` declaration to the new package
@@ -201,7 +230,7 @@ pub(crate) fn prepare_config_install(
             .as_ref()
             .and_then(|config| config.original_hash.as_deref());
         let current = read_existing(root, &file.path)?;
-        let new_hash = live_file_hash(&file);
+        let new_hash = live_file_hash(&file)?;
         let incoming_source = declaration.map_or(ConfigSource::Auto, |_| source);
         let noreplace = declaration.is_some_and(|config| config.noreplace);
         let decision = decide_config_install(
@@ -511,14 +540,13 @@ fn read_existing(root: &Path, package_path: &str) -> Result<Option<ExistingConfi
     let file = if metadata.file_type().is_symlink() {
         LiveRootFile {
             path: package_path.to_string(),
-            content: Vec::new(),
+            content: LiveRootContent::absent(),
             node,
         }
     } else if metadata.is_file() {
         LiveRootFile {
             path: package_path.to_string(),
-            content: fs::read(&path)
-                .with_context(|| format!("Failed to read config {}", path.display()))?,
+            content: LiveRootContent::capture_file(&path)?,
             node,
         }
     } else {
@@ -527,18 +555,21 @@ fn read_existing(root: &Path, package_path: &str) -> Result<Option<ExistingConfi
             path.display()
         );
     };
-    let hash = live_file_hash(&file);
+    let hash = live_file_hash(&file)?;
     Ok(Some(ExistingConfig { file, hash }))
 }
 
-fn live_file_hash(file: &LiveRootFile) -> String {
+fn live_file_hash(file: &LiveRootFile) -> Result<String> {
     match &file.node.source.kind {
         conary_core::payload::PayloadNodeKind::Symlink { target } => {
-            conary_core::hash::sha256(target.as_bytes())
+            Ok(conary_core::hash::sha256(target.as_bytes()))
         }
-        conary_core::payload::PayloadNodeKind::Regular { .. } => {
-            conary_core::hash::sha256(&file.content)
-        }
+        conary_core::payload::PayloadNodeKind::Regular { .. } => Ok(file
+            .content
+            .authority()
+            .context("regular config payload has no content authority")?
+            .sha256
+            .clone()),
         _ => unreachable!("config policy accepts only regular files and symlinks"),
     }
 }

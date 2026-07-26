@@ -338,6 +338,9 @@ mod tests {
         assert_eq!(arch_for_format(Some("x86_64"), "deb").unwrap(), "amd64");
         assert_eq!(arch_for_format(Some("aarch64"), "deb").unwrap(), "arm64");
         assert_eq!(arch_for_format(Some("amd64"), "rpm").unwrap(), "x86_64");
+        assert!(arch_for_format(Some("all"), "rpm").is_err());
+        assert!(arch_for_format(Some("any"), "rpm").is_err());
+        assert!(arch_for_format(Some("noarch"), "deb").is_err());
         assert!(arch_for_format(None, "arch").is_err());
         assert!(arch_for_format(Some("riscv64"), "arch").is_err());
     }

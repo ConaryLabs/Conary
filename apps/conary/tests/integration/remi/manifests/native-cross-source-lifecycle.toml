@@ -1,0 +1,31 @@
+# tests/integration/remi/manifests/native-cross-source-lifecycle.toml
+#
+# Focused container proof for the complete cross-source native lifecycle.
+
+[suite]
+name = "Native Cross-Source Lifecycle"
+phase = 4
+timeout = 1800
+
+[distro_overrides.fedora44]
+native_lifecycle_oracle_format = "rpm"
+
+[distro_overrides."ubuntu-26.04"]
+native_lifecycle_oracle_format = "deb"
+
+[distro_overrides.arch]
+native_lifecycle_oracle_format = "arch"
+
+[[test]]
+id = "TNPMX01"
+name = "cross_source_install_update_rollback_remove"
+description = "RPM, Debian, and Arch install, update, rollback, and remove traces match native package-manager authority across every target without runtime delegation"
+timeout = 1500
+fatal = true
+group = "native-cross-source-lifecycle"
+
+[[test.step]]
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format}"
+
+[test.step.assert]
+exit_code = 0

@@ -24,7 +24,8 @@ use crate::ccs::v2::PackageKindTagV2;
 use crate::filesystem::path::sanitize_path;
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
-    dependency_model::RepositoryRequirementGroup, package_relation::validate_native_relation,
+    dependency_model::{DebianMultiArch, RepositoryRequirementGroup},
+    package_relation::validate_native_relation,
     requirement::validate_requirement_group,
 };
 use serde::{Deserialize, Serialize};
@@ -148,6 +149,20 @@ impl CcsManifest {
         })?;
         if self.package.release.is_empty() {
             return Err(ManifestError::MissingField("package.release".to_string()));
+        }
+        match (self.package.version_scheme, self.package.debian_multi_arch) {
+            (VersionScheme::Debian, Some(_))
+            | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+            (VersionScheme::Debian, None) => {
+                return Err(ManifestError::MissingField(
+                    "package.debian_multi_arch".to_string(),
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(ManifestError::Invalid(
+                    "package.debian_multi_arch is valid only for Debian packages".to_string(),
+                ));
+            }
         }
 
         for user in &self.hooks.users {
@@ -283,6 +298,7 @@ impl CcsManifest {
         if let Some(capabilities) = &self.capabilities {
             capabilities
                 .validate_for_target_arch(
+                    self.package.version_scheme,
                     self.package
                         .platform
                         .as_ref()
@@ -328,6 +344,7 @@ impl CcsManifest {
                 description: format!("A new CCS package: {}", name),
                 release: "1".to_string(),
                 kind: PackageKindTagV2::Package,
+                debian_multi_arch: None,
                 license: None,
                 homepage: None,
                 repository: None,
@@ -371,6 +388,10 @@ pub struct Package {
     pub release: String,
 
     pub kind: PackageKindTagV2,
+
+    /// Exact Debian `Multi-Arch` control-field behavior.
+    #[serde(default)]
+    pub debian_multi_arch: Option<DebianMultiArch>,
 
     #[serde(default)]
     pub license: Option<String>,
@@ -488,12 +509,10 @@ pub struct ComponentRule {
 
 /// Configuration file tracking
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
-    pub files: Vec<String>,
-
-    #[serde(default = "default_true")]
-    pub noreplace: bool,
+    pub files: Vec<crate::packages::traits::ConfigFileInfo>,
 }
 
 fn default_true() -> bool {

@@ -65,13 +65,14 @@ pub struct PackagePopularity {
 
 /// Run pre-warming job
 pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
-    conary_core::repository::supported_profiles::profile_for_remi_route(&config.distro)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "prewarm route '{}' does not map to exactly one public profile",
-                config.distro
-            )
-        })?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(&config.distro)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "prewarm route '{}' does not map to exactly one public profile",
+                    config.distro
+                )
+            })?;
     info!(
         "Starting pre-warm for {} (max {} packages)",
         config.distro, config.max_packages
@@ -128,7 +129,7 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
             &config.db_path,
             &pkg.name,
             &pkg.version,
-            &config.distro,
+            source_profile.id(),
         )
         .await?
         {
@@ -260,7 +261,7 @@ fn get_packages_to_convert(
         "SELECT {}
          FROM repository_packages rp
          JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.default_strategy_distro = ?1
+         WHERE r.source_profile = ?1
          AND rp.size > 0
          ORDER BY rp.name, rp.version DESC",
         RepositoryPackage::COLUMNS_PREFIXED
@@ -304,8 +305,9 @@ fn load_popularity_data(path: &str) -> Result<Vec<PackagePopularity>> {
 
 /// Check if a package is already converted.
 ///
-/// Only repository conversion identity fields (`distro`, `package_name`, and
-/// `package_version`) are authoritative for Remi prewarming. Installed
+/// Only repository conversion identity fields (`source_profile`,
+/// `package_name`, and `package_version`) are authoritative for Remi
+/// prewarming. Installed
 /// conversion records keyed by `trove_id` are a separate artifact class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExistingConversionState {
@@ -317,9 +319,9 @@ fn existing_conversion_state(
     conn: &rusqlite::Connection,
     name: &str,
     version: &str,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<ExistingConversionState> {
-    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(name))? {
+    for converted in ConvertedPackage::find_current_conversions(conn, source_profile, Some(name))? {
         if converted.repository_artifact()?.package_version != version {
             continue;
         }
@@ -334,16 +336,16 @@ async fn existing_conversion_state_async(
     db_path: &str,
     name: &str,
     version: &str,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<ExistingConversionState> {
     let db_path = db_path.to_string();
     let name = name.to_string();
     let version = version.to_string();
-    let distro = distro.to_string();
+    let source_profile = source_profile.to_string();
 
     tokio::task::spawn_blocking(move || {
         let conn = conary_core::db::open(&db_path)?;
-        existing_conversion_state(&conn, &name, &version, &distro)
+        existing_conversion_state(&conn, &name, &version, &source_profile)
     })
     .await
     .map_err(|e| anyhow::anyhow!("prewarm cache lookup task panicked: {e}"))?
@@ -425,9 +427,10 @@ mod tests {
         schema::ensure_current(&conn).unwrap();
 
         let mut stale = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "pkg".to_string(),
             "1.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:pkg-1.0-source".to_string(),
             &[],
@@ -439,9 +442,10 @@ mod tests {
         stale.insert(&conn).unwrap();
 
         let mut current = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "pkg".to_string(),
             "2.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:pkg-2.0-source".to_string(),
             &[],
@@ -452,11 +456,11 @@ mod tests {
         current.insert(&conn).unwrap();
 
         assert_eq!(
-            existing_conversion_state(&conn, "pkg", "1.0", "fedora").unwrap(),
+            existing_conversion_state(&conn, "pkg", "1.0", "fedora-44").unwrap(),
             ExistingConversionState::MissingOrStale
         );
         assert_eq!(
-            existing_conversion_state(&conn, "pkg", "2.0", "fedora").unwrap(),
+            existing_conversion_state(&conn, "pkg", "2.0", "fedora-44").unwrap(),
             ExistingConversionState::Current
         );
     }
@@ -485,7 +489,7 @@ mod tests {
         installed.insert(&conn).unwrap();
 
         assert_eq!(
-            existing_conversion_state(&conn, "pkg", "1.0", "fedora").unwrap(),
+            existing_conversion_state(&conn, "pkg", "1.0", "fedora-44").unwrap(),
             ExistingConversionState::MissingOrStale
         );
     }
@@ -498,7 +502,7 @@ mod tests {
         schema::ensure_current(&conn).unwrap();
         conn.execute("DROP TABLE converted_packages", []).unwrap();
 
-        let error = existing_conversion_state(&conn, "pkg", "1.0", "fedora").unwrap_err();
+        let error = existing_conversion_state(&conn, "pkg", "1.0", "fedora-44").unwrap_err();
         assert!(error.to_string().contains("converted_packages"), "{error}");
     }
 
@@ -515,10 +519,10 @@ mod tests {
 
         // Insert some download stats
         let events = vec![
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "git".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "git".into()),
         ];
         DownloadStat::insert_batch(&conn, &events).unwrap();
         DownloadCount::refresh_aggregates(&conn).unwrap();
@@ -553,13 +557,13 @@ mod tests {
 
         // Local: curl downloaded 5 times (5*10=50 boost), vim 2 times (2*10=20)
         let events = vec![
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
-            DownloadStat::new("fedora".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
+            DownloadStat::new("fedora-44".into(), "vim".into()),
         ];
         DownloadStat::insert_batch(&conn, &events).unwrap();
         DownloadCount::refresh_aggregates(&conn).unwrap();

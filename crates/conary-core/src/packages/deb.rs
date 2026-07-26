@@ -9,19 +9,26 @@ use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::archive_utils::normalize_path;
 use crate::packages::common::PackageMetadata;
+use crate::packages::payload::{
+    PAYLOAD_IO_BUFFER_SIZE, PackagePayload, PayloadSpool, ReopenablePayload,
+};
 use crate::packages::traits::{
     ConfigFileInfo, DebControlMember, DebMaintainerInvocation, DebMaintainerMode,
-    DebNativeScriptletMetadata, Dependency, DependencyType, ExtractedFile, NativeArgumentContract,
-    NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation,
-    NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind,
-    NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder,
-    NativeTransactionPosition, PackageFile, PackageFormat,
+    DebNativeScriptletMetadata, NativeArgumentContract, NativeArgumentValue,
+    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
+    NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
+    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
+    PackageFile, PackageFormat, ProvidedCapability,
 };
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::dependency_model::{
+    DebianMultiArch, RepositoryCapabilityKind, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
+};
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::versioning::VersionScheme;
+use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use tar::Archive;
 use tracing::debug;
@@ -31,7 +38,7 @@ pub mod dpkg_lifecycle;
 pub mod lifecycle_helpers;
 mod native;
 mod payload;
-pub(crate) mod templates;
+pub mod templates;
 mod triggers;
 
 pub(crate) use triggers::parse as parse_trigger_declarations;
@@ -45,8 +52,8 @@ const CONTROL_TAR_NAMES: &[&str] = &[
 
 const DATA_TAR_NAMES: &[&str] = &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"];
 
-/// Maximum size for a single AR member within a DEB archive (16 MiB)
-const MAX_DEB_MEMBER_SIZE: u64 = 16 * 1024 * 1024;
+/// Maximum size for bounded control metadata within a DEB archive (16 MiB).
+pub(super) const MAX_DEB_CONTROL_MEMBER_SIZE: u64 = 16 * 1024 * 1024;
 
 /// Results of single-pass control tarball extraction
 #[derive(Default)]
@@ -71,8 +78,9 @@ pub struct DebPackage {
     priority: Option<String>,
     homepage: Option<String>,
     installed_size: Option<u64>,
-    /// Cached data tarball bytes to avoid re-extracting from the AR archive
-    data_tar_cache: Vec<u8>,
+    multi_arch: DebianMultiArch,
+    /// File-backed payload parsed from the data tar member.
+    payload: PackagePayload,
 }
 
 impl DebPackage {
@@ -152,24 +160,64 @@ impl DebPackage {
 
         let mut current_field = String::new();
         let mut current_value = String::new();
+        let mut seen_fields = BTreeSet::new();
+        let mut paragraph_ended = false;
 
-        for line in control_content.lines() {
-            // Multi-line fields start with a space
-            if line.starts_with(' ') || line.starts_with('\t') {
-                if !current_field.is_empty() {
-                    current_value.push('\n');
-                    current_value.push_str(line.trim());
-                }
-            } else if let Some((field, value)) = line.split_once(':') {
-                // Save previous field
+        for (index, line) in control_content.lines().enumerate() {
+            let line_number = index + 1;
+            if line.is_empty() {
                 if !current_field.is_empty() {
                     Self::apply_control_field(&mut info, &current_field, &current_value)?;
+                    current_field.clear();
+                    current_value.clear();
                 }
-
-                // Start new field
-                current_field = field.trim().to_string();
-                current_value = value.trim().to_string();
+                paragraph_ended = true;
+                continue;
             }
+            if paragraph_ended {
+                return Err(Error::ParseError(format!(
+                    "Debian binary control metadata contains a second paragraph at line {line_number}"
+                )));
+            }
+
+            // Multi-line fields start with a space
+            if line.starts_with(' ') || line.starts_with('\t') {
+                if current_field.is_empty() {
+                    return Err(Error::ParseError(format!(
+                        "Debian control line {line_number} is an orphan continuation"
+                    )));
+                }
+                current_value.push('\n');
+                current_value.push_str(line.trim());
+                continue;
+            }
+
+            let (field, value) = line.split_once(':').ok_or_else(|| {
+                Error::ParseError(format!(
+                    "Debian control line {line_number} is not a field or continuation"
+                ))
+            })?;
+            if field.is_empty()
+                || !field.bytes().enumerate().all(|(position, byte)| {
+                    byte.is_ascii_alphanumeric() || (position > 0 && byte == b'-')
+                })
+            {
+                return Err(Error::ParseError(format!(
+                    "Debian control line {line_number} has invalid field name {field:?}"
+                )));
+            }
+            let canonical_field = field.to_ascii_lowercase();
+            if !seen_fields.insert(canonical_field) {
+                return Err(Error::ParseError(format!(
+                    "Debian control field {field:?} is repeated at line {line_number}"
+                )));
+            }
+
+            if !current_field.is_empty() {
+                Self::apply_control_field(&mut info, &current_field, &current_value)?;
+            }
+            current_field = field.to_string();
+            current_value = value.trim().to_string();
         }
 
         // Save last field
@@ -185,9 +233,9 @@ impl DebPackage {
         match field {
             "Package" => info.name = Some(value.to_string()),
             "Version" => info.version = Some(value.to_string()),
-            "Architecture" => {
-                info.architecture =
-                    Some(crate::packages::common::normalize_architecture(value).to_string())
+            "Architecture" => info.architecture = Some(value.to_string()),
+            "Multi-Arch" => {
+                info.multi_arch = DebianMultiArch::parse_exact(value).map_err(Error::ParseError)?;
             }
             "Description" => {
                 // Description is the short description (first line)
@@ -211,52 +259,44 @@ impl DebPackage {
                     ))
                 })?)
             }
-            "Depends" => info.dependencies = Self::parse_dependency_list(value),
-            "Pre-Depends" => info.pre_dependencies = Self::parse_dependency_list(value),
-            "Recommends" => info.recommends = Self::parse_dependency_list(value),
-            "Suggests" => info.suggests = Self::parse_dependency_list(value),
-            "Build-Depends" => info.build_depends = Self::parse_dependency_list(value),
-            "Provides" => info.provides = Self::parse_dependency_list(value),
-            "Conflicts" => info.conflicts = Self::parse_dependency_list(value),
-            "Breaks" => info.breaks = Self::parse_dependency_list(value),
-            "Replaces" => info.replaces = Self::parse_dependency_list(value),
+            "Depends" => info.dependencies = Self::parse_dependency_list(value)?,
+            "Pre-Depends" => info.pre_dependencies = Self::parse_dependency_list(value)?,
+            "Recommends" => info.recommends = Self::parse_dependency_list(value)?,
+            "Suggests" => info.suggests = Self::parse_dependency_list(value)?,
+            "Build-Depends" => info.build_depends = Self::parse_dependency_list(value)?,
+            "Provides" => info.provides = Self::parse_dependency_list(value)?,
+            "Conflicts" => info.conflicts = Self::parse_dependency_list(value)?,
+            "Breaks" => info.breaks = Self::parse_dependency_list(value)?,
+            "Replaces" => info.replaces = Self::parse_dependency_list(value)?,
             _ => {} // Ignore unknown fields
         }
         Ok(())
     }
 
     /// Parse Debian dependency list (comma-separated with optional version constraints)
-    fn parse_dependency_list(deps: &str) -> Vec<String> {
+    fn parse_dependency_list(deps: &str) -> Result<Vec<String>> {
         deps.split(',')
-            .map(|dep| dep.trim().to_string())
-            .filter(|dep| !dep.is_empty())
+            .enumerate()
+            .map(|(index, dependency)| {
+                let dependency = dependency.trim();
+                if dependency.is_empty() {
+                    return Err(Error::ParseError(format!(
+                        "Debian dependency list contains an empty atom at position {}",
+                        index + 1
+                    )));
+                }
+                Ok(dependency.to_string())
+            })
             .collect()
     }
 
-    /// Parse a single dependency string into name and version constraint
-    fn parse_single_dependency(dep: &str) -> (String, Option<String>) {
-        // Handle alternatives (foo | bar)
-        let dep = dep.split('|').next().unwrap_or(dep).trim();
-
-        // Parse version constraint: package (>= 1.0) or package (<< 2.0)
-        if let Some(start) = dep.find('(')
-            && let Some(end) = dep.find(')')
-        {
-            let name = dep[..start].trim().to_string();
-            let constraint = dep[start + 1..end].trim().to_string();
-            return (name, Some(constraint));
-        }
-
-        (dep.to_string(), None)
-    }
-
     /// Single-pass extraction of control and data tarballs from the AR archive.
-    fn extract_ar_members(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn extract_ar_members(path: &str) -> Result<(Vec<u8>, ReopenablePayload)> {
         let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open DEB file: {}", e)))?;
         let mut archive = ar::Archive::new(file);
         let mut control_data: Option<Vec<u8>> = None;
-        let mut data_data: Option<Vec<u8>> = None;
+        let mut data_source = None;
         let mut entries_seen = 0usize;
         while let Some(entry) = archive.next_entry() {
             entries_seen += 1;
@@ -268,7 +308,7 @@ impl DebPackage {
             let trimmed = entry_name.trim_end_matches('/');
             if control_data.is_none() && CONTROL_TAR_NAMES.contains(&trimmed) {
                 let entry_size = entry.header().size();
-                if entry_size > MAX_DEB_MEMBER_SIZE {
+                if entry_size > MAX_DEB_CONTROL_MEMBER_SIZE {
                     return Err(Error::InitError(format!(
                         "DEB archive member too large: {entry_size} bytes"
                     )));
@@ -278,26 +318,37 @@ impl DebPackage {
                     .read_to_end(&mut buf)
                     .map_err(|e| Error::InitError(format!("Failed to read control tar: {}", e)))?;
                 control_data = Some(buf);
-            } else if data_data.is_none() && DATA_TAR_NAMES.contains(&trimmed) {
+            } else if data_source.is_none() && DATA_TAR_NAMES.contains(&trimmed) {
                 let entry_size = entry.header().size();
-                if entry_size > MAX_DEB_MEMBER_SIZE {
-                    return Err(Error::InitError(format!(
-                        "DEB archive member too large: {entry_size} bytes"
-                    )));
+                let spool = PayloadSpool::new(entry_size)?;
+                let path = spool.indexed_path(0);
+                let mut output = File::create(&path)?;
+                let mut remaining = entry_size;
+                let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
+                while remaining > 0 {
+                    let requested = usize::try_from(remaining.min(buffer.len() as u64))
+                        .expect("bounded DEB member chunk");
+                    let read = entry.read(&mut buffer[..requested]).map_err(|error| {
+                        Error::InitError(format!("Failed to read data tar: {error}"))
+                    })?;
+                    if read == 0 {
+                        return Err(Error::InitError(format!(
+                            "DEB data tar ended early with {remaining} bytes remaining"
+                        )));
+                    }
+                    output.write_all(&buffer[..read])?;
+                    remaining -= read as u64;
                 }
-                let mut buf = Vec::new();
-                entry
-                    .read_to_end(&mut buf)
-                    .map_err(|e| Error::InitError(format!("Failed to read data tar: {}", e)))?;
-                data_data = Some(buf);
+                output.sync_all()?;
+                data_source = Some(spool.source(path));
             }
-            if control_data.is_some() && data_data.is_some() {
+            if control_data.is_some() && data_source.is_some() {
                 break;
             }
         }
         let control = control_data
             .ok_or_else(|| Error::InitError("control.tar not found in DEB archive".to_string()))?;
-        let data = data_data
+        let data = data_source
             .ok_or_else(|| Error::InitError("data.tar not found in DEB archive".to_string()))?;
         Ok((control, data))
     }
@@ -379,7 +430,7 @@ impl DebPackage {
                         ));
                     }
                     let entry_size = entry.size();
-                    if entry_size > MAX_DEB_MEMBER_SIZE {
+                    if entry_size > MAX_DEB_CONTROL_MEMBER_SIZE {
                         return Err(Error::ParseError(format!(
                             "Invalid DEBIAN/templates: control member is too large: {entry_size} bytes"
                         )));
@@ -406,23 +457,46 @@ impl DebPackage {
     }
 
     /// Parse the data tarball to extract the file list.
-    fn parse_data_tar(data_tar_data: &[u8]) -> Result<Vec<PackageFile>> {
-        payload::parse_package_files(data_tar_data)
+    fn parse_data_tar(data_tar: &ReopenablePayload) -> Result<PackagePayload> {
+        payload::parse_package_payload(data_tar)
     }
 
-    /// Convert dependency list to Dependency structs
-    fn convert_dependencies(deps: &[String], dep_type: DependencyType) -> Vec<Dependency> {
-        deps.iter()
-            .map(|dep| {
-                let (name, version) = Self::parse_single_dependency(dep);
-                Dependency {
-                    name,
-                    version,
-                    dep_type,
-                    description: None,
-                }
-            })
-            .collect()
+    fn convert_provides(
+        package_name: &str,
+        package_version: &str,
+        entries: &[String],
+    ) -> Result<Vec<ProvidedCapability>> {
+        let mut provides = vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::PackageName,
+            name: package_name.to_string(),
+            version: Some(package_version.to_string()),
+            version_relation: Some(
+                crate::repository::dependency_model::ProvideVersionRelation::Equal,
+            ),
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: Default::default(),
+        }];
+        for entry in entries {
+            let native = crate::repository::package_relation::parse_debian_provide(entry)
+                .map_err(Error::ParseError)?;
+            let provide = ProvidedCapability {
+                kind: if native.name == package_name {
+                    RepositoryCapabilityKind::PackageName
+                } else {
+                    native.kind
+                },
+                name: native.name,
+                version: native.version,
+                version_relation: native.version_relation,
+                version_scheme: VersionScheme::Debian,
+                architecture_qualifier: native.architecture_qualifier,
+            };
+            provide.validate()?;
+            if !provides.contains(&provide) {
+                provides.push(provide);
+            }
+        }
+        Ok(provides)
     }
 
     fn convert_relations(
@@ -461,6 +535,7 @@ struct ControlInfo {
     name: Option<String>,
     version: Option<String>,
     architecture: Option<String>,
+    multi_arch: DebianMultiArch,
     description: Option<String>,
     maintainer: Option<String>,
     section: Option<String>,
@@ -507,9 +582,18 @@ impl PackageFormat for DebPackage {
         }
 
         // Extract file list
-        let files = Self::parse_data_tar(&data_tar_data)?;
+        let payload = Self::parse_data_tar(&data_tar_data)?;
+        let files: Vec<PackageFile> = payload
+            .files()
+            .iter()
+            .map(|file| PackageFile {
+                path: file.path.clone(),
+                node: file.node.clone(),
+                content: file.content_authority.clone(),
+            })
+            .collect();
 
-        let provides = Self::convert_dependencies(&control.provides, DependencyType::Runtime);
+        let provides = Self::convert_provides(&name, &version, &control.provides)?;
         let mut requirements =
             Self::convert_requirements(&control.dependencies, RepositoryRequirementKind::Depends)?;
         requirements.extend(Self::convert_requirements(
@@ -558,6 +642,7 @@ impl PackageFormat for DebPackage {
             version,
             version_scheme: VersionScheme::Debian,
             architecture: control.architecture,
+            debian_multi_arch: Some(control.multi_arch),
             description: control.description,
             files,
             requirements,
@@ -575,7 +660,8 @@ impl PackageFormat for DebPackage {
             priority: control.priority,
             homepage: control.homepage,
             installed_size: control.installed_size,
-            data_tar_cache: data_tar_data,
+            multi_arch: control.multi_arch,
+            payload,
         })
     }
 
@@ -595,6 +681,10 @@ impl PackageFormat for DebPackage {
         self.meta.architecture()
     }
 
+    fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
+        Some(self.multi_arch)
+    }
+
     fn description(&self) -> Option<&str> {
         self.meta.description()
     }
@@ -607,7 +697,7 @@ impl PackageFormat for DebPackage {
         self.meta.requirements()
     }
 
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         self.meta.provides()
     }
 
@@ -615,16 +705,8 @@ impl PackageFormat for DebPackage {
         self.meta.relations()
     }
 
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        debug!(
-            "Extracting file contents from Debian package: {:?}",
-            self.meta.package_path()
-        );
-
-        let extracted_files = payload::extract_files(&self.data_tar_cache)?;
-
-        debug!("Extracted {} files from DEB package", extracted_files.len());
-        Ok(extracted_files)
+    fn package_payload(&self) -> Result<PackagePayload> {
+        Ok(self.payload.clone())
     }
 
     fn to_trove(&self) -> Trove {
@@ -664,6 +746,11 @@ impl DebPackage {
     /// Get installed size in KB
     pub fn installed_size(&self) -> Option<u64> {
         self.installed_size
+    }
+
+    /// Exact Debian `Multi-Arch` behavior from the package control archive.
+    pub fn multi_arch(&self) -> DebianMultiArch {
+        self.multi_arch
     }
 }
 

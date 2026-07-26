@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use crate::db::models::{InstalledRequirementGroup, ProvideEntry, Trove};
 use crate::error::{Error, Result};
 use crate::packages::PackageFormat;
-use crate::packages::traits::Dependency;
+use crate::packages::traits::ProvidedCapability;
 use crate::repository::dependency_model::{
     PackageRelationRemovalMode, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
@@ -106,7 +106,7 @@ pub struct IncomingPackageRelations<'a> {
     pub version: &'a str,
     pub architecture: Option<&'a str>,
     pub version_scheme: VersionScheme,
-    pub provides: &'a [Dependency],
+    pub provides: &'a [ProvidedCapability],
     pub relations: &'a [RepositoryRequirementGroup],
 }
 
@@ -422,7 +422,7 @@ fn owned_incoming_candidate(
             .map(|provide| OwnedPackageRelationProvide {
                 name: provide.name.clone(),
                 version: provide.version.clone(),
-                version_scheme: incoming.version_scheme,
+                version_scheme: provide.version_scheme,
             })
             .collect(),
     }

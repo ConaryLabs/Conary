@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 41
+last_updated: 2026-07-26
+revision: 46
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -181,7 +181,7 @@ and payload visibility contract is
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
 **native_lifecycle.rs** -- Current persisted RPM, Debian, and Arch lifecycle
-ABI. The schema-revision-17 bundle lives in the TOML manifest as
+ABI. The schema-revision-18 bundle lives in the TOML manifest as
 `[native_lifecycle]` and records source identity and version scheme, exact
 entries with typed executable/control-artifact kind, body digests,
 interpreters, native invocation contracts, RPM triggers, Debian
@@ -190,14 +190,16 @@ Arch install functions and ALPM hooks, and residual lifecycle metadata. All
 persisted lifecycle structs reject unknown fields; there is no arbitrary
 extension map. The bundle has no reason code, effect projection, unknown-command
 evidence, diagnostic-class list/count, adapter-registry digest, publication
-policy, or parallel security-policy intent.
+policy, or parallel security-policy intent. Its optional `source_profile` is
+one exact public supported-profile ID; the former ambiguous field name and
+family/route aliases are rejected.
 
 The typed Debian declaration list is the sole trigger authority: validation
 reparses the preserved control artifact and rejects parallel superseded
 trigger-body or trigger-name projections. Actual provider execution at the
 selected-root process boundary is systemd, SELinux, AppArmor, boot, and kernel
 runtime authority; static script classifications are not persisted authority.
-Revision 17 is a hard cut: earlier artifacts and installed rows must be
+Revision 18 is a hard cut: earlier artifacts and installed rows must be
 reconverted, rebuilt, or discarded with the pre-alpha database rather than
 migrated. `native-free` means no lifecycle entries; `native-lifecycle` means
 source behavior is preserved by the Conary runtime. Only a future complete
@@ -246,6 +248,10 @@ for command ergonomics and local-dev state, and
 into signed v2 authority. `crates/conary-core/src/ccs/v2/lifecycle.rs` owns the
 exact bidirectional projection between manifest lifecycle declarations, signed
 v2 lifecycle authority, and the install-interface manifest projection.
+`crates/conary-core/src/ccs/v2/validation/identity.rs` owns exact package
+identity and typed provider validation; the validation hub owns orchestration.
+`crates/conary-core/src/ccs/v2/validation/config.rs` owns exact per-path config
+and currently consumable package-policy validation.
 Debug TOML consistency checks live in
 `crates/conary-core/src/ccs/v2/debug_projection.rs`; debug TOML is verified
 against signed authority and never becomes install-time authority.
@@ -263,7 +269,9 @@ translation and do not provide a `[legacy]` schema alias. Required target
 metadata comes from exact manifest fields: RPM requires the package license,
 Arch requires homepage and maintainer-backed packager identity, and Debian
 omits its optional maintainer field when no exact value exists. Exporters do
-not invent unknown identities or unconditional maintainer scriptlets.
+not invent unknown identities or unconditional maintainer scriptlets. Config
+export fails when the target format cannot express a declaration's exact
+per-path semantics.
 
 **export/** -- OCI image export. Produces OCI-layout archives with gzipped
 tar layers, image config, and manifest. ContainerConfig controls entrypoint,
@@ -310,6 +318,21 @@ sole native package contract: the repository has no v1 writer, parser,
 projection, fixture factory, or compatibility path. `MANIFEST.toml` and
 component JSON are checked projections only; malformed, unsupported, or
 unsigned authority never falls back to them.
+
+Configuration authority is exact per path. Each `[[config.files]]` declaration
+and its signed v2 projection carries `noreplace`, `ghost`, and
+`remove_on_upgrade`; there is no package-wide config default. Ordinary config
+paths must identify one regular-file or symlink payload and repeat the same
+semantics in `FileAuthorityV2`. RPM ghost paths and Debian
+remove-on-upgrade paths must be absent from payload and backed by the matching
+signed native source contract. `CcsPackage` projects only that verified
+authority into install, update, and remove transactions. Foreign conversion
+copies the native parser's exact config declarations rather than reconstructing
+them from paths.
+
+Signed file conflict replacement and host-mutation policy are rejected while
+their typed transaction consumers do not exist. The reader never accepts a
+non-default signed field that installation would silently ignore.
 
 ### Native CCS v2 Local Authoring Loop
 
@@ -453,13 +476,23 @@ already present. This is useful for repairing corrupted files or re-running
 hooks without bumping the version.
 
 Payload paths are normalized before capability checks, CAS storage, or
-generation publication. Standard usr-merge roots and pre-existing symlink
-ancestors such as Arch `/usr/lib64 -> lib` are resolved to the root-relative
-deployment target only when every hop stays inside the selected install root.
-An absolute symlink target is accepted only when it explicitly names a path
-beneath that root. Escapes, loops, and children beneath symlinks created by the
-package remain fail-closed; an existing leaf symlink also keeps the separate
-replacement/collision semantics owned by the payload type.
+generation publication. Usr-merge roots and pre-existing symlink ancestors
+such as Arch `/usr/lib64 -> lib` are resolved to the root-relative deployment
+target only from exact symlinks present in the selected install root and only
+when every hop stays inside it. Conary does not infer `/bin`, `/sbin`, `/lib`,
+or `/lib64` rewrites from path spelling. An absolute symlink target is accepted
+only when it explicitly names a path beneath that root. Escapes, loops, and
+children beneath symlinks created by the package remain fail-closed; an
+existing leaf symlink also keeps the separate replacement/collision semantics
+owned by the payload type.
+
+Signed v2 authority carries the complete optional package capability
+declaration used by install preflight, persistence, audit, and enforcement; the
+authoring and install projections do not reconstruct it from debug TOML.
+Package payload paths likewise do not imply lifecycle mutations. The current
+schema has no built-in trigger classification or seeded path-glob triggers;
+only an explicitly user-created trigger carries that separate operator
+authority.
 
 The source-independent node contract in
 `crates/conary-core/src/payload.rs` is the sole authority for payload kind,
@@ -467,6 +500,16 @@ mode, numeric ownership, timestamp, xattrs, device identity, symlink target,
 hardlink identity, and content reference. Native parsers, CCS v2, installed
 state, and generation manifests use that same type; they do not maintain
 parallel partial file projections.
+
+A CCS archive is transport, not necessarily its source package ABI. A
+Conary-authored CCS package applies its incoming metadata when it shares an
+existing directory. A converted CCS package instead retains the exact
+RPM, Debian, or Arch directory and configuration behavior selected by its
+validated `native_lifecycle.source_format`; that source format must agree with
+the package version scheme. The installed database stores every package's
+exact directory claim even when dpkg or libalpm semantics preserve the
+currently visible directory metadata. See
+[`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md#shared-directory-ownership-and-materialization).
 
 For `[[file_capabilities]]`, Conary persists the signed authority in the
 selected-root transaction, attaches `security.capability` while building the
@@ -483,12 +526,7 @@ exact target capability validation lives in
 `apps/conary/src/commands/ccs/install/capability_declaration.rs`; and payload path
 normalization remains in `apps/conary/src/commands/ccs/payload_paths.rs`.
 
-CCS also exposes two package-scoped runtime helpers that are positively covered
-in Phase 4:
-
 ```bash
-conary ccs shell package-name          # Interactive environment with package contents
-conary ccs run package-name -- cmd     # One-shot execution under that environment
 conary ccs install package.ccs --policy ./ccs-trust.toml --components runtime,config --yes
 ```
 

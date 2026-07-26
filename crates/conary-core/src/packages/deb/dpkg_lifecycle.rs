@@ -28,7 +28,9 @@ pub use maintscript_helper::{
     DpkgMaintscriptHelperInvocation, MaintainerReplacement, MaintainerScriptPhase,
     MaintscriptHelperAction, MaintscriptHelperOperation, MaintscriptHelperSupportStatus,
 };
-pub use query::{DpkgQueryAction, DpkgQueryExitStatus, DpkgQueryInvocation, DpkgQueryOptions};
+pub use query::{
+    DpkgQueryAction, DpkgQueryExitStatus, DpkgQueryInvocation, DpkgQueryOption, DpkgQueryOptions,
+};
 
 /// Debian dpkg source package version whose executable contracts are modeled.
 pub const DPKG_LIFECYCLE_VERSION: &str = "1.23.7";
@@ -42,7 +44,7 @@ pub struct PinnedDpkgLifecycleSource {
 }
 
 /// Exact implementation and manual inputs used by this module.
-pub const PINNED_DPKG_LIFECYCLE_SOURCES: [PinnedDpkgLifecycleSource; 15] = [
+pub const PINNED_DPKG_LIFECYCLE_SOURCES: [PinnedDpkgLifecycleSource; 16] = [
     PinnedDpkgLifecycleSource {
         path: "src/dpkg-maintscript-helper.sh",
         source_url: "https://sources.debian.org/data/main/d/dpkg/1.23.7/src/dpkg-maintscript-helper.sh",
@@ -92,6 +94,11 @@ pub const PINNED_DPKG_LIFECYCLE_SOURCES: [PinnedDpkgLifecycleSource; 15] = [
         path: "src/main/main.c",
         source_url: "https://sources.debian.org/data/main/d/dpkg/1.23.7/src/main/main.c",
         sha256: "a5a5f0ab9a9b6f6c510d25e71e4618add60077b70c01b0bae0d44432ec75ada4",
+    },
+    PinnedDpkgLifecycleSource {
+        path: "src/main/unpack.c",
+        source_url: "https://sources.debian.org/data/main/d/dpkg/1.23.7/src/main/unpack.c",
+        sha256: "8ca212f6901994b6265f36e34a2d83801a441639e158077242b5cf4ec1b5a9b6",
     },
     PinnedDpkgLifecycleSource {
         path: "src/main/enquiry.c",

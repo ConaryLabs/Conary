@@ -143,7 +143,7 @@ does not count as a completion.
   per-venue eligibility checks pass. Record each post immediately after
   submission. The three-week stall clock starts from the first actual launch
   timestamp.
-- Privacy-safe feedback path: the beta-feedback issue template and a reviewed
+- Privacy-safe feedback path: the pre-alpha tester-feedback issue template and a reviewed
   support bundle; never request secrets, credential files, private keys, broad
   environment dumps, or a live database by default.
 

@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::repository::versioning::VersionScheme;
+
 /// The only capability-declaration schema accepted by this build.
 pub const CAPABILITY_SCHEMA_VERSION: u32 = 1;
 
@@ -16,7 +18,7 @@ pub const CAPABILITY_SCHEMA_VERSION: u32 = 1;
 ///
 /// This declares what system resources a package requires to function.
 /// Used for audit mode and enforcement.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityDeclaration {
     /// Exact version of the capability schema.
@@ -100,10 +102,12 @@ impl CapabilityDeclaration {
     /// selects a concrete target.
     pub fn validate_for_target_arch(
         &self,
+        version_scheme: VersionScheme,
         architecture: Option<&str>,
     ) -> Result<(), CapabilityValidationError> {
         self.validate()?;
-        self.syscalls.validate_for_target_arch(architecture)
+        self.syscalls
+            .validate_for_target_arch(version_scheme, architecture)
     }
 
     /// Validate target-dependent requirements against the running system.
@@ -115,7 +119,7 @@ impl CapabilityDeclaration {
 }
 
 /// Network capability declarations
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkCapabilities {
     /// Exact remote TCP ports this package may connect to.
@@ -172,7 +176,7 @@ fn validate_exact_ports(ports: &[u16], context: &str) -> Result<(), CapabilityVa
 }
 
 /// Filesystem capability declarations
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FilesystemCapabilities {
     /// Paths that can be read (e.g., ["/etc/ssl/certs", "/usr/share"])
@@ -212,7 +216,7 @@ impl FilesystemCapabilities {
 }
 
 /// Syscall capability declarations
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SyscallCapabilities {
     /// Explicitly allowed target-ABI syscall names
@@ -291,6 +295,7 @@ impl SyscallCapabilities {
     /// installation selects a concrete target.
     pub fn validate_for_target_arch(
         &self,
+        version_scheme: VersionScheme,
         architecture: Option<&str>,
     ) -> Result<(), CapabilityValidationError> {
         self.validate()?;
@@ -300,7 +305,7 @@ impl SyscallCapabilities {
         let Some(architecture) = architecture else {
             return Ok(());
         };
-        let Some(arch) = seccomp_architecture(architecture)? else {
+        let Some(arch) = seccomp_architecture(version_scheme, architecture)? else {
             return Ok(());
         };
         validate_syscalls_for_arch(&self.allow, architecture, arch)?;
@@ -330,36 +335,52 @@ fn is_syscall_name_grammar(name: &str) -> bool {
 }
 
 fn seccomp_architecture(
+    version_scheme: VersionScheme,
     architecture: &str,
 ) -> Result<Option<libseccomp::ScmpArch>, CapabilityValidationError> {
-    use crate::repository::selector::normalize_arch;
     use libseccomp::ScmpArch;
 
-    Ok(match normalize_arch(architecture) {
-        "noarch" | "all" | "any" => None,
-        "x86_64" => Some(ScmpArch::X8664),
-        "i686" => Some(ScmpArch::X86),
-        "aarch64" => Some(ScmpArch::Aarch64),
-        "armv7l" => Some(ScmpArch::Arm),
-        "loongarch64" => Some(ScmpArch::Loongarch64),
-        "m68k" => Some(ScmpArch::M68k),
-        "mips" => Some(ScmpArch::Mips),
-        "mips64" => Some(ScmpArch::Mips64),
-        "mips64n32" => Some(ScmpArch::Mips64N32),
-        "mipsel" => Some(ScmpArch::Mipsel),
-        "mipsel64" => Some(ScmpArch::Mipsel64),
-        "mipsel64n32" => Some(ScmpArch::Mipsel64N32),
-        "ppc" => Some(ScmpArch::Ppc),
-        "ppc64" => Some(ScmpArch::Ppc64),
-        "ppc64le" => Some(ScmpArch::Ppc64Le),
-        "s390" => Some(ScmpArch::S390),
-        "s390x" => Some(ScmpArch::S390X),
-        "parisc" | "hppa" => Some(ScmpArch::Parisc),
-        "parisc64" | "hppa64" => Some(ScmpArch::Parisc64),
-        "riscv64" => Some(ScmpArch::Riscv64),
-        "sheb" => Some(ScmpArch::Sheb),
-        "sh" => Some(ScmpArch::Sh),
-        _ => {
+    Ok(match (version_scheme, architecture) {
+        (VersionScheme::Conary | VersionScheme::Rpm, "noarch")
+        | (VersionScheme::Debian, "all")
+        | (VersionScheme::Arch, "any") => None,
+        (VersionScheme::Debian, "amd64")
+        | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, "x86_64") => {
+            Some(ScmpArch::X8664)
+        }
+        (VersionScheme::Debian, "i386")
+        | (VersionScheme::Rpm, "i386" | "i486" | "i586" | "i686")
+        | (VersionScheme::Conary | VersionScheme::Arch, "i686") => Some(ScmpArch::X86),
+        (VersionScheme::Debian, "arm64")
+        | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, "aarch64") => {
+            Some(ScmpArch::Aarch64)
+        }
+        (VersionScheme::Debian, "armhf")
+        | (VersionScheme::Rpm, "armv7hl")
+        | (VersionScheme::Arch, "armv7h")
+        | (VersionScheme::Conary, "armv7") => Some(ScmpArch::Arm),
+        (_, "loongarch64") => Some(ScmpArch::Loongarch64),
+        (_, "m68k") => Some(ScmpArch::M68k),
+        (_, "mips") => Some(ScmpArch::Mips),
+        (_, "mips64") => Some(ScmpArch::Mips64),
+        (_, "mips64n32") => Some(ScmpArch::Mips64N32),
+        (_, "mipsel") => Some(ScmpArch::Mipsel),
+        (_, "mipsel64") => Some(ScmpArch::Mipsel64),
+        (_, "mipsel64n32") => Some(ScmpArch::Mipsel64N32),
+        (_, "ppc") => Some(ScmpArch::Ppc),
+        (_, "ppc64") => Some(ScmpArch::Ppc64),
+        (VersionScheme::Debian, "ppc64el")
+        | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, "ppc64le") => {
+            Some(ScmpArch::Ppc64Le)
+        }
+        (_, "s390") => Some(ScmpArch::S390),
+        (_, "s390x") => Some(ScmpArch::S390X),
+        (_, "parisc" | "hppa") => Some(ScmpArch::Parisc),
+        (_, "parisc64" | "hppa64") => Some(ScmpArch::Parisc64),
+        (_, "riscv64") => Some(ScmpArch::Riscv64),
+        (_, "sheb") => Some(ScmpArch::Sheb),
+        (_, "sh") => Some(ScmpArch::Sh),
+        (_, _) => {
             return Err(CapabilityValidationError::UnsupportedSyscallArchitecture {
                 architecture: architecture.to_string(),
             });
@@ -398,7 +419,7 @@ pub(crate) fn resolve_native_syscall_number(name: &str) -> Option<i64> {
 }
 
 /// Exact Linux process-capability requirements.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct LinuxCapabilities {
     /// Canonical lower-case capability names (for example,
@@ -712,8 +733,10 @@ read_only = ["/etc"]
 
     #[test]
     fn unknown_capability_schema_version_is_rejected() {
-        let mut cap = CapabilityDeclaration::default();
-        cap.version = CAPABILITY_SCHEMA_VERSION + 1;
+        let cap = CapabilityDeclaration {
+            version: CAPABILITY_SCHEMA_VERSION + 1,
+            ..CapabilityDeclaration::default()
+        };
         assert!(matches!(
             cap.validate(),
             Err(CapabilityValidationError::UnsupportedVersion {
@@ -791,7 +814,7 @@ read_only = ["/etc"]
     fn schema_validation_does_not_use_the_build_hosts_syscall_abi() {
         let mut cap = CapabilityDeclaration::default();
         cap.syscalls.allow.push("openat".to_string());
-        cap.validate_for_target_arch(Some("aarch64"))
+        cap.validate_for_target_arch(VersionScheme::Conary, Some("aarch64"))
             .expect("a target ABI must be resolved through libseccomp");
     }
 
@@ -800,7 +823,7 @@ read_only = ["/etc"]
         let mut cap = CapabilityDeclaration::default();
         cap.syscalls.allow.push("arch_prctl".to_string());
         assert!(matches!(
-            cap.validate_for_target_arch(Some("aarch64")),
+            cap.validate_for_target_arch(VersionScheme::Conary, Some("aarch64")),
             Err(CapabilityValidationError::InvalidSyscall { .. })
         ));
     }
@@ -811,7 +834,7 @@ read_only = ["/etc"]
         cap.syscalls
             .allow
             .push("syntactically_valid_but_unknown".to_string());
-        cap.validate_for_target_arch(Some("noarch"))
+        cap.validate_for_target_arch(VersionScheme::Conary, Some("noarch"))
             .expect("noarch does not select a concrete syscall ABI");
     }
 }

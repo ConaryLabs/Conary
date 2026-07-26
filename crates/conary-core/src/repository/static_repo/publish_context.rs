@@ -264,11 +264,8 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
     let authority = package
         .v2_authority()
         .context("verified v2 package missing authority")?;
-    let payloads_by_path = v2_payloads_by_path(&package, authority)?;
     let debug_toml = verification
-        .archive()
-        .toml_raw
-        .as_deref()
+        .debug_toml()
         .map(std::str::from_utf8)
         .transpose()
         .context("decode v2 MANIFEST.toml as UTF-8")?;
@@ -280,9 +277,9 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
                 format!("resolve parent for {}", input.package_path.display())
             })?)?;
 
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_sources(
         authority,
-        &payloads_by_path,
+        package.payload().files(),
         signed_temp.path(),
         &input.context.active_publish_key,
         debug_toml,
@@ -311,38 +308,6 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
         .map_err(|error| anyhow::anyhow!("persist attested package: {}", error.error))?
         .1;
     Ok(persisted)
-}
-
-fn v2_payloads_by_path(
-    package: &crate::ccs::CcsPackage,
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
-) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
-    use crate::ccs::v2::schema::PackageKindV2;
-    use crate::payload::PayloadNodeKind;
-
-    let PackageKindV2::Package(data) = &authority.kind else {
-        bail!("M4a project-form v2 attestation only supports package payloads");
-    };
-    let blobs = package.extract_all_content().map_err(anyhow::Error::from)?;
-    let mut payloads_by_path = std::collections::BTreeMap::new();
-    for file in &data.files {
-        if matches!(&file.node.kind, PayloadNodeKind::Regular { .. }) {
-            let content = file.content.as_ref().with_context(|| {
-                format!(
-                    "verified v2 regular node {} has no content authority",
-                    file.path
-                )
-            })?;
-            let payload = blobs.get(&content.sha256).with_context(|| {
-                format!(
-                    "verified v2 package is missing payload blob {} for {}",
-                    content.sha256, file.path
-                )
-            })?;
-            payloads_by_path.insert(file.path.clone(), payload.clone());
-        }
-    }
-    Ok(payloads_by_path)
 }
 
 fn build_project_form_attestation_payload(

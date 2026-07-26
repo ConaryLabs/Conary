@@ -31,9 +31,10 @@ async fn chunk_state_with_db(
 
     for (index, stale) in stale_rows.into_iter().enumerate() {
         let mut converted = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             format!("pkg-{index}"),
             "1.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:source-{index}"),
             &[hash.to_string()],
@@ -219,7 +220,7 @@ async fn head_chunk_allows_hash_shared_with_current_conversion_row() {
 }
 
 #[tokio::test]
-async fn get_chunk_allows_unreferenced_protected_local_cache_hash() {
+async fn get_chunk_hides_unreferenced_protected_local_cache_hash() {
     let (state, _temp) = chunk_state_with_db(TEST_HASH, Vec::new()).await;
     {
         let state_guard = state.read().await;
@@ -231,5 +232,5 @@ async fn get_chunk_allows_unreferenced_protected_local_cache_hash() {
 
     let response = get_chunk(State(state), Path(TEST_HASH.to_string()), HeaderMap::new()).await;
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

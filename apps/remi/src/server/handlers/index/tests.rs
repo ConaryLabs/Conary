@@ -1,6 +1,6 @@
 // apps/remi/src/server/handlers/index/tests.rs
 use super::*;
-use crate::server::handlers::find_repository_for_distro;
+use crate::server::handlers::find_repository_for_profile;
 use crate::server::native_publish::test_support::seed_native_publication;
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{
@@ -28,7 +28,7 @@ fn insert_converted_with_summary(
     distro: &str,
     package: &str,
     version: &str,
-    architecture: Option<&str>,
+    architecture: &str,
     original_format: &str,
     summary: ScriptletBundleSummary,
 ) {
@@ -36,6 +36,7 @@ fn insert_converted_with_summary(
         distro.to_string(),
         package.to_string(),
         version.to_string(),
+        architecture.to_string(),
         original_format.to_string(),
         format!("sha256:{package}-{version}-source"),
         &[format!("sha256:{package}-{version}-chunk")],
@@ -43,7 +44,6 @@ fn insert_converted_with_summary(
         format!("sha256:{package}-{version}-content"),
         format!("/tmp/{package}-{version}.ccs"),
     );
-    converted.package_architecture = architecture.map(str::to_string);
     converted.set_scriptlet_metadata(&summary).unwrap();
     converted.insert(conn).unwrap();
 }
@@ -53,7 +53,7 @@ fn insert_stale_conversion(
     distro: &str,
     package: &str,
     version: &str,
-    architecture: Option<&str>,
+    architecture: &str,
     original_format: &str,
 ) {
     insert_converted_with_summary(
@@ -67,7 +67,7 @@ fn insert_stale_conversion(
     );
     conn.execute(
         "UPDATE converted_packages SET conversion_version = ?1
-         WHERE distro = ?2 AND package_name = ?3 AND package_version = ?4",
+         WHERE source_profile = ?2 AND package_name = ?3 AND package_version = ?4",
         rusqlite::params![
             conary_core::db::models::CONVERSION_VERSION - 1,
             distro,
@@ -96,9 +96,9 @@ fn test_build_metadata_no_repository() {
 fn test_build_metadata_empty_repository() {
     let (temp_file, conn) = create_test_db();
 
-    // Create a repository with default_strategy_distro
+    // Create a repository with source_profile
     let mut repo = Repository::new("fedora-base".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     repo.insert(&conn).unwrap();
 
     // Update with last_sync (not set during insert)
@@ -118,7 +118,7 @@ fn metadata_wire_preserves_exact_typed_package_relation() {
     let (temp_file, conn) = create_test_db();
     let mut repository =
         Repository::new("fedora-base".to_string(), "https://example.com".to_string());
-    repository.default_strategy_distro = Some("fedora-44".to_string());
+    repository.source_profile = Some("fedora-44".to_string());
     let repository_id = repository.insert(&conn).unwrap();
     let mut package = RepositoryPackage::new(
         repository_id,
@@ -241,7 +241,7 @@ fn test_build_metadata_with_packages() {
 
     // Create repository
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     // Add some packages
@@ -295,7 +295,7 @@ fn test_build_metadata_preserves_repository_architecture() {
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut pkg = RepositoryPackage::new(
@@ -326,7 +326,7 @@ fn test_build_metadata_ignores_zero_sized_repository_rows() {
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut placeholder = RepositoryPackage::new(
@@ -376,7 +376,7 @@ fn test_build_metadata_with_converted_packages() {
 
     // Create repository
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     // Add packages
@@ -405,9 +405,10 @@ fn test_build_metadata_with_converted_packages() {
 
     // Mark nginx as converted
     let mut converted = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "nginx".to_string(),
         "1.24.0-1.fc44".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:abc".to_string(),
         &["chunk1".to_string(), "chunk2".to_string()],
@@ -415,7 +416,6 @@ fn test_build_metadata_with_converted_packages() {
         "sha256:content".to_string(),
         "/path/to/nginx.ccs".to_string(),
     );
-    converted.package_architecture = Some("x86_64".to_string());
     converted.insert(&conn).unwrap();
 
     let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
@@ -441,13 +441,14 @@ fn test_build_metadata_with_converted_only_package() {
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     repo.insert(&conn).unwrap();
 
     let mut converted = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "conary-test-fixture".to_string(),
         "1.0.0".to_string(),
+        "x86_64".to_string(),
         "ccs".to_string(),
         "upload:fedora:fixture".to_string(),
         &["fixture".to_string()],
@@ -478,7 +479,7 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut repo_backed_pkg = RepositoryPackage::new(
@@ -505,9 +506,10 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
     unconverted_pkg.insert(&conn).unwrap();
 
     let mut repo_backed = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "repo-backed".to_string(),
         "1.0".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:repo-backed".to_string(),
         &["sha256:repo-backed-chunk".to_string()],
@@ -515,7 +517,6 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
         "sha256:repo-backed-content".to_string(),
         "/cache/repo-backed.ccs".to_string(),
     );
-    repo_backed.package_architecture = Some("x86_64".to_string());
     repo_backed
         .set_scriptlet_metadata(&ScriptletBundleSummary {
             scriptlet_fidelity: "native-lifecycle".to_string(),
@@ -525,9 +526,10 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
     repo_backed.insert(&conn).unwrap();
 
     let mut converted_only = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "converted-only".to_string(),
         "2.0".to_string(),
+        "x86_64".to_string(),
         "ccs".to_string(),
         "upload:fedora:converted-only".to_string(),
         &["sha256:converted-only-chunk".to_string()],
@@ -596,7 +598,7 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
 fn metadata_hides_stale_scriptlet_rows() {
     let (temp_file, conn) = create_test_db();
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut repo_pkg = RepositoryPackage::new(
@@ -611,7 +613,7 @@ fn metadata_hides_stale_scriptlet_rows() {
     repo_pkg.architecture = Some("x86_64".to_string());
     repo_pkg.insert(&conn).unwrap();
 
-    insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0", Some("x86_64"), "rpm");
+    insert_stale_conversion(&conn, "fedora-44", "gtk3", "3.24.0", "x86_64", "rpm");
 
     let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
     let pkg = metadata
@@ -634,10 +636,10 @@ fn metadata_hides_stale_scriptlet_rows() {
 fn metadata_omits_converted_only_stale_rows() {
     let (temp_file, conn) = create_test_db();
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     repo.insert(&conn).unwrap();
 
-    insert_stale_conversion(&conn, "fedora", "stale-only", "1.0", Some("x86_64"), "ccs");
+    insert_stale_conversion(&conn, "fedora-44", "stale-only", "1.0", "x86_64", "ccs");
 
     let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
 
@@ -646,67 +648,18 @@ fn metadata_omits_converted_only_stale_rows() {
 }
 
 #[test]
-fn test_build_metadata_omits_legacy_repo_converted_only_without_architecture() {
-    let (temp_file, conn) = create_test_db();
-
-    let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
-    let repo_id = repo.insert(&conn).unwrap();
-
-    let mut repo_pkg = RepositoryPackage::new(
-        repo_id,
-        "qemu-img".to_string(),
-        "2:10.1.0-7.fc44".to_string(),
-        VersionScheme::Rpm,
-        "sha256:qemu-img".to_string(),
-        4096,
-        "https://example.com/qemu-img.rpm".to_string(),
-    );
-    repo_pkg.architecture = Some("x86_64".to_string());
-    repo_pkg.insert(&conn).unwrap();
-
-    let mut stale_converted = ConvertedPackage::new_repository(
-        "fedora".to_string(),
-        "qemu-img".to_string(),
-        "10.1.0-7.fc44".to_string(),
-        "rpm".to_string(),
-        "sha256:old-qemu-img".to_string(),
-        &["chunk".to_string()],
-        2048,
-        "sha256:content".to_string(),
-        "/cache/qemu-img-10.1.0-7.fc44.ccs".to_string(),
-    );
-    stale_converted.insert(&conn).unwrap();
-
-    let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
-
-    assert!(
-        metadata
-            .packages
-            .iter()
-            .any(|p| p.name == "qemu-img" && p.version == "2:10.1.0-7.fc44")
-    );
-    assert!(
-        !metadata
-            .packages
-            .iter()
-            .any(|p| p.name == "qemu-img" && p.version == "10.1.0-7.fc44")
-    );
-}
-
-#[test]
 fn test_find_repository_by_strategy_distro() {
     let (_temp_file, conn) = create_test_db();
 
-    // Create repo with default_strategy_distro
+    // Create repo with source_profile
     let mut repo = Repository::new(
         "my-fedora-repo".to_string(),
         "https://example.com".to_string(),
     );
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     repo.insert(&conn).unwrap();
 
-    let found = find_repository_for_distro(&conn, "fedora").unwrap();
+    let found = find_repository_for_profile(&conn, "fedora-44").unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().name, "my-fedora-repo");
 }
@@ -715,11 +668,11 @@ fn test_find_repository_by_strategy_distro() {
 fn repository_name_does_not_create_profile_authority() {
     let (_temp_file, conn) = create_test_db();
 
-    // Create repo without default_strategy_distro but with matching name
+    // Create repo without source_profile but with matching name
     let mut repo = Repository::new("arch-linux".to_string(), "https://example.com".to_string());
     repo.insert(&conn).unwrap();
 
-    let found = find_repository_for_distro(&conn, "arch").unwrap();
+    let found = find_repository_for_profile(&conn, "arch").unwrap();
     assert!(found.is_none());
 }
 
@@ -738,11 +691,11 @@ fn exact_profile_identity_selects_repository() {
         "my-deb-repo".to_string(),
         "https://new.example.com".to_string(),
     );
-    repo2.default_strategy_distro = Some("ubuntu-26.04".to_string());
+    repo2.source_profile = Some("ubuntu-26.04".to_string());
     repo2.insert(&conn).unwrap();
 
     // Should prefer the one with matching strategy_distro
-    let found = find_repository_for_distro(&conn, "ubuntu").unwrap();
+    let found = find_repository_for_profile(&conn, "ubuntu-26.04").unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().name, "my-deb-repo");
 }
@@ -755,7 +708,7 @@ fn test_find_repository_not_found() {
     let mut repo = Repository::new("centos".to_string(), "https://example.com".to_string());
     repo.insert(&conn).unwrap();
 
-    let found = find_repository_for_distro(&conn, "fedora").unwrap();
+    let found = find_repository_for_profile(&conn, "fedora-44").unwrap();
     assert!(found.is_none());
 }
 
@@ -765,9 +718,10 @@ fn test_build_converted_packages() {
 
     // Add converted packages for different distros
     let mut fedora_pkg = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "nginx".to_string(),
         "1.24.0".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:fed1".to_string(),
         &[],
@@ -775,13 +729,13 @@ fn test_build_converted_packages() {
         "sha256:c1".to_string(),
         "/path/1.ccs".to_string(),
     );
-    fedora_pkg.package_architecture = Some("x86_64".to_string());
     fedora_pkg.insert(&conn).unwrap();
 
     let mut arch_pkg = ConvertedPackage::new_repository(
         "arch".to_string(),
         "nginx".to_string(),
         "1.24.0".to_string(),
+        "x86_64".to_string(),
         "arch".to_string(),
         "sha256:arch1".to_string(),
         &[],
@@ -789,11 +743,10 @@ fn test_build_converted_packages() {
         "sha256:c2".to_string(),
         "/path/2.ccs".to_string(),
     );
-    arch_pkg.package_architecture = Some("x86_64".to_string());
     arch_pkg.insert(&conn).unwrap();
 
     // Query for fedora - should only get fedora packages
-    let fedora_set = build_converted_packages(&conn, "fedora").unwrap();
+    let fedora_set = build_converted_packages(&conn, "fedora-44").unwrap();
     assert_eq!(fedora_set.len(), 1);
     assert_eq!(fedora_set[0].name, "nginx");
     assert_eq!(fedora_set[0].version, "1.24.0");
@@ -806,7 +759,7 @@ fn test_build_converted_packages() {
     assert_eq!(arch_set[0].version, "1.24.0");
 
     // Query for ubuntu - should be empty
-    let ubuntu_set = build_converted_packages(&conn, "ubuntu").unwrap();
+    let ubuntu_set = build_converted_packages(&conn, "ubuntu-26.04").unwrap();
     assert!(ubuntu_set.is_empty());
 }
 
@@ -828,9 +781,10 @@ fn test_build_converted_packages_ignores_null_fields() {
 
     // Add a server-side converted package
     let mut server_pkg = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "curl".to_string(),
         "8.5.0".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:server".to_string(),
         &[],
@@ -838,10 +792,9 @@ fn test_build_converted_packages_ignores_null_fields() {
         "sha256:c".to_string(),
         "/path/curl.ccs".to_string(),
     );
-    server_pkg.package_architecture = Some("x86_64".to_string());
     server_pkg.insert(&conn).unwrap();
 
-    let set = build_converted_packages(&conn, "fedora").unwrap();
+    let set = build_converted_packages(&conn, "fedora-44").unwrap();
 
     // Should only include the server-side package with non-null fields
     assert_eq!(set.len(), 1);
@@ -854,7 +807,7 @@ fn test_metadata_package_sorting() {
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     // Add packages in non-alphabetical order

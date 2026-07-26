@@ -93,7 +93,6 @@ pub(crate) fn publish_gate_code_to_diagnostic_code(
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::AbsentOrUnknownProvenanceClass
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::NonHermeticHardeningLevel
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::StaleOrUnknownPolicy
-        | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::InvalidDiagnosticEvidence
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::ForeignConversionMissingBoundary
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::ForeignConversionBoundaryHashMismatch
         | conary_core::repository::static_repo::publish_gate::PublishGateFailureCode::RecordedDraftArtifact => {
@@ -436,7 +435,6 @@ mod tests {
             PublishGateFailureCode::AbsentOrUnknownProvenanceClass,
             PublishGateFailureCode::NonHermeticHardeningLevel,
             PublishGateFailureCode::StaleOrUnknownPolicy,
-            PublishGateFailureCode::InvalidDiagnosticEvidence,
             PublishGateFailureCode::ForeignConversionMissingBoundary,
             PublishGateFailureCode::ForeignConversionBoundaryHashMismatch,
             PublishGateFailureCode::RecordedDraftArtifact,

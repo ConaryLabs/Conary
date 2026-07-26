@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
-    RepositoryRequirementClause, RepositoryRequirementGroup, RepositoryRequirementKind,
+    RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
@@ -131,32 +131,44 @@ impl ArchParser {
 
         if let Some(deps) = fields.get("DEPENDS") {
             for dep in deps {
-                let (name, constraint) = self.parse_dependency_string(dep);
-                let clause = if constraint.is_empty() {
-                    RepositoryRequirementClause::name_only(name)
-                } else {
-                    RepositoryRequirementClause::versioned(name, constraint)
-                };
                 groups.push(
-                    RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, clause)
-                        .with_native_text(dep.clone()),
+                    crate::repository::requirement::parse_native_requirement(
+                        RepositoryRequirementKind::Depends,
+                        VersionScheme::Arch,
+                        dep,
+                    )
+                    .map_err(|error| {
+                        Error::ParseError(format!("invalid Arch %DEPENDS% entry '{dep}': {error}"))
+                    })?,
                 );
             }
         }
 
         if let Some(opts) = fields.get("OPTDEPENDS") {
             for opt in opts {
-                let (pkg_name, desc) = if let Some((pkg, d)) = opt.split_once(':') {
-                    let (name, _) = self.parse_dependency_string(pkg.trim());
-                    (name, Some(d.trim().to_string()))
-                } else {
-                    let (name, _) = self.parse_dependency_string(opt);
-                    (name, None)
-                };
-                groups.push(RepositoryRequirementGroup::optional(
-                    RepositoryRequirementClause::name_only(pkg_name),
-                    desc,
-                ));
+                // libalpm's alpm_dep_from_string() recognizes only ": " as
+                // the description boundary so an epoch colon remains part of
+                // the version.
+                let (native_requirement, description) =
+                    if let Some((package, description)) = opt.split_once(": ") {
+                        (
+                            package.trim(),
+                            Some(description.trim().to_string()).filter(|value| !value.is_empty()),
+                        )
+                    } else {
+                        (opt.as_str(), None)
+                    };
+                let mut group = crate::repository::requirement::parse_native_requirement(
+                    RepositoryRequirementKind::Optional,
+                    VersionScheme::Arch,
+                    native_requirement,
+                )
+                .map_err(|error| {
+                    Error::ParseError(format!("invalid Arch %OPTDEPENDS% entry '{opt}': {error}"))
+                })?;
+                group.description = description;
+                group.native_text = Some(opt.clone());
+                groups.push(group);
             }
         }
 
@@ -201,7 +213,7 @@ impl ArchParser {
         name: &str,
         version: &str,
         desc_fields: &HashMap<String, Vec<String>>,
-    ) -> Vec<RepositoryProvide> {
+    ) -> Result<Vec<RepositoryProvide>> {
         let mut provides = vec![RepositoryProvide::package_name(
             name.to_string(),
             Some(version.to_string()),
@@ -209,8 +221,14 @@ impl ArchParser {
 
         if let Some(prov_list) = desc_fields.get("PROVIDES") {
             for prov in prov_list {
-                let (prov_name, prov_constraint) = self.parse_dependency_string(prov);
-                let kind = if prov_name == name {
+                let clause = crate::repository::package_relation::parse_arch_atom(prov).map_err(
+                    |error| {
+                        Error::ParseError(format!(
+                            "invalid Arch %PROVIDES% entry '{prov}': {error}"
+                        ))
+                    },
+                )?;
+                let kind = if clause.name == name {
                     RepositoryCapabilityKind::PackageName
                 } else {
                     // ALPM's PROVIDES field declares a capability but does not
@@ -219,18 +237,44 @@ impl ArchParser {
                     RepositoryCapabilityKind::Virtual
                 };
 
-                let prov_version = common::extract_version_from_constraint(&prov_constraint);
+                let prov_version = clause
+                    .version_constraint
+                    .as_deref()
+                    .map(|constraint| {
+                        match crate::repository::versioning::parse_repo_constraint(
+                            VersionScheme::Arch,
+                            constraint,
+                        )
+                        .map_err(|error| {
+                            Error::ParseError(format!(
+                                "invalid Arch %PROVIDES% entry '{prov}': {error}"
+                            ))
+                        })? {
+                            crate::repository::versioning::RepoVersionConstraint::Exact(
+                                version,
+                            ) => Ok(version),
+                            _ => Err(Error::ParseError(format!(
+                                "Arch %PROVIDES% entry '{prov}' must be unversioned or use the exact '=' relation"
+                            ))),
+                        }
+                    })
+                    .transpose()?;
 
                 provides.push(RepositoryProvide {
-                    name: prov_name,
+                    name: clause.name,
                     kind,
+                    version_relation: prov_version.as_ref().map(|_| {
+                        crate::repository::dependency_model::ProvideVersionRelation::Equal
+                    }),
                     version: prov_version,
+                    architecture_qualifier:
+                        crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
                     native_text: Some(prov.clone()),
                 });
             }
         }
 
-        provides
+        Ok(provides)
     }
 
     fn package_from_fields(
@@ -339,29 +383,24 @@ impl ArchParser {
             .map_or_else(|| vec![desc_fields], |fields| vec![desc_fields, fields]);
         requirements.extend(self.parse_relation_fields(&relation_field_sets)?);
 
-        let structured_provides = self.build_structured_provides(&name, &version, desc_fields);
+        let structured_provides = self.build_structured_provides(&name, &version, desc_fields)?;
 
         Ok(PackageMetadata {
             name,
             version,
             architecture,
+            debian_multi_arch: None,
             description,
             checksum,
             checksum_type: ChecksumType::Sha256,
             size,
             download_url,
             extra_metadata: serde_json::Value::Object(extra),
-            source_distro: RepositoryDependencyFlavor::Arch,
+            dependency_flavor: RepositoryDependencyFlavor::Arch,
             version_scheme: VersionScheme::Arch,
             requirements,
             provides: structured_provides,
         })
-    }
-
-    /// Parse dependency string into name and constraint
-    /// Format: "package>=1.0" or "package=1.0" or "package<2.0" or just "package"
-    fn parse_dependency_string(&self, dep: &str) -> (String, String) {
-        common::split_dependency(dep)
     }
 }
 
@@ -488,16 +527,33 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_dependency_string() {
+    fn repository_dependency_uses_canonical_arch_parser() {
+        let parsed = crate::repository::requirement::parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Arch,
+            "glibc>=2.17",
+        )
+        .unwrap();
+        assert_eq!(parsed.alternatives[0].name, "glibc");
+        assert_eq!(
+            parsed.alternatives[0].version_constraint.as_deref(),
+            Some(">= 2.17")
+        );
+    }
+
+    #[test]
+    fn optional_dependency_preserves_version_epoch_before_description() {
         let parser = parser();
 
-        let (name, constraint) = parser.parse_dependency_string("glibc>=2.17");
-        assert_eq!(name, "glibc");
-        assert_eq!(constraint, ">=2.17");
-
-        let (name2, constraint2) = parser.parse_dependency_string("readline");
-        assert_eq!(name2, "readline");
-        assert_eq!(constraint2, "");
+        let groups = parser
+            .parse_structured_depends("%OPTDEPENDS%\nruntime>=2:1.0-1: optional runtime\n")
+            .unwrap();
+        assert_eq!(groups[0].alternatives[0].name, "runtime");
+        assert_eq!(
+            groups[0].alternatives[0].version_constraint.as_deref(),
+            Some(">= 2:1.0-1")
+        );
+        assert_eq!(groups[0].description.as_deref(), Some("optional runtime"));
     }
 
     #[test]
@@ -569,7 +625,7 @@ x86_64
             .package_from_fields("https://example.test", &fields, None)
             .unwrap();
 
-        assert_eq!(pkg.source_distro, RepositoryDependencyFlavor::Arch);
+        assert_eq!(pkg.dependency_flavor, RepositoryDependencyFlavor::Arch);
         assert_eq!(pkg.version_scheme, VersionScheme::Arch);
     }
 
@@ -613,7 +669,7 @@ ncurses
         assert_eq!(glibc.alternatives[0].name, "glibc");
         assert_eq!(
             glibc.alternatives[0].version_constraint.as_deref(),
-            Some(">=2.36")
+            Some(">= 2.36")
         );
 
         let readline = &pkg.requirements[1];
@@ -770,6 +826,18 @@ libpthread.so
     }
 
     #[test]
+    fn repository_rejects_non_exact_arch_provide_version() {
+        let parser = parser();
+        let mut fields = HashMap::new();
+        fields.insert("PROVIDES".to_string(), vec!["mail-api>=2".to_string()]);
+
+        let error = parser
+            .build_structured_provides("mail-provider", "1", &fields)
+            .unwrap_err();
+        assert!(error.to_string().contains("exact '='"), "{error}");
+    }
+
+    #[test]
     fn test_implicit_self_provide_always_present() {
         let parser = parser();
         let desc = "\
@@ -804,15 +872,11 @@ x86_64
     }
 
     #[test]
-    fn test_dependency_string_with_operator() {
+    fn repository_rejects_malformed_arch_dependency() {
         let parser = parser();
-
-        let (name, constraint) = parser.parse_dependency_string("openssl>=3.0");
-        assert_eq!(name, "openssl");
-        assert_eq!(constraint, ">=3.0");
-
-        let (name2, constraint2) = parser.parse_dependency_string("zlib=1.3.1-1");
-        assert_eq!(name2, "zlib");
-        assert_eq!(constraint2, "=1.3.1-1");
+        let error = parser
+            .parse_structured_depends("%DEPENDS%\nopenssl>=\n")
+            .unwrap_err();
+        assert!(error.to_string().contains("empty version"), "{error}");
     }
 }

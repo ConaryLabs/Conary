@@ -11,7 +11,6 @@
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{ConversionOptions, NativePackageConverter};
 use conary_core::ccs::native_lifecycle::ScriptletFidelity;
-use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::native_abi::*;
 use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile};
@@ -46,6 +45,10 @@ fn content_authority(content: &[u8]) -> PayloadContentAuthority {
     }
 }
 
+fn source_checksum(label: &str) -> String {
+    format!("sha256:{}", conary_core::hash::sha256(label.as_bytes()))
+}
+
 fn package_regular(path: impl Into<String>, content: &[u8], mode: u32) -> PackageFile {
     PackageFile {
         path: path.into(),
@@ -60,6 +63,37 @@ fn extracted_regular(path: impl Into<String>, content: &[u8], mode: u32) -> Extr
         node: PayloadNode::regular(mode),
         content: content.to_vec(),
         content_authority: Some(content_authority(content)),
+    }
+}
+
+fn signed_test_converter(options: ConversionOptions) -> NativePackageConverter {
+    NativePackageConverter::new(options).with_signing_key(std::sync::Arc::new(
+        conary_core::ccs::SigningKeyPair::generate().with_key_id("conversion-integration"),
+    ))
+}
+
+trait InMemoryConversionForTest {
+    fn convert_in_memory_for_test(
+        &self,
+        metadata: &PackageMetadata,
+        files: &[ExtractedFile],
+        format: &str,
+        checksum: &str,
+    ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult>;
+}
+
+impl InMemoryConversionForTest for NativePackageConverter {
+    fn convert_in_memory_for_test(
+        &self,
+        metadata: &PackageMetadata,
+        files: &[ExtractedFile],
+        format: &str,
+        checksum: &str,
+    ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult> {
+        let payload =
+            conary_core::packages::PackagePayload::from_extracted_in_memory(files.to_vec())?;
+        self.convert_payload(metadata, payload.files(), format, checksum)
+            .map_err(Into::into)
     }
 }
 
@@ -114,8 +148,9 @@ fn create_test_metadata(name: &str) -> PackageMetadata {
         package_path: PathBuf::from(format!("/tmp/{}-1.0.0.rpm", name)),
         name: name.to_string(),
         version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Conary,
+        version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: Some(format!("Test package: {}", name)),
         files: vec![package_regular(
             format!("/usr/bin/{name}"),
@@ -142,24 +177,28 @@ fn create_test_files(name: &str) -> Vec<ExtractedFile> {
 }
 
 fn passive_converter(output_dir: &std::path::Path) -> NativePackageConverter {
-    NativePackageConverter::new(ConversionOptions {
+    signed_test_converter(ConversionOptions {
         output_dir: output_dir.to_path_buf(),
-        enable_chunking: false,
     })
-    .with_source_distro("fedora")
+    .with_source_profile("fedora-44")
     .with_source_release("44")
 }
 
 fn parse_converted_package(result: &conary_core::ccs::convert::ConversionResult) -> CcsPackage {
-    CcsPackage::parse(
-        result
-            .package_path
-            .as_ref()
-            .expect("conversion should write CCS package")
-            .to_str()
-            .expect("package path is utf-8"),
+    let package_path = result
+        .package_path
+        .as_ref()
+        .expect("conversion should write CCS package");
+    let verified = conary_core::ccs::verify::verify_package(
+        package_path,
+        &conary_core::ccs::TrustPolicy::strict(vec![result.signing_public_key.clone()]),
     )
-    .expect("converted CCS package should parse")
+    .expect("converted CCS authority should verify");
+    CcsPackage::from_verified_archive(
+        package_path.to_str().expect("package path is utf-8"),
+        &verified,
+    )
+    .expect("verified converted CCS package should open")
 }
 
 fn golden_payload_files(name: &str) -> Vec<ExtractedFile> {
@@ -217,8 +256,9 @@ WantedBy=multi-user.target
         package_path: PathBuf::from("/tmp/myserver-1.0.0.rpm"),
         name: "myserver".to_string(),
         version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Debian,
+        version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: Some("A test server application".to_string()),
         files: vec![
             package_regular("/usr/sbin/myserver", binary_content, 0o755),
@@ -232,13 +272,13 @@ WantedBy=multi-user.target
         requirements: vec![
             requirement(
                 RepositoryRequirementKind::Depends,
-                VersionScheme::Debian,
-                "libssl3 (>= 3.0)",
+                VersionScheme::Rpm,
+                "openssl-libs >= 3.0",
             ),
             requirement(
                 RepositoryRequirementKind::Depends,
-                VersionScheme::Debian,
-                "libc6",
+                VersionScheme::Rpm,
+                "glibc",
             ),
         ],
         provides: vec![],
@@ -290,20 +330,20 @@ fn test_minimal_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false, // Faster for tests
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
     let metadata = create_test_metadata("minimal");
     let files = create_test_files("minimal");
+    let checksum = source_checksum("minimal native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "checksum123");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(result.is_ok(), "Basic conversion should succeed");
 
     let result = result.unwrap();
     assert!(result.package_path.is_some(), "Should produce output file");
     assert_eq!(result.original_format, "rpm");
-    assert_eq!(result.original_checksum, "checksum123");
+    assert_eq!(result.original_checksum, checksum);
 
     // Verify output file exists
     let package_path = result.package_path.unwrap();
@@ -319,14 +359,15 @@ fn test_conversion_preserves_metadata() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("metadata-test");
     metadata.description = Some("A detailed description".to_string());
     metadata.version_scheme = VersionScheme::Debian;
+    metadata.debian_multi_arch =
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
     metadata.requirements = vec![requirement(
         RepositoryRequirementKind::Depends,
         VersionScheme::Debian,
@@ -334,9 +375,10 @@ fn test_conversion_preserves_metadata() {
     )];
 
     let files = create_test_files("metadata-test");
+    let checksum = source_checksum("metadata native package");
 
     let result = converter
-        .convert(&metadata, &files, "deb", "deb_checksum")
+        .convert_in_memory_for_test(&metadata, &files, "deb", &checksum)
         .unwrap();
 
     // Check manifest preserves metadata
@@ -359,14 +401,14 @@ fn test_server_package_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
     let (metadata, files) = create_server_package();
+    let checksum = source_checksum("server native package");
 
     let result = converter
-        .convert(&metadata, &files, "rpm", "server_checksum")
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
         .unwrap();
 
     // Check config files preserved
@@ -379,7 +421,11 @@ fn test_server_package_conversion() {
         manifest
             .config
             .files
-            .contains(&"/etc/myserver/myserver.conf".to_string()),
+            .iter()
+            .any(|config| config.path == "/etc/myserver/myserver.conf"
+                && config.noreplace
+                && !config.ghost
+                && !config.remove_on_upgrade),
         "Should include myserver.conf"
     );
 }
@@ -393,10 +439,9 @@ fn test_file_permissions_preserved() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
     let executable_content = b"#!/bin/sh";
     let config_content = b"config";
     let secret_content = b"secret";
@@ -407,6 +452,7 @@ fn test_file_permissions_preserved() {
         version: "1.0.0".to_string(),
         version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: None,
         files: vec![
             package_regular("/usr/bin/executable", executable_content, 0o755),
@@ -426,8 +472,11 @@ fn test_file_permissions_preserved() {
         extracted_regular("/etc/config", config_content, 0o644),
         extracted_regular("/etc/secret", secret_content, 0o600),
     ];
+    let checksum = source_checksum("permissions native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
+    let result = converter
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
+        .unwrap();
 
     // Verify conversion completed
     assert!(result.package_path.is_some());
@@ -442,10 +491,9 @@ fn test_empty_package_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let metadata = PackageMetadata {
         package_path: PathBuf::from("/tmp/empty-1.0.0.rpm"),
@@ -453,8 +501,9 @@ fn test_empty_package_conversion() {
         version: "1.0.0".to_string(),
         version_scheme: VersionScheme::Rpm,
         architecture: None, // No architecture
-        description: None,  // No description
-        files: vec![],      // No files
+        debian_multi_arch: None,
+        description: None, // No description
+        files: vec![],     // No files
         requirements: vec![],
         provides: vec![],
         relations: vec![],
@@ -464,9 +513,10 @@ fn test_empty_package_conversion() {
     };
 
     let files: Vec<ExtractedFile> = vec![];
+    let checksum = source_checksum("empty native package");
 
     // Empty package should still convert (meta-packages exist)
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(
         result.is_ok(),
         "Empty package should convert: {:?}",
@@ -478,14 +528,13 @@ fn test_empty_package_conversion() {
 }
 
 #[test]
-fn test_large_file_handling() {
+fn test_large_payload_emits_verified_ccs_archive() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: true, // Test with chunking
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
 
     // Create a larger file (1MB of data)
     let large_content: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
@@ -496,6 +545,7 @@ fn test_large_file_handling() {
         version: "1.0.0".to_string(),
         version_scheme: VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: None,
         files: vec![package_regular(
             "/usr/share/large/data.bin",
@@ -515,8 +565,9 @@ fn test_large_file_handling() {
         &large_content,
         0o644,
     )];
+    let checksum = source_checksum("large native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(
         result.is_ok(),
         "Large file should convert: {:?}",
@@ -525,11 +576,15 @@ fn test_large_file_handling() {
 
     let result = result.unwrap();
     assert!(result.package_path.is_some());
-
-    // With chunking enabled, should have chunked data in the build result
-    assert!(
-        result.build_result.chunked,
-        "Chunking should be used for large files"
+    let parsed = parse_converted_package(&result);
+    assert_eq!(parsed.file_entries().len(), 1);
+    assert_eq!(
+        parsed.file_entries()[0]
+            .content
+            .as_ref()
+            .expect("regular file content authority")
+            .size,
+        large_content.len() as u64
     );
 }
 
@@ -542,19 +597,19 @@ fn test_rpm_format_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
     let metadata = create_test_metadata("rpm-pkg");
     let files = create_test_files("rpm-pkg");
+    let checksum = source_checksum("rpm native package");
 
     let result = converter
-        .convert(&metadata, &files, "rpm", "rpm_checksum_abc")
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
         .unwrap();
 
     assert_eq!(result.original_format, "rpm");
-    assert_eq!(result.original_checksum, "rpm_checksum_abc");
+    assert_eq!(result.original_checksum, checksum);
 }
 
 #[test]
@@ -562,19 +617,22 @@ fn test_deb_format_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
-    let metadata = create_test_metadata("deb-pkg");
+    let converter = signed_test_converter(options);
+    let mut metadata = create_test_metadata("deb-pkg");
+    metadata.version_scheme = VersionScheme::Debian;
+    metadata.debian_multi_arch =
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
     let files = create_test_files("deb-pkg");
+    let checksum = source_checksum("deb native package");
 
     let result = converter
-        .convert(&metadata, &files, "deb", "deb_checksum_xyz")
+        .convert_in_memory_for_test(&metadata, &files, "deb", &checksum)
         .unwrap();
 
     assert_eq!(result.original_format, "deb");
-    assert_eq!(result.original_checksum, "deb_checksum_xyz");
+    assert_eq!(result.original_checksum, checksum);
 }
 
 #[test]
@@ -582,19 +640,20 @@ fn test_arch_format_tracking() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
-    let metadata = create_test_metadata("arch-pkg");
+    let converter = signed_test_converter(options);
+    let mut metadata = create_test_metadata("arch-pkg");
+    metadata.version_scheme = VersionScheme::Arch;
     let files = create_test_files("arch-pkg");
+    let checksum = source_checksum("arch native package");
 
     let result = converter
-        .convert(&metadata, &files, "arch", "arch_checksum_123")
+        .convert_in_memory_for_test(&metadata, &files, "arch", &checksum)
         .unwrap();
 
     assert_eq!(result.original_format, "arch");
-    assert_eq!(result.original_checksum, "arch_checksum_123");
+    assert_eq!(result.original_checksum, checksum);
 }
 
 // =============================================================================
@@ -606,10 +665,9 @@ fn test_dependency_conversion() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("deps-pkg");
     metadata.version_scheme = VersionScheme::Rpm;
@@ -632,7 +690,10 @@ fn test_dependency_conversion() {
     ];
 
     let files = create_test_files("deps-pkg");
-    let result = converter.convert(&metadata, &files, "rpm", "cs").unwrap();
+    let checksum = source_checksum("dependency native package");
+    let result = converter
+        .convert_in_memory_for_test(&metadata, &files, "rpm", &checksum)
+        .unwrap();
 
     let manifest = &result.build_result.manifest;
 
@@ -660,16 +721,16 @@ fn test_invalid_output_dir_handling() {
     // Test with an invalid output directory
     let options = ConversionOptions {
         output_dir: PathBuf::from("/nonexistent/deeply/nested/path/that/should/not/exist"),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
     let metadata = create_test_metadata("error-test");
     let files = create_test_files("error-test");
+    let checksum = source_checksum("invalid output native package");
 
     // The conversion might fail when trying to create output directory
     // depending on permissions, or it might succeed if it can create the dirs
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
 
     // Either succeeds (created dirs) or fails with I/O error
     if let Err(e) = result {
@@ -688,17 +749,17 @@ fn test_special_characters_in_package_name() {
     let temp_dir = TempDir::new().unwrap();
     let options = ConversionOptions {
         output_dir: temp_dir.path().to_path_buf(),
-        enable_chunking: false,
     };
 
-    let converter = NativePackageConverter::new(options);
+    let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("pkg-with-special_chars.v2");
     metadata.name = "pkg-with-special_chars.v2".to_string();
 
     let files = create_test_files("pkg-with-special_chars.v2");
+    let checksum = source_checksum("special character native package");
 
-    let result = converter.convert(&metadata, &files, "rpm", "cs");
+    let result = converter.convert_in_memory_for_test(&metadata, &files, "rpm", &checksum);
     assert!(
         result.is_ok(),
         "Package with special chars should convert: {:?}",

@@ -244,36 +244,34 @@ pub fn json_response(json: String, cache_max_age: u32) -> Response {
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Find a repository configured for the given distro
+/// Find a repository configured for one exact public source profile.
 ///
-/// Requires an exact public profile ID or unambiguous public route and returns
-/// the first declared source.
+/// Public route slugs must be resolved at the HTTP boundary before calling
+/// this persisted-authority lookup.
 // Used by test modules in sparse.rs and index.rs.
 #[allow(dead_code)]
-pub fn find_repository_for_distro(
+pub fn find_repository_for_profile(
     conn: &Connection,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<Option<Repository>, anyhow::Error> {
-    let all = find_repositories_for_distro(conn, distro)?;
+    let all = find_repositories_for_profile(conn, source_profile)?;
     Ok(all.into_iter().next())
 }
 
-/// Find all repositories configured for the given distro
+/// Find all repositories configured for one exact public source profile.
 ///
-/// Uses only the embedded route catalog and persisted typed profile identity.
-/// Repository names and URLs never establish distro authority.
-pub fn find_repositories_for_distro(
+/// Repository names, URLs, route slugs, and package formats never establish
+/// persisted source authority.
+pub fn find_repositories_for_profile(
     conn: &Connection,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<Vec<Repository>, anyhow::Error> {
-    let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
-        .or_else(|| conary_core::repository::supported_profiles::profile_for_remi_route(distro));
-    let profile =
-        profile.ok_or_else(|| anyhow::anyhow!("unsupported public profile or route '{distro}'"))?;
+    let profile = conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+        .ok_or_else(|| anyhow::anyhow!("unsupported public source profile '{source_profile}'"))?;
     let repos = Repository::list_enabled(conn)?;
     Ok(repos
         .into_iter()
-        .filter(|repository| repository.default_strategy_distro.as_deref() == Some(profile.id()))
+        .filter(|repository| repository.source_profile.as_deref() == Some(profile.id()))
         .collect())
 }
 

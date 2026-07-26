@@ -8,7 +8,7 @@ fn arch_hook_bundle_with_dependency(package_name: &str, dependency: &str) -> Nat
     let mut bundle = pre_remove_bundle(package_name, "1");
     bundle.source_format = SourceFormat::Arch;
     bundle.source_family = "arch".to_string();
-    bundle.source_distro = Some("arch".to_string());
+    bundle.source_profile = Some("arch".to_string());
     bundle.source_release = None;
     bundle.source_arch = Some("x86_64".to_string());
     bundle.version_scheme = LifecycleVersionScheme::Arch;
@@ -90,11 +90,16 @@ fn arch_hook_depends_accepts_incoming_virtual_provide_from_native_install_input(
         "hook dependency must not be inferred from the incoming payload"
     );
 
-    let provides = [conary_core::packages::traits::Dependency {
+    let provides = [conary_core::packages::traits::ProvidedCapability {
+        kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
         name: "cache-provider".to_string(),
         version: Some("2:1.0-2".to_string()),
-        dep_type: conary_core::packages::traits::DependencyType::Runtime,
-        description: None,
+        version_relation: Some(
+            conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+        ),
+        version_scheme: VersionScheme::Arch,
+        architecture_qualifier:
+            conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
     }];
     let with_provide = PreparedNativeTransaction::prepare_batch(
         &conn,

@@ -44,6 +44,8 @@ pub(super) fn regular_snapshot(path: &str, permissions: u32) -> FileSnapshot {
             sha256: conary_core::hash::sha256(b"x"),
             size: 1,
         }),
+        installed_at: "2026-01-01T00:00:00Z".to_string(),
+        component: None,
     }
 }
 
@@ -57,6 +59,8 @@ fn symlink_snapshot(path: &str, target: &str) -> FileSnapshot {
             libc::S_IFLNK | 0o777,
         ),
         content: None,
+        installed_at: "2026-01-01T00:00:00Z".to_string(),
+        component: None,
     }
 }
 
@@ -68,23 +72,15 @@ fn directory_snapshot(path: &str, permissions: u32) -> FileSnapshot {
             libc::S_IFDIR | (permissions & 0o7777),
         ),
         content: None,
+        installed_at: "2026-01-01T00:00:00Z".to_string(),
+        component: None,
     }
 }
 
 pub(super) fn remove_snapshot(files: Vec<FileSnapshot>) -> TroveSnapshot {
-    TroveSnapshot {
-        name: "fixture".to_string(),
-        version: "1.0.0".to_string(),
-        architecture: Some("x86_64".to_string()),
-        description: None,
-        install_source: "Package".to_string(),
-        source_distro: None,
-        version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
-        native_lifecycle: None,
-        ccs_remove_hook: None,
-        installed_from_repository_id: None,
-        files,
-    }
+    let mut snapshot = TroveSnapshot::test_package("fixture", "1.0.0", files);
+    snapshot.architecture = Some("x86_64".to_string());
+    snapshot
 }
 
 fn snapshot_path_under_root(root: &Path, path: &str) -> PathBuf {

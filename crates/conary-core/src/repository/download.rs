@@ -27,6 +27,7 @@ use super::client::{
     download_static_or_http_file_with_expected_size, is_file_or_local_reference,
 };
 use super::metadata::DeltaInfo;
+use super::rpm_verifier::RpmOpenPgpVerifier;
 use super::trust::openpgp::PreparedOpenPgpTrust;
 use super::trust::{ArchSignatureRequirement, RepositoryTrustPolicy, TrustRole};
 
@@ -183,25 +184,20 @@ async fn verify_native_package(
             Ok(())
         }
         RepositoryTrustPolicy::Rpm { .. } => {
-            let keyring = opts.trust.armored_keyring(TrustRole::RpmPackage)?;
-            let verifier =
-                rpm::signature::pgp::Verifier::from_asc_bytes(&keyring).map_err(|error| {
-                    Error::GpgVerificationFailed(format!(
-                        "failed to construct RPM package verifier: {error}"
-                    ))
-                })?;
             let package = rpm::Package::open(dest_path).map_err(|error| {
                 Error::ParseError(format!(
                     "failed to parse downloaded RPM package '{}': {error}",
                     repo_pkg.name
                 ))
             })?;
-            package.verify_signature(verifier).map_err(|error| {
-                Error::GpgVerificationFailed(format!(
-                    "embedded RPM signature verification failed for '{}': {error}",
-                    repo_pkg.name
-                ))
-            })
+            RpmOpenPgpVerifier::new(&opts.trust)
+                .verify(&package)
+                .map_err(|error| {
+                    Error::GpgVerificationFailed(format!(
+                        "embedded RPM signature verification failed for '{}': {error}",
+                        repo_pkg.name
+                    ))
+                })
         }
         RepositoryTrustPolicy::Arch { sig_level, .. } => {
             let signature_url = format!("{}.sig", repo_pkg.download_url);

@@ -31,6 +31,7 @@ results_dir = "/tmp/results"
 [distros.fedora44]
 remi_distro = "fedora-44"
 repo_name = "remi-fedora-44"
+build_context = "binary"
 "#,
     )
     .unwrap();
@@ -244,7 +245,7 @@ fn smoke_dry_run_returns_planned_command_without_execution() {
 #[test]
 fn smoke_refuses_when_bootstrap_check_is_not_ready() {
     let mut inspect = ready_bootstrap_report();
-    inspect.data["default_smoke_candidate"]["ready"] = serde_json::json!(false);
+    inspect.data["required"]["cargo"] = serde_json::json!(false);
     let report = smoke_with_runner(&inspect, &BootstrapSmokeOptions::default(), |_command| {
         panic!("not-ready smoke must not execute")
     });

@@ -5,12 +5,16 @@ mod common;
 use conary_core::ccs::builder::write_v2_ccs_package;
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::ccs::v2::schema::{
-    AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-    FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2, PackageKindTagV2,
-    PackageKindV2, ProvenanceAuthorityV2,
+    AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
+    FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
+    PackageKindTagV2, PackageKindV2, ProvenanceAuthorityV2, ProvidedCapabilityV2,
 };
 use conary_core::ccs::verify::{TrustPolicy, verify_package};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+use conary_core::repository::dependency_model::{
+    ProvideArchitectureQualifier, ProvideVersionRelation,
+};
+use conary_core::repository::versioning::VersionScheme;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeMap;
@@ -25,8 +29,13 @@ fn v2_package_verification_rejects_unsigned_manifest() {
     let package_path = temp.path().join("unsigned-v2.ccs");
     write_unsigned_v2_package(&package_path);
 
-    let error = verify_package(&package_path, &TrustPolicy::strict(Vec::new())).unwrap_err();
-    let message = error.to_string();
+    let trusted = SigningKeyPair::generate();
+    let error = verify_package(
+        &package_path,
+        &TrustPolicy::strict(vec![trusted.public_key_base64()]),
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
     assert!(
         message.contains("MANIFEST.sig") || message.contains("not signed"),
         "unexpected unsigned v2 verification error: {message}"
@@ -147,7 +156,8 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
             version: "1.0.0".to_string(),
             version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
             release: "1".to_string(),
-            architecture: Some("x86_64".to_string()),
+            architecture: Some(std::env::consts::ARCH.to_string()),
+            debian_multi_arch: None,
             platform: Some("linux".to_string()),
             kind: PackageKindTagV2::Package,
         },
@@ -156,9 +166,19 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
             config: Vec::new(),
             policy: Default::default(),
         }),
-        provides: Vec::new(),
+        provides: vec![ProvidedCapabilityV2 {
+            kind: DependencyKindV2::Package,
+            name: name.to_string(),
+            provider_version: Some("1.0.0".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Conary,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            target: None,
+            component: None,
+        }],
         requirements: Vec::new(),
         relations: Vec::new(),
+        capabilities: None,
         components: BTreeMap::from([(
             "main".to_string(),
             ComponentAuthorityV2 {

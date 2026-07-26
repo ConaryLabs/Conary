@@ -8,9 +8,6 @@ mod tests;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::versioning::VersionScheme;
-
 pub use types::{ProfilePackageFormat, SupportedProfile, SupportedRoute};
 
 use types::{CatalogDocument, SupportedProfile as Profile};
@@ -77,30 +74,6 @@ pub fn profile_by_public_id(id: &str) -> Option<&'static SupportedProfile> {
     public_profiles().iter().find(|profile| profile.id() == id)
 }
 
-#[must_use]
-pub fn profile_by_family_slug(slug: &str) -> Option<&'static SupportedProfile> {
-    let slug = slug.trim();
-    public_profiles()
-        .iter()
-        .find(|profile| profile.family_slug() == slug)
-}
-
-/// Resolve an exact repository identity declared by a canonical mapping
-/// contract. Public profile IDs, family/route slugs, and Repology repository
-/// IDs are aliases owned by the embedded profile catalog.
-#[must_use]
-pub fn profile_by_repository_identity(identity: &str) -> Option<&'static SupportedProfile> {
-    let identity = identity.trim();
-    let mut matches = public_profiles().iter().filter(|profile| {
-        profile.id() == identity
-            || profile.family_slug() == identity
-            || profile.remi_route_slug() == identity
-            || profile.repology_repo() == identity
-    });
-    let profile = matches.next()?;
-    matches.next().is_none().then_some(profile)
-}
-
 /// Resolve a configured Remi target to one exact public profile.
 #[must_use]
 pub fn profile_for_remi_target(target: &str) -> Option<&'static SupportedProfile> {
@@ -132,38 +105,10 @@ pub fn profile_for_remi_route(slug: &str) -> Option<&'static SupportedProfile> {
     profile_by_public_id(profile_id)
 }
 
-/// Resolve the exact ALPM source profile whose build-time scriptlet shell owns
-/// a package's `.INSTALL` interpreter ABI.
-///
-/// Repository conversion supplies a public profile ID or unambiguous route.
-/// Direct local ALPM installation is accepted only while exactly one supported
-/// ALPM source profile exists.
-pub fn arch_source_profile(
-    source_profile_or_route: Option<&str>,
-) -> Option<&'static SupportedProfile> {
-    if let Some(source) = source_profile_or_route {
-        return profile_by_public_id(source)
-            .or_else(|| profile_for_remi_route(source))
-            .filter(|profile| profile.package_format() == ProfilePackageFormat::Arch);
-    }
-
-    let mut profiles = public_profiles()
-        .iter()
-        .filter(|profile| profile.package_format() == ProfilePackageFormat::Arch);
-    let profile = profiles.next()?;
-    profiles.next().is_none().then_some(profile)
-}
-
+/// Resolve an exact public ALPM source profile whose build-time scriptlet
+/// shell owns a package's `.INSTALL` interpreter ABI.
 #[must_use]
-pub fn dependency_flavor_for_name(name: &str) -> Option<RepositoryDependencyFlavor> {
-    profile_by_public_id(name)
-        .or_else(|| profile_by_family_slug(name))
-        .map(SupportedProfile::dependency_flavor)
-}
-
-#[must_use]
-pub fn version_scheme_for_name(name: &str) -> Option<VersionScheme> {
-    profile_by_public_id(name)
-        .or_else(|| profile_by_family_slug(name))
-        .map(SupportedProfile::version_scheme)
+pub fn alpm_source_profile(source_profile_id: &str) -> Option<&'static SupportedProfile> {
+    profile_by_public_id(source_profile_id)
+        .filter(|profile| profile.package_format() == ProfilePackageFormat::Arch)
 }

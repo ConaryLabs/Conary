@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 4
-summary: Document Remi source and repository trust authority, conversion, publication, and serving
+last_updated: 2026-07-26
+revision: 7
+summary: Document Remi source, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
 # Remi
@@ -55,6 +55,39 @@ runs prewarm jobs. The release deployment gate requires exact source
 reconciliation, all sources populated, and at least one conversion and
 validated converted artifact for every configured public profile.
 
+## Canonical Map Exchange
+
+Remi builds canonical package equivalence only from the versioned literal
+contracts loaded by `apps/remi/src/server/canonical_job.rs`. Repology remains a
+discovery cache. AppStream may enrich an already-authorized canonical identity
+with one unique application ID, but it cannot create an implementation row.
+The exact contract rows, rebuild timestamp, and content revision commit in one
+SQLite transaction, so a reader cannot observe new mappings under an old
+revision.
+
+The shared wire and replacement owner is
+`crates/conary-core/src/canonical/exchange.rs`; local persistence rules live in
+`db/models/canonical.rs`. `GET /v1/canonical/map` returns canonical-map schema
+version 1, a persisted content revision and rebuild timestamp, and each
+identity's exact kind, optional category, and public-profile package map.
+`generated_at` is `null` only for the empty revision-zero map, so the response
+body and ETag stay stable between rebuilds.
+
+The response carries `X-Conary-Canonical-Sha256` for the exact bounded body and
+`X-Conary-Canonical-Revision` for its content revision. Both Conary fetch paths
+verify the checksum before parsing or opening a persistence transaction. The
+parser denies unknown fields, unsupported schema versions, route aliases,
+unknown profiles, duplicate keys, duplicate identities, and empty or
+conflicting mappings.
+
+Snapshot application atomically replaces Remi-owned rows while preserving
+non-conflicting local `Contract` authority. An identical Remi mapping cannot
+demote a contract; an exact local contract can promote an identical Remi row.
+Any package-name disagreement rolls the replacement back. The current schema
+also makes AppStream IDs unique, removes the unused implementation repository
+column, and permits exactly one package implementation per canonical identity
+and public profile.
+
 ## Release Uploads
 
 Remi release push is the first native CCS publication intake surface. The
@@ -63,6 +96,7 @@ but accepted CCS v2 uploads are stored in `native_package_publications` and
 projected into `repository_packages`; they are not synthetic
 `converted_packages` rows. Native uploads stage privately, run the shared static
 publish gate against `release_publish.trusted_build_attestation_signers`.
+There is no parallel `/v1/admin/packages/{distro}` publication route.
 After structural parsing, signature/trust verification, and the shared static
 publish gate pass, Remi validates signed CCS v2 lifecycle authority
 structurally. The route selects a repository feed, never a destination
@@ -94,10 +128,12 @@ entry-decision count. There is no scriptlet publication-status projection.
 The current schema separates installed conversions from repository-serving
 artifacts with a required discriminator. Installed rows require an exact trove
 identity and cannot carry serving fields. Repository rows require their exact
-distro/name/version identity, chunk list, total size, content hash, and CCS
-path; public and OCI handlers validate that typed artifact instead of filling
-missing fields with guesses or empty values. Local conversion tracking is
-written only after the CCS install transaction commits.
+distro/name/version/architecture identity, chunk list, total size, content
+hash, and CCS path; public and OCI handlers validate that typed artifact
+instead of filling missing fields with guesses or empty values. Architecture is
+a required constructor and API-view field, and the current schema rejects
+missing or empty values. Local conversion tracking is written only after the
+CCS install transaction commits.
 
 Ready conversion means the artifact carries a source-independent Conary
 lifecycle contract. A client may install it on any target whose typed
@@ -131,7 +167,8 @@ operator promotion state or alternate serving lane.
 
 Local chunk visibility in `server/publication.rs` is a reachability check:
 native publication references are authoritative directly, and converted chunks
-are hidden only when every referring conversion is stale. It does not classify
+are served only when a current validated conversion references them. Stale-only
+and unreferenced local cache objects remain private. It does not classify
 lifecycle program text.
 
 Sparse-index and search responses use `converted=true` only for current,

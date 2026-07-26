@@ -25,6 +25,14 @@ fn cli_rejects_removed_seccomp_warn_bypass() {
     assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
+#[test]
+fn cli_rejects_removed_builtin_trigger_filter() {
+    let error = parse_cli(["conary", "system", "trigger", "list", "--builtin"])
+        .err()
+        .expect("current trigger authority has no built-in classification");
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
 fn render_help_with_stack<F>(render: F) -> String
 where
     F: FnOnce() -> String + Send + 'static,
@@ -390,7 +398,7 @@ fn repo_add_rejects_static_default_strategy_at_parse_time() {
 }
 
 #[test]
-fn repo_add_accepts_exact_public_remi_distro() {
+fn repo_add_accepts_exact_public_source_profile() {
     assert!(
         parse_cli([
             "conary",
@@ -402,7 +410,7 @@ fn repo_add_accepts_exact_public_remi_distro() {
             "remi",
             "--remi-endpoint",
             "https://remi.example.invalid",
-            "--remi-distro",
+            "--source-profile",
             "fedora-44",
         ])
         .is_ok()
@@ -410,7 +418,7 @@ fn repo_add_accepts_exact_public_remi_distro() {
 }
 
 #[test]
-fn repo_add_rejects_internal_remi_route_slug_at_parse_time() {
+fn repo_add_rejects_internal_source_route_slug_at_parse_time() {
     assert!(
         parse_cli([
             "conary",
@@ -422,7 +430,7 @@ fn repo_add_rejects_internal_remi_route_slug_at_parse_time() {
             "remi",
             "--remi-endpoint",
             "https://remi.example.invalid",
-            "--remi-distro",
+            "--source-profile",
             "fedora",
         ])
         .is_err()

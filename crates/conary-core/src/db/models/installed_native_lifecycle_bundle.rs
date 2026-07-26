@@ -13,7 +13,7 @@ pub struct InstalledNativeLifecycleBundle {
     pub trove_id: i64,
     pub source_format: String,
     pub source_family: String,
-    pub source_distro: Option<String>,
+    pub source_profile: Option<String>,
     pub source_release: Option<String>,
     pub source_arch: Option<String>,
     pub source_package: String,
@@ -29,7 +29,7 @@ pub struct InstalledNativeLifecycleBundle {
 }
 
 impl InstalledNativeLifecycleBundle {
-    const COLUMNS: &'static str = "id, trove_id, source_format, source_family, source_distro, \
+    const COLUMNS: &'static str = "id, trove_id, source_format, source_family, source_profile, \
          source_release, source_arch, source_package, source_version, scriptlet_fidelity, \
          evidence_digest, lifecycle_state, pending_triggers_json, \
          awaited_packages_json, bundle_toml, installed_changeset_id, installed_at";
@@ -50,7 +50,7 @@ impl InstalledNativeLifecycleBundle {
             trove_id,
             source_format: bundle.source_format.as_str().to_string(),
             source_family: bundle.source_family.clone(),
-            source_distro: bundle.source_distro.clone(),
+            source_profile: bundle.source_profile.clone(),
             source_release: bundle.source_release.clone(),
             source_arch: bundle.source_arch.clone(),
             source_package: bundle.source_package.clone(),
@@ -72,7 +72,7 @@ impl InstalledNativeLifecycleBundle {
 
         conn.execute(
             "INSERT INTO installed_native_lifecycle_bundles (
-                trove_id, source_format, source_family, source_distro, source_release,
+                trove_id, source_format, source_family, source_profile, source_release,
                 source_arch, source_package, source_version, scriptlet_fidelity,
                 evidence_digest, lifecycle_state, pending_triggers_json,
                 awaited_packages_json, bundle_toml, installed_changeset_id
@@ -82,7 +82,7 @@ impl InstalledNativeLifecycleBundle {
              ON CONFLICT(trove_id) DO UPDATE SET
                 source_format = excluded.source_format,
                 source_family = excluded.source_family,
-                source_distro = excluded.source_distro,
+                source_profile = excluded.source_profile,
                 source_release = excluded.source_release,
                 source_arch = excluded.source_arch,
                 source_package = excluded.source_package,
@@ -99,7 +99,7 @@ impl InstalledNativeLifecycleBundle {
                 self.trove_id,
                 &self.source_format,
                 &self.source_family,
-                &self.source_distro,
+                &self.source_profile,
                 &self.source_release,
                 &self.source_arch,
                 &self.source_package,
@@ -201,7 +201,7 @@ impl InstalledNativeLifecycleBundle {
             trove_id: row.get(1)?,
             source_format: row.get(2)?,
             source_family: row.get(3)?,
-            source_distro: row.get(4)?,
+            source_profile: row.get(4)?,
             source_release: row.get(5)?,
             source_arch: row.get(6)?,
             source_package: row.get(7)?,
@@ -330,7 +330,7 @@ mod tests {
             schema_revision: crate::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
             source_format: SourceFormat::Rpm,
             source_family: "fedora".to_string(),
-            source_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora-44".to_string()),
             source_release: Some("44".to_string()),
             source_arch: Some("x86_64".to_string()),
             source_package: "native-lifecycle-fixture".to_string(),

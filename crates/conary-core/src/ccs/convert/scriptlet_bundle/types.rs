@@ -2,16 +2,13 @@
 
 use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 use crate::packages::common::PackageMetadata;
-use crate::packages::traits::ExtractedFile;
 use serde::{Deserialize, Serialize};
 
 pub struct ScriptletBundleInput<'a> {
     pub source_metadata: &'a PackageMetadata,
     pub final_metadata: &'a PackageMetadata,
-    pub source_files: &'a [ExtractedFile],
-    pub final_files: &'a [ExtractedFile],
     pub source_format: &'a str,
-    pub source_distro: Option<&'a str>,
+    pub source_profile: Option<&'a str>,
     pub source_release: Option<&'a str>,
     pub source_arch: Option<&'a str>,
     pub source_checksum: Option<&'a str>,

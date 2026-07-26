@@ -14,7 +14,7 @@ use conary_core::ccs::native_transaction::{
     NativePackageIdentity, NativeTransactionEvent, NativeTransactionOperation,
 };
 use conary_core::db::models::{
-    FileEntry, InstalledNativeLifecycleBundle, NativeLifecycleResidualState, Trove,
+    InstalledNativeLifecycleBundle, NativeLifecycleResidualState, PackagePayloadOwnership, Trove,
 };
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
@@ -176,9 +176,10 @@ impl PreparedNativeTransaction {
                 lifecycle_state: row.lifecycle_state,
                 pending_triggers: row.pending_triggers,
                 awaited_packages: row.awaited_packages,
-                paths: FileEntry::find_by_trove(conn, row.trove_id)?
-                    .into_iter()
-                    .map(|file| absolute_package_path(&file.path))
+                paths: PackagePayloadOwnership::load(conn, row.trove_id)?
+                    .lifecycle_paths()
+                    .iter()
+                    .map(|path| absolute_package_path(path))
                     .collect::<Result<_>>()?,
                 description: trove.description,
                 bundle,
@@ -576,7 +577,7 @@ fn prepare_admin_directory(root: &Path) -> Result<PathBuf> {
     let admin = live_root::target_path(root, DPKG_ADMIN_COMPAT_DIRECTORY)?;
     let parent = admin
         .parent()
-        .context("dpkg compatibility path has no parent")?;
+        .context("dpkg administrative projection path has no parent")?;
     ensure_plain_directories(root, parent)?;
     match fs::symlink_metadata(&admin) {
         Ok(metadata) if metadata.file_type().is_dir() => {
@@ -589,7 +590,7 @@ fn prepare_admin_directory(root: &Path) -> Result<PathBuf> {
             fs::remove_dir_all(&admin)?;
         }
         Ok(_) => bail!(
-            "reserved dpkg compatibility path {} is not a directory",
+            "reserved dpkg administrative projection path {} is not a directory",
             admin.display()
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

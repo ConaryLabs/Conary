@@ -11,15 +11,13 @@ use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use crate::db::models::{InstallReason, InstallSource, Trove, TroveType};
 use crate::error::{Error, Result};
-use crate::hash;
-use crate::packages::traits::{
-    ConfigFileInfo, Dependency, ExtractedFile, PackageFile, PackageFormat,
-};
+use crate::packages::payload::PackagePayload;
+use crate::packages::traits::{ConfigFileInfo, PackageFile, PackageFormat, ProvidedCapability};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::debug;
 use v2_projection::{
-    files_from_v2_authority, install_manifest_from_v2, provides_from_v2_authority,
+    config_files_from_v2_authority, files_from_v2_authority, install_manifest_from_v2,
+    provides_from_v2_authority,
 };
 
 /// A parsed CCS package ready for installation
@@ -39,53 +37,19 @@ pub struct CcsPackage {
     files: Vec<FileEntry>,
     /// Component data
     components: HashMap<String, ComponentData>,
-    /// Payload objects authenticated by the verification capability.
-    blobs: HashMap<String, Vec<u8>>,
+    /// Reopenable payload objects authenticated by the verification capability.
+    payload: PackagePayload,
     /// Cached PackageFile list for the trait
     package_files: Vec<PackageFile>,
     /// Cached exact positive requirements for the trait.
     requirements: Vec<crate::repository::dependency_model::RepositoryRequirementGroup>,
     /// Cached exact capability providers for the trait
-    provides: Vec<Dependency>,
+    provides: Vec<ProvidedCapability>,
     /// Cached config files for the trait
     config_files_cache: Vec<ConfigFileInfo>,
 }
 
 impl CcsPackage {
-    fn validate_file_content(file: &FileEntry, content: &[u8]) -> Result<()> {
-        let authority = file.content.as_ref().ok_or_else(|| {
-            Error::IoError(format!(
-                "Regular payload node {} has no content authority",
-                file.path
-            ))
-        })?;
-        let actual_size = u64::try_from(content.len()).map_err(|_| {
-            Error::IoError(format!("File content too large to validate: {}", file.path))
-        })?;
-        if actual_size != authority.size {
-            if actual_size < authority.size {
-                return Err(Error::IoError(format!(
-                    "File size mismatch (truncated) for {}: expected {} bytes, got {}",
-                    file.path, authority.size, actual_size
-                )));
-            }
-            return Err(Error::IoError(format!(
-                "File size mismatch for {}: expected {}, got {}",
-                file.path, authority.size, actual_size
-            )));
-        }
-
-        let actual_hash = hash::sha256(content);
-        if actual_hash != authority.sha256 {
-            return Err(Error::ChecksumMismatch {
-                expected: authority.sha256.clone(),
-                actual: actual_hash,
-            });
-        }
-
-        Ok(())
-    }
-
     /// Get the manifest
     pub fn manifest(&self) -> &CcsManifest {
         &self.manifest
@@ -113,30 +77,30 @@ impl CcsPackage {
         verification: &crate::ccs::verify::VerifiedCcsArchive,
     ) -> Result<Self> {
         let package_path = PathBuf::from(path);
-        let contents = verification.archive();
         let authority = verification.authority();
         let manifest = install_manifest_from_v2(
             authority,
-            contents.v2_build_attestation.clone(),
-            contents.v2_foreign_conversion_boundary.clone(),
+            verification.build_attestation().cloned(),
+            verification.foreign_conversion_boundary().cloned(),
         )?;
         let files = files_from_v2_authority(authority)?;
         let requirements = Self::convert_requirements(&manifest);
         let provides = provides_from_v2_authority(authority);
         let package_files = Self::convert_files(&files);
+        let config_files_cache = config_files_from_v2_authority(authority)?;
         Ok(Self {
             package_path,
             manifest,
             v2_authority: Some(authority.clone()),
-            v2_build_attestation: contents.v2_build_attestation.clone(),
-            v2_foreign_conversion_boundary: contents.v2_foreign_conversion_boundary.clone(),
+            v2_build_attestation: verification.build_attestation().cloned(),
+            v2_foreign_conversion_boundary: verification.foreign_conversion_boundary().cloned(),
             files,
-            components: contents.components.clone(),
-            blobs: contents.blobs.clone(),
+            components: verification.components().clone(),
+            payload: verification.payload().clone(),
             package_files,
             requirements,
             provides,
-            config_files_cache: Vec::new(),
+            config_files_cache,
         })
     }
 
@@ -160,6 +124,11 @@ impl CcsPackage {
         &self.package_path
     }
 
+    /// Authenticated, independently reopenable payload sources.
+    pub(crate) fn payload(&self) -> &PackagePayload {
+        &self.payload
+    }
+
     fn convert_requirements(
         manifest: &CcsManifest,
     ) -> Vec<crate::repository::dependency_model::RepositoryRequirementGroup> {
@@ -176,19 +145,6 @@ impl CcsPackage {
                 content: f.content.clone(),
             })
             .collect()
-    }
-
-    /// Extract file contents from the package
-    ///
-    /// This re-reads the archive and returns the content blobs by hash.
-    pub fn extract_all_content(&self) -> Result<HashMap<String, Vec<u8>>> {
-        debug!(
-            "Extracted {} content blobs from {}",
-            self.blobs.len(),
-            self.package_path.display()
-        );
-
-        Ok(self.blobs.clone())
     }
 }
 
@@ -208,6 +164,7 @@ impl CcsPackage {
         let requirements = Self::convert_requirements(&manifest);
         let provides = provides_from_v2_authority(&authority);
         let package_files = Self::convert_files(&files);
+        let config_files_cache = config_files_from_v2_authority(&authority)?;
         Ok(Self {
             package_path: PathBuf::from("v2-test.ccs"),
             manifest,
@@ -216,11 +173,11 @@ impl CcsPackage {
             v2_foreign_conversion_boundary: foreign_conversion_boundary,
             files,
             components: HashMap::new(),
-            blobs: HashMap::new(),
+            payload: PackagePayload::default(),
             package_files,
             requirements,
             provides,
-            config_files_cache: Vec::new(),
+            config_files_cache,
         })
     }
 }
@@ -244,6 +201,10 @@ impl PackageFormat for CcsPackage {
         &self.manifest.package.version
     }
 
+    fn package_release(&self) -> Option<&str> {
+        Some(&self.manifest.package.release)
+    }
+
     fn version_scheme(&self) -> crate::repository::versioning::VersionScheme {
         self.manifest.package.version_scheme
     }
@@ -254,6 +215,12 @@ impl PackageFormat for CcsPackage {
             .platform
             .as_ref()
             .and_then(|p| p.arch.as_deref())
+    }
+
+    fn debian_multi_arch(&self) -> Option<crate::repository::dependency_model::DebianMultiArch> {
+        self.v2_authority
+            .as_ref()
+            .and_then(|authority| authority.identity.debian_multi_arch)
     }
 
     fn description(&self) -> Option<&str> {
@@ -268,7 +235,7 @@ impl PackageFormat for CcsPackage {
         &self.requirements
     }
 
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         &self.provides
     }
 
@@ -276,63 +243,8 @@ impl PackageFormat for CcsPackage {
         &self.manifest.relations
     }
 
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        let blobs = self.extract_all_content()?;
-        let mut extracted = Vec::with_capacity(self.files.len());
-
-        for file in &self.files {
-            let content = if !file.node.kind.is_regular() {
-                Vec::new()
-            } else if let Some(chunk_hashes) = &file.chunks {
-                // File is chunked - reassemble from chunks
-                let capacity = file
-                    .content
-                    .as_ref()
-                    .map_or(0, |authority| authority.size as usize);
-                let mut reassembled = Vec::with_capacity(capacity);
-                for chunk_hash in chunk_hashes {
-                    let chunk_data = blobs.get(chunk_hash).ok_or_else(|| {
-                        crate::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!("Chunk {} not found for file {}", chunk_hash, file.path),
-                        ))
-                    })?;
-                    reassembled.extend_from_slice(chunk_data);
-                }
-                Self::validate_file_content(file, &reassembled)?;
-                reassembled
-            } else {
-                // Non-chunked file - look up by file hash
-                let authority = file.content.as_ref().ok_or_else(|| {
-                    crate::Error::IoError(format!(
-                        "Regular payload node {} has no content authority",
-                        file.path
-                    ))
-                })?;
-                let content = blobs.get(&authority.sha256).cloned().ok_or_else(|| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!(
-                            "Content not found for file {} (hash: {})",
-                            file.path, authority.sha256
-                        ),
-                    ))
-                })?;
-                Self::validate_file_content(file, &content)?;
-                content
-            };
-
-            extracted.push(ExtractedFile {
-                path: file.path.clone(),
-                node: file.node.clone(),
-                content,
-                content_authority: file.content.clone(),
-            });
-        }
-
-        debug!("Extracted {} files from CCS package", extracted.len());
-
-        Ok(extracted)
+    fn package_payload(&self) -> Result<PackagePayload> {
+        Ok(self.payload.clone())
     }
 
     fn config_files(&self) -> &[ConfigFileInfo] {
@@ -344,8 +256,10 @@ impl PackageFormat for CcsPackage {
             id: None,
             name: self.manifest.package.name.clone(),
             version: self.manifest.package.version.clone(),
+            package_release: Some(self.manifest.package.release.clone()),
             trove_type: TroveType::Package,
             architecture: self.architecture().map(String::from),
+            debian_multi_arch: self.debian_multi_arch(),
             description: Some(self.manifest.package.description.clone()),
             installed_at: None,
             installed_by_changeset_id: None,
@@ -356,7 +270,7 @@ impl PackageFormat for CcsPackage {
             selection_reason: None,
             label_id: None,
             orphan_since: None,
-            source_distro: None,
+            source_profile: None,
             version_scheme: self.manifest.package.version_scheme,
             native_package_identity: None,
             installed_from_repository_id: None,
@@ -376,6 +290,7 @@ mod tests {
     use flate2::read::GzDecoder;
     use flate2::write::GzEncoder;
     use std::fs::{self, File};
+    use std::io::Read;
     use tar::{Archive, Builder};
     use tempfile::TempDir;
 
@@ -399,7 +314,10 @@ license = "MIT"
         )
         .unwrap();
 
-        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+        let result = CcsBuilder::new(manifest, &source_dir)
+            .unwrap()
+            .build()
+            .unwrap();
         let package_path = temp.path().join("test-package.ccs");
         let signing_key = SigningKeyPair::generate();
         write_signed_current_ccs_package(&result, &package_path, &signing_key, false).unwrap();
@@ -414,18 +332,36 @@ license = "MIT"
         .unwrap()
     }
 
-    fn mutate_package(source_path: &Path, output_path: &Path, mutator: impl FnOnce(&Path)) {
-        let unpack_dir = tempfile::tempdir().unwrap();
+    fn truncate_first_object(source_path: &Path, output_path: &Path) {
         let source_file = File::open(source_path).unwrap();
         let decoder = GzDecoder::new(source_file);
         let mut archive = Archive::new(decoder);
-        archive.unpack(unpack_dir.path()).unwrap();
-        mutator(unpack_dir.path());
 
         let output_file = File::create(output_path).unwrap();
         let encoder = GzEncoder::new(output_file, Compression::default());
         let mut builder = Builder::new(encoder);
-        builder.append_dir_all(".", unpack_dir.path()).unwrap();
+        let mut truncated = false;
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            let mut header = entry.header().clone();
+            if !truncated
+                && header.entry_type().is_file()
+                && path.starts_with("objects")
+                && !bytes.is_empty()
+            {
+                bytes.truncate(bytes.len() / 2);
+                header.set_size(bytes.len() as u64);
+                header.set_cksum();
+                truncated = true;
+            }
+            builder
+                .append_data(&mut header, &path, bytes.as_slice())
+                .unwrap();
+        }
+        assert!(truncated, "test package must contain an object payload");
         let encoder = builder.into_inner().unwrap();
         encoder.finish().unwrap();
     }
@@ -461,7 +397,10 @@ license = "MIT"
         )
         .unwrap();
 
-        let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+        let result = CcsBuilder::new(manifest, &source_dir)
+            .unwrap()
+            .build()
+            .unwrap();
         let package_path = temp.path().join("symlink-package.ccs");
         let signing_key = SigningKeyPair::generate();
         write_signed_current_ccs_package(&result, &package_path, &signing_key, false).unwrap();
@@ -488,22 +427,7 @@ license = "MIT"
     fn test_extract_rejects_truncated_content() {
         let (_temp, package_path, signing_key) = build_test_package();
         let corrupted_path = package_path.with_file_name("truncated.ccs");
-        mutate_package(&package_path, &corrupted_path, |root| {
-            let object = fs::read_dir(root.join("objects"))
-                .unwrap()
-                .flatten()
-                .find(|entry| entry.path().is_dir())
-                .unwrap()
-                .path();
-            let object_file = fs::read_dir(object)
-                .unwrap()
-                .flatten()
-                .find(|entry| entry.path().is_file())
-                .unwrap()
-                .path();
-            let original = fs::read(&object_file).unwrap();
-            fs::write(&object_file, &original[..original.len() / 2]).unwrap();
-        });
+        truncate_first_object(&package_path, &corrupted_path);
 
         let err = crate::ccs::verify::verify_package(
             &corrupted_path,
@@ -514,7 +438,8 @@ license = "MIT"
         assert!(
             err.contains("object path hash mismatch")
                 || err.contains("payload hash mismatch")
-                || err.contains("payload size mismatch"),
+                || err.contains("payload size mismatch")
+                || err.contains("signed authority requires"),
             "{err}"
         );
     }
@@ -561,7 +486,7 @@ license = "MIT"
 
     #[test]
     fn v2_positive_dependency_kinds_reach_package_format_without_string_guessing() {
-        use crate::ccs::v2::schema::{DependencyEntryV2, DependencyKindV2};
+        use crate::ccs::v2::schema::{DependencyKindV2, ProvidedCapabilityV2};
         use crate::repository::dependency_model::{
             RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
             RepositoryRequirementKind,
@@ -574,6 +499,7 @@ license = "MIT"
                     name: name.to_string(),
                     capability_kind: Some(capability_kind),
                     version_constraint: None,
+                    architecture_qualifier: Default::default(),
                     native_text: None,
                 },
             )
@@ -587,17 +513,35 @@ license = "MIT"
             requirement("binary(sh)", RepositoryCapabilityKind::Generic),
         ];
         authority.provides = vec![
-            DependencyEntryV2 {
-                kind: DependencyKindV2::Capability,
-                name: "http-client".to_string(),
-                version_constraint: None,
+            ProvidedCapabilityV2 {
+                kind: DependencyKindV2::Package,
+                name: "typed-v2".to_string(),
+                provider_version: Some("1.0.0".to_string()),
+                version_relation: Some(
+                    crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                ),
+                version_scheme: crate::repository::versioning::VersionScheme::Conary,
+                architecture_qualifier: Default::default(),
                 target: None,
                 component: None,
             },
-            DependencyEntryV2 {
+            ProvidedCapabilityV2 {
+                kind: DependencyKindV2::Capability,
+                name: "http-client".to_string(),
+                provider_version: None,
+                version_relation: None,
+                version_scheme: crate::repository::versioning::VersionScheme::Conary,
+                architecture_qualifier: Default::default(),
+                target: None,
+                component: None,
+            },
+            ProvidedCapabilityV2 {
                 kind: DependencyKindV2::PkgConfig,
                 name: "typed-v2".to_string(),
-                version_constraint: None,
+                provider_version: None,
+                version_relation: None,
+                version_scheme: crate::repository::versioning::VersionScheme::Conary,
+                architecture_qualifier: Default::default(),
                 target: None,
                 component: None,
             },
@@ -612,12 +556,9 @@ license = "MIT"
             .collect::<Vec<_>>();
 
         assert_eq!(package.requirements(), authority.requirements.as_slice());
-        assert_eq!(provides, vec!["http-client", "pkgconfig(typed-v2)"]);
-        assert_eq!(
-            package.manifest().provides.capabilities,
-            vec!["http-client"]
-        );
-        assert_eq!(package.manifest().provides.pkgconfig, vec!["typed-v2"]);
+        assert_eq!(provides, vec!["typed-v2", "http-client", "typed-v2"]);
+        assert!(package.manifest().provides.capabilities.is_empty());
+        assert!(package.manifest().provides.pkgconfig.is_empty());
     }
 
     #[test]

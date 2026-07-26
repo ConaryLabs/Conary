@@ -4,9 +4,7 @@
 //!
 //! Takes a parent package and applies modifications to create a derived version.
 
-use crate::db::models::{
-    DerivedOverride, DerivedPackage, DerivedPatch, FileEntry, Trove, VersionPolicy,
-};
+use crate::db::models::{DerivedOverride, DerivedPackage, DerivedPatch, Trove, VersionPolicy};
 use crate::error::{Error, Result};
 use crate::filesystem::CasStore;
 use crate::hash;
@@ -14,9 +12,19 @@ use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
+
+mod parent;
+mod patch;
+
+/// One exact patch input for a derived build.
+#[derive(Debug, Clone)]
+pub struct DerivedPatchInput {
+    pub name: String,
+    pub content: Vec<u8>,
+    pub strip_level: u32,
+}
 
 /// Specification for building a derived package
 #[derive(Debug, Clone)]
@@ -31,8 +39,8 @@ pub struct DerivedSpec {
     pub version_policy: VersionPolicy,
     /// Description
     pub description: Option<String>,
-    /// Patches to apply (name, content bytes)
-    pub patches: Vec<(String, Vec<u8>)>,
+    /// Patches to apply in declaration order.
+    pub patches: Vec<DerivedPatchInput>,
     /// File overrides (target path, new content bytes, optional permissions)
     pub overrides: Vec<(String, Vec<u8>, Option<u32>)>,
     /// Files to remove (target paths)
@@ -56,7 +64,26 @@ impl DerivedSpec {
 
     /// Add a patch
     pub fn add_patch(mut self, name: String, content: Vec<u8>) -> Self {
-        self.patches.push((name, content));
+        self.patches.push(DerivedPatchInput {
+            name,
+            content,
+            strip_level: 1,
+        });
+        self
+    }
+
+    /// Add a patch with an explicit path-component strip level.
+    pub fn add_patch_with_strip(
+        mut self,
+        name: String,
+        content: Vec<u8>,
+        strip_level: u32,
+    ) -> Self {
+        self.patches.push(DerivedPatchInput {
+            name,
+            content,
+            strip_level,
+        });
         self
     }
 
@@ -125,6 +152,7 @@ pub struct PersistedDerivedArtifact {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DerivedArtifactManifest {
     format: String,
     name: String,
@@ -136,6 +164,7 @@ struct DerivedArtifactManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DerivedArtifactFile {
     node: PayloadNode,
     content: Option<PayloadContentAuthority>,
@@ -184,7 +213,9 @@ impl<'a> DerivedBuilder<'a> {
         let parent_id = parent
             .id
             .ok_or_else(|| Error::InitError("Parent trove missing ID".to_string()))?;
-        let parent_files = FileEntry::find_by_trove(self.conn, parent_id)?;
+        let parent_payload =
+            crate::db::models::PackagePayloadOwnership::load(self.conn, parent_id)?;
+        let parent_files = parent_payload.entries();
         debug!("Parent has {} files", parent_files.len());
 
         // Create working directory for patch application
@@ -194,11 +225,34 @@ impl<'a> DerivedBuilder<'a> {
         let mut files: HashMap<String, DerivedFile> = HashMap::new();
         let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
 
-        for file in &parent_files {
-            // Get file content from CAS if available
-            let content = match (self.cas, file.content.as_ref()) {
-                (Some(cas), Some(authority)) => cas.retrieve(&authority.sha256).ok(),
-                _ => None,
+        for file in parent_files {
+            let content = match file.content.as_ref() {
+                Some(authority) => {
+                    let cas = self.cas.ok_or_else(|| {
+                        Error::InitError(format!(
+                            "Cannot derive {}: parent payload {} requires CAS object {}, but no CAS authority was supplied",
+                            self.spec.name, file.path, authority.sha256
+                        ))
+                    })?;
+                    let content = cas.retrieve(&authority.sha256).map_err(|error| {
+                        Error::InitError(format!(
+                            "Cannot derive {}: parent payload {} could not be loaded from exact CAS object {}: {}",
+                            self.spec.name, file.path, authority.sha256, error
+                        ))
+                    })?;
+                    if content.len() as u64 != authority.size {
+                        return Err(Error::InitError(format!(
+                            "Cannot derive {}: parent payload {} CAS object {} has size {}, expected {}",
+                            self.spec.name,
+                            file.path,
+                            authority.sha256,
+                            content.len(),
+                            authority.size
+                        )));
+                    }
+                    Some(content)
+                }
+                None => None,
             };
 
             files.insert(
@@ -232,15 +286,16 @@ impl<'a> DerivedBuilder<'a> {
 
         // Apply patches
         let mut patches_applied = Vec::new();
-        for (idx, (patch_name, patch_content)) in self.spec.patches.iter().enumerate() {
-            debug!("Applying patch {}: {}", idx + 1, patch_name);
-            self.apply_patch(work_dir.path(), patch_content, 1u32)?;
-            patches_applied.push(patch_name.clone());
-        }
-
-        // If patches were applied, rescan the work directory
-        if !patches_applied.is_empty() {
-            self.rescan_after_patch(work_dir.path(), &mut files, &mut blobs)?;
+        for (idx, patch) in self.spec.patches.iter().enumerate() {
+            debug!("Applying patch {}: {}", idx + 1, patch.name);
+            patch::apply_patch_set(
+                work_dir.path(),
+                &patch.content,
+                patch.strip_level,
+                &mut files,
+                &mut blobs,
+            )?;
+            patches_applied.push(patch.name.clone());
         }
 
         // Apply file overrides
@@ -324,163 +379,11 @@ impl<'a> DerivedBuilder<'a> {
 
     /// Find the parent trove
     fn find_parent(&self) -> Result<Trove> {
-        let troves = Trove::find_by_name(self.conn, &self.spec.parent_name)?;
-
-        if troves.is_empty() {
-            return Err(Error::InitError(format!(
-                "Parent package '{}' not found",
-                self.spec.parent_name
-            )));
-        }
-
-        // If version constraint specified, filter
-        if let Some(ref version) = self.spec.parent_version {
-            for trove in troves {
-                if trove.version == *version {
-                    return Ok(trove);
-                }
-            }
-            return Err(Error::InitError(format!(
-                "Parent package '{}' version '{}' not found",
-                self.spec.parent_name, version
-            )));
-        }
-
-        // Return first (most recent) version
-        troves.into_iter().next().ok_or_else(|| {
-            Error::InitError(format!(
-                "Parent package '{}' unexpectedly empty after check",
-                self.spec.parent_name
-            ))
-        })
-    }
-
-    /// Apply a patch using native Rust (diffy crate)
-    fn apply_patch(&self, work_dir: &Path, patch_content: &[u8], strip_level: u32) -> Result<()> {
-        let patch_str = std::str::from_utf8(patch_content)
-            .map_err(|e| Error::InitError(format!("Patch is not valid UTF-8: {}", e)))?;
-
-        // Split multi-file patches and apply each one
-        for file_patch in split_unified_patch(patch_str) {
-            self.apply_single_file_patch(work_dir, &file_patch, strip_level)?;
-        }
-
-        Ok(())
-    }
-
-    /// Apply a patch to a single file
-    fn apply_single_file_patch(
-        &self,
-        work_dir: &Path,
-        patch_str: &str,
-        strip_level: u32,
-    ) -> Result<()> {
-        // Parse the patch
-        let patch = diffy::Patch::from_str(patch_str)
-            .map_err(|e| Error::InitError(format!("Failed to parse patch: {}", e)))?;
-
-        // Get the file path from the patch header and apply strip level
-        let file_path = patch
-            .modified()
-            .ok_or_else(|| Error::InitError("Patch has no target file".to_string()))?;
-
-        let stripped_path = strip_path_prefix(file_path, strip_level);
-        let full_path = work_dir.join(&stripped_path);
-
-        // Validate that the resolved path stays within work_dir to prevent
-        // path traversal via ".." components in patch file paths.
-        let canonical_work = work_dir
-            .canonicalize()
-            .map_err(|e| Error::InitError(format!("Cannot canonicalize work dir: {}", e)))?;
-        // Ensure parent directory exists before canonicalizing (new files)
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::InitError(format!("Failed to create directory: {}", e)))?;
-        }
-        let canonical_full = full_path
-            .canonicalize()
-            .or_else(|_| {
-                // File may not exist yet; canonicalize the parent and append the filename
-                full_path.parent().map_or_else(
-                    || Ok(full_path.clone()),
-                    |p| {
-                        p.canonicalize()
-                            .map(|cp| cp.join(full_path.file_name().unwrap_or_default()))
-                    },
-                )
-            })
-            .map_err(|e| Error::InitError(format!("Cannot canonicalize patch target: {}", e)))?;
-        if !canonical_full.starts_with(&canonical_work) {
-            return Err(Error::InitError(format!(
-                "Path traversal detected: patch target '{}' escapes work directory '{}'",
-                stripped_path,
-                work_dir.display()
-            )));
-        }
-
-        debug!("Applying patch to: {}", full_path.display());
-
-        // Read original file content (or empty if new file)
-        let original = if full_path.exists() {
-            std::fs::read_to_string(&full_path).map_err(|e| {
-                Error::InitError(format!("Failed to read {}: {}", full_path.display(), e))
-            })?
-        } else {
-            // Ensure parent directory exists for new files
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| Error::InitError(format!("Failed to create directory: {}", e)))?;
-            }
-            String::new()
-        };
-
-        // Apply the patch
-        let patched = diffy::apply(&original, &patch).map_err(|e| {
-            Error::InitError(format!("Failed to apply patch to {}: {}", stripped_path, e))
-        })?;
-
-        // Write the result
-        std::fs::write(&full_path, patched).map_err(|e| {
-            Error::InitError(format!("Failed to write {}: {}", full_path.display(), e))
-        })?;
-
-        Ok(())
-    }
-
-    /// Rescan work directory after patching to update file hashes
-    fn rescan_after_patch(
-        &self,
-        work_dir: &Path,
-        files: &mut HashMap<String, DerivedFile>,
-        blobs: &mut HashMap<String, Vec<u8>>,
-    ) -> Result<()> {
-        for file in files.values_mut() {
-            if !file.node.kind.is_regular() {
-                continue;
-            }
-            let work_path = work_dir.join(file.path.trim_start_matches('/'));
-            if work_path.exists() {
-                let content = std::fs::read(&work_path)
-                    .map_err(|e| Error::InitError(format!("Failed to read patched file: {}", e)))?;
-
-                let new_hash = hash::sha256(&content);
-                let old_hash = file
-                    .content
-                    .as_ref()
-                    .map(|authority| authority.sha256.as_str());
-                if Some(new_hash.as_str()) != old_hash {
-                    debug!("File modified by patch: {}", file.path);
-                    file.content = Some(PayloadContentAuthority {
-                        sha256: new_hash.clone(),
-                        size: content.len() as u64,
-                    });
-                    file.modified = true;
-                    blobs.insert(new_hash, content);
-                }
-            }
-        }
-
-        Ok(())
+        parent::find_parent(
+            self.conn,
+            &self.spec.parent_name,
+            self.spec.parent_version.as_deref(),
+        )
     }
 
     /// Save the derived package definition to the database
@@ -497,10 +400,20 @@ impl<'a> DerivedBuilder<'a> {
         })?;
 
         // Save patches
-        for (idx, (patch_name, patch_content)) in self.spec.patches.iter().enumerate() {
-            let patch_hash = hash::sha256(patch_content);
-            let mut patch =
-                DerivedPatch::new(derived_id, (idx + 1) as i32, patch_name.clone(), patch_hash);
+        for (idx, patch_input) in self.spec.patches.iter().enumerate() {
+            let patch_hash = hash::sha256(&patch_input.content);
+            let mut patch = DerivedPatch::new(
+                derived_id,
+                (idx + 1) as i32,
+                patch_input.name.clone(),
+                patch_hash,
+            );
+            patch.strip_level = i32::try_from(patch_input.strip_level).map_err(|_| {
+                Error::ConfigError(format!(
+                    "derived patch {} strip level {} exceeds persisted range",
+                    patch_input.name, patch_input.strip_level
+                ))
+            })?;
             patch.insert(self.conn)?;
         }
 
@@ -541,7 +454,17 @@ pub fn build_from_definition(
         let content = cas.retrieve(&patch.patch_hash).map_err(|_| {
             Error::InitError(format!("Patch content not found: {}", patch.patch_name))
         })?;
-        patch_data.push((patch.patch_name, content));
+        let strip_level = u32::try_from(patch.strip_level).map_err(|_| {
+            Error::ConfigError(format!(
+                "derived patch {} has negative strip level {}",
+                patch.patch_name, patch.strip_level
+            ))
+        })?;
+        patch_data.push(DerivedPatchInput {
+            name: patch.patch_name,
+            content,
+            strip_level,
+        });
     }
 
     // Load overrides
@@ -643,6 +566,38 @@ pub fn persist_build_artifact(
     })
 }
 
+/// Parse one current derived build artifact and return its exact CAS content
+/// references.
+pub fn load_build_artifact_contents(
+    cas: &CasStore,
+    artifact_hash: &str,
+) -> Result<Vec<PayloadContentAuthority>> {
+    let bytes = cas.retrieve(artifact_hash)?;
+    let artifact = serde_json::from_slice::<DerivedArtifactManifest>(&bytes)
+        .map_err(|error| Error::InitError(format!("Invalid derived artifact manifest: {error}")))?;
+    if artifact.format != "conary-derived-v2" {
+        return Err(Error::InitError(format!(
+            "Unsupported derived artifact format '{}'",
+            artifact.format
+        )));
+    }
+    let mut contents = Vec::new();
+    for (path, file) in artifact.files {
+        file.node
+            .validate()
+            .map_err(|error| Error::InitError(format!("Invalid derived node {path}: {error}")))?;
+        file.node
+            .validate_content(file.content.as_ref())
+            .map_err(|error| {
+                Error::InitError(format!("Invalid derived content authority {path}: {error}"))
+            })?;
+        if let Some(content) = file.content {
+            contents.push(content);
+        }
+    }
+    Ok(contents)
+}
+
 /// Validate that an override target path is safe
 ///
 /// Rejects paths that:
@@ -665,80 +620,51 @@ fn validate_override_target(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Split a multi-file unified diff into individual file patches
-///
-/// Unified diff format starts each file's patch with:
-/// - `diff --git ...` (for git diffs)
-/// - `--- ` followed by `+++ ` (for traditional diffs)
-fn split_unified_patch(patch: &str) -> Vec<String> {
-    let mut patches = Vec::new();
-    let mut current = String::new();
-    let mut in_patch = false;
-    let mut is_git_format = false;
-
-    for line in patch.lines() {
-        // Detect start of a new file patch
-        let is_git_header = line.starts_with("diff --git ");
-        let is_traditional_header = line.starts_with("--- ")
-            && !line.starts_with("--- a/dev/null")
-            && !line.starts_with("--- /dev/null");
-
-        // For git format, only split on "diff --git" lines
-        // For traditional format, split on "--- " lines
-        let is_new_patch = if is_git_format {
-            is_git_header
-        } else if is_git_header {
-            is_git_format = true;
-            true
-        } else {
-            // New traditional patch if: header found AND (not in patch yet OR already saw a hunk)
-            is_traditional_header && (!in_patch || current.contains("\n@@ "))
-        };
-
-        if is_new_patch && in_patch && !current.is_empty() {
-            // Save the previous patch and start a new one
-            patches.push(std::mem::take(&mut current));
-        }
-
-        if is_new_patch || in_patch {
-            in_patch = true;
-            current.push_str(line);
-            current.push('\n');
-        }
-    }
-
-    // Don't forget the last patch
-    if !current.is_empty() {
-        patches.push(current);
-    }
-
-    patches
-}
-
-/// Strip path prefix components (like `patch -p`)
-///
-/// E.g., with strip_level=1: "a/src/main.rs" -> "src/main.rs"
-fn strip_path_prefix(path: &str, strip_level: u32) -> String {
-    let mut components: Vec<&str> = path.split('/').collect();
-
-    // Remove leading empty component from absolute paths
-    if components.first() == Some(&"") {
-        components.remove(0);
-    }
-
-    // Strip the specified number of leading components
-    let skip = strip_level as usize;
-    if skip < components.len() {
-        components[skip..].join("/")
-    } else {
-        // If strip level exceeds components, return the last component
-        components.last().unwrap_or(&"").to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derived_build_requires_exact_parent_cas_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        crate::db::init(db_path.to_str().unwrap()).unwrap();
+        let conn = crate::db::open(db_path.to_str().unwrap()).unwrap();
+
+        let mut parent = Trove::new(
+            "parent".to_string(),
+            "1.0.0".to_string(),
+            crate::db::models::TroveType::Package,
+            crate::repository::versioning::VersionScheme::Conary,
+        );
+        let parent_id = parent.insert(&conn).unwrap();
+        let bytes = b"exact parent bytes";
+        let authority = PayloadContentAuthority {
+            sha256: crate::hash::sha256(bytes),
+            size: bytes.len() as u64,
+        };
+        let mut file = crate::db::models::FileEntry::new(
+            "/usr/share/parent.txt".to_string(),
+            crate::payload::ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644))
+                .unwrap(),
+            Some(authority.clone()),
+            parent_id,
+        );
+        file.insert(&conn).unwrap();
+
+        let error = DerivedBuilder::new(
+            DerivedSpec::new("child".to_string(), "parent".to_string()),
+            &conn,
+        )
+        .build()
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("no CAS authority was supplied"),
+            "{message}"
+        );
+        assert!(message.contains(&authority.sha256), "{message}");
+    }
 
     #[test]
     fn test_derived_spec_builder() {
@@ -775,79 +701,6 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_path_prefix() {
-        // Standard git-style paths with -p1
-        assert_eq!(strip_path_prefix("a/src/main.rs", 1), "src/main.rs");
-        assert_eq!(strip_path_prefix("b/src/main.rs", 1), "src/main.rs");
-
-        // Multiple levels
-        assert_eq!(strip_path_prefix("a/b/c/file.txt", 2), "c/file.txt");
-        assert_eq!(strip_path_prefix("a/b/c/file.txt", 0), "a/b/c/file.txt");
-
-        // Edge cases
-        assert_eq!(strip_path_prefix("file.txt", 1), "file.txt");
-        assert_eq!(strip_path_prefix("/absolute/path.txt", 1), "path.txt");
-    }
-
-    #[test]
-    fn test_split_unified_patch_single() {
-        let patch = "\
---- a/file.txt
-+++ b/file.txt
-@@ -1 +1 @@
--old
-+new
-";
-        let patches = split_unified_patch(patch);
-        assert_eq!(patches.len(), 1);
-        assert!(patches[0].contains("--- a/file.txt"));
-    }
-
-    #[test]
-    fn test_split_unified_patch_multi() {
-        let patch = "\
---- a/file1.txt
-+++ b/file1.txt
-@@ -1 +1 @@
--old1
-+new1
---- a/file2.txt
-+++ b/file2.txt
-@@ -1 +1 @@
--old2
-+new2
-";
-        let patches = split_unified_patch(patch);
-        assert_eq!(patches.len(), 2);
-        assert!(patches[0].contains("file1.txt"));
-        assert!(patches[1].contains("file2.txt"));
-    }
-
-    #[test]
-    fn test_split_unified_patch_git_format() {
-        let patch = "\
-diff --git a/src/main.rs b/src/main.rs
-index abc123..def456 100644
---- a/src/main.rs
-+++ b/src/main.rs
-@@ -1 +1 @@
--old
-+new
-diff --git a/src/lib.rs b/src/lib.rs
-index 111222..333444 100644
---- a/src/lib.rs
-+++ b/src/lib.rs
-@@ -1 +1 @@
--old
-+new
-";
-        let patches = split_unified_patch(patch);
-        assert_eq!(patches.len(), 2);
-        assert!(patches[0].contains("src/main.rs"));
-        assert!(patches[1].contains("src/lib.rs"));
-    }
-
-    #[test]
     fn test_validate_override_target_accepts_absolute() {
         assert!(validate_override_target("/etc/passwd").is_ok());
         assert!(validate_override_target("/usr/bin/foo").is_ok());
@@ -871,14 +724,5 @@ index 111222..333444 100644
         assert!(validate_override_target("etc/nginx/nginx.conf").is_ok());
         assert!(validate_override_target("usr/bin/foo").is_ok());
         assert!(validate_override_target("config.toml").is_ok());
-    }
-
-    #[test]
-    fn test_path_traversal_rejected() {
-        // Verify that strip_path_prefix + ".." cannot escape
-        let result = strip_path_prefix("a/../../etc/passwd", 1);
-        assert_eq!(result, "../../etc/passwd");
-        // The actual protection is in apply_single_file_patch which
-        // canonicalizes and checks starts_with -- tested via integration.
     }
 }

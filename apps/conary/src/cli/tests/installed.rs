@@ -244,7 +244,6 @@ fn parses_system_adopt_system_dry_run_filters() {
             exclude,
             explicit_only,
             refresh,
-            convert,
             sync_hook,
             ..
         })) => {
@@ -257,7 +256,6 @@ fn parses_system_adopt_system_dry_run_filters() {
             assert_eq!(exclude.as_deref(), Some("kernel*"));
             assert!(explicit_only);
             assert!(!refresh);
-            assert!(!convert);
             assert!(!sync_hook);
         }
         _ => panic!("expected system adopt command"),
@@ -284,7 +282,6 @@ fn parses_system_adopt_refresh_quiet_from_sync_hook() {
             status,
             dry_run,
             refresh,
-            convert,
             sync_hook,
             quiet,
             from_sync_hook,
@@ -296,7 +293,6 @@ fn parses_system_adopt_refresh_quiet_from_sync_hook() {
             assert!(!status);
             assert!(!dry_run);
             assert!(refresh);
-            assert!(!convert);
             assert!(!sync_hook);
             assert!(quiet);
             assert!(from_sync_hook);
@@ -324,44 +320,12 @@ fn rejects_system_adopt_from_sync_hook_with_full() {
 }
 
 #[test]
-fn parses_system_adopt_convert_dry_run_jobs() {
-    let cli = parse_cli([
-        "conary",
-        "system",
-        "adopt",
-        "--convert",
-        "--dry-run",
-        "--jobs",
-        "4",
-        "--no-chunking",
-    ])
-    .expect("system adopt --convert dry-run jobs should parse");
-
-    match cli.command {
-        Some(Commands::System(SystemCommands::Adopt {
-            packages,
-            convert,
-            dry_run,
-            jobs,
-            no_chunking,
-            system,
-            status,
-            refresh,
-            sync_hook,
-            ..
-        })) => {
-            assert!(packages.is_empty());
-            assert!(convert);
-            assert!(dry_run);
-            assert_eq!(jobs, Some(4));
-            assert!(no_chunking);
-            assert!(!system);
-            assert!(!status);
-            assert!(!refresh);
-            assert!(!sync_hook);
-        }
-        _ => panic!("expected system adopt command"),
-    }
+fn rejects_removed_unsafe_adopt_convert_surface() {
+    let error = match parse_cli(["conary", "system", "adopt", "--convert"]) {
+        Ok(_) => panic!("adopt conversion requires exact artifact re-resolution"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]
@@ -377,7 +341,6 @@ fn parses_system_adopt_sync_hook_remove_hook() {
             system,
             status,
             refresh,
-            convert,
             ..
         })) => {
             assert!(packages.is_empty());
@@ -386,7 +349,6 @@ fn parses_system_adopt_sync_hook_remove_hook() {
             assert!(!system);
             assert!(!status);
             assert!(!refresh);
-            assert!(!convert);
         }
         _ => panic!("expected system adopt command"),
     }
@@ -405,7 +367,6 @@ fn parses_system_adopt_package_dry_run_preview_surface() {
             status,
             dry_run,
             refresh,
-            convert,
             sync_hook,
             ..
         })) => {
@@ -415,7 +376,6 @@ fn parses_system_adopt_package_dry_run_preview_surface() {
             assert!(!status);
             assert!(dry_run);
             assert!(!refresh);
-            assert!(!convert);
             assert!(!sync_hook);
         }
         _ => panic!("expected system adopt command"),
@@ -460,22 +420,6 @@ fn parses_explicit_native_authority_for_adopt_and_takeover() {
         }
         _ => panic!("expected system takeover command"),
     }
-}
-
-#[test]
-fn rejects_native_authority_for_conversion_only_mode() {
-    let err = match parse_cli([
-        "conary",
-        "system",
-        "adopt",
-        "--convert",
-        "--package-manager",
-        "rpm",
-    ]) {
-        Ok(_) => panic!("conversion does not consume native database authority"),
-        Err(error) => error,
-    };
-    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

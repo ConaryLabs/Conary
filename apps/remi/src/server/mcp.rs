@@ -632,11 +632,12 @@ impl RemiMcpServer {
     // Canonical mapping
     // -----------------------------------------------------------------------
 
-    /// Rebuild the canonical package mapping from all indexed distros.
+    /// Rebuild the canonical package mapping from exact versioned contracts.
     ///
-    /// Ingests explicit curated-rule, Repology, and AppStream contracts.
+    /// AppStream may enrich an existing exact mapping with metadata. Repology
+    /// discovery data never creates or ranks a mutation-authoritative mapping.
     #[tool(
-        description = "Rebuild the canonical package mapping from explicit curated-rule, Repology, and AppStream contracts. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+        description = "Rebuild canonical package mappings from exact versioned contracts, then attach non-authoritative AppStream metadata to already-mapped packages. Repology discovery data cannot create or rank mappings. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn canonical_rebuild(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;
@@ -660,10 +661,11 @@ impl RemiMcpServer {
 
     /// Trigger an immediate Repology + AppStream fetch cycle.
     ///
-    /// Populates the cache tables used by `canonical_rebuild`. Returns counts
-    /// of cached entries for each source.
+    /// Populates discovery caches. AppStream metadata may enrich an exact
+    /// contract mapping during `canonical_rebuild`; Repology remains
+    /// diagnostics and discovery evidence only.
     #[tool(
-        description = "Trigger immediate Repology + AppStream fetch cycle. Populates the cache tables used by canonical_rebuild. Returns counts of cached entries. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+        description = "Refresh Repology and AppStream discovery caches. AppStream may enrich an existing exact contract mapping; neither source may establish mapping or ranking authority. Returns cached-entry counts. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn canonical_fetch(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;

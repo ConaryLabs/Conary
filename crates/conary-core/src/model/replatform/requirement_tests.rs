@@ -13,7 +13,7 @@ fn replatform_dependency_preflight_preserves_or_group_semantics() {
         "arch-core".to_string(),
         "https://example.test/arch".to_string(),
     );
-    repository.default_strategy_distro = Some("arch".to_string());
+    repository.source_profile = Some("arch".to_string());
     let repository_id = repository.insert(&conn).unwrap();
 
     let mut target = RepositoryPackage::new(
@@ -46,6 +46,7 @@ fn replatform_dependency_preflight_preserves_or_group_semantics() {
             name: name.to_string(),
             capability_kind: Some(RepositoryCapabilityKind::PackageName),
             version_constraint: None,
+            architecture_qualifier: Default::default(),
             native_text: Some(name.to_string()),
         })
         .collect::<Vec<_>>();

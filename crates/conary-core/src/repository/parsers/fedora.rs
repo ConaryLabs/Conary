@@ -11,8 +11,8 @@ use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
-    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryDependencyFlavor,
-    RepositoryProvide, RepositoryRequirementGroup, RepositoryRequirementKind,
+    RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
+    RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
@@ -24,7 +24,12 @@ use serde_json::json;
 use tracing::{debug, info};
 
 mod metalink;
+mod relation;
 use metalink::parse_metalink_repomd_identity;
+use relation::{
+    RpmProvideConstraint, rpm_constraint_native_text, rpm_provide_constraint,
+    rpm_relation_native_text, rpm_require_to_group,
+};
 
 /// Fedora/RPM repository parser
 pub struct FedoraParser {
@@ -39,6 +44,17 @@ enum FormatSection {
     Provides,
     Conflicts,
     Obsoletes,
+}
+
+impl FormatSection {
+    const fn metadata_name(self) -> &'static str {
+        match self {
+            Self::Requires => "requires",
+            Self::Provides => "provides",
+            Self::Conflicts => "conflicts",
+            Self::Obsoletes => "obsoletes",
+        }
+    }
 }
 
 impl FedoraParser {
@@ -511,30 +527,35 @@ impl FedoraParser {
                                     }
                                 }
 
-                                if let Some(name) = dep_name
-                                    && !name.starts_with("rpmlib(")
-                                {
-                                    let constraint =
-                                        match (dep_flags.as_deref(), dep_ver.as_deref()) {
-                                            (Some(flags), Some(ver)) => {
-                                                let op = rpm_flags_to_op(flags);
-                                                if op.is_empty() {
-                                                    String::new()
-                                                } else {
-                                                    format!("{op} {ver}")
-                                                }
-                                            }
-                                            _ => String::new(),
-                                        };
-
-                                    match format_section {
-                                        Some(FormatSection::Requires) => {
+                                if let Some(section) = format_section {
+                                    let name = dep_name.ok_or_else(|| {
+                                        Error::ParseError(format!(
+                                            "RPM primary metadata {} entry is missing its required name attribute",
+                                            section.metadata_name()
+                                        ))
+                                    })?;
+                                    match section {
+                                        FormatSection::Requires => {
+                                            let constraint = rpm_constraint_native_text(
+                                                &name,
+                                                dep_flags.as_deref(),
+                                                dep_epoch.as_deref(),
+                                                dep_ver.as_deref(),
+                                                dep_rel.as_deref(),
+                                            )?;
                                             pkg.dependencies.push((name, constraint));
                                         }
-                                        Some(FormatSection::Provides) => {
-                                            pkg.provides.push((name, constraint));
+                                        FormatSection::Provides => {
+                                            let provide = rpm_provide_constraint(
+                                                &name,
+                                                dep_flags.as_deref(),
+                                                dep_epoch.as_deref(),
+                                                dep_ver.as_deref(),
+                                                dep_rel.as_deref(),
+                                            )?;
+                                            pkg.provides.push((name, provide));
                                         }
-                                        Some(FormatSection::Conflicts) => {
+                                        FormatSection::Conflicts => {
                                             pkg.relations.push((
                                                 RepositoryRequirementKind::Conflict,
                                                 rpm_relation_native_text(
@@ -546,7 +567,7 @@ impl FedoraParser {
                                                 )?,
                                             ));
                                         }
-                                        Some(FormatSection::Obsoletes) => {
+                                        FormatSection::Obsoletes => {
                                             pkg.relations.push((
                                                 RepositoryRequirementKind::Obsolete,
                                                 rpm_relation_native_text(
@@ -558,7 +579,6 @@ impl FedoraParser {
                                                 )?,
                                             ));
                                         }
-                                        None => {}
                                     }
                                 }
                             }
@@ -688,86 +708,8 @@ struct PackageBuilder {
     location: Option<String>,
     url: Option<String>,
     dependencies: Vec<(String, String)>,
-    provides: Vec<(String, String)>,
+    provides: Vec<(String, RpmProvideConstraint)>,
     relations: Vec<(RepositoryRequirementKind, String)>,
-}
-
-/// Convert RPM flags string to a version constraint operator.
-fn rpm_flags_to_op(flags: &str) -> &str {
-    match flags {
-        "GE" => ">=",
-        "LE" => "<=",
-        "EQ" => "=",
-        "LT" => "<",
-        "GT" => ">",
-        _ => "",
-    }
-}
-
-fn rpm_relation_native_text(
-    name: &str,
-    flags: Option<&str>,
-    epoch: Option<&str>,
-    version: Option<&str>,
-    release: Option<&str>,
-) -> Result<String> {
-    match (flags, version) {
-        (None, None) => Ok(name.to_string()),
-        (Some(flags), Some(version)) => {
-            let operator = rpm_flags_to_op(flags);
-            if operator.is_empty() {
-                return Err(Error::ParseError(format!(
-                    "unsupported RPM relation flags '{flags}' for {name}"
-                )));
-            }
-            let mut evr = String::new();
-            if let Some(epoch) = epoch
-                && epoch != "0"
-            {
-                evr.push_str(epoch);
-                evr.push(':');
-            }
-            evr.push_str(version);
-            if let Some(release) = release
-                && !release.is_empty()
-            {
-                evr.push('-');
-                evr.push_str(release);
-            }
-            Ok(format!("{name} {operator} {evr}"))
-        }
-        _ => Err(Error::ParseError(format!(
-            "malformed RPM relation entry for {name}: comparison flags and version must appear together"
-        ))),
-    }
-}
-
-/// Build a `RepositoryRequirementGroup` from a single RPM requires entry.
-fn rpm_require_to_group(name: &str, constraint: &str) -> Result<RepositoryRequirementGroup> {
-    let native_text = if constraint.is_empty() {
-        name.to_string()
-    } else {
-        format!("{name} {constraint}")
-    };
-    let expression = crate::repository::rpm_dependency::parse_rpm_dependency(&native_text)
-        .map_err(Error::ParseError)?;
-    let clauses = expression.atoms().into_iter().cloned().collect::<Vec<_>>();
-    let behavior = if expression.is_conditional() {
-        ConditionalRequirementBehavior::Conditional
-    } else {
-        ConditionalRequirementBehavior::Hard
-    };
-    let first = clauses.first().cloned().ok_or_else(|| {
-        Error::ParseError(format!(
-            "RPM dependency produced no atomic requirements: {native_text}"
-        ))
-    })?;
-    let mut group = RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, first)
-        .with_behavior(behavior)
-        .with_expression(expression)
-        .with_native_text(native_text);
-    group.alternatives = clauses;
-    Ok(group)
 }
 
 impl PackageBuilder {
@@ -836,7 +778,10 @@ impl PackageBuilder {
             .dependencies
             .iter()
             .map(|(dep_name, constraint)| rpm_require_to_group(dep_name, constraint))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         requirements.extend(
             self.relations
                 .iter()
@@ -856,7 +801,15 @@ impl PackageBuilder {
             Some(version.clone()),
         ));
 
-        for (prov_name, prov_constraint) in &self.provides {
+        for (prov_name, provide) in &self.provides {
+            if crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(prov_name)
+                .map_err(|error| Error::ParseError(error.to_string()))?
+                .is_some()
+            {
+                return Err(Error::ParseError(format!(
+                    "RPM repository package cannot provide package-manager runtime capability '{prov_name}'; Conary's typed runtime ledger is the sole authority"
+                )));
+            }
             let kind = if prov_name == &name {
                 RepositoryCapabilityKind::PackageName
             } else {
@@ -866,18 +819,19 @@ impl PackageBuilder {
                 RepositoryCapabilityKind::Generic
             };
 
-            let prov_version = common::extract_version_from_constraint(prov_constraint);
-
-            let native_text = if prov_constraint.is_empty() {
+            let native_text = if provide.native_constraint.is_empty() {
                 prov_name.clone()
             } else {
-                format!("{prov_name} {prov_constraint}")
+                format!("{prov_name} {}", provide.native_constraint)
             };
 
             structured_provides.push(RepositoryProvide {
                 name: prov_name.clone(),
                 kind,
-                version: prov_version,
+                version: provide.version.clone(),
+                version_relation: provide.version_relation,
+                architecture_qualifier:
+                    crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
                 native_text: Some(native_text),
             });
         }
@@ -885,11 +839,11 @@ impl PackageBuilder {
         let rpm_provides: Vec<String> = self
             .provides
             .iter()
-            .map(|(prov_name, constraint)| {
-                if constraint.is_empty() {
+            .map(|(prov_name, provide)| {
+                if provide.native_constraint.is_empty() {
                     prov_name.clone()
                 } else {
-                    format!("{prov_name} {constraint}")
+                    format!("{prov_name} {}", provide.native_constraint)
                 }
             })
             .collect();
@@ -913,13 +867,14 @@ impl PackageBuilder {
             name,
             version,
             architecture: self.arch,
+            debian_multi_arch: None,
             description: self.description,
             checksum,
             checksum_type,
             size,
             download_url,
             extra_metadata: serde_json::Value::Object(extra),
-            source_distro: RepositoryDependencyFlavor::Rpm,
+            dependency_flavor: RepositoryDependencyFlavor::Rpm,
             version_scheme: VersionScheme::Rpm,
             requirements,
             provides: structured_provides,

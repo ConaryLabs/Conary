@@ -2,7 +2,7 @@
 
 use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;
-use crate::db::models::{CanonicalPackage, PackageImplementation};
+use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
 
 /// Helper: insert a canonical package with distro-specific implementations.
 fn insert_canonical(
@@ -18,7 +18,7 @@ fn insert_canonical(
             can_id,
             distro.to_string(),
             distro_name.to_string(),
-            "auto".to_string(),
+            CanonicalMappingAuthority::Contract,
         );
         pi.insert(conn).unwrap();
     }
@@ -33,7 +33,7 @@ fn canonical_fallback_resolves_cross_distro_dep() {
     insert_canonical(
         &conn,
         "openssl",
-        &[("fedora", "openssl"), ("debian", "libssl3")],
+        &[("fedora-44", "openssl"), ("ubuntu-26.04", "libssl3")],
     );
 
     let mut repo = Repository::new(
@@ -87,7 +87,11 @@ fn canonical_fallback_not_used_when_exact_match_exists() {
     // interfere -- the direct candidate should be used.
     let (_dir, conn) = setup_test_db();
 
-    insert_canonical(&conn, "kernel", &[("fedora", "kernel"), ("arch", "linux")]);
+    insert_canonical(
+        &conn,
+        "kernel",
+        &[("fedora-44", "kernel"), ("arch", "linux")],
+    );
 
     let mut repo = Repository::new(
         "fedora-main".to_string(),
@@ -189,16 +193,16 @@ fn test_cross_distro_canonical_resolution() {
 
     // Create two repos
     conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('fedora-41', 'https://f.com', 1, 10, 'fedora-41')",
+        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
+             VALUES ('fedora-44', 'https://f.com', 1, 10, 'fedora-44')",
         [],
     )
     .unwrap();
     let fed_repo = conn.last_insert_rowid();
 
     conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('debian-bookworm', 'https://d.com', 1, 5, 'debian-bookworm')",
+        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
+             VALUES ('debian-bookworm', 'https://d.com', 1, 5, 'ubuntu-26.04')",
         [],
     )
     .unwrap();
@@ -213,11 +217,16 @@ fn test_cross_distro_canonical_resolution() {
         .unwrap();
 
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'apache2', '2.4.57', 'sha256:b', 100, 'https://d.com/apache2', 'debian', ?2)",
-            rusqlite::params![deb_repo, canonical_id],
-        )
-        .unwrap();
+        "INSERT INTO repository_packages (
+                 repository_id, name, version, architecture, debian_multi_arch,
+                 checksum, size, download_url, version_scheme, canonical_id
+             ) VALUES (
+                 ?1, 'apache2', '2.4.57', 'amd64', 'no',
+                 'sha256:b', 100, 'https://d.com/apache2', 'debian', ?2
+             )",
+        rusqlite::params![deb_repo, canonical_id],
+    )
+    .unwrap();
 
     // Verify PackageIdentity finds httpd with canonical link
     let httpd = PackageIdentity::find_all_by_name(&conn, "httpd").unwrap();
@@ -291,8 +300,10 @@ fn test_provides_index_cross_source() {
         .unwrap();
     let pkg_id = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO repository_provides (repository_package_id, capability, version, kind, version_scheme)
-             VALUES (?1, 'libssl.so.3', '3.2', 'library', 'rpm')",
+        "INSERT INTO repository_provides
+             (repository_package_id, capability, version, version_relation, kind, version_scheme,
+              architecture_qualifier_kind)
+             VALUES (?1, 'libssl.so.3', '3.2', 'eq', 'soname', 'rpm', 'implicit')",
         [pkg_id],
     )
     .unwrap();
@@ -327,19 +338,24 @@ fn test_version_scheme_comes_from_package_contract() {
 
     // Repository labels do not override the package's exact version contract.
     conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('mixed-repo', 'https://m.com', 1, 10, 'fedora-41')",
+        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
+             VALUES ('mixed-repo', 'https://m.com', 1, 10, 'fedora-44')",
         [],
     )
     .unwrap();
     let repo_id = conn.last_insert_rowid();
 
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
-             VALUES (?1, 'pkg', '1.0', 'sha256:a', 100, 'https://m.com/x', 'debian')",
-            [repo_id],
-        )
-        .unwrap();
+        "INSERT INTO repository_packages (
+                 repository_id, name, version, architecture, debian_multi_arch,
+                 checksum, size, download_url, version_scheme
+             ) VALUES (
+                 ?1, 'pkg', '1.0', 'amd64', 'no',
+                 'sha256:a', 100, 'https://m.com/x', 'debian'
+             )",
+        [repo_id],
+    )
+    .unwrap();
 
     let identities = PackageIdentity::find_all_by_name(&conn, "pkg").unwrap();
     assert_eq!(identities.len(), 1);
@@ -347,7 +363,7 @@ fn test_version_scheme_comes_from_package_contract() {
 }
 
 #[test]
-fn latest_mode_sat_install_prefers_newest_candidate() {
+fn repology_latest_signal_cannot_override_repository_priority() {
     let (_dir, conn) = setup_test_db();
     let fresh = chrono::Utc::now().to_rfc3339();
 
@@ -359,15 +375,15 @@ fn latest_mode_sat_install_prefers_newest_candidate() {
     let canonical_id = conn.last_insert_rowid();
 
     conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('fedora-remi', 'https://f.com', 1, 20, 'fedora')",
+        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
+             VALUES ('fedora-remi', 'https://f.com', 1, 20, 'fedora-44')",
         [],
     )
     .unwrap();
     let fedora_repo_id = conn.last_insert_rowid();
 
     conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
+        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
              VALUES ('arch-core', 'https://a.com', 1, 5, 'arch')",
         [],
     )
@@ -375,21 +391,21 @@ fn latest_mode_sat_install_prefers_newest_candidate() {
     let arch_repo_id = conn.last_insert_rowid();
 
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'python', '3.12.2-1.fc44', 'sha256:fedora', 100, 'https://f.com/python', 'rpm', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'python', '3.12.2-1.fc44', 'x86_64', 'sha256:fedora', 100, 'https://f.com/python', 'rpm', ?2)",
             rusqlite::params![fedora_repo_id, canonical_id],
         )
         .unwrap();
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'python', '3.13.0-1', 'sha256:arch', 100, 'https://a.com/python', 'arch', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'python', '3.13.0-1', 'x86_64', 'sha256:arch', 100, 'https://a.com/python', 'arch', ?2)",
             rusqlite::params![arch_repo_id, canonical_id],
         )
         .unwrap();
 
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
-             VALUES (?1, 'libc', '1.0-1', 'sha256:libc', 100, 'https://a.com/libc', 'arch')",
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url, version_scheme)
+             VALUES (?1, 'libc', '1.0-1', 'x86_64', 'sha256:libc', 100, 'https://a.com/libc', 'arch')",
             [arch_repo_id],
         )
         .unwrap();
@@ -423,7 +439,7 @@ fn latest_mode_sat_install_prefers_newest_candidate() {
         &conn,
         &[("python".to_string(), VersionConstraint::Any)],
         &ResolutionPolicy::new()
-            .with_selection_mode(crate::repository::resolution_policy::SelectionMode::Latest),
+            .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
     )
     .unwrap();
 
@@ -432,5 +448,5 @@ fn latest_mode_sat_install_prefers_newest_candidate() {
         .iter()
         .find(|pkg| pkg.name == "python")
         .expect("python should be present in SAT install order");
-    assert_eq!(python.version, "3.13.0-1");
+    assert_eq!(python.version, "3.12.2-1.fc44");
 }

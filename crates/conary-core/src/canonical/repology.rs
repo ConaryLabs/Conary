@@ -1,16 +1,15 @@
 // conary-core/src/canonical/repology.rs
 
-//! Repology API client for bootstrapping the canonical package registry.
+//! Repology discovery-metadata client.
 //!
 //! Repology tracks packaging across hundreds of repositories and distributions.
-//! This module fetches project data from the Repology API and maps it into
-//! Conary's canonical package model.
+//! This module fetches and caches project observations. Repology observations
+//! never create canonical equivalence or rank mutation candidates.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::db::models::{CanonicalPackage, PackageImplementation};
 use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------------
@@ -104,26 +103,22 @@ pub fn parse_projects_batch(json: &str) -> Result<Vec<RepologyProject>> {
     Ok(projects)
 }
 
-/// Map a Conary distro identifier to a Repology-style repository ID.
+/// Map an exact Conary public source-profile ID to a Repology repository ID.
 ///
-/// This is the inverse of `repo_to_distro`. Returns `None` for unrecognised distros.
-pub fn distro_to_repo(distro: &str) -> Option<String> {
-    crate::repository::supported_profiles::profile_by_public_id(distro)
-        .or_else(|| crate::repository::supported_profiles::profile_by_family_slug(distro))
+/// This is the inverse of `repo_to_profile`. Family and route slugs are not
+/// profile aliases.
+pub fn profile_to_repo(profile_id: &str) -> Option<String> {
+    crate::repository::supported_profiles::profile_by_public_id(profile_id)
         .map(|profile| profile.repology_repo().to_string())
 }
 
-/// Map a Repology repository ID to a Conary distro identifier.
+/// Map a Repology repository ID to an exact Conary public source-profile ID.
 ///
 /// Returns `None` for repositories we do not recognise.
 ///
-/// NOTE: A mapping here does NOT imply Remi hosts packages for that distro.
-/// These mappings support canonical name resolution (e.g. "what is httpd called
-/// on Debian?" -> "apache2") even for distros without a Remi repository endpoint.
-/// To actually serve packages for a new distro, you also need: a Remi mirror
-/// sync config, a Containerfile for integration tests, and a config.toml entry
-/// in conary-test. See `.claude/rules/integration-tests.md` "Adding a New Distro".
-pub fn repo_to_distro(repo: &str) -> Option<String> {
+/// A mapping here does not imply that Remi serves the profile. Serving support
+/// is owned by the typed source-profile catalog and repository configuration.
+pub fn repo_to_profile(repo: &str) -> Option<String> {
     crate::repository::supported_profiles::public_profiles()
         .iter()
         .find(|profile| profile.repology_repo() == repo)
@@ -203,60 +198,6 @@ impl RepologyClient {
         let body = self.get_text(&url).await?;
         parse_projects_batch(&body)
     }
-
-    /// Fetch a batch of projects and sync recognised implementations into the
-    /// database. Returns the number of projects synced.
-    pub async fn sync_to_db(&self, conn: &rusqlite::Connection, start: &str) -> Result<usize> {
-        let projects = self.fetch_projects_batch(start).await?;
-        let mut count = 0;
-
-        // Wrap all inserts in a single transaction for atomicity and performance
-        let tx = conn.unchecked_transaction()?;
-
-        for project in &projects {
-            // Filter to implementations we can map to a known distro
-            let known: Vec<_> = project
-                .implementations
-                .iter()
-                .filter_map(|imp| {
-                    repo_to_distro(&imp.repo).map(|distro| (distro, imp.visiblename.clone()))
-                })
-                .collect();
-
-            if known.is_empty() {
-                continue;
-            }
-
-            // Upsert the canonical package — if it already exists, look up its ID
-            let mut canonical = CanonicalPackage::new(project.name.clone(), "package".to_string());
-            let can_id = match canonical.insert_or_ignore(&tx)? {
-                Some(id) => id,
-                None => {
-                    // Already exists — look up by name
-                    match CanonicalPackage::find_by_name(&tx, &project.name)? {
-                        Some(existing) => match existing.id {
-                            Some(id) => id,
-                            None => continue,
-                        },
-                        None => continue,
-                    }
-                }
-            };
-
-            // Upsert each distro implementation
-            for (distro, distro_name) in known {
-                let mut imp =
-                    PackageImplementation::new(can_id, distro, distro_name, "repology".to_string());
-                imp.insert_or_ignore(&tx)?;
-            }
-
-            count += 1;
-        }
-
-        tx.commit()?;
-
-        Ok(count)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +217,7 @@ pub fn cache_projects_to_db(
 
     for project in projects {
         for imp in &project.implementations {
-            let Some(distro) = repo_to_distro(&imp.repo) else {
+            let Some(distro) = repo_to_profile(&imp.repo) else {
                 continue;
             };
             let entry = crate::db::models::RepologyCacheEntry {
@@ -334,23 +275,23 @@ mod tests {
 
     #[test]
     fn supported_profile_catalog_owns_repology_identity() {
-        assert_eq!(repo_to_distro("fedora_44"), Some("fedora-44".to_string()));
+        assert_eq!(repo_to_profile("fedora_44"), Some("fedora-44".to_string()));
         assert_eq!(
-            repo_to_distro("ubuntu_26_04"),
+            repo_to_profile("ubuntu_26_04"),
             Some("ubuntu-26.04".to_string())
         );
-        assert_eq!(repo_to_distro("arch"), Some("arch".to_string()));
-        assert_eq!(distro_to_repo("fedora-44"), Some("fedora_44".to_string()));
-        assert_eq!(distro_to_repo("fedora"), Some("fedora_44".to_string()));
+        assert_eq!(repo_to_profile("arch"), Some("arch".to_string()));
+        assert_eq!(profile_to_repo("fedora-44"), Some("fedora_44".to_string()));
+        assert_eq!(profile_to_repo("fedora"), None);
         assert_eq!(
-            distro_to_repo("ubuntu-26.04"),
+            profile_to_repo("ubuntu-26.04"),
             Some("ubuntu_26_04".to_string())
         );
-        assert_eq!(repo_to_distro("unknown_repo_xyz"), None);
-        assert_eq!(repo_to_distro("fedora_41"), None);
-        assert_eq!(repo_to_distro("debian_10"), None);
-        assert_eq!(repo_to_distro("opensuse_tumbleweed"), None);
-        assert_eq!(distro_to_repo("debian-10"), None);
+        assert_eq!(repo_to_profile("unknown_repo_xyz"), None);
+        assert_eq!(repo_to_profile("fedora_41"), None);
+        assert_eq!(repo_to_profile("debian_10"), None);
+        assert_eq!(repo_to_profile("opensuse_tumbleweed"), None);
+        assert_eq!(profile_to_repo("debian-10"), None);
     }
 
     #[test]

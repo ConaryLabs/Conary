@@ -77,10 +77,6 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             exclude,
             explicit_only,
             refresh,
-            convert,
-            jobs,
-            no_chunking,
-            key,
             sync_hook,
             remove_hook,
             quiet,
@@ -89,15 +85,6 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             let package_manager = package_manager.map(Into::into);
             if sync_hook {
                 commands::cmd_sync_hook_install(remove_hook, package_manager).await
-            } else if convert {
-                commands::cmd_adopt_convert(
-                    &db.db_path,
-                    jobs,
-                    no_chunking,
-                    dry_run,
-                    key.as_deref().map(std::path::Path::new),
-                )
-                .await
             } else if status {
                 commands::cmd_adopt_status(&db.db_path, package_manager).await
             } else if refresh {
@@ -179,14 +166,6 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             .await
             .map(|_| ())
         }
-
-        cli::SystemCommands::Gc {
-            db,
-            objects_dir,
-            keep_days,
-            dry_run,
-            chunks,
-        } => commands::cmd_gc(&db.db_path, &objects_dir, keep_days, dry_run, chunks).await,
 
         cli::SystemCommands::Sbom {
             package_name,

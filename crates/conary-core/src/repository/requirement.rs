@@ -4,7 +4,7 @@
 
 use super::dependency_model::{
     ConditionalRequirementBehavior, RepositoryRequirementExpression, RepositoryRequirementGroup,
-    RepositoryRequirementKind,
+    RepositoryRequirementKind, RequirementArchitectureQualifier,
 };
 use super::package_relation::validate_native_relation;
 use super::versioning::{VersionScheme, parse_repo_constraint};
@@ -122,6 +122,22 @@ pub fn validate_requirement_group(
                     raw
                 )
             })?;
+        }
+        match (&clause.architecture_qualifier, scheme) {
+            (RequirementArchitectureQualifier::Unqualified, _) => {}
+            (
+                RequirementArchitectureQualifier::Any
+                | RequirementArchitectureQualifier::Native
+                | RequirementArchitectureQualifier::Exact(_),
+                VersionScheme::Debian,
+            ) => {}
+            (qualifier, _) => {
+                return Err(format!(
+                    "package requirement '{}' uses Debian architecture qualifier {qualifier:?} with {} versioning",
+                    clause.name,
+                    scheme.as_str()
+                ));
+            }
         }
     }
     Ok(())

@@ -152,6 +152,15 @@ impl TransactionConfig {
     /// generation, mount, and `/etc` state live under `/conary`.
     pub fn from_paths(_root: PathBuf, db_path: PathBuf) -> Self {
         let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
+        Self::for_runtime_root(&runtime_root)
+    }
+
+    /// Create a config for one explicit runtime root.
+    ///
+    /// Selected-root and try-session transactions use this constructor so the
+    /// global mutation lock and CAS always belong to the live runtime even when
+    /// package state is read from a copied database.
+    pub fn for_runtime_root(runtime_root: &ConaryRuntimeRoot) -> Self {
         Self {
             root: runtime_root.root().to_path_buf(),
             db_path: runtime_root.db_path().to_path_buf(),
@@ -280,13 +289,13 @@ pub struct TransactionResult {
 
 #[cfg(all(test, feature = "composefs-rs"))]
 mod integration_tests {
-    use crate::db::models::{FileEntry, SystemState, Trove, TroveType};
+    use crate::db::models::{SystemState, Trove, TroveType};
     use crate::filesystem::CasStore;
     use crate::generation::builder::build_generation_from_db_with_boot_root;
+    use crate::generation::builder::test_support::insert_regular_file_with_parents;
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
-    use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use tempfile::TempDir;
 
     fn setup_test_db() -> (TempDir, rusqlite::Connection) {
@@ -324,26 +333,22 @@ mod integration_tests {
         let cas = CasStore::new(&objects_dir).unwrap();
         let hash = cas.store(b"hello").unwrap();
         let init_hash = cas.store(b"init").unwrap();
-        let mut fe = FileEntry::new(
-            "/usr/bin/hello".to_string(),
-            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap(),
-            Some(PayloadContentAuthority {
-                sha256: hash,
-                size: b"hello".len() as u64,
-            }),
+        insert_regular_file_with_parents(
+            &conn,
+            "/usr/bin/hello",
+            hash,
+            b"hello".len(),
+            0o755,
             trove_id,
         );
-        fe.insert(&conn).unwrap();
-        let mut init = FileEntry::new(
-            "/usr/sbin/init".to_string(),
-            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap(),
-            Some(PayloadContentAuthority {
-                sha256: init_hash,
-                size: b"init".len() as u64,
-            }),
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
+            init_hash,
+            b"init".len(),
+            0o755,
             trove_id,
         );
-        init.insert(&conn).unwrap();
 
         // Run build_generation_from_db
         let result = build_generation_from_db_with_boot_root(
@@ -415,6 +420,7 @@ mod tests {
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
+    use crate::generation::test_support::write_root_manifests_with_objects;
     use tempfile::TempDir;
 
     fn write_valid_generation_artifact(root: &Path, generation: i64) {
@@ -431,10 +437,11 @@ mod tests {
             .unwrap()
             .store(cas_bytes)
             .unwrap();
-        let _cas_objects = vec![CasObjectRef {
+        let cas_objects = vec![CasObjectRef {
             sha256: cas_hash,
             size: cas_bytes.len() as u64,
         }];
+        write_root_manifests_with_objects(&generation_dir, &cas_objects);
 
         let erofs_path = generation_dir.join(EROFS_IMAGE_NAME);
         std::fs::write(&erofs_path, b"root-erofs").unwrap();

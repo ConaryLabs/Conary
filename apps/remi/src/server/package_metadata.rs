@@ -24,9 +24,11 @@ pub(crate) fn load_exact_package_metadata(
         .map(|provide| RemiProvide {
             capability: provide.capability,
             version: provide.version,
+            version_relation: provide.version_relation,
             kind: provide.kind,
             raw: provide.raw,
             version_scheme: provide.version_scheme,
+            architecture_qualifier: provide.architecture_qualifier,
         })
         .collect();
 

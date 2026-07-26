@@ -77,144 +77,150 @@ pub enum CliArchKeyringFormat {
     AlpmPackageZstd,
 }
 
+#[derive(clap::Args)]
+pub struct RepoAddArgs {
+    /// Repository name
+    pub name: String,
+
+    /// Repository URL (for metadata)
+    pub url: String,
+
+    /// Exact package metadata grammar served by this repository
+    ///
+    /// Required for non-static repositories. Static Conary repositories
+    /// declare their own signed metadata contract.
+    #[arg(long, value_enum)]
+    pub package_format: Option<CliRepositoryFormat>,
+
+    /// Exact Debian suite/codename (required for --package-format=deb)
+    #[arg(long)]
+    pub distribution: Option<String>,
+
+    /// Exact Debian component (required for --package-format=deb)
+    #[arg(long)]
+    pub component: Option<String>,
+
+    /// Exact package-manager architecture (required for rpm and deb)
+    #[arg(long)]
+    pub architecture: Option<String>,
+
+    /// Exact Arch repository database name (required for arch)
+    #[arg(long)]
+    pub database: Option<String>,
+
+    #[command(flatten)]
+    pub db: DbArgs,
+
+    /// Content mirror URL for package downloads (reference mirror pattern)
+    ///
+    /// If set, metadata is fetched from --url but packages are downloaded
+    /// from --content-url. This enables scenarios like:
+    /// - Trusted metadata server with local content mirrors
+    /// - Hosting custom metadata pointing to upstream content
+    #[arg(long)]
+    pub content_url: Option<String>,
+
+    /// Repository priority (higher = preferred)
+    #[arg(short, long, default_value = "50")]
+    pub priority: i32,
+
+    /// Add repository in disabled state
+    #[arg(long)]
+    pub disabled: bool,
+
+    /// Debian Release signer in exact FINGERPRINT=URL form; repeatable
+    #[arg(
+        long = "debian-release-key",
+        value_name = "FINGERPRINT=URL",
+        value_parser = parse_openpgp_root
+    )]
+    pub debian_release_keys: Vec<OpenPgpTrustRoot>,
+
+    /// RPM repository-metadata signer in exact FINGERPRINT=URL form; repeatable
+    #[arg(
+        long = "rpm-metadata-key",
+        value_name = "FINGERPRINT=URL",
+        value_parser = parse_openpgp_root
+    )]
+    pub rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
+
+    /// Exact HTTPS metalink authenticating rpm-md repomd.xml
+    #[arg(long, value_name = "URL", conflicts_with = "rpm_metadata_keys")]
+    pub rpm_metalink: Option<String>,
+
+    /// RPM package signer in exact FINGERPRINT=URL form; repeatable
+    #[arg(
+        long = "rpm-package-key",
+        value_name = "FINGERPRINT=URL",
+        value_parser = parse_openpgp_root
+    )]
+    pub rpm_package_keys: Vec<OpenPgpTrustRoot>,
+
+    /// Exact Arch keyring URL containing masters, certifications, and packager keys
+    #[arg(long, value_name = "URL")]
+    pub arch_keyring: Option<String>,
+
+    /// Exact Arch keyring source grammar
+    #[arg(long, value_enum)]
+    pub arch_keyring_format: Option<CliArchKeyringFormat>,
+
+    /// Trusted Arch master-key fingerprint; repeatable
+    #[arg(
+        long = "arch-master-key",
+        value_name = "FINGERPRINT",
+        value_parser = parse_openpgp_fingerprint
+    )]
+    pub arch_master_keys: Vec<String>,
+
+    /// Distinct trusted Arch master certifications required for a packager key
+    #[arg(long, value_name = "COUNT")]
+    pub arch_packager_key_threshold: Option<usize>,
+
+    /// Whether this Arch repository requires a detached database signature
+    #[arg(long, value_enum)]
+    pub arch_database_signature: Option<CliArchDatabaseSignature>,
+
+    /// Static repository root key fingerprint; repeat for multi-key roots
+    #[arg(long = "fingerprint", value_name = "64-HEX")]
+    pub fingerprints: Vec<String>,
+
+    /// Assume yes to interactive static repository trust prompts
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+
+    /// Replace an existing static repository trust pin and repository row
+    #[arg(long)]
+    pub replace: bool,
+
+    /// Default resolution strategy for packages from this repository
+    ///
+    /// When no per-package routing entry exists, use this strategy:
+    /// - remi: Convert packages via Remi server (requires --remi-endpoint)
+    /// - binary: Download pre-built packages directly (default behavior)
+    #[arg(long, value_name = "STRATEGY", value_parser = ["remi", "binary"])]
+    pub default_strategy: Option<String>,
+
+    /// Remi server endpoint URL (required when --default-strategy=remi)
+    #[arg(long, value_name = "URL")]
+    pub remi_endpoint: Option<String>,
+
+    /// Exact public distro profile served by this repository
+    ///
+    /// Examples: fedora-44, ubuntu-26.04, arch
+    #[arg(long, value_name = "PROFILE", value_parser = parse_public_profile_id)]
+    pub source_profile: Option<String>,
+
+    /// Whether this repository publishes security-advisory metadata
+    #[arg(long, value_enum, default_value_t = CliSecurityAdvisorySupport::Unknown)]
+    pub security_advisories: CliSecurityAdvisorySupport,
+}
+
 #[derive(Subcommand)]
 pub enum RepoCommands {
     /// Add a repository
     Add {
-        /// Repository name
-        name: String,
-
-        /// Repository URL (for metadata)
-        url: String,
-
-        /// Exact package metadata grammar served by this repository
-        ///
-        /// Required for non-static repositories. Static Conary repositories
-        /// declare their own signed metadata contract.
-        #[arg(long, value_enum)]
-        package_format: Option<CliRepositoryFormat>,
-
-        /// Exact Debian suite/codename (required for --package-format=deb)
-        #[arg(long)]
-        distribution: Option<String>,
-
-        /// Exact Debian component (required for --package-format=deb)
-        #[arg(long)]
-        component: Option<String>,
-
-        /// Exact package-manager architecture (required for rpm and deb)
-        #[arg(long)]
-        architecture: Option<String>,
-
-        /// Exact Arch repository database name (required for arch)
-        #[arg(long)]
-        database: Option<String>,
-
         #[command(flatten)]
-        db: DbArgs,
-
-        /// Content mirror URL for package downloads (reference mirror pattern)
-        ///
-        /// If set, metadata is fetched from --url but packages are downloaded
-        /// from --content-url. This enables scenarios like:
-        /// - Trusted metadata server with local content mirrors
-        /// - Hosting custom metadata pointing to upstream content
-        #[arg(long)]
-        content_url: Option<String>,
-
-        /// Repository priority (higher = preferred)
-        #[arg(short, long, default_value = "50")]
-        priority: i32,
-
-        /// Add repository in disabled state
-        #[arg(long)]
-        disabled: bool,
-
-        /// Debian Release signer in exact FINGERPRINT=URL form; repeatable
-        #[arg(
-            long = "debian-release-key",
-            value_name = "FINGERPRINT=URL",
-            value_parser = parse_openpgp_root
-        )]
-        debian_release_keys: Vec<OpenPgpTrustRoot>,
-
-        /// RPM repository-metadata signer in exact FINGERPRINT=URL form; repeatable
-        #[arg(
-            long = "rpm-metadata-key",
-            value_name = "FINGERPRINT=URL",
-            value_parser = parse_openpgp_root
-        )]
-        rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
-
-        /// Exact HTTPS metalink authenticating rpm-md repomd.xml
-        #[arg(long, value_name = "URL", conflicts_with = "rpm_metadata_keys")]
-        rpm_metalink: Option<String>,
-
-        /// RPM package signer in exact FINGERPRINT=URL form; repeatable
-        #[arg(
-            long = "rpm-package-key",
-            value_name = "FINGERPRINT=URL",
-            value_parser = parse_openpgp_root
-        )]
-        rpm_package_keys: Vec<OpenPgpTrustRoot>,
-
-        /// Exact Arch keyring URL containing masters, certifications, and packager keys
-        #[arg(long, value_name = "URL")]
-        arch_keyring: Option<String>,
-
-        /// Exact Arch keyring source grammar
-        #[arg(long, value_enum)]
-        arch_keyring_format: Option<CliArchKeyringFormat>,
-
-        /// Trusted Arch master-key fingerprint; repeatable
-        #[arg(
-            long = "arch-master-key",
-            value_name = "FINGERPRINT",
-            value_parser = parse_openpgp_fingerprint
-        )]
-        arch_master_keys: Vec<String>,
-
-        /// Distinct trusted Arch master certifications required for a packager key
-        #[arg(long, value_name = "COUNT")]
-        arch_packager_key_threshold: Option<usize>,
-
-        /// Whether this Arch repository requires a detached database signature
-        #[arg(long, value_enum)]
-        arch_database_signature: Option<CliArchDatabaseSignature>,
-
-        /// Static repository root key fingerprint; repeat for multi-key roots
-        #[arg(long = "fingerprint", value_name = "64-HEX")]
-        fingerprints: Vec<String>,
-
-        /// Assume yes to interactive static repository trust prompts
-        #[arg(short = 'y', long)]
-        yes: bool,
-
-        /// Replace an existing static repository trust pin and repository row
-        #[arg(long)]
-        replace: bool,
-
-        /// Default resolution strategy for packages from this repository
-        ///
-        /// When no per-package routing entry exists, use this strategy:
-        /// - remi: Convert packages via Remi server (requires --remi-endpoint and --remi-distro)
-        /// - binary: Download pre-built packages directly (default behavior)
-        #[arg(long, value_name = "STRATEGY", value_parser = ["remi", "binary"])]
-        default_strategy: Option<String>,
-
-        /// Remi server endpoint URL (required when --default-strategy=remi)
-        #[arg(long, value_name = "URL")]
-        remi_endpoint: Option<String>,
-
-        /// Distribution name for Remi conversion (required when --default-strategy=remi)
-        ///
-        /// Examples: fedora-44, ubuntu-26.04, arch
-        #[arg(long, value_name = "DISTRO", value_parser = parse_public_profile_id)]
-        remi_distro: Option<String>,
-
-        /// Whether this repository publishes security-advisory metadata
-        #[arg(long, value_enum, default_value_t = CliSecurityAdvisorySupport::Unknown)]
-        security_advisories: CliSecurityAdvisorySupport,
+        args: Box<RepoAddArgs>,
     },
 
     /// List configured repositories

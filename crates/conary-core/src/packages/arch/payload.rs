@@ -3,22 +3,27 @@
 //! Exact ALPM tar payload parsing.
 
 use crate::error::{Error, Result};
+use crate::hash::{HashAlgorithm, Hasher};
 use crate::packages::archive_utils::normalize_path;
-use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
-use crate::packages::traits::ExtractedFile;
+use crate::packages::payload::{
+    PAYLOAD_IO_BUFFER_SIZE, PackagePayloadFile, PayloadSpool, ReopenablePayload,
+};
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Write};
 use tar::{Entry, EntryType};
 
 pub(super) struct ArchivePayloadEntry {
     path: String,
     node: PayloadNode,
-    content: Vec<u8>,
-    hardlink_content: Vec<u8>,
+    content_authority: Option<PayloadContentAuthority>,
+    source: Option<ReopenablePayload>,
+    hardlink_authority: Option<PayloadContentAuthority>,
+    _hardlink_source: Option<ReopenablePayload>,
 }
 
 impl ArchivePayloadEntry {
@@ -26,12 +31,40 @@ impl ArchivePayloadEntry {
         &self.path
     }
 
-    pub(super) fn regular_content(&self) -> Option<&[u8]> {
-        self.node.kind.is_regular().then_some(&self.content)
+    pub(super) fn read_regular_content_bounded(&self, limit: u64) -> Result<Option<Vec<u8>>> {
+        if !self.node.kind.is_regular() {
+            return Ok(None);
+        }
+        let authority = self
+            .content_authority
+            .as_ref()
+            .expect("regular parsed entry has content authority");
+        if authority.size > limit {
+            return Err(Error::ParseError(format!(
+                "ALPM control payload {} is {} bytes; maximum is {limit}",
+                self.path, authority.size
+            )));
+        }
+        let mut content = Vec::with_capacity(usize::try_from(authority.size).map_err(|_| {
+            Error::ParseError(format!(
+                "ALPM control payload {} cannot be represented in memory",
+                self.path
+            ))
+        })?);
+        self.source
+            .as_ref()
+            .expect("regular parsed entry has content source")
+            .open()?
+            .read_to_end(&mut content)?;
+        Ok(Some(content))
     }
 }
 
-pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePayloadEntry> {
+pub(super) fn parse_entry<R: Read>(
+    entry: &mut Entry<'_, R>,
+    spool: &PayloadSpool,
+    index: usize,
+) -> Result<ArchivePayloadEntry> {
     let path_bytes = entry.path_bytes().into_owned();
     let raw_path = std::str::from_utf8(&path_bytes)
         .map_err(|error| Error::ParseError(format!("ALPM payload path is not UTF-8: {error}")))?;
@@ -85,26 +118,28 @@ pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePa
         pax.device_major.or(header_device.0),
         pax.device_minor.or(header_device.1),
     );
-    let (kind, content, hardlink_content) = match entry_type {
+    let mut content_authority = None;
+    let mut source = None;
+    let mut hardlink_authority = None;
+    let mut hardlink_source = None;
+    let kind = match entry_type {
         EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => {
-            let content = read_content(entry, &path)?;
-            (
-                PayloadNodeKind::Regular {
-                    hardlink_identity: None,
-                },
-                content,
-                Vec::new(),
-            )
+            let (authority, payload_source) = spool_content(entry, &path, spool, index)?;
+            content_authority = Some(authority);
+            source = Some(payload_source);
+            PayloadNodeKind::Regular {
+                hardlink_identity: None,
+            }
         }
         EntryType::Directory => {
             require_empty_entry(entry, &path)?;
-            (PayloadNodeKind::Directory, Vec::new(), Vec::new())
+            PayloadNodeKind::Directory
         }
         EntryType::Symlink => {
             require_empty_entry(entry, &path)?;
             let target = link_target
                 .ok_or_else(|| Error::ParseError(format!("ALPM symlink {path} has no target")))?;
-            (PayloadNodeKind::Symlink { target }, Vec::new(), Vec::new())
+            PayloadNodeKind::Symlink { target }
         }
         EntryType::Link => {
             let target = link_target
@@ -112,15 +147,15 @@ pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePa
             let target = normalize_path(&target).map_err(|error| {
                 Error::ParseError(format!("invalid ALPM hardlink target for {path}: {error}"))
             })?;
-            let hardlink_content = read_content(entry, &path)?;
-            (
-                PayloadNodeKind::Hardlink {
-                    identity: format!("path:{target}"),
-                    target,
-                },
-                Vec::new(),
-                hardlink_content,
-            )
+            if entry.size() != 0 {
+                let (authority, payload_source) = spool_content(entry, &path, spool, index)?;
+                hardlink_authority = Some(authority);
+                hardlink_source = Some(payload_source);
+            }
+            PayloadNodeKind::Hardlink {
+                identity: format!("path:{target}"),
+                target,
+            }
         }
         EntryType::Block => {
             require_empty_entry(entry, &path)?;
@@ -129,11 +164,7 @@ pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePa
                     "ALPM block device {path} has no complete device identity"
                 )));
             };
-            (
-                PayloadNodeKind::BlockDevice { major, minor },
-                Vec::new(),
-                Vec::new(),
-            )
+            PayloadNodeKind::BlockDevice { major, minor }
         }
         EntryType::Char => {
             require_empty_entry(entry, &path)?;
@@ -142,19 +173,15 @@ pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePa
                     "ALPM character device {path} has no complete device identity"
                 )));
             };
-            (
-                PayloadNodeKind::CharacterDevice { major, minor },
-                Vec::new(),
-                Vec::new(),
-            )
+            PayloadNodeKind::CharacterDevice { major, minor }
         }
         EntryType::Fifo => {
             require_empty_entry(entry, &path)?;
-            (PayloadNodeKind::Fifo, Vec::new(), Vec::new())
+            PayloadNodeKind::Fifo
         }
         other if other.as_byte() == b's' => {
             require_empty_entry(entry, &path)?;
-            (PayloadNodeKind::Socket, Vec::new(), Vec::new())
+            PayloadNodeKind::Socket
         }
         other => {
             return Err(Error::ParseError(format!(
@@ -177,14 +204,16 @@ pub(super) fn parse_entry<R: Read>(entry: &mut Entry<'_, R>) -> Result<ArchivePa
     Ok(ArchivePayloadEntry {
         path,
         node,
-        content,
-        hardlink_content,
+        content_authority,
+        source,
+        hardlink_authority,
+        _hardlink_source: hardlink_source,
     })
 }
 
 pub(super) fn resolve_hardlinks(
     mut entries: Vec<ArchivePayloadEntry>,
-) -> Result<Vec<ExtractedFile>> {
+) -> Result<Vec<PackagePayloadFile>> {
     let mut paths = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
         if paths.insert(entry.path.clone(), index).is_some() {
@@ -202,9 +231,8 @@ pub(super) fn resolve_hardlinks(
         let anchor = hardlink_anchor(index, &entries, &paths)?;
         let anchor_path = entries[anchor].path.clone();
         let identity = format!("path:{anchor_path}");
-        let anchor_content = entries[anchor].content.clone();
-        if !entries[index].hardlink_content.is_empty()
-            && entries[index].hardlink_content != anchor_content
+        if entries[index].hardlink_authority.is_some()
+            && entries[index].hardlink_authority != entries[anchor].content_authority
         {
             return Err(Error::ParseError(format!(
                 "ALPM hardlink {} carries bytes different from anchor {anchor_path}",
@@ -235,29 +263,21 @@ pub(super) fn resolve_hardlinks(
     entries
         .into_iter()
         .map(|entry| {
-            let content_authority = entry
-                .node
-                .kind
-                .is_regular()
-                .then(|| PayloadContentAuthority {
-                    sha256: crate::hash::sha256(&entry.content),
-                    size: entry.content.len() as u64,
-                });
             entry
                 .node
-                .validate_content(content_authority.as_ref())
+                .validate_content(entry.content_authority.as_ref())
                 .map_err(|error| {
                     Error::ParseError(format!(
                         "invalid ALPM content authority for {}: {error}",
                         entry.path
                     ))
                 })?;
-            Ok(ExtractedFile {
-                path: entry.path,
-                node: entry.node,
-                content: entry.content,
-                content_authority,
-            })
+            PackagePayloadFile::new(
+                entry.path,
+                entry.node,
+                entry.content_authority,
+                entry.source,
+            )
         })
         .collect()
 }
@@ -452,24 +472,51 @@ fn percent_decode(value: &[u8], path: &str) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-fn read_content<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<Vec<u8>> {
+fn spool_content<R: Read>(
+    entry: &mut Entry<'_, R>,
+    path: &str,
+    spool: &PayloadSpool,
+    index: usize,
+) -> Result<(PayloadContentAuthority, ReopenablePayload)> {
     let size = entry.size();
-    if size > MAX_EXTRACTION_FILE_SIZE {
-        return Err(Error::ParseError(format!(
-            "ALPM payload node {path} is {size} bytes; maximum is {MAX_EXTRACTION_FILE_SIZE}"
-        )));
+    crate::packages::payload::ensure_available_space(spool.root(), size)?;
+    let output_path = spool.indexed_path(index);
+    let mut output = File::create(&output_path)?;
+    let mut hasher = Hasher::new(HashAlgorithm::Sha256);
+    let mut copied = 0_u64;
+    let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
+    loop {
+        let read = entry.read(&mut buffer).map_err(|error| {
+            Error::ParseError(format!("read ALPM payload node {path}: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        copied = copied.checked_add(read as u64).ok_or_else(|| {
+            Error::ParseError(format!("ALPM payload node {path} size overflows u64"))
+        })?;
+        if copied > size {
+            return Err(Error::ParseError(format!(
+                "ALPM payload node {path} declares {size} bytes but yields at least {copied}"
+            )));
+        }
+        hasher.update(&buffer[..read]);
+        output.write_all(&buffer[..read])?;
     }
-    let mut content = Vec::new();
-    entry
-        .read_to_end(&mut content)
-        .map_err(|error| Error::ParseError(format!("read ALPM payload node {path}: {error}")))?;
-    if content.len() as u64 != size {
+    if copied != size {
         return Err(Error::ParseError(format!(
             "ALPM payload node {path} declares {size} bytes but yields {}",
-            content.len()
+            copied
         )));
     }
-    Ok(content)
+    output.sync_all()?;
+    Ok((
+        PayloadContentAuthority {
+            sha256: hasher.finalize().value,
+            size,
+        },
+        spool.source(output_path),
+    ))
 }
 
 fn require_empty_entry<R: Read>(entry: &Entry<'_, R>, path: &str) -> Result<()> {
@@ -505,6 +552,7 @@ fn mode_type(kind: &PayloadNodeKind) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::{ExtractedFile, PackagePayload};
     use std::io::Cursor;
     use tar::{Archive, Builder, Header};
 
@@ -536,14 +584,16 @@ mod tests {
     fn parse_archive(bytes: Vec<u8>) -> Result<Vec<ExtractedFile>> {
         let mut archive = Archive::new(Cursor::new(bytes));
         let mut parsed = Vec::new();
-        for entry in archive
+        let spool = PayloadSpool::new(0)?;
+        for (index, entry) in archive
             .entries()
             .map_err(|error| Error::ParseError(error.to_string()))?
+            .enumerate()
         {
             let mut entry = entry.map_err(|error| Error::ParseError(error.to_string()))?;
-            parsed.push(parse_entry(&mut entry)?);
+            parsed.push(parse_entry(&mut entry, &spool, index)?);
         }
-        resolve_hardlinks(parsed)
+        PackagePayload::new(resolve_hardlinks(parsed)?).to_extracted_in_memory()
     }
 
     #[test]

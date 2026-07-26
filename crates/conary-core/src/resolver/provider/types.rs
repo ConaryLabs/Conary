@@ -10,8 +10,10 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::repository::dependency_model::{
-    RepositoryRequirementExpression, RepositoryRequirementGroup,
+    RepositoryCapabilityKind, RepositoryRequirementExpression, RepositoryRequirementGroup,
+    RequirementArchitectureQualifier,
 };
+use crate::repository::rpm_runtime::RpmRuntimeRequirement;
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme};
 use crate::version::VersionConstraint;
 
@@ -21,8 +23,14 @@ pub enum ConaryConstraint {
     Repository {
         scheme: VersionScheme,
         constraint: RepoVersionConstraint,
+        capability_kind: Option<RepositoryCapabilityKind>,
         raw: Option<String>,
+        architecture_qualifier: RequirementArchitectureQualifier,
+        depending_architecture: String,
     },
+    /// A package-manager runtime feature. This is a Boolean constant after
+    /// exact feature-EVR validation and must never be interned as a package.
+    RpmRuntime(RpmRuntimeRequirement),
     ProviderExpression {
         expression: CapabilityExpression,
     },
@@ -70,6 +78,7 @@ impl SolverExpression {
 pub enum CapabilityExpression {
     Atom {
         name: String,
+        capability_kind: Option<RepositoryCapabilityKind>,
         scheme: VersionScheme,
         constraint: RepoVersionConstraint,
     },
@@ -102,20 +111,34 @@ impl CapabilityExpression {
         use RepositoryRequirementExpression as Source;
 
         match expression {
-            Source::Atom(clause) => Ok(Self::Atom {
-                name: clause.name.clone(),
-                scheme,
-                constraint: match clause.version_constraint.as_deref() {
-                    Some(raw) => crate::repository::versioning::parse_repo_constraint(scheme, raw)
-                        .map_err(|error| {
-                            format!(
-                                "dependency '{}' has invalid {:?} constraint '{}': {error}",
-                                clause.name, scheme, raw
-                            )
-                        })?,
-                    None => RepoVersionConstraint::Any,
-                },
-            }),
+            Source::Atom(clause) => {
+                if RpmRuntimeRequirement::from_clause(clause, scheme)
+                    .map_err(|error| error.to_string())?
+                    .is_some()
+                {
+                    return Err(format!(
+                        "RPM runtime capability '{}' cannot participate in same-package provider semantics",
+                        clause.name
+                    ));
+                }
+                Ok(Self::Atom {
+                    name: clause.name.clone(),
+                    capability_kind: clause.capability_kind,
+                    scheme,
+                    constraint: match clause.version_constraint.as_deref() {
+                        Some(raw) => {
+                            crate::repository::versioning::parse_repo_constraint(scheme, raw)
+                                .map_err(|error| {
+                                    format!(
+                                        "dependency '{}' has invalid {:?} constraint '{}': {error}",
+                                        clause.name, scheme, raw
+                                    )
+                                })?
+                        }
+                        None => RepoVersionConstraint::Any,
+                    },
+                })
+            }
             Source::And(operands) => Ok(Self::And(
                 operands
                     .iter()
@@ -232,6 +255,14 @@ impl fmt::Display for ConaryConstraint {
                 } else {
                     write!(f, "{:?}", constraint)
                 }
+            }
+            Self::RpmRuntime(requirement) => {
+                write!(
+                    f,
+                    "{} {}",
+                    requirement.feature.capability(),
+                    requirement.native_constraint.as_deref().unwrap_or("<any>")
+                )
             }
             Self::ProviderExpression { expression } => {
                 write!(f, "same-provider {expression:?}")

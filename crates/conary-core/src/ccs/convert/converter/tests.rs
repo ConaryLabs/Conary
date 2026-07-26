@@ -1,11 +1,38 @@
 // conary-core/src/ccs/convert/converter/tests.rs
 
 use super::*;
+use crate::ccs::v2::PackageKindV2;
 use crate::packages::native_abi::*;
-use crate::packages::traits::{DiagnosticScriptletPhase, PackageFile};
+use crate::packages::traits::{
+    ConfigFileInfo, DiagnosticScriptletPhase, ExtractedFile, PackageFile, PackageFormat,
+};
 use crate::payload::{PayloadContentAuthority, PayloadNode};
 
 const TEST_PAYLOAD: &[u8] = b"#!/bin/sh\necho test";
+
+trait InMemoryConversionForTest {
+    fn convert_in_memory_for_test(
+        &self,
+        metadata: &PackageMetadata,
+        files: &[ExtractedFile],
+        format: &str,
+        checksum: &str,
+    ) -> Result<ConversionResult, ConversionError>;
+}
+
+impl InMemoryConversionForTest for NativePackageConverter {
+    fn convert_in_memory_for_test(
+        &self,
+        metadata: &PackageMetadata,
+        files: &[ExtractedFile],
+        format: &str,
+        checksum: &str,
+    ) -> Result<ConversionResult, ConversionError> {
+        let payload = crate::packages::PackagePayload::from_extracted_in_memory(files.to_vec())
+            .map_err(|error| ConversionError::IoError(error.to_string()))?;
+        self.convert_payload(metadata, payload.files(), format, checksum)
+    }
+}
 
 fn content_authority(content: &[u8]) -> PayloadContentAuthority {
     PayloadContentAuthority {
@@ -20,24 +47,6 @@ fn extracted_file(path: &str, content: &[u8], mode: u32) -> ExtractedFile {
         node: PayloadNode::regular(mode),
         content: content.to_vec(),
         content_authority: Some(content_authority(content)),
-    }
-}
-
-fn extracted_symlink(path: &str, target: &str, mode: u32) -> ExtractedFile {
-    ExtractedFile {
-        path: path.to_string(),
-        node: crate::payload::PayloadNode {
-            kind: crate::payload::PayloadNodeKind::Symlink {
-                target: target.to_string(),
-            },
-            mode: libc::S_IFLNK | (mode & 0o7777),
-            user: crate::payload::PayloadIdentity::Numeric { id: 0 },
-            group: crate::payload::PayloadIdentity::Numeric { id: 0 },
-            mtime: crate::payload::PayloadTimestamp::UNIX_EPOCH,
-            xattrs: Default::default(),
-        },
-        content: target.as_bytes().to_vec(),
-        content_authority: None,
     }
 }
 
@@ -85,6 +94,7 @@ fn make_test_metadata() -> PackageMetadata {
         version: "1.0.0".to_string(),
         version_scheme: crate::repository::versioning::VersionScheme::Rpm,
         architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
         description: Some("Test package".to_string()),
         files: vec![PackageFile {
             path: "/usr/bin/test".to_string(),
@@ -217,10 +227,9 @@ fn arch_install_function_entry(function_name: &str, install_source: &str) -> Nat
     }
 }
 
-fn passive_test_converter(output_dir: &Path) -> NativePackageConverter {
+fn passive_test_converter(output_dir: &std::path::Path) -> NativePackageConverter {
     NativePackageConverter::new(ConversionOptions {
         output_dir: output_dir.to_path_buf(),
-        ..ConversionOptions::default()
     })
     .with_signing_key(std::sync::Arc::new(
         crate::ccs::signing::SigningKeyPair::generate().with_key_id("converter-test"),
@@ -254,14 +263,13 @@ fn conversion_result_embeds_native_lifecycle_bundle() {
     let converter = passive_test_converter(temp_dir.path());
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &make_test_files(),
             "rpm",
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         )
         .unwrap();
-
     let bundle = result
         .build_result
         .manifest
@@ -286,13 +294,63 @@ fn conversion_result_embeds_native_lifecycle_bundle() {
 }
 
 #[test]
+fn arch_install_conversion_requires_exact_source_profile() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut metadata = make_test_metadata();
+    metadata.package_path = PathBuf::from("/tmp/test-1.0.0.pkg.tar.zst");
+    metadata.version_scheme = crate::repository::versioning::VersionScheme::Arch;
+    metadata.diagnostic_scriptlet_evidence.clear();
+    metadata.native_scriptlet_abi = vec![arch_install_function_entry(
+        "post_install",
+        "post_install() { :; }\n",
+    )];
+
+    let error = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &make_test_files(),
+            "arch",
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires an exact ALPM source profile ID"),
+        "{error}"
+    );
+}
+
+#[test]
+fn conversion_rejects_format_version_authority_mismatch() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let metadata = make_test_metadata();
+
+    let error = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &make_test_files(),
+            "deb",
+            "sha256:abababababababababababababababababababababababababababababababab",
+        )
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("format 'deb' requires 'debian' version authority, got 'rpm'"),
+        "{error}"
+    );
+}
+
+#[test]
 fn conversion_result_attaches_foreign_boundary_provenance() {
     let temp_dir = tempfile::tempdir().unwrap();
     let metadata = make_test_metadata();
     let converter = passive_test_converter(temp_dir.path());
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &make_test_files(),
             "rpm",
@@ -353,6 +411,153 @@ fn conversion_result_attaches_foreign_boundary_provenance() {
 }
 
 #[test]
+fn conversion_preserves_exact_source_architecture_tokens_in_signed_identity() {
+    use crate::repository::dependency_model::DebianMultiArch;
+    use crate::repository::versioning::VersionScheme;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(temp_dir.path());
+    for (name, scheme, architecture, multi_arch, source_format) in [
+        (
+            "debian-all-token",
+            VersionScheme::Debian,
+            "all",
+            Some(DebianMultiArch::No),
+            "deb",
+        ),
+        ("arch-any-token", VersionScheme::Arch, "any", None, "arch"),
+        (
+            "rpm-noarch-token",
+            VersionScheme::Rpm,
+            "noarch",
+            None,
+            "rpm",
+        ),
+    ] {
+        let mut metadata = make_test_metadata();
+        metadata.name = name.to_string();
+        metadata.version = "1".to_string();
+        metadata.version_scheme = scheme;
+        metadata.architecture = Some(architecture.to_string());
+        metadata.debian_multi_arch = multi_arch;
+        metadata.native_scriptlet_abi.clear();
+        metadata.diagnostic_scriptlet_evidence.clear();
+
+        let result = converter
+            .convert_in_memory_for_test(
+                &metadata,
+                &make_test_files(),
+                source_format,
+                &format!("sha256:{}", crate::hash::sha256(name.as_bytes())),
+            )
+            .unwrap();
+        let package = verified_converted_package(&result);
+        let identity = &package.v2_authority().unwrap().identity;
+        assert_eq!(identity.version_scheme, scheme);
+        assert_eq!(identity.architecture.as_deref(), Some(architecture));
+        assert_eq!(identity.debian_multi_arch, multi_arch);
+    }
+}
+
+#[test]
+fn converted_rpm_preserves_exact_config_and_ghost_authority() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut metadata = make_test_metadata();
+    let config_content = b"setting=true\n";
+    metadata.files.push(PackageFile {
+        path: "/etc/test-package.conf".to_string(),
+        node: PayloadNode::regular(0o644),
+        content: Some(content_authority(config_content)),
+    });
+    metadata.config_files = vec![
+        ConfigFileInfo {
+            path: "/etc/test-package.conf".to_string(),
+            noreplace: false,
+            ghost: false,
+            remove_on_upgrade: false,
+        },
+        ConfigFileInfo {
+            path: "/var/lib/test-package/runtime.conf".to_string(),
+            noreplace: true,
+            ghost: true,
+            remove_on_upgrade: false,
+        },
+    ];
+    let mut files = make_test_files();
+    files.push(extracted_file(
+        "/etc/test-package.conf",
+        config_content,
+        0o644,
+    ));
+
+    let result = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &files,
+            "rpm",
+            "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+        )
+        .unwrap();
+    let package = verified_converted_package(&result);
+
+    assert_eq!(package.config_files(), metadata.config_files);
+    assert_eq!(package.manifest().config.files, metadata.config_files);
+    let authority = package.v2_authority().unwrap();
+    let PackageKindV2::Package(data) = &authority.kind else {
+        panic!("converted package did not carry package authority");
+    };
+    assert_eq!(data.config.len(), 2);
+    assert!(
+        data.files
+            .iter()
+            .find(|file| file.path == "/etc/test-package.conf")
+            .unwrap()
+            .config
+            .is_some()
+    );
+    assert!(
+        data.files
+            .iter()
+            .all(|file| file.path != "/var/lib/test-package/runtime.conf")
+    );
+}
+
+#[test]
+fn converted_deb_preserves_remove_on_upgrade_without_inventing_payload() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut metadata = make_test_metadata();
+    metadata.version_scheme = crate::repository::versioning::VersionScheme::Debian;
+    metadata.architecture = Some("amd64".to_string());
+    metadata.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
+    metadata.native_scriptlet_abi.clear();
+    metadata.config_files = vec![ConfigFileInfo {
+        path: "/etc/test-package.retired".to_string(),
+        noreplace: true,
+        ghost: false,
+        remove_on_upgrade: true,
+    }];
+
+    let result = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &make_test_files(),
+            "deb",
+            "sha256:3434343434343434343434343434343434343434343434343434343434343434",
+        )
+        .unwrap();
+    let package = verified_converted_package(&result);
+
+    assert_eq!(package.config_files(), metadata.config_files);
+    assert_eq!(package.manifest().config.files, metadata.config_files);
+    assert!(
+        package
+            .files()
+            .iter()
+            .all(|file| file.path != "/etc/test-package.retired")
+    );
+}
+
+#[test]
 fn conversion_boundary_records_foreign_scriptlet_command_risk() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut metadata = make_test_metadata();
@@ -363,16 +568,20 @@ fn conversion_boundary_records_foreign_scriptlet_command_risk() {
         "post_install",
         "post_install() { npm install synthetic-atomic-lockfile; }\n",
     )];
-    let converter = passive_test_converter(temp_dir.path());
+    let converter = passive_test_converter(temp_dir.path()).with_source_profile("arch");
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &make_test_files(),
             "arch",
             "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         )
         .unwrap();
+    assert_eq!(
+        result.native_lifecycle.as_ref().unwrap().entries[0].interpreter,
+        "/usr/bin/bash"
+    );
 
     let boundary = result
         .build_result
@@ -410,7 +619,7 @@ fn converted_ccs_archive_round_trip_preserves_native_lifecycle_bundle() {
     let converter = passive_test_converter(temp_dir.path());
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &make_test_files(),
             "rpm",
@@ -432,12 +641,12 @@ fn remi_converter_context_flows_into_bundle_metadata() {
     let temp_dir = tempfile::tempdir().unwrap();
     let metadata = make_test_metadata();
     let converter = passive_test_converter(temp_dir.path())
-        .with_source_distro("fedora")
+        .with_source_profile("fedora-44")
         .with_source_release("44")
         .with_conversion_tool("remi");
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &make_test_files(),
             "rpm",
@@ -451,7 +660,7 @@ fn remi_converter_context_flows_into_bundle_metadata() {
         .native_lifecycle
         .as_ref()
         .unwrap();
-    assert_eq!(bundle.source_distro.as_deref(), Some("fedora"));
+    assert_eq!(bundle.source_profile.as_deref(), Some("fedora-44"));
     assert_eq!(bundle.source_release.as_deref(), Some("44"));
     assert_eq!(bundle.conversion_tool, "remi");
     assert_eq!(
@@ -468,7 +677,7 @@ fn convert_scriptlet_body(converter: &NativePackageConverter, content: &str) -> 
         content,
     );
     converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &make_test_files(),
             "rpm",

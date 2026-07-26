@@ -51,7 +51,7 @@ pub fn derive_action(method: &str, path: &str) -> String {
         "test.fixture"
     } else if rest.starts_with("test-artifacts") {
         "test.artifact"
-    } else if rest.starts_with("packages") || rest.starts_with("convert") {
+    } else if rest.starts_with("releases") || rest.starts_with("convert") {
         "package"
     } else if rest.starts_with("openapi") {
         "openapi"
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn test_derive_action_packages() {
         assert_eq!(
-            derive_action("POST", "/v1/admin/packages/fedora"),
+            derive_action("POST", "/v1/admin/releases/fedora"),
             "package.create"
         );
         assert_eq!(derive_action("POST", "/v1/admin/convert"), "package.create");

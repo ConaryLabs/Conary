@@ -1,16 +1,14 @@
-// src/commands/state.rs
+// apps/conary/src/commands/state.rs
 //! System state snapshot management commands
 
 use super::install::{
     InstallOptions, add_prepared_install_to_target_state, build_target_state_view,
-    execute_prepared_install_graph, prepare_install_for_restore,
+    execute_state_restore_transaction, prepare_install_for_restore,
     validate_prepared_install_dependencies,
 };
-use super::progress::RemoveProgress;
-use super::remove::{RemoveLifecycleOptions, execute_installed_trove_remove_graph};
 use super::{SandboxMode, open_db};
 use anyhow::Result;
-use conary_core::db::models::{StateDiff, StateEngine, StateMember, SystemState, Trove};
+use conary_core::db::models::{StateDiff, StateEngine, StateMember, SystemState, Trove, TroveType};
 use tracing::info;
 
 /// List all system states
@@ -99,7 +97,10 @@ pub async fn cmd_state_show(db_path: &str, state_number: i64) -> Result<()> {
             let marker = if reason == "dependency" { " (dep)" } else { "" };
             println!(
                 "  {} {} [{}]{}",
-                member.trove_name, member.trove_version, arch, marker
+                member.trove_name,
+                state_member_version(member),
+                arch,
+                marker
             );
         }
     }
@@ -134,14 +135,14 @@ pub async fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Re
     if !diff.added.is_empty() {
         println!("\nAdded ({}):", diff.added.len());
         for member in &diff.added {
-            println!("  + {} {}", member.trove_name, member.trove_version);
+            println!("  + {} {}", member.trove_name, state_member_version(member));
         }
     }
 
     if !diff.removed.is_empty() {
         println!("\nRemoved ({}):", diff.removed.len());
         for member in &diff.removed {
-            println!("  - {} {}", member.trove_name, member.trove_version);
+            println!("  - {} {}", member.trove_name, state_member_version(member));
         }
     }
 
@@ -150,7 +151,9 @@ pub async fn cmd_state_diff(db_path: &str, from_state: i64, to_state: i64) -> Re
         for (old, new) in &diff.upgraded {
             println!(
                 "  ~ {} {} -> {}",
-                old.trove_name, old.trove_version, new.trove_version
+                old.trove_name,
+                state_member_version(old),
+                state_member_version(new)
             );
         }
     }
@@ -199,14 +202,14 @@ async fn execute_restore_plan_with_root(
     if !plan.to_remove.is_empty() {
         println!("\nPackages to remove ({}):", plan.to_remove.len());
         for member in &plan.to_remove {
-            println!("  - {} {}", member.trove_name, member.trove_version);
+            println!("  - {} {}", member.trove_name, state_member_version(member));
         }
     }
 
     if !plan.to_install.is_empty() {
         println!("\nPackages to install ({}):", plan.to_install.len());
         for member in &plan.to_install {
-            println!("  + {} {}", member.trove_name, member.trove_version);
+            println!("  + {} {}", member.trove_name, state_member_version(member));
         }
     }
 
@@ -215,7 +218,9 @@ async fn execute_restore_plan_with_root(
         for (old, new) in &plan.to_upgrade {
             println!(
                 "  ~ {} {} -> {}",
-                old.trove_name, old.trove_version, new.trove_version
+                old.trove_name,
+                state_member_version(old),
+                state_member_version(new)
             );
         }
     }
@@ -239,6 +244,7 @@ async fn execute_restore_plan_with_root(
                 db_path,
                 root,
                 version: Some(member.trove_version.clone()),
+                package_release: member.package_release.clone(),
                 architecture: member.architecture.clone(),
                 sandbox_mode: SandboxMode::Always,
                 allow_downgrade: true,
@@ -259,6 +265,7 @@ async fn execute_restore_plan_with_root(
                 db_path,
                 root,
                 version: Some(member.trove_version.clone()),
+                package_release: member.package_release.clone(),
                 architecture: member.architecture.clone(),
                 sandbox_mode: SandboxMode::Always,
                 allow_downgrade: true,
@@ -280,21 +287,15 @@ async fn execute_restore_plan_with_root(
         .iter()
         .map(|member| find_installed_trove_for_member(&conn, member))
         .collect::<Result<Vec<_>>>()?;
-    for trove in &removal_troves {
-        let progress = RemoveProgress::new(&trove.name);
-        execute_installed_trove_remove_graph(
-            &conn,
-            trove,
-            db_path,
-            &trove.name,
-            RemoveLifecycleOptions::new(SandboxMode::Always),
-            &progress,
-        )?;
-    }
-
-    for prepared in prepared_installs {
-        execute_prepared_install_graph(&mut conn, db_path, root, prepared)?;
-    }
+    execute_state_restore_transaction(
+        &mut conn,
+        db_path,
+        root,
+        plan.from_state.state_number,
+        plan.to_state.state_number,
+        &removal_troves,
+        prepared_installs,
+    )?;
     info!(
         "Restore state {} applied through typed transaction graphs",
         state_number
@@ -306,29 +307,40 @@ fn find_installed_trove_for_member(
     conn: &rusqlite::Connection,
     member: &StateMember,
 ) -> Result<Trove> {
-    Trove::find_by_name(conn, &member.trove_name)?
+    let matches = Trove::find_by_name(conn, &member.trove_name)?
         .into_iter()
-        .find(|trove| state_member_matches_trove(member, trove))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Restore plan expected installed package '{}' version '{}'{}",
-                member.trove_name,
-                member.trove_version,
-                format_member_arch_suffix(member.architecture.as_deref()),
-            )
-        })
+        .filter(|trove| state_member_matches_trove(member, trove))
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [trove] => Ok(trove.clone()),
+        [] => Err(anyhow::anyhow!(
+            "Restore plan expected installed package '{}' version '{}'{}",
+            member.trove_name,
+            state_member_version(member),
+            format_member_arch_suffix(member.architecture.as_deref()),
+        )),
+        _ => Err(anyhow::anyhow!(
+            "Restore plan found multiple installed packages matching '{}' version '{}'{}",
+            member.trove_name,
+            state_member_version(member),
+            format_member_arch_suffix(member.architecture.as_deref()),
+        )),
+    }
 }
 
 fn state_member_matches_trove(member: &StateMember, trove: &Trove) -> bool {
     trove.version == member.trove_version
-        && architectures_match(
-            member.architecture.as_deref(),
-            trove.architecture.as_deref(),
-        )
+        && trove.package_release == member.package_release
+        && member.architecture == trove.architecture
+        && trove.trove_type == TroveType::Package
 }
 
-fn architectures_match(target: Option<&str>, actual: Option<&str>) -> bool {
-    target == actual || target.is_none() || actual.is_none()
+fn state_member_version(member: &StateMember) -> String {
+    member.package_release.as_ref().map_or_else(
+        || member.trove_version.clone(),
+        |release| format!("{}-{release}", member.trove_version),
+    )
 }
 
 fn format_member_arch_suffix(architecture: Option<&str>) -> String {

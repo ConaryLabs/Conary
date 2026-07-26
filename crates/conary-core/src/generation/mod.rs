@@ -17,3 +17,6 @@ pub mod root_manifest;
 
 #[cfg(feature = "composefs-rs")]
 pub mod composefs_rs_eval;
+
+#[cfg(test)]
+pub(crate) mod test_support;

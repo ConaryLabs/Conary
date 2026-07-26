@@ -303,12 +303,26 @@ pub fn update_current_symlink(conary_root: &Path, generation_number: i64) -> cra
 pub fn current_generation(conary_root: &Path) -> crate::Result<Option<i64>> {
     let link = conary_root.join("current");
 
-    if !link.exists() {
-        return Ok(None);
+    match std::fs::symlink_metadata(&link) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
     }
 
     let target = std::fs::read_link(&link)
         .map_err(|e| Error::IoError(format!("Failed to read symlink {}: {e}", link.display())))?;
+    let resolved_target = if target.is_absolute() {
+        target.clone()
+    } else {
+        conary_root.join(&target)
+    };
+    if !resolved_target.exists() {
+        return Err(Error::IoError(format!(
+            "Current generation symlink {} is dangling: target {} does not exist",
+            link.display(),
+            target.display()
+        )));
+    }
 
     let component = target
         .file_name()
@@ -625,6 +639,16 @@ mod tests {
         let result = current_generation(tmp.path());
         assert!(result.is_ok(), "should return Ok for missing symlink");
         assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn current_generation_rejects_dangling_symlink() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        std::os::unix::fs::symlink("generations/7", tmp.path().join("current")).unwrap();
+
+        let error = current_generation(tmp.path()).unwrap_err();
+
+        assert!(error.to_string().contains("dangling"), "{error}");
     }
 
     #[test]

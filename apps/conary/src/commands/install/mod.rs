@@ -1,4 +1,4 @@
-// src/commands/install/mod.rs
+// apps/conary/src/commands/install/mod.rs
 //! Package installation commands
 
 mod acquire;
@@ -23,13 +23,16 @@ mod payload_identity;
 mod prepare;
 mod resolve;
 mod restore;
+mod rollback_snapshot;
 mod semantics;
+pub(crate) mod shared_directory;
 mod source_policy;
 mod transaction;
 mod validation;
 
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use command::cmd_install;
+pub(crate) use command::cmd_install_replatform;
 pub use ownership_mode::OwnershipMode;
 
 #[allow(unused_imports)]
@@ -42,13 +45,14 @@ pub(crate) use ccs_transaction::{
 pub(crate) use native_lifecycle::NativeLifecycleInstallState;
 pub use options::InstallOptions;
 pub(crate) use options::{
-    RepositoryInstallProvenance, repository_install_provenance_from_package,
+    CcsEnvelopeAuthority, RepositoryInstallProvenance, repository_install_provenance_from_package,
     verify_ccs_package_authority,
 };
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{
-    add_prepared_install_to_target_state, build_target_state_view, execute_prepared_install_graph,
-    prepare_install_for_restore, validate_prepared_install_dependencies,
+    add_prepared_install_to_target_state, build_target_state_view,
+    execute_state_restore_transaction, prepare_install_for_restore,
+    validate_prepared_install_dependencies,
 };
 
 use super::progress::{InstallPhase, InstallProgress};
@@ -62,8 +66,11 @@ use lifecycle::{
     runtime_requirement_count, show_dry_run_summary,
 };
 use prepare::check_upgrade_status;
+pub(crate) use semantics::InstallIntent;
 use semantics::{InstallSemantics, PreparedSourceKind, build_execution_mode};
-use source_policy::{build_resolution_policy, resolve_canonical_name};
+use source_policy::{
+    bind_transaction_source_profile, build_resolution_policy, resolve_canonical_name,
+};
 use transaction::{
     InstallTransactionResult, TransactionContext, execute_install_transaction_in_selected_root,
     execute_install_transaction_in_selected_root_with_post_graph,

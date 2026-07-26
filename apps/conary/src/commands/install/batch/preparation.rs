@@ -1,7 +1,6 @@
 // apps/conary/src/commands/install/batch/preparation.rs
 
 use super::*;
-use std::collections::HashSet;
 
 /// Result of batch planning
 pub(super) struct BatchPlan {
@@ -45,8 +44,10 @@ impl fmt::Display for BatchConflict {
 pub fn prepare_package_for_batch(
     package_path: &Path,
     db_path: &str,
-    install_reason: &str,
+    install_reason: InstallReason,
+    selection_reason: &str,
     allow_downgrade: bool,
+    source_profile_id: Option<&str>,
 ) -> Result<Option<PreparedPackage>> {
     // Detect format
     let path_str = package_path
@@ -68,16 +69,20 @@ pub fn prepare_package_for_batch(
         pkg.as_ref(),
         &InstallSemantics::native_package(format),
         allow_downgrade,
+        InstallIntent::PackageChange,
     )? {
         UpgradeCheck::FreshInstall => (false, None),
         UpgradeCheck::AlreadyInstalled(_) => return Ok(None),
-        UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => (true, Some(trove)),
+        UpgradeCheck::Upgrade(trove)
+        | UpgradeCheck::Downgrade(trove)
+        | UpgradeCheck::Replatform(trove) => (true, Some(trove)),
     };
 
     // Extract files
     info!("Extracting files from {}...", pkg.name());
     let extracted_files = pkg
-        .extract_file_contents()
+        .package_payload()
+        .map(conary_core::packages::payload::PackagePayload::into_files)
         .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
 
     // Native package formats do not carry Conary component authority. Keep
@@ -87,7 +92,7 @@ pub fn prepare_package_for_batch(
     let installed_components = vec![ComponentType::Runtime];
 
     let native_lifecycle_state =
-        NativeLifecycleInstallState::from_native_package(pkg.as_ref(), format, &extracted_files)?;
+        NativeLifecycleInstallState::from_native_package(pkg.as_ref(), format, source_profile_id)?;
 
     Ok(Some(PreparedPackage {
         name: pkg.name().to_string(),
@@ -102,12 +107,12 @@ pub fn prepare_package_for_batch(
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
         config_files: pkg.config_files().to_vec(),
-        install_reason: install_reason.to_string(),
+        install_reason,
+        selection_reason: selection_reason.to_string(),
         is_upgrade,
         old_trove,
         installed_components,
         classified_files,
-        language_provides: Vec::new(),
         repository_provenance: None,
         native_lifecycle_state,
     }))
@@ -121,28 +126,26 @@ impl BatchInstaller<'_> {
         packages: &[PreparedPackage],
         _conn: &Connection,
     ) -> Result<BatchPlan> {
-        let mut all_paths = HashSet::new();
+        let mut all_paths = HashMap::<String, (String, bool)>::new();
         let mut conflicts = Vec::new();
         let mut total_files = 0;
 
         for pkg in packages {
             for file in &pkg.extracted_files {
-                if all_paths.contains(&file.path) {
-                    if let Some(other_pkg) = packages.iter().find(|other_pkg| {
-                        other_pkg.name != pkg.name
-                            && other_pkg
-                                .extracted_files
-                                .iter()
-                                .any(|other| other.path == file.path)
-                    }) {
+                let incoming_is_directory = matches!(
+                    file.node.kind,
+                    conary_core::payload::PayloadNodeKind::Directory
+                );
+                if let Some((other_package, other_is_directory)) = all_paths.get(&file.path) {
+                    if !(incoming_is_directory && *other_is_directory) {
                         conflicts.push(BatchConflict::CrossPackageConflict {
                             path: file.path.clone(),
-                            package1: other_pkg.name.clone(),
+                            package1: other_package.clone(),
                             package2: pkg.name.clone(),
                         });
                     }
                 } else {
-                    all_paths.insert(file.path.clone());
+                    all_paths.insert(file.path.clone(), (pkg.name.clone(), incoming_is_directory));
                 }
                 total_files += 1;
             }

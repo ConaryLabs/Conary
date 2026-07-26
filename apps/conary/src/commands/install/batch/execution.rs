@@ -3,7 +3,9 @@
 //! Graph-driven batch payload execution.
 
 use super::super::native_events::PreparedNativeTransaction;
-use super::{BatchInstaller, PackageFormatType, PreparedPackage, inner};
+use super::{
+    BatchDbRows, BatchInstaller, InstallSemantics, PackageFormatType, PreparedPackage, inner,
+};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::NativePackageIdentity;
@@ -12,8 +14,8 @@ use conary_core::db::models::{
     ActivationRequest, Changeset, ChangesetStatus, ConfigSource, InstalledNativeLifecycleBundle,
     Trove,
 };
+use conary_core::filesystem::CasStore;
 use conary_core::scriptlet::ExecutionMode;
-use conary_core::transaction::TransactionEngine;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -29,7 +31,7 @@ impl BatchInstaller<'_> {
     pub(super) fn execute_selected_root_native_graph(
         &self,
         conn: &mut rusqlite::Connection,
-        engine: &TransactionEngine,
+        cas: &CasStore,
         packages: &[PreparedPackage],
         stored_files_by_pkg: &[Vec<inner::StoredInstallFile>],
         tx_description: &str,
@@ -37,6 +39,7 @@ impl BatchInstaller<'_> {
         native_transaction: &PreparedNativeTransaction,
         native_execution_mode: &ExecutionMode,
         selected: &mut crate::commands::generation::selected_root::SelectedRootSession,
+        rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
     ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
         let graph_inputs = self.prepare_graph_execution(conn, packages)?;
         let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(
@@ -45,14 +48,25 @@ impl BatchInstaller<'_> {
         let selected_root = selected.selected_root().to_path_buf();
         let tx = conn.unchecked_transaction()?;
         let execution = (|| -> Result<_> {
-            let (changeset_id, trove_ids, retained_trove_ids, retain_for_lifecycle_by_pkg) =
-                Self::insert_batch_db_rows(&tx, packages, tx_description, None)?;
+            let BatchDbRows {
+                changeset_id,
+                trove_ids,
+                retained_upgrade_trove_ids,
+                retain_for_lifecycle_by_pkg,
+            } = Self::insert_batch_db_rows(
+                &tx,
+                &selected_root,
+                packages,
+                tx_description,
+                None,
+                rollback_root,
+            )?;
             let mut config_transaction = GenerationConfigTransaction::default();
             self.drive_graph(
                 &tx,
                 selected,
                 &selected_root,
-                engine,
+                cas,
                 packages,
                 stored_files_by_pkg,
                 changeset_id,
@@ -62,7 +76,7 @@ impl BatchInstaller<'_> {
                 native_transaction,
                 native_execution_mode,
                 &graph_inputs,
-                &retained_trove_ids,
+                &retained_upgrade_trove_ids,
             )?;
             let all_file_paths = packages
                 .iter()
@@ -200,7 +214,7 @@ impl BatchInstaller<'_> {
         tx: &rusqlite::Transaction<'_>,
         root_mutation: &mut impl super::super::native_graph::TransactionRootMutation,
         selected_root: &Path,
-        engine: &TransactionEngine,
+        cas: &CasStore,
         packages: &[PreparedPackage],
         stored_files_by_pkg: &[Vec<inner::StoredInstallFile>],
         changeset_id: i64,
@@ -217,7 +231,7 @@ impl BatchInstaller<'_> {
             tx,
             root_mutation,
             selected_root,
-            engine,
+            cas,
             packages,
             stored_files_by_pkg,
             changeset_id,
@@ -242,7 +256,7 @@ struct BatchGraphPayload<'a, R> {
     tx: &'a rusqlite::Transaction<'a>,
     root_mutation: &'a mut R,
     selected_root: &'a Path,
-    engine: &'a TransactionEngine,
+    cas: &'a CasStore,
     packages: &'a [PreparedPackage],
     stored_files_by_pkg: &'a [Vec<inner::StoredInstallFile>],
     changeset_id: i64,
@@ -267,10 +281,21 @@ where
                 .context("batch payload has no stored-file input")?;
             let resolved_files =
                 inner::resolve_stored_install_files(self.selected_root, stored_files)?;
-            let package_files = super::super::live_root_files_from_stored_files(
-                self.engine.cas(),
+            let semantics = InstallSemantics::native_package(package.format);
+            let directory_plan = inner::preflight_resolved_file_ownership(
+                self.tx,
+                self.selected_root,
                 &resolved_files,
+                &package.name,
+                &package.relation_removals,
+                semantics,
             )?;
+            let package_files =
+                super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?
+                    .into_iter()
+                    .filter(|file| !directory_plan.preserves_leaf(&file.path))
+                    .collect::<Vec<_>>();
+            let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
             let retain_for_lifecycle = self
                 .retain_for_lifecycle_by_pkg
                 .get(change_index)
@@ -284,11 +309,14 @@ where
             let mut captured = crate::commands::generation::config_transaction::capture_install(
                 self.tx,
                 self.selected_root,
-                source_for_format(package.format),
-                &package.config_files,
-                &package_files,
-                old_trove_id,
-                &immediately_replaced,
+                self.cas,
+                crate::commands::generation::config_transaction::ConfigInstallCapture {
+                    source: source_for_format(package.format),
+                    declared: &package.config_files,
+                    incoming: &package_files,
+                    replacing_trove_id: old_trove_id,
+                    replaced_trove_ids: &immediately_replaced,
+                },
             )?;
             self.config_transaction
                 .entries
@@ -302,6 +330,8 @@ where
                 package_files,
             )?;
             self.root_mutation.apply_install_files(&plan.files)?;
+            self.root_mutation
+                .apply_install_files(&through_symlink_files)?;
             self.root_mutation.apply_remove_paths(&plan.remove_paths)?;
             let retain_for_lifecycle = self
                 .retain_for_lifecycle_by_pkg
@@ -320,6 +350,7 @@ where
                     .get(change_index)
                     .context("batch payload has no installed trove identity")?,
                 &resolved_files,
+                &directory_plan,
             )?;
             if let Some(Some(package)) = self.inputs.installing_deb_identities.get(change_index) {
                 self.native_transaction

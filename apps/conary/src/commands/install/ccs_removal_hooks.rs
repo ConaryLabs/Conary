@@ -175,20 +175,27 @@ mod tests {
     }
 
     #[test]
-    fn failing_pre_remove_hook_keeps_installed_authority_intact() {
+    fn target_root_preflight_failure_keeps_installed_authority_intact() {
         let conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
         let (owner, trove_id) = installed_ccs(&conn, "old-ccs", "exit 42");
         let plan = CcsRemovalHookPlan::prepare(&conn, std::iter::once(&owner), std::iter::empty())
             .unwrap();
-        let preflighted = plan.preflight(Path::new("/"), SandboxMode::Always).unwrap();
+        let target_root = tempfile::tempdir().unwrap();
 
-        let error = preflighted.execute().unwrap_err();
+        let error = match plan.preflight(target_root.path(), SandboxMode::Always) {
+            Ok(_) => panic!("target root without /bin/sh must fail CCS hook preflight"),
+            Err(error) => error,
+        };
 
         assert!(
             error
                 .to_string()
-                .contains("package authority remains installed")
+                .contains("CCS pre-remove hook preflight failed")
+        );
+        assert!(
+            format!("{error:#}").contains("Interpreter /bin/sh not found in target root"),
+            "{error:#}"
         );
         assert!(Trove::find_by_id(&conn, trove_id).unwrap().is_some());
         assert!(

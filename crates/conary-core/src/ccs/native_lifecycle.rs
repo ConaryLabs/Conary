@@ -14,7 +14,7 @@ pub use rpm::*;
 pub use types::*;
 
 pub const NATIVE_LIFECYCLE_SCHEMA_V1: &str = "conary.native-lifecycles.v1";
-pub const NATIVE_LIFECYCLE_SCHEMA_REVISION: u16 = 17;
+pub const NATIVE_LIFECYCLE_SCHEMA_REVISION: u16 = 18;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,7 +24,7 @@ pub struct NativeLifecycleBundle {
     pub source_format: SourceFormat,
     pub source_family: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_distro: Option<String>,
+    pub source_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_release: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -364,6 +364,35 @@ impl NativeLifecycleBundle {
                 expected_version_scheme.as_str(),
                 self.version_scheme.as_str()
             );
+        }
+        if let Some(source_profile_id) = self.source_profile.as_deref() {
+            let profile = crate::repository::supported_profiles::profile_by_public_id(
+                source_profile_id,
+            )
+            .ok_or_else(|| {
+                anyhow!(
+                    "native lifecycle bundle names unsupported exact source profile '{source_profile_id}'"
+                )
+            })?;
+            let expected_format = match self.source_format {
+                SourceFormat::Rpm => {
+                    crate::repository::supported_profiles::ProfilePackageFormat::Rpm
+                }
+                SourceFormat::Deb => {
+                    crate::repository::supported_profiles::ProfilePackageFormat::Deb
+                }
+                SourceFormat::Arch => {
+                    crate::repository::supported_profiles::ProfilePackageFormat::Arch
+                }
+            };
+            if profile.package_format() != expected_format {
+                bail!(
+                    "native lifecycle source profile '{}' uses package format '{}', but bundle source_format is '{}'",
+                    profile.id(),
+                    profile.package_format().as_str(),
+                    self.source_format.as_str()
+                );
+            }
         }
 
         required_string("source_family", &self.source_family)?;

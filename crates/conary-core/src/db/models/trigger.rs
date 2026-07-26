@@ -9,7 +9,7 @@
 //! Key features:
 //! - Pattern-based matching (glob patterns for file paths)
 //! - DAG ordering via dependencies
-//! - Built-in triggers for common system actions
+//! - Explicit operator-created mutation authority
 //! - Per-changeset tracking of triggered handlers
 
 use crate::error::Result;
@@ -32,19 +32,17 @@ pub struct Trigger {
     pub priority: i32,
     /// Whether this trigger is enabled
     pub enabled: bool,
-    /// Whether this is a built-in system trigger
-    pub builtin: bool,
     pub created_at: Option<String>,
 }
 
 impl Trigger {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, name, description, pattern, handler, priority, \
-         enabled, builtin, created_at";
+         enabled, created_at";
 
-    /// Create a new trigger
-    pub fn new(name: String, pattern: String, handler: String) -> Self {
-        Self {
+    /// Create a new trigger with a fully validated path-pattern grammar.
+    pub fn new(name: String, pattern: String, handler: String) -> Result<Self> {
+        let trigger = Self {
             id: None,
             name,
             description: None,
@@ -52,9 +50,10 @@ impl Trigger {
             handler,
             priority: 50,
             enabled: true,
-            builtin: false,
             created_at: None,
-        }
+        };
+        trigger.compile_patterns()?;
+        Ok(trigger)
     }
 
     /// Create a new trigger with description
@@ -71,9 +70,10 @@ impl Trigger {
 
     /// Insert this trigger into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        self.compile_patterns()?;
         conn.execute(
-            "INSERT INTO triggers (name, description, pattern, handler, priority, enabled, builtin)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO triggers (name, description, pattern, handler, priority, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 &self.name,
                 &self.description,
@@ -81,7 +81,6 @@ impl Trigger {
                 &self.handler,
                 self.priority,
                 self.enabled,
-                self.builtin,
             ],
         )?;
 
@@ -155,19 +154,6 @@ impl Trigger {
         Ok(triggers)
     }
 
-    /// List built-in triggers
-    pub fn list_builtin(conn: &Connection) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {} FROM triggers WHERE builtin = 1 ORDER BY priority, name",
-            Self::COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let triggers = stmt
-            .query_map([], Self::from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(triggers)
-    }
-
     /// Enable a trigger
     pub fn enable(conn: &Connection, id: i64) -> Result<()> {
         conn.execute("UPDATE triggers SET enabled = 1 WHERE id = ?1", [id])?;
@@ -180,15 +166,15 @@ impl Trigger {
         Ok(())
     }
 
-    /// Delete a trigger (only non-builtin)
+    /// Delete a trigger
     pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
-        let rows = conn.execute("DELETE FROM triggers WHERE id = ?1 AND builtin = 0", [id])?;
+        let rows = conn.execute("DELETE FROM triggers WHERE id = ?1", [id])?;
         Ok(rows > 0)
     }
 
     /// Convert a database row to a Trigger
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        Ok(Self {
+        let trigger = Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
             description: row.get(2)?,
@@ -196,9 +182,16 @@ impl Trigger {
             handler: row.get(4)?,
             priority: row.get(5)?,
             enabled: row.get::<_, i32>(6)? != 0,
-            builtin: row.get::<_, i32>(7)? != 0,
-            created_at: row.get(8)?,
-        })
+            created_at: row.get(7)?,
+        };
+        trigger.compile_patterns().map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+        Ok(trigger)
     }
 
     /// Parse the pattern string into individual glob patterns
@@ -206,16 +199,33 @@ impl Trigger {
         self.pattern.split(',').map(|s| s.trim()).collect()
     }
 
-    /// Check if a file path matches any of this trigger's patterns
-    pub fn matches(&self, path: &str) -> bool {
-        for pattern_str in self.patterns() {
-            if let Ok(pattern) = Pattern::new(pattern_str)
-                && pattern.matches(path)
-            {
-                return true;
-            }
+    fn compile_patterns(&self) -> Result<Vec<Pattern>> {
+        let raw_patterns = self.patterns();
+        if raw_patterns.is_empty() || raw_patterns.iter().any(|pattern| pattern.is_empty()) {
+            return Err(crate::error::Error::TriggerError(format!(
+                "trigger '{}' has an empty path pattern",
+                self.name
+            )));
         }
-        false
+        raw_patterns
+            .into_iter()
+            .map(|pattern| {
+                Pattern::new(pattern).map_err(|error| {
+                    crate::error::Error::TriggerError(format!(
+                        "trigger '{}' has invalid path pattern '{}': {}",
+                        self.name, pattern, error
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    /// Check if a file path matches any of this trigger's validated patterns.
+    pub fn matches(&self, path: &str) -> Result<bool> {
+        Ok(self
+            .compile_patterns()?
+            .into_iter()
+            .any(|pattern| pattern.matches(path)))
     }
 
     /// Get dependencies for this trigger
@@ -497,7 +507,6 @@ mod tests {
                 handler TEXT NOT NULL,
                 priority INTEGER NOT NULL DEFAULT 50,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                builtin INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -540,7 +549,8 @@ mod tests {
             "ldconfig".to_string(),
             "/usr/lib/*.so*".to_string(),
             "/sbin/ldconfig".to_string(),
-        );
+        )
+        .unwrap();
         trigger.description = Some("Update shared library cache".to_string());
         let id = trigger.insert(&conn).unwrap();
 
@@ -566,6 +576,9 @@ mod tests {
         Trigger::enable(&conn, id).unwrap();
         let found = Trigger::find_by_id(&conn, id).unwrap().unwrap();
         assert!(found.enabled);
+
+        assert!(Trigger::delete(&conn, id).unwrap());
+        assert!(Trigger::find_by_id(&conn, id).unwrap().is_none());
     }
 
     #[test]
@@ -574,17 +587,85 @@ mod tests {
             "ldconfig".to_string(),
             "/usr/lib/*.so*,/usr/lib64/*.so*".to_string(),
             "/sbin/ldconfig".to_string(),
-        );
+        )
+        .unwrap();
 
         // Should match
-        assert!(trigger.matches("/usr/lib/libssl.so.3"));
-        assert!(trigger.matches("/usr/lib64/libc.so.6"));
-        assert!(trigger.matches("/usr/lib/libfoo.so"));
+        assert!(trigger.matches("/usr/lib/libssl.so.3").unwrap());
+        assert!(trigger.matches("/usr/lib64/libc.so.6").unwrap());
+        assert!(trigger.matches("/usr/lib/libfoo.so").unwrap());
 
         // Should not match
-        assert!(!trigger.matches("/usr/bin/ls"));
-        assert!(!trigger.matches("/etc/passwd"));
-        assert!(!trigger.matches("/usr/lib/pkgconfig/foo.pc"));
+        assert!(!trigger.matches("/usr/bin/ls").unwrap());
+        assert!(!trigger.matches("/etc/passwd").unwrap());
+        assert!(!trigger.matches("/usr/lib/pkgconfig/foo.pc").unwrap());
+    }
+
+    #[test]
+    fn invalid_trigger_patterns_fail_before_persistence() {
+        let invalid_glob = Trigger::new(
+            "invalid-glob".to_string(),
+            "/usr/lib/[broken".to_string(),
+            "/bin/true".to_string(),
+        )
+        .unwrap_err();
+        assert!(
+            invalid_glob
+                .to_string()
+                .contains("invalid path pattern '/usr/lib/[broken'"),
+            "{invalid_glob}"
+        );
+
+        let empty_member = Trigger::new(
+            "empty-member".to_string(),
+            "/usr/lib/*,,/usr/lib64/*".to_string(),
+            "/bin/true".to_string(),
+        )
+        .unwrap_err();
+        assert!(
+            empty_member.to_string().contains("empty path pattern"),
+            "{empty_member}"
+        );
+    }
+
+    #[test]
+    fn invalid_persisted_trigger_pattern_is_a_planning_error() {
+        let (_temp, conn) = create_test_db();
+        conn.execute(
+            "INSERT INTO triggers (name, pattern, handler, priority, enabled)
+             VALUES ('corrupt', '/usr/lib/[broken', '/bin/true', 50, 1)",
+            [],
+        )
+        .unwrap();
+
+        let error = TriggerEngine::new(&conn)
+            .find_matching_triggers(&["/usr/lib/libfoo.so".to_string()])
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("corrupt"), "{message}");
+        assert!(message.contains("invalid path pattern"), "{message}");
+    }
+
+    #[test]
+    fn insert_revalidates_public_pattern_field() {
+        let (_temp, conn) = create_test_db();
+        let mut trigger = Trigger::new(
+            "mutated".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        )
+        .unwrap();
+        trigger.pattern = "/usr/lib/[broken".to_string();
+
+        let error = trigger.insert(&conn).unwrap_err();
+        assert!(
+            error.to_string().contains("invalid path pattern"),
+            "{error}"
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM triggers", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -596,12 +677,14 @@ mod tests {
             "sysusers".to_string(),
             "/usr/lib/sysusers.d/*".to_string(),
             "systemd-sysusers".to_string(),
-        );
+        )
+        .unwrap();
         let mut trigger2 = Trigger::new(
             "tmpfiles".to_string(),
             "/usr/lib/tmpfiles.d/*".to_string(),
             "systemd-tmpfiles".to_string(),
-        );
+        )
+        .unwrap();
 
         trigger1.insert(&conn).unwrap();
         let id2 = trigger2.insert(&conn).unwrap();
@@ -623,7 +706,8 @@ mod tests {
         let changeset_id = conn.last_insert_rowid();
 
         // Create trigger
-        let mut trigger = Trigger::new("test".to_string(), "/*".to_string(), "true".to_string());
+        let mut trigger =
+            Trigger::new("test".to_string(), "/*".to_string(), "true".to_string()).unwrap();
         let trigger_id = trigger.insert(&conn).unwrap();
 
         // Track trigger
@@ -656,12 +740,14 @@ mod tests {
             "ldconfig".to_string(),
             "/usr/lib/*.so*".to_string(),
             "/sbin/ldconfig".to_string(),
-        );
+        )
+        .unwrap();
         let mut t2 = Trigger::new(
             "icons".to_string(),
             "/usr/share/icons/*".to_string(),
             "gtk-update-icon-cache".to_string(),
-        );
+        )
+        .unwrap();
         t1.insert(&conn).unwrap();
         t2.insert(&conn).unwrap();
 
@@ -697,7 +783,8 @@ mod tests {
             "trigger_b".to_string(),
             "/usr/lib/*".to_string(),
             "/bin/true".to_string(),
-        );
+        )
+        .unwrap();
         trigger_b.priority = 90;
         let id_b = trigger_b.insert(&conn).unwrap();
 
@@ -707,7 +794,8 @@ mod tests {
             "trigger_a".to_string(),
             "/usr/lib/*".to_string(),
             "/bin/true".to_string(),
-        );
+        )
+        .unwrap();
         trigger_a.priority = 10;
         let id_a = trigger_a.insert(&conn).unwrap();
 
@@ -742,7 +830,8 @@ mod tests {
             "zz_low_priority".to_string(),
             "/usr/lib/*".to_string(),
             "/bin/true".to_string(),
-        );
+        )
+        .unwrap();
         t_low.priority = 90;
         let id_low = t_low.insert(&conn).unwrap();
 
@@ -750,7 +839,8 @@ mod tests {
             "aa_high_priority".to_string(),
             "/usr/lib/*".to_string(),
             "/bin/true".to_string(),
-        );
+        )
+        .unwrap();
         t_high.priority = 10;
         let id_high = t_high.insert(&conn).unwrap();
 
@@ -783,13 +873,15 @@ mod tests {
             "trigger_a".to_string(),
             "/usr/lib/*".to_string(),
             "/bin/true".to_string(),
-        );
+        )
+        .unwrap();
         let id_a = trigger_a.insert(&conn).unwrap();
         let mut trigger_b = Trigger::new(
             "trigger_b".to_string(),
             "/usr/lib/*".to_string(),
             "/bin/true".to_string(),
-        );
+        )
+        .unwrap();
         let id_b = trigger_b.insert(&conn).unwrap();
 
         TriggerDependency::add(&conn, id_a, "trigger_b").unwrap();

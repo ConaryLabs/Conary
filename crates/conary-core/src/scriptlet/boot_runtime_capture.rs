@@ -407,8 +407,8 @@ fn capture_contract_error(message: impl Into<String>) -> Error {
 mod tests {
     use super::*;
     use crate::boot_runtime::{BootRuntimeInvocation, DepmodAction};
+    use crate::scriptlet::test_support::materialized_root;
     use crate::scriptlet::{PackageFormat, ScriptletExecutor};
-    use std::os::unix::process::CommandExt as _;
 
     #[test]
     fn target_contract_includes_declared_paths_and_effective_path() {
@@ -446,12 +446,13 @@ mod tests {
 
     #[test]
     fn missing_and_existing_mutation_helpers_are_intercepted_in_the_mount_namespace() {
-        if !nix::unistd::geteuid().is_root() || !mount_namespace_available() {
+        const TEST_NAME: &str = concat!(
+            "scriptlet::boot_runtime_capture::tests::",
+            "missing_and_existing_mutation_helpers_are_intercepted_in_the_mount_namespace"
+        );
+        let Some(missing_root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
             return;
-        }
-
-        let missing_root = tempfile::tempdir().unwrap();
-        install_host_shell(missing_root.path());
+        };
         let missing = executor(missing_root.path());
         run_script(&missing, b"/usr/sbin/depmod -a\n").unwrap();
         assert!(!missing_root.path().join("usr/sbin/depmod").exists());
@@ -461,8 +462,8 @@ mod tests {
                 if matches!(invocation.action, DepmodAction::Generate { .. })
         ));
 
-        let existing_root = tempfile::tempdir().unwrap();
-        install_host_shell(existing_root.path());
+        let existing_root =
+            materialized_root(TEST_NAME, &["/bin/sh"]).expect("namespace child selected root");
         let helper = existing_root.path().join("usr/sbin/depmod");
         fs::create_dir_all(helper.parent().unwrap()).unwrap();
         let original = b"#!/bin/sh\ntouch /original-depmod-executed\nexit 99\n";
@@ -482,11 +483,15 @@ mod tests {
 
     #[test]
     fn parser_proven_information_delegates_with_the_provider_status() {
-        if !nix::unistd::geteuid().is_root() || !mount_namespace_available() {
+        let Some(root) = materialized_root(
+            concat!(
+                "scriptlet::boot_runtime_capture::tests::",
+                "parser_proven_information_delegates_with_the_provider_status"
+            ),
+            &["/bin/sh"],
+        ) else {
             return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        install_host_shell(root.path());
+        };
         let helper = root.path().join("usr/sbin/depmod");
         fs::create_dir_all(helper.parent().unwrap()).unwrap();
         fs::write(&helper, b"#!/bin/sh\necho provider-help\nexit 23\n").unwrap();
@@ -504,11 +509,15 @@ mod tests {
 
     #[test]
     fn exact_native_argv_uses_the_same_boot_capture_boundary() {
-        if !nix::unistd::geteuid().is_root() || !mount_namespace_available() {
+        let Some(root) = materialized_root(
+            concat!(
+                "scriptlet::boot_runtime_capture::tests::",
+                "exact_native_argv_uses_the_same_boot_capture_boundary"
+            ),
+            &["/bin/sh"],
+        ) else {
             return;
-        }
-        let root = tempfile::tempdir().unwrap();
-        install_host_shell(root.path());
+        };
         let helper = root.path().join("usr/sbin/depmod");
         fs::create_dir_all(helper.parent().unwrap()).unwrap();
         fs::write(
@@ -547,45 +556,9 @@ mod tests {
         )
     }
 
-    fn install_host_shell(root: &Path) {
-        copy_into_root(Path::new("/bin/sh"), root, Path::new("/bin/sh"));
-        let output = Command::new("ldd").arg("/bin/sh").output().unwrap();
-        assert!(output.status.success());
-        let dependencies = String::from_utf8(output.stdout)
-            .unwrap()
-            .split_whitespace()
-            .filter(|field| field.starts_with('/'))
-            .map(|field| field.trim_end_matches(':').to_string())
-            .collect::<BTreeSet<_>>();
-        for dependency in dependencies {
-            let path = Path::new(&dependency);
-            copy_into_root(path, root, path);
-        }
-    }
-
-    fn copy_into_root(source: &Path, root: &Path, destination: &Path) {
-        let source = fs::canonicalize(source).unwrap();
-        let destination = root.join(destination.strip_prefix("/").unwrap());
-        fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        fs::copy(source, destination).unwrap();
-    }
-
     fn set_executable(path: &Path) {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(path, permissions).unwrap();
-    }
-
-    fn mount_namespace_available() -> bool {
-        let mut command = Command::new("/bin/true");
-        // Safety: this child-only probe uses the same mount namespace syscall
-        // as the selected-root execution boundary.
-        unsafe {
-            command.pre_exec(|| {
-                nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS)
-                    .map_err(std::io::Error::from)
-            });
-        }
-        command.status().is_ok()
     }
 }

@@ -1,4 +1,4 @@
-// src/commands/install/batch.rs
+// apps/conary/src/commands/install/batch.rs
 
 //! Batch installer for atomic multi-package installation
 //!
@@ -25,26 +25,26 @@ use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
-    InstallSemantics, NativeLifecycleInstallState, PackageFormatType, RepositoryInstallProvenance,
-    build_execution_mode, detect_package_format,
+    InstallIntent, InstallSemantics, NativeLifecycleInstallState, PackageFormatType,
+    RepositoryInstallProvenance, build_execution_mode, detect_package_format,
 };
 use anyhow::{Context, Result};
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
-    Changeset, Component, InstalledNativeLifecycleBundle, InstalledRequirementGroup, ProvideEntry,
+    Changeset, Component, InstallReason, InstalledNativeLifecycleBundle, InstalledRequirementGroup,
     Trove,
 };
-use conary_core::dependencies::{DependencyClass, LanguageDep};
-use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile};
+use conary_core::filesystem::CasStore;
+use conary_core::packages::payload::PackagePayloadFile;
+use conary_core::packages::traits::ConfigFileInfo;
 use conary_core::scriptlet::SandboxMode;
-use conary_core::transaction::{TransactionConfig, TransactionEngine};
 #[cfg(test)]
 use preparation::BatchConflict;
 pub use preparation::prepare_package_for_batch;
 use rusqlite::{Connection, Transaction};
 use std::collections::HashMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{debug, info};
 
 /// A package prepared for batch installation
@@ -63,12 +63,12 @@ pub struct PreparedPackage {
     pub architecture: Option<String>,
     /// Package description
     pub description: Option<String>,
-    /// Files extracted from the package (with content for now, will be streamed later)
-    pub extracted_files: Vec<ExtractedFile>,
+    /// Exact payload descriptors with independently reopenable content sources.
+    pub extracted_files: Vec<PackagePayloadFile>,
     /// Exact positive requirement groups declared by the package.
     pub requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     /// Exact source-native capabilities declared by the package.
-    pub provides: Vec<conary_core::packages::traits::Dependency>,
+    pub provides: Vec<conary_core::packages::traits::ProvidedCapability>,
     /// Exact source-native negative/replacement relation groups.
     pub relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     /// Installed packages selected by exact relation evaluation immediately
@@ -79,8 +79,10 @@ pub struct PreparedPackage {
     pub relation_deconfigurations: Vec<conary_core::transaction::PackageRelationDeconfiguration>,
     /// Configuration files declared by the native package metadata
     pub config_files: Vec<ConfigFileInfo>,
-    /// Why this package is being installed
-    pub install_reason: String,
+    /// Typed ownership used by dependency and autoremove planning.
+    pub install_reason: InstallReason,
+    /// Human-facing explanation for why this package was selected.
+    pub selection_reason: String,
     /// Whether this is an upgrade of an existing package
     pub is_upgrade: bool,
     /// Old trove being upgraded (if any)
@@ -89,12 +91,17 @@ pub struct PreparedPackage {
     pub installed_components: Vec<ComponentType>,
     /// Files assigned by exact component metadata.
     pub classified_files: HashMap<ComponentType, Vec<String>>,
-    /// Language-specific provides detected from files
-    pub language_provides: Vec<LanguageDep>,
     /// Repository metadata for packages resolved from synced repository rows.
     pub repository_provenance: Option<RepositoryInstallProvenance>,
     /// Bundle replay plans accepted during preflight, carried through commit.
     pub native_lifecycle_state: NativeLifecycleInstallState,
+}
+
+pub(super) struct BatchDbRows {
+    pub(super) changeset_id: i64,
+    pub(super) trove_ids: Vec<i64>,
+    pub(super) retained_upgrade_trove_ids: Vec<i64>,
+    pub(super) retain_for_lifecycle_by_pkg: Vec<bool>,
 }
 
 impl PreparedPackage {
@@ -134,16 +141,12 @@ impl PreparedPackage {
         trove.architecture = self.architecture.clone();
         trove.description = self.description.clone();
         trove.installed_by_changeset_id = Some(changeset_id);
-        trove.selection_reason = Some(self.install_reason.clone());
-
-        // Mark as dependency if install reason contains "Required by"
-        if self.install_reason.starts_with("Required by") {
-            trove.install_reason = conary_core::db::models::InstallReason::Dependency;
-        }
+        trove.install_reason = self.install_reason.clone();
+        trove.selection_reason = Some(self.selection_reason.clone());
         if let Some(provenance) = self.repository_provenance.as_ref() {
             trove.install_source = conary_core::db::models::InstallSource::Repository;
             trove.installed_from_repository_id = Some(provenance.repository_id);
-            trove.source_distro = provenance.source_distro.clone();
+            trove.source_profile = provenance.source_profile.clone();
         }
 
         Ok(trove)
@@ -256,20 +259,27 @@ impl<'a> BatchInstaller<'a> {
         native_transaction.preflight(&selected_path, &native_execution_mode)?;
         let preflighted_ccs_removal_hooks =
             ccs_removal_hook_plan.preflight(&selected_path, self.sandbox_mode)?;
-
-        // The transaction engine owns CAS and locking; payload and lifecycle
-        // mutations are confined to the exact selected root.
-        let tx_config =
-            TransactionConfig::from_paths(selected_path.clone(), PathBuf::from(self.db_path));
-        let mut engine =
-            TransactionEngine::new(tx_config).context("Failed to create transaction engine")?;
-
-        // Acquire transaction lock for entire batch
-        engine
-            .begin()
-            .context("Failed to begin batch transaction")?;
+        let rollback_root = selected_root.capture_rollback_authority()?;
+        let cas = selected_root.cas().clone();
 
         info!("Started batch transaction for {}", tx_description);
+
+        // Planning began before we waited for the runtime mutation lock. The
+        // selected-root session now owns that lock, so revalidate every exact
+        // relation transition against the serialized database state.
+        for package in &packages {
+            conary_core::transaction::validate_package_relation_transitions(
+                &conn,
+                &package.relation_removals,
+                &package.relation_deconfigurations,
+            )
+            .with_context(|| {
+                format!(
+                    "package relation transaction preflight changed for {}",
+                    package.name
+                )
+            })?;
+        }
 
         // Phase 1: Unified planning across all packages
         // Collect all files and detect cross-package conflicts
@@ -279,7 +289,6 @@ impl<'a> BatchInstaller<'a> {
         if !batch_plan.conflicts.is_empty() {
             let conflict_msgs: Vec<String> =
                 batch_plan.conflicts.iter().map(|c| c.to_string()).collect();
-            engine.release_lock();
             return Err(anyhow::anyhow!(
                 "Batch install conflicts detected:\n  {}",
                 conflict_msgs.join("\n  ")
@@ -298,7 +307,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Phase 3: Store all package files in CAS, capturing the
         // authoritative hash returned by the store for each file.
-        let stored_files_by_pkg = self.store_batch_files_in_cas(&engine, &packages)?;
+        let stored_files_by_pkg = self.store_batch_files_in_cas(&cas, &packages)?;
 
         info!("Batch CAS storage complete: {} packages", package_count);
 
@@ -306,7 +315,7 @@ impl<'a> BatchInstaller<'a> {
         let summary = format!("Batch install: {main_pkg_name}");
         let transaction_result = self.execute_selected_root_native_graph(
             &mut conn,
-            &engine,
+            &cas,
             &packages,
             &stored_files_by_pkg,
             &tx_description,
@@ -314,17 +323,9 @@ impl<'a> BatchInstaller<'a> {
             &native_transaction,
             &native_execution_mode,
             &mut selected_root,
+            rollback_root,
         );
-        let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = match transaction_result {
-            Ok(result) => result,
-            Err(error) => {
-                engine.release_lock();
-                return Err(error);
-            }
-        };
-
-        // Release transaction lock
-        engine.release_lock();
+        let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = transaction_result?;
 
         info!(
             "Batch transaction completed: {} packages installed",
@@ -366,7 +367,7 @@ impl<'a> BatchInstaller<'a> {
 
     fn store_batch_files_in_cas(
         &self,
-        engine: &TransactionEngine,
+        cas: &CasStore,
         packages: &[PreparedPackage],
     ) -> Result<Vec<Vec<inner::StoredInstallFile>>> {
         let mut stored_files_by_pkg = Vec::with_capacity(packages.len());
@@ -379,7 +380,7 @@ impl<'a> BatchInstaller<'a> {
                 pkg.version
             );
 
-            let stored_files = inner::store_extracted_files_in_cas(engine, &pkg.extracted_files)
+            let stored_files = inner::store_extracted_files_in_cas(cas, &pkg.extracted_files)
                 .with_context(|| format!("Failed to store payload for {}", pkg.name))?;
             stored_files_by_pkg.push(stored_files);
         }
@@ -388,15 +389,34 @@ impl<'a> BatchInstaller<'a> {
 
     fn insert_batch_db_rows(
         tx: &Transaction<'_>,
+        selected_root: &std::path::Path,
         packages: &[PreparedPackage],
         tx_description: &str,
         tx_uuid: Option<String>,
-    ) -> Result<(i64, Vec<i64>, Vec<i64>, Vec<bool>)> {
+        rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+    ) -> Result<BatchDbRows> {
         let mut changeset = match tx_uuid {
             Some(tx_uuid) => Changeset::with_tx_uuid(tx_description.to_string(), tx_uuid),
             None => Changeset::new(tx_description.to_string()),
         };
         let changeset_id = changeset.insert(tx)?;
+        let materialized_directories =
+            super::shared_directory::capture_existing_directory_materializations(
+                tx,
+                selected_root,
+            )?;
+        super::rollback_snapshot::record_install_rollback_snapshots(
+            tx,
+            changeset_id,
+            packages
+                .iter()
+                .filter_map(|package| package.old_trove.as_deref()),
+            packages
+                .iter()
+                .flat_map(|package| package.relation_removals.iter()),
+            rollback_root,
+            materialized_directories,
+        )?;
 
         let mut trove_ids: Vec<i64> = Vec::with_capacity(packages.len());
         let mut retained_upgrade_trove_ids = packages
@@ -417,10 +437,9 @@ impl<'a> BatchInstaller<'a> {
             retain_for_lifecycle_by_pkg.push(retain_for_lifecycle);
             if let Some(ref old_trove) = pkg.old_trove
                 && let Some(old_id) = old_trove.id
+                && retain_for_lifecycle
             {
-                if retain_for_lifecycle {
-                    retained_upgrade_trove_ids.push(old_id);
-                }
+                retained_upgrade_trove_ids.push(old_id);
             }
 
             let mut trove = pkg.to_trove(changeset_id)?;
@@ -449,23 +468,14 @@ impl<'a> BatchInstaller<'a> {
                 installed.insert_or_replace(tx)?;
             }
 
-            for lang_dep in &pkg.language_provides {
-                let kind = match lang_dep.class {
-                    DependencyClass::Package => "package",
-                    _ => lang_dep.class.prefix(),
-                };
-                let mut provide = ProvideEntry::new_typed(
-                    trove_id,
-                    kind,
-                    lang_dep.name.clone(),
-                    lang_dep.version_constraint.clone(),
-                );
-                provide.insert_or_ignore(tx)?;
-            }
-
-            let mut pkg_provide =
-                ProvideEntry::new(trove_id, pkg.name.clone(), Some(pkg.version.clone()));
-            pkg_provide.insert_or_ignore(tx)?;
+            super::transaction::persist_declared_provides(
+                tx,
+                trove_id,
+                &pkg.name,
+                &pkg.version,
+                trove.version_scheme,
+                &pkg.provides,
+            )?;
 
             if let Some(old_trove) = pkg.old_trove.as_ref() {
                 super::mark_upgraded_parent_deriveds_stale(
@@ -473,7 +483,7 @@ impl<'a> BatchInstaller<'a> {
                     &pkg.name,
                     Some(old_trove.version.as_str()),
                     &pkg.version,
-                );
+                )?;
             }
 
             debug!(
@@ -486,12 +496,12 @@ impl<'a> BatchInstaller<'a> {
 
         retained_upgrade_trove_ids.sort_unstable();
         retained_upgrade_trove_ids.dedup();
-        Ok((
+        Ok(BatchDbRows {
             changeset_id,
             trove_ids,
             retained_upgrade_trove_ids,
             retain_for_lifecycle_by_pkg,
-        ))
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -501,6 +511,7 @@ impl<'a> BatchInstaller<'a> {
         pkg: &PreparedPackage,
         trove_id: i64,
         files: &[inner::ResolvedInstallFile],
+        directory_plan: &super::shared_directory::DirectoryInstallPlan,
     ) -> Result<()> {
         let mut component_ids = HashMap::new();
         for comp_type in &pkg.installed_components {
@@ -538,23 +549,30 @@ impl<'a> BatchInstaller<'a> {
                 trove_id,
             );
             entry.component_id = path_to_component.get(file.path.as_str()).copied();
-            let file_id = inner::insert_file_entry_claiming_live_root_overlap(
+            directory_plan.reconcile_through_symlink_target(tx, file)?;
+            let inserted = inner::insert_file_entry_claiming_live_root_overlap(
                 tx,
                 &mut entry,
                 &pkg.name,
                 &pkg.relation_removals,
+                directory_plan.materialization_for_path(&file.path),
+                directory_plan.leaf_before(&file.path),
             )?;
-            installed_file_metadata.insert(file.path.clone(), (file_id, file.cas_hash.clone()));
-            tx.execute(
-                "INSERT INTO file_history (changeset_id, path, sha256_hash, action)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    changeset_id,
-                    &file.path,
-                    file.content.as_ref().map(|content| &content.sha256),
-                    if pkg.is_upgrade { "modify" } else { "add" },
-                ],
-            )?;
+            directory_plan.persist_through_symlink_target(tx, file, trove_id)?;
+            installed_file_metadata
+                .insert(file.path.clone(), (inserted.file_id, file.cas_hash.clone()));
+            if inserted.materialized {
+                tx.execute(
+                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        changeset_id,
+                        &file.path,
+                        file.content.as_ref().map(|content| &content.sha256),
+                        if pkg.is_upgrade { "modify" } else { "add" },
+                    ],
+                )?;
+            }
         }
         Self::insert_config_rows(tx, pkg, trove_id, &installed_file_metadata, files)
     }

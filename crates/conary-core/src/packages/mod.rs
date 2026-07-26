@@ -17,6 +17,7 @@ pub mod native_abi;
 #[doc(hidden)]
 pub mod native_scriptlet_support;
 pub mod pacman_query;
+pub mod payload;
 pub mod query_common;
 pub mod registry;
 pub mod rpm;
@@ -34,6 +35,7 @@ use std::path::Path;
 use std::process::Command;
 use tracing::info;
 
+pub use payload::{PackagePayload, PackagePayloadFile, ReopenablePayload};
 pub use query_common::{InstalledFileInfo, InstalledPackageRecord};
 pub use rpm_query::InstalledRpmInfo;
 pub use traits::{ExtractedFile, PackageFormat};
@@ -246,8 +248,8 @@ pub struct ExtractedPackage {
     pub name: String,
     /// Package version
     pub version: String,
-    /// Extracted file contents
-    pub files: Vec<ExtractedFile>,
+    /// Independently reopenable payload sources
+    pub files: PackagePayload,
     /// The parsed package (boxed for dynamic dispatch)
     pub package: Box<dyn PackageFormat + Send>,
 }
@@ -258,7 +260,7 @@ impl std::fmt::Debug for ExtractedPackage {
             .field("path", &self.path)
             .field("name", &self.name)
             .field("version", &self.version)
-            .field("files_count", &self.files.len())
+            .field("files_count", &self.files.files().len())
             .finish()
     }
 }
@@ -290,8 +292,7 @@ pub fn extract_packages_parallel(
             // Detect format and parse using registry
             let package = parse_package(path)?;
 
-            // Extract contents
-            let files = package.extract_file_contents()?;
+            let files = package.package_payload()?;
 
             Ok(ExtractedPackage {
                 path: path.to_string_lossy().to_string(),

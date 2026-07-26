@@ -37,7 +37,7 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -96,9 +96,12 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
     assert_eq!(stored_path, "/usr/bin/from-ccs");
 
     let current = std::fs::read_link(temp_dir.path().join("current"));
+    let publication_debts =
+        conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
     assert!(
         current.is_ok(),
-        "test-mode composefs apply must still publish an active generation pointer"
+        "test-mode composefs apply must still publish an active generation pointer: \
+         {publication_debts:#?}"
     );
 }
 
@@ -132,7 +135,7 @@ async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -199,7 +202,7 @@ async fn ccs_install_persists_manifest_provides() {
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
     let files = vec![ccs_regular_file(
-        "/usr/sbin/init".to_string(),
+        "/sbin/init".to_string(),
         init_hash.clone(),
         init_content.len() as u64,
         0o100755,
@@ -257,7 +260,7 @@ async fn ccs_install_persists_manifest_provides() {
     };
 
     assert!(
-        rows.contains(&("package".to_string(), "virtual-web-server".to_string())),
+        rows.contains(&("virtual".to_string(), "virtual-web-server".to_string())),
         "manifest capability provides must be persisted"
     );
     assert!(
@@ -293,7 +296,7 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
     let init_content = b"#!/bin/sh\nexec true\n".to_vec();
     let init_hash = hash::sha256(&init_content);
     let files = vec![ccs_regular_file(
-        "/usr/sbin/init".to_string(),
+        "/sbin/init".to_string(),
         init_hash.clone(),
         init_content.len() as u64,
         0o100755,
@@ -337,9 +340,12 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
-    let typed =
-        conary_core::db::models::ProvideEntry::find_typed(&conn, "binary", "collision-tool")
-            .unwrap();
+    let typed = conary_core::db::models::ProvideEntry::find_typed(
+        &conn,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::Binary,
+        "collision-tool",
+    )
+    .unwrap();
     assert!(
         typed.is_some(),
         "typed manifest provide must remain resolvable when its raw capability equals the package name"
@@ -410,7 +416,7 @@ async fn ccs_install_registers_metadata_only_package_without_files() {
 }
 
 #[tokio::test]
-async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
+async fn ccs_install_does_not_infer_ldconfig_trigger_from_library_path() {
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
@@ -473,7 +479,7 @@ async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
         install_root.to_str().unwrap(),
         false,
         Some(trust_policy_path.to_string_lossy().into_owned()),
-        None,
+        Some(vec!["all".to_string()]),
         crate::commands::SandboxMode::Always,
         true,
         false,
@@ -482,16 +488,18 @@ async fn ccs_install_records_ldconfig_trigger_for_shared_libraries() {
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
-    let (status, matched_files): (String, i64) = conn
+    let inferred_count: i64 = conn
         .query_row(
-            "SELECT ct.status, ct.matched_files \
+            "SELECT COUNT(*) \
              FROM changeset_triggers ct \
              JOIN triggers t ON t.id = ct.trigger_id \
              WHERE t.name = 'ldconfig'",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(matched_files, 1);
-    assert_eq!(status, "completed");
+    assert_eq!(
+        inferred_count, 0,
+        "library path spelling must not create implicit mutation authority"
+    );
 }

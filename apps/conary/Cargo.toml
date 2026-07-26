@@ -38,7 +38,6 @@ serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 chrono.workspace = true
-rayon.workspace = true
 indicatif.workspace = true
 console = "0.16"
 tempfile.workspace = true

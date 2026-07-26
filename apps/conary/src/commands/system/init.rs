@@ -1,6 +1,7 @@
 // conary/src/commands/system/init.rs
 
 use super::*;
+use conary_core::runtime_root::ConaryRuntimeRoot;
 
 const REMI_ENDPOINT: &str = "https://remi.conary.io";
 const MAX_INIT_SYMLINK_DEPTH: usize = 40;
@@ -289,7 +290,7 @@ fn reconcile_remi_seeds(
             repo.priority = 110 - i32::try_from(index).unwrap_or(0);
             repo.default_strategy = Some("remi".to_string());
             repo.default_strategy_endpoint = Some(REMI_ENDPOINT.to_string());
-            repo.default_strategy_distro = Some(feed.id().to_string());
+            repo.source_profile = Some(feed.id().to_string());
             repo.set_parser_config(conary_core::repository::RepositoryParserConfig::Json)?;
             repo.insert(conn)?;
             messages.push((
@@ -316,7 +317,7 @@ fn reconcile_remi_seeds(
         }
 
         let parser_config = conary_core::repository::RepositoryParserConfig::Json;
-        if repo.default_strategy_distro.as_deref() != Some(feed.id())
+        if repo.source_profile.as_deref() != Some(feed.id())
             || repo.parser_config.as_ref() != Some(&parser_config)
         {
             let repo_id = repo.id.ok_or_else(|| {
@@ -328,7 +329,7 @@ fn reconcile_remi_seeds(
                 "DELETE FROM repository_package_keys WHERE repository_id = ?1",
                 [repo_id],
             )?;
-            repo.default_strategy_distro = Some(feed.id().to_string());
+            repo.source_profile = Some(feed.id().to_string());
             repo.set_parser_config(parser_config)?;
             repo.last_sync = None;
             repo.update(conn)?;
@@ -348,16 +349,15 @@ fn reconcile_native_repository_seeds(
 
         match existing {
             None => {
-                let mut repository = conary_core::repository::add_repository(
+                conary_core::repository::add_repository(
                     conn,
                     seed.name.to_string(),
                     seed.url.to_string(),
                     seed.parser.config(),
+                    Some(seed.source_feed.to_string()),
                     false,
                     seed.priority,
                 )?;
-                repository.default_strategy_distro = Some(seed.source_feed.to_string());
-                repository.update(conn)?;
                 messages.push((
                     false,
                     format!(
@@ -370,7 +370,7 @@ fn reconcile_native_repository_seeds(
                 let mut changed = false;
                 let parser_config = seed.parser.config();
                 if repo.parser_config.as_ref() != Some(&parser_config)
-                    || repo.default_strategy_distro.as_deref() != Some(seed.source_feed)
+                    || repo.source_profile.as_deref() != Some(seed.source_feed)
                 {
                     let repo_id = repo.id.ok_or_else(|| {
                         conary_core::Error::MissingId(format!(
@@ -381,7 +381,7 @@ fn reconcile_native_repository_seeds(
                     RepositoryPackage::delete_by_repository(conn, repo_id)?;
                     PackageResolution::delete_by_repository(conn, repo_id)?;
                     repo.set_parser_config(parser_config)?;
-                    repo.default_strategy_distro = Some(seed.source_feed.to_string());
+                    repo.source_profile = Some(seed.source_feed.to_string());
                     repo.last_sync = None;
                     changed = true;
                     messages.push((

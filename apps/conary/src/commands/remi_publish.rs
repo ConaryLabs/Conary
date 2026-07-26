@@ -160,11 +160,15 @@ mod tests {
         payload: &[u8],
     ) -> conary_core::ccs::v2::schema::AuthorityDocumentV2 {
         use conary_core::ccs::v2::schema::{
-            AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-            FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-            PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+            AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
+            FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2,
+            PackageIdentityV2, PackageKindTagV2, PackageKindV2, PackagePolicyV2,
+            ProvenanceAuthorityV2, ProvidedCapabilityV2,
         };
         use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+        use conary_core::repository::dependency_model::{
+            ProvideArchitectureQualifier, ProvideVersionRelation,
+        };
         use std::collections::BTreeMap;
 
         AuthorityDocumentV2 {
@@ -175,6 +179,7 @@ mod tests {
                 version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
                 release: "1".to_string(),
                 architecture: Some("noarch".to_string()),
+                debian_multi_arch: None,
                 platform: Some("linux".to_string()),
                 kind: PackageKindTagV2::Package,
             },
@@ -193,9 +198,19 @@ mod tests {
                 config: Vec::new(),
                 policy: PackagePolicyV2::default(),
             }),
-            provides: Vec::new(),
+            provides: vec![ProvidedCapabilityV2 {
+                kind: DependencyKindV2::Package,
+                name: name.to_string(),
+                provider_version: Some("1.0.0".to_string()),
+                version_relation: Some(ProvideVersionRelation::Equal),
+                version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                target: None,
+                component: None,
+            }],
             requirements: Vec::new(),
             relations: Vec::new(),
+            capabilities: None,
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {

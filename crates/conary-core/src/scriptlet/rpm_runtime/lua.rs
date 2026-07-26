@@ -189,8 +189,8 @@ mod tests {
         RpmCriticality, RpmHeaderContext, RpmMacroContext, RpmMacroDefinition,
         RpmMacroDefinitionSource, RpmProgram, RpmRuntimeMetadata,
     };
+    use crate::scriptlet::test_support::materialized_root;
     use crate::scriptlet::{PackageFormat, SandboxMode, ScriptletExecutor};
-    use std::path::Path;
     use std::time::Duration;
 
     fn runtime() -> RpmRuntimeMetadata {
@@ -216,7 +216,13 @@ mod tests {
 
     #[test]
     fn embedded_lua_exposes_rpm_arguments_prefixes_macros_and_input() {
-        let executor = ScriptletExecutor::new(Path::new("/"), "demo", "1.0", PackageFormat::Rpm)
+        let Some(root) = materialized_root(
+            "scriptlet::rpm_runtime::lua::tests::embedded_lua_exposes_rpm_arguments_prefixes_macros_and_input",
+            &["/bin/true", "/bin/sh"],
+        ) else {
+            return;
+        };
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm)
             .with_sandbox_mode(SandboxMode::Always);
         execute_embedded_lua(
             &executor,
@@ -306,11 +312,74 @@ mod tests {
     }
 
     #[test]
+    fn embedded_lua_rejects_malformed_passwd_uid() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("etc")).expect("account database directory");
+        std::fs::write(
+            root.path().join("etc/passwd"),
+            "broken:x:not-a-uid:1001:Broken:/home/broken:/bin/sh\n",
+        )
+        .expect("passwd database");
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
+
+        let error = execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"posix.getpasswd("broken")"#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("RpmEmbeddedLuaInvalidAccountEntry"),
+            "{error}"
+        );
+        assert!(error.contains("/etc/passwd"), "{error}");
+        assert!(error.contains("invalid uid 'not-a-uid'"), "{error}");
+    }
+
+    #[test]
+    fn embedded_lua_rejects_malformed_group_gid() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("etc")).expect("account database directory");
+        std::fs::write(root.path().join("etc/group"), "broken:x:not-a-gid:\n")
+            .expect("group database");
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
+
+        let error = execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"posix.getgroup("broken")"#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("RpmEmbeddedLuaInvalidAccountEntry"),
+            "{error}"
+        );
+        assert!(error.contains("/etc/group"), "{error}");
+        assert!(error.contains("invalid gid 'not-a-gid'"), "{error}");
+    }
+
+    #[test]
     fn embedded_lua_spawn_redirections_are_target_confined() {
-        let output = tempfile::NamedTempFile::new().expect("stdout");
-        let error = tempfile::NamedTempFile::new().expect("stderr");
-        let output_path = output.path().to_string_lossy();
-        let error_path = error.path().to_string_lossy();
+        let Some(root) = materialized_root(
+            "scriptlet::rpm_runtime::lua::tests::embedded_lua_spawn_redirections_are_target_confined",
+            &["/bin/sh"],
+        ) else {
+            return;
+        };
+        let output_path = "/tmp/stdout";
+        let error_path = "/tmp/stderr";
         let body = format!(
             r#"
                 assert(rpm.spawn(
@@ -319,7 +388,7 @@ mod tests {
                 ) == 0)
             "#
         );
-        let executor = ScriptletExecutor::new(Path::new("/"), "demo", "1.0", PackageFormat::Rpm)
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm)
             .with_sandbox_mode(SandboxMode::Always);
 
         execute_embedded_lua(
@@ -333,11 +402,11 @@ mod tests {
         )
         .expect("spawn redirection");
         assert_eq!(
-            std::fs::read_to_string(output.path()).expect("stdout"),
+            std::fs::read_to_string(root.host_path(output_path)).expect("stdout"),
             "stdout"
         );
         assert_eq!(
-            std::fs::read_to_string(error.path()).expect("stderr"),
+            std::fs::read_to_string(root.host_path(error_path)).expect("stderr"),
             "stderr"
         );
     }

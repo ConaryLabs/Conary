@@ -184,7 +184,7 @@ async fn add_static_repo(
     fixture: &StaticRepoFixture,
     fingerprints: Vec<String>,
 ) -> anyhow::Result<()> {
-    add_static_repo_with(db, fixture, fingerprints, false, false, false).await
+    add_static_repo_with(db, fixture, fingerprints, false, false, false, None).await
 }
 
 async fn add_static_repo_with(
@@ -194,6 +194,7 @@ async fn add_static_repo_with(
     replace: bool,
     yes: bool,
     native_trust: bool,
+    source_profile: Option<&str>,
 ) -> anyhow::Result<()> {
     let debian_release_keys = if native_trust {
         vec![
@@ -229,7 +230,7 @@ async fn add_static_repo_with(
         arch_database_signature: None,
         default_strategy: None,
         remi_endpoint: None,
-        remi_distro: None,
+        source_profile: source_profile.map(str::to_string),
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints,
         yes,
@@ -276,8 +277,10 @@ fn insert_synced_visibility(conn: &Connection, repo_id: i64) {
     package.architecture = Some("x86_64".to_string());
     let package_id = package.insert(conn).unwrap();
     conn.execute(
-        "INSERT INTO repository_provides (repository_package_id, capability, kind)
-         VALUES (?1, ?2, 'package')",
+        "INSERT INTO repository_provides
+         (repository_package_id, capability, kind, version_scheme,
+          architecture_qualifier_kind)
+         VALUES (?1, ?2, 'package', 'rpm', 'implicit')",
         params![package_id, "acme-widget"],
     )
     .unwrap();
@@ -418,11 +421,37 @@ async fn inserted_static_repo_has_metadata_url_and_static_strategy() {
 }
 
 #[tokio::test]
+async fn distro_specific_static_repo_preserves_its_exact_source_profile() {
+    let db = TestDb::new();
+    let fixture = StaticRepoFixture::single_key("acme-static");
+
+    add_static_repo_with(
+        &db,
+        &fixture,
+        fixture.root_key_ids.clone(),
+        false,
+        false,
+        false,
+        Some("arch"),
+    )
+    .await
+    .unwrap();
+
+    let repo = repo(&db.conn());
+    assert_eq!(repo.default_strategy.as_deref(), Some("static"));
+    assert_eq!(repo.source_profile.as_deref(), Some("arch"));
+    assert_eq!(
+        repo.resolution_source_profile().unwrap().unwrap().id(),
+        "arch"
+    );
+}
+
+#[tokio::test]
 async fn static_repo_add_rejects_native_trust_flags_after_probe_without_fingerprint() {
     let db = TestDb::new();
     let fixture = StaticRepoFixture::single_key("acme-static");
 
-    let err = add_static_repo_with(&db, &fixture, Vec::new(), false, false, true)
+    let err = add_static_repo_with(&db, &fixture, Vec::new(), false, false, true, None)
         .await
         .unwrap_err();
 
@@ -586,6 +615,7 @@ async fn replace_updates_existing_row_and_bootstraps_new_root() {
         true,
         false,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -617,6 +647,7 @@ async fn reset_then_repin_reestablishes_trust_and_reenables_sync() {
         true,
         false,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -711,7 +742,7 @@ async fn static_identity_probe_error_does_not_fall_back_to_native_add() {
         arch_database_signature: None,
         default_strategy: None,
         remi_endpoint: None,
-        remi_distro: None,
+        source_profile: None,
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints: Vec::new(),
         yes: false,

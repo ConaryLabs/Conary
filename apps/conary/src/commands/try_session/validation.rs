@@ -322,10 +322,10 @@ description = "native lifecycles"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 17
+schema_revision = 18
 source_format = "rpm"
 source_family = "fedora-rhel"
-source_distro = "fedora"
+source_profile = "fedora-44"
 source_release = "44"
 source_arch = "x86_64"
 source_package = "native-lifecycles"

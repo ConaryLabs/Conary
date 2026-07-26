@@ -24,7 +24,7 @@ pub(super) fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str)
         .unwrap_or_else(|| {
             panic!("test source '{distro}' must name an exact profile or supported Remi route")
         });
-    repo.default_strategy_distro = Some(profile.id().to_string());
+    repo.source_profile = Some(profile.id().to_string());
     repo.insert(conn).unwrap()
 }
 
@@ -49,7 +49,7 @@ pub(super) fn insert_package(
 }
 
 fn production_source_without_comments(path: &Path) -> String {
-    let source = fs::read_to_string(&path)
+    let source = fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
     let mut stripped = String::new();
     let mut in_block_comment = false;
@@ -126,9 +126,7 @@ pub(super) fn production_rust_sources(relative_root: &str) -> Vec<(PathBuf, Stri
     sources
 }
 
-pub(super) fn make_conversion_result(
-    blobs: std::collections::HashMap<String, Vec<u8>>,
-) -> ConversionResult {
+pub(super) fn make_conversion_result(package_path: Option<std::path::PathBuf>) -> ConversionResult {
     use conary_core::ccs::builder::{BuildResult, FileEntry};
     use conary_core::ccs::manifest::{CcsManifest, Hooks, Package};
 
@@ -139,6 +137,7 @@ pub(super) fn make_conversion_result(
             version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
             release: "1".to_string(),
             kind: conary_core::ccs::v2::PackageKindTagV2::Package,
+            debian_multi_arch: None,
             description: "test package".to_string(),
             license: None,
             homepage: None,
@@ -168,7 +167,7 @@ pub(super) fn make_conversion_result(
         manifest,
         components: std::collections::HashMap::new(),
         files: Vec::<FileEntry>::new(),
-        blobs,
+        blobs: std::collections::HashMap::new(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -176,7 +175,7 @@ pub(super) fn make_conversion_result(
 
     ConversionResult {
         build_result,
-        package_path: None,
+        package_path,
         original_format: "rpm".to_string(),
         original_checksum: "sha256:test".to_string(),
         signing_public_key: conary_core::ccs::SigningKeyPair::generate().public_key_base64(),

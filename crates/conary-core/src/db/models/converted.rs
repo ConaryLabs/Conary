@@ -35,8 +35,8 @@ pub enum ConvertedArtifactKind {
 pub struct RepositoryConvertedArtifact<'a> {
     pub package_name: &'a str,
     pub package_version: &'a str,
-    pub distro: &'a str,
-    pub package_architecture: Option<&'a str>,
+    pub source_profile: &'a str,
+    pub package_architecture: &'a str,
     pub chunk_hashes: Vec<String>,
     pub total_size: u64,
     pub content_hash: &'a str,
@@ -75,8 +75,8 @@ pub struct ConvertedPackage {
     pub package_name: Option<String>,
     /// Package version (for server-side lookups)
     pub package_version: Option<String>,
-    /// Distribution (fedora, arch, ubuntu, debian)
-    pub distro: Option<String>,
+    /// Exact public source profile for this repository conversion.
+    pub source_profile: Option<String>,
     /// Native package architecture for server-side conversion cache identity.
     pub package_architecture: Option<String>,
     /// JSON array of chunk hashes
@@ -110,7 +110,7 @@ impl ConvertedPackage {
          conversion_version, converted_at, \
          enhancement_version, extracted_provenance_json, \
          enhancement_status, enhancement_error, enhancement_attempted_at, \
-         package_name, package_version, distro, chunk_hashes_json, total_size, \
+         package_name, package_version, source_profile, chunk_hashes_json, total_size, \
          content_hash, ccs_path, package_architecture, scriptlet_fidelity, \
          evidence_digest, scriptlet_summary_json";
 
@@ -137,7 +137,7 @@ impl ConvertedPackage {
             // Server-side fields start as None
             package_name: None,
             package_version: None,
-            distro: None,
+            source_profile: None,
             package_architecture: None,
             chunk_hashes_json: None,
             total_size: None,
@@ -152,9 +152,10 @@ impl ConvertedPackage {
     /// Create a repository-serving converted package record.
     #[allow(clippy::too_many_arguments)]
     pub fn new_repository(
-        distro: String,
+        source_profile: String,
         package_name: String,
         package_version: String,
+        package_architecture: String,
         original_format: String,
         original_checksum: String,
         chunk_hashes: &[String],
@@ -179,8 +180,8 @@ impl ConvertedPackage {
             enhancement_attempted_at: None,
             package_name: Some(package_name),
             package_version: Some(package_version),
-            distro: Some(distro),
-            package_architecture: None,
+            source_profile: Some(source_profile),
+            package_architecture: Some(package_architecture),
             chunk_hashes_json: Some(chunk_hashes_json),
             total_size: Some(total_size),
             content_hash: Some(content_hash),
@@ -222,7 +223,7 @@ impl ConvertedPackage {
             enhancement_attempted_at: row.get(11)?,
             package_name: row.get(12)?,
             package_version: row.get(13)?,
-            distro: row.get(14)?,
+            source_profile: row.get(14)?,
             chunk_hashes_json: row.get(15)?,
             total_size: row.get(16)?,
             content_hash: row.get(17)?,
@@ -241,7 +242,7 @@ impl ConvertedPackage {
         conn.execute(
             "INSERT INTO converted_packages (artifact_kind, trove_id, original_format, original_checksum, conversion_version,
                 enhancement_version, extracted_provenance_json, enhancement_status,
-                package_name, package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture,
+                package_name, package_version, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture,
                 scriptlet_fidelity, evidence_digest,
                 scriptlet_summary_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
@@ -256,7 +257,7 @@ impl ConvertedPackage {
                 &self.enhancement_status,
                 &self.package_name,
                 &self.package_version,
-                &self.distro,
+                &self.source_profile,
                 &self.chunk_hashes_json,
                 self.total_size,
                 &self.content_hash,
@@ -273,16 +274,35 @@ impl ConvertedPackage {
         Ok(id)
     }
 
-    /// Find a converted package by its original checksum
-    pub fn find_by_checksum(conn: &Connection, checksum: &str) -> Result<Option<Self>> {
+    /// Find an installed conversion by its original checksum.
+    pub fn find_installed_by_checksum(conn: &Connection, checksum: &str) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM converted_packages WHERE original_checksum = ?1",
+            "SELECT {} FROM converted_packages
+             WHERE artifact_kind = 'installed' AND original_checksum = ?1",
             Self::COLUMNS
         );
         let result = conn
             .query_row(&sql, [checksum], Self::from_row)
             .optional()?;
         Ok(result)
+    }
+
+    /// Find a repository conversion by exact profile and original checksum.
+    pub fn find_repository_by_checksum(
+        conn: &Connection,
+        source_profile: &str,
+        checksum: &str,
+    ) -> Result<Option<Self>> {
+        Self::require_public_source_profile(source_profile)?;
+        let sql = format!(
+            "SELECT {} FROM converted_packages
+             WHERE artifact_kind = 'repository'
+               AND source_profile = ?1 AND original_checksum = ?2",
+            Self::COLUMNS
+        );
+        conn.query_row(&sql, params![source_profile, checksum], Self::from_row)
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Find a converted package by trove_id
@@ -334,7 +354,16 @@ impl ConvertedPackage {
         let package_name = self.required_repository_text("package_name", &self.package_name)?;
         let package_version =
             self.required_repository_text("package_version", &self.package_version)?;
-        let distro = self.required_repository_text("distro", &self.distro)?;
+        let source_profile =
+            self.required_repository_text("source_profile", &self.source_profile)?;
+        if crate::repository::supported_profiles::profile_by_public_id(source_profile).is_none() {
+            return Err(crate::Error::InternalError(format!(
+                "repository converted package {} carries unsupported source profile '{source_profile}'",
+                self.record_identity()
+            )));
+        }
+        let package_architecture =
+            self.required_repository_text("package_architecture", &self.package_architecture)?;
         let content_hash = self.required_repository_text("content_hash", &self.content_hash)?;
         let ccs_path = self.required_repository_text("ccs_path", &self.ccs_path)?;
         let chunk_hashes_json =
@@ -368,8 +397,8 @@ impl ConvertedPackage {
         Ok(RepositoryConvertedArtifact {
             package_name,
             package_version,
-            distro,
-            package_architecture: self.package_architecture.as_deref(),
+            source_profile,
+            package_architecture,
             chunk_hashes,
             total_size,
             content_hash,
@@ -399,7 +428,7 @@ impl ConvertedPackage {
                 self.installed_trove_id()?;
                 if self.package_name.is_some()
                     || self.package_version.is_some()
-                    || self.distro.is_some()
+                    || self.source_profile.is_some()
                     || self.package_architecture.is_some()
                     || self.chunk_hashes_json.is_some()
                     || self.total_size.is_some()
@@ -568,14 +597,15 @@ impl ConvertedPackage {
     /// so malformed current rows surface as data corruption.
     pub fn find_current_conversions(
         conn: &Connection,
-        distro: &str,
+        source_profile: &str,
         package_name: Option<&str>,
     ) -> Result<Vec<Self>> {
+        Self::require_public_source_profile(source_profile)?;
         let sql = if package_name.is_some() {
             format!(
                 "SELECT {} FROM converted_packages
                  WHERE artifact_kind = 'repository'
-                   AND distro = ?1 AND package_name = ?2
+                   AND source_profile = ?1 AND package_name = ?2
                    AND conversion_version = ?3",
                 Self::COLUMNS
             )
@@ -583,7 +613,7 @@ impl ConvertedPackage {
             format!(
                 "SELECT {} FROM converted_packages
                  WHERE artifact_kind = 'repository'
-                   AND distro = ?1 AND conversion_version = ?2",
+                   AND source_profile = ?1 AND conversion_version = ?2",
                 Self::COLUMNS
             )
         };
@@ -591,58 +621,63 @@ impl ConvertedPackage {
         let rows = if let Some(package_name) = package_name {
             let mut stmt = conn.prepare(&sql)?;
             stmt.query_map(
-                params![distro, package_name, CONVERSION_VERSION],
+                params![source_profile, package_name, CONVERSION_VERSION],
                 Self::from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?
         } else {
             let mut stmt = conn.prepare(&sql)?;
-            stmt.query_map(params![distro, CONVERSION_VERSION], Self::from_row)?
+            stmt.query_map(params![source_profile, CONVERSION_VERSION], Self::from_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
         Ok(rows)
     }
 
-    /// Find a converted package by distro, name, and version (server-side lookup)
+    /// Find a converted package by source_profile, name, and version (server-side lookup)
     pub fn find_by_package_identity(
         conn: &Connection,
-        distro: &str,
+        source_profile: &str,
         name: &str,
         version: Option<&str>,
     ) -> Result<Option<Self>> {
-        Self::find_by_package_identity_with_arch(conn, distro, name, version, None)
+        Self::find_by_package_identity_with_arch(conn, source_profile, name, version, None)
     }
 
-    /// Find a converted package by distro, name, version, and architecture.
+    /// Find a converted package by source_profile, name, version, and architecture.
     pub fn find_by_package_identity_with_arch(
         conn: &Connection,
-        distro: &str,
+        source_profile: &str,
         name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<Option<Self>> {
+        Self::require_public_source_profile(source_profile)?;
         let result = if let Some(ver) = version {
             if let Some(arch) = architecture {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
                      WHERE artifact_kind = 'repository' \
-                     AND distro = ?1 AND package_name = ?2 AND package_version = ?3 \
+                     AND source_profile = ?1 AND package_name = ?2 AND package_version = ?3 \
                      AND package_architecture = ?4 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
-                conn.query_row(&sql, params![distro, name, ver, arch], Self::from_row)
-                    .optional()?
+                conn.query_row(
+                    &sql,
+                    params![source_profile, name, ver, arch],
+                    Self::from_row,
+                )
+                .optional()?
             } else {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
                      WHERE artifact_kind = 'repository' \
-                     AND distro = ?1 AND package_name = ?2 AND package_version = ?3 \
+                     AND source_profile = ?1 AND package_name = ?2 AND package_version = ?3 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
-                conn.query_row(&sql, params![distro, name, ver], Self::from_row)
+                conn.query_row(&sql, params![source_profile, name, ver], Self::from_row)
                     .optional()?
             }
         } else {
@@ -650,21 +685,21 @@ impl ConvertedPackage {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
                      WHERE artifact_kind = 'repository' \
-                     AND distro = ?1 AND package_name = ?2 AND package_architecture = ?3 \
+                     AND source_profile = ?1 AND package_name = ?2 AND package_architecture = ?3 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
-                conn.query_row(&sql, params![distro, name, arch], Self::from_row)
+                conn.query_row(&sql, params![source_profile, name, arch], Self::from_row)
                     .optional()?
             } else {
                 let sql = format!(
                     "SELECT {} FROM converted_packages \
                      WHERE artifact_kind = 'repository' \
-                     AND distro = ?1 AND package_name = ?2 \
+                     AND source_profile = ?1 AND package_name = ?2 \
                      ORDER BY converted_at DESC LIMIT 1",
                     Self::COLUMNS
                 );
-                conn.query_row(&sql, params![distro, name], Self::from_row)
+                conn.query_row(&sql, params![source_profile, name], Self::from_row)
                     .optional()?
             }
         };
@@ -675,16 +710,17 @@ impl ConvertedPackage {
     /// OCI-style `sha256:` references.
     pub fn find_by_content_hash_identity(
         conn: &Connection,
-        distro: &str,
+        source_profile: &str,
         package: &str,
         content_hash: &str,
     ) -> Result<Option<Self>> {
+        Self::require_public_source_profile(source_profile)?;
         let normalized_hash = content_hash.strip_prefix("sha256:").unwrap_or(content_hash);
         let prefixed_hash = format!("sha256:{normalized_hash}");
         let sql = format!(
             "SELECT {} FROM converted_packages \
              WHERE artifact_kind = 'repository' \
-             AND distro = ?1 AND package_name = ?2 \
+             AND source_profile = ?1 AND package_name = ?2 \
              AND (content_hash = ?3 OR content_hash = ?4) \
              ORDER BY converted_at DESC LIMIT 1",
             Self::COLUMNS
@@ -692,18 +728,44 @@ impl ConvertedPackage {
         let result = conn
             .query_row(
                 &sql,
-                params![distro, package, normalized_hash, prefixed_hash],
+                params![source_profile, package, normalized_hash, prefixed_hash],
                 Self::from_row,
             )
             .optional()?;
         Ok(result)
     }
 
-    /// Delete a converted package record by checksum
-    pub fn delete_by_checksum(conn: &Connection, checksum: &str) -> Result<()> {
+    fn require_public_source_profile(source_profile: &str) -> Result<()> {
+        if crate::repository::supported_profiles::profile_by_public_id(source_profile).is_none() {
+            return Err(crate::Error::ConfigError(format!(
+                "unsupported public source profile '{source_profile}' for converted-package lookup"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Delete an installed conversion record by checksum.
+    pub fn delete_installed_by_checksum(conn: &Connection, checksum: &str) -> Result<()> {
         conn.execute(
-            "DELETE FROM converted_packages WHERE original_checksum = ?1",
+            "DELETE FROM converted_packages
+             WHERE artifact_kind = 'installed' AND original_checksum = ?1",
             [checksum],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a repository conversion by exact profile and checksum.
+    pub fn delete_repository_by_checksum(
+        conn: &Connection,
+        source_profile: &str,
+        checksum: &str,
+    ) -> Result<()> {
+        Self::require_public_source_profile(source_profile)?;
+        conn.execute(
+            "DELETE FROM converted_packages
+             WHERE artifact_kind = 'repository'
+               AND source_profile = ?1 AND original_checksum = ?2",
+            params![source_profile, checksum],
         )?;
         Ok(())
     }

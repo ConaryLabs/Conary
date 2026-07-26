@@ -5,7 +5,6 @@ mod artifacts;
 mod audit;
 mod events;
 mod federation;
-mod packages;
 mod repos;
 pub mod test_data;
 mod tokens;
@@ -14,7 +13,6 @@ pub use artifacts::*;
 pub use audit::*;
 pub use events::*;
 pub use federation::*;
-pub use packages::*;
 pub use repos::*;
 pub use tokens::*;
 

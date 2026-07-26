@@ -67,7 +67,7 @@ fn sample_bundle() -> NativeLifecycleBundle {
         schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
-        source_distro: Some("fedora".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         source_release: Some("44".to_string()),
         source_arch: Some("x86_64".to_string()),
         source_package: "nginx".to_string(),

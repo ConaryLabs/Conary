@@ -66,10 +66,21 @@ pub struct TestPackage {
 pub struct DistroConfig {
     pub remi_distro: String,
     pub repo_name: String,
+    pub build_context: DistroBuildContext,
     #[serde(default)]
     pub containerfile: Option<String>,
     #[serde(default)]
     pub test_packages: Vec<TestPackage>,
+}
+
+/// Files staged into a distro image build context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DistroBuildContext {
+    /// Stage the host Conary binary and integration fixtures only.
+    Binary,
+    /// Stage the binary, fixtures, and the complete workspace source tree.
+    WorkspaceSource,
 }
 
 #[derive(Debug, Clone)]

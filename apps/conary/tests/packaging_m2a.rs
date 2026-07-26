@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use conary_core::ccs::verify::verify_package;
-use conary_core::ccs::{CcsManifest, CcsPackage, SigningKeyPair, TrustPolicy, VerifiedCcsArchive};
+use conary_core::ccs::{CcsPackage, SigningKeyPair, TrustPolicy, VerifiedCcsArchive};
 
 const HASH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -86,10 +86,21 @@ fn publish_project_form_records_hermetic_evidence_with_build_attestation() {
     assert_stdout_contains(&output, "Cooking and attesting");
 
     let package_path = fixture.published_package_path();
-    let manifest = read_package_manifest(&package_path, &fixture.publish_signing_key_path());
-    let provenance = manifest.provenance.expect("provenance");
+    let package = read_package(&package_path, &fixture.publish_signing_key_path());
+    let authority = package.v2_authority().expect("v2 authority");
+    assert_eq!(
+        authority.provenance.hardening_level.as_deref(),
+        Some("hermetic")
+    );
+    assert!(
+        authority
+            .provenance
+            .hermetic_evidence_hash
+            .as_deref()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
+    let provenance = package.manifest().provenance.as_ref().expect("provenance");
     assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
-    assert!(provenance.hermetic_evidence.is_some());
     let attestation = provenance
         .build_attestation
         .as_ref()
@@ -116,20 +127,34 @@ fn cook_isolated_records_hermetic_evidence() {
     if !assert_success_or_skip_pristine_container_unavailable(&output) {
         return;
     }
-    let manifest = read_package_manifest(&fixture.package_path(), &fixture.cook_signing_key_path);
-    let provenance = manifest.provenance.expect("provenance");
-    assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
-    assert!(provenance.hermetic_evidence.is_some());
+    let package = read_package(&fixture.package_path(), &fixture.cook_signing_key_path);
+    let authority = package.v2_authority().expect("v2 authority");
+    assert_eq!(
+        authority.provenance.hardening_level.as_deref(),
+        Some("hermetic")
+    );
+    assert_eq!(
+        authority.identity.architecture.as_deref(),
+        Some(std::env::consts::ARCH)
+    );
+    assert!(
+        authority
+            .provenance
+            .hermetic_evidence_hash
+            .as_deref()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
+    );
 }
 
 #[test]
-fn cook_isolated_blocks_npm_fetch_before_build() {
+fn cook_isolated_executes_npm_under_runtime_enforcement() {
     let fixture = RecipeFixture::new_npm_fetch();
     let config_path = fixture.write_hermetic_config();
 
     let output = fixture.cook_isolated(&config_path);
 
-    assert_failure_contains(&output, &["npm", "M2a hermetic support"]);
+    assert_failure_contains(&output, &["npm runtime reached under sandbox enforcement"]);
+    assert!(!output_text(&output).contains("M2a hermetic support"));
     assert!(!fixture.package_path().exists());
 }
 
@@ -157,13 +182,8 @@ fn publish_artifact_form_accepts_attested_project_artifact() {
     assert_success(&output);
     assert_stdout_contains(&output, "Published attested artifact");
     let republished = fixture.published_artifact_package_path();
-    let manifest = read_package_manifest(&republished, &fixture.publish_signing_key_path());
-    assert!(
-        manifest
-            .provenance
-            .and_then(|provenance| provenance.build_attestation)
-            .is_some()
-    );
+    let package = read_package(&republished, &fixture.publish_signing_key_path());
+    assert!(package.v2_build_attestation().is_some());
 }
 
 struct RecipeFixture {
@@ -173,22 +193,27 @@ struct RecipeFixture {
     source_cache: PathBuf,
     sysroot: PathBuf,
     cook_signing_key_path: PathBuf,
+    install_fake_npm: bool,
 }
 
 impl RecipeFixture {
     fn new(with_build_dependencies: bool) -> Self {
-        Self::from_recipe(|project_dir, recipe_path| {
-            write_recipe(recipe_path, with_build_dependencies);
-            fs::write(project_dir.join("source.txt"), "hello from m2a\n").unwrap();
-        })
+        Self::from_recipe(
+            |project_dir, recipe_path| {
+                write_recipe(recipe_path, with_build_dependencies);
+                fs::write(project_dir.join("source.txt"), "hello from m2a\n").unwrap();
+            },
+            false,
+        )
     }
 
     fn new_npm_fetch() -> Self {
-        Self::from_recipe(|project_dir, recipe_path| {
-            fs::write(project_dir.join("package.json"), r#"{"name":"m2a-npm"}"#).unwrap();
-            fs::write(
-                recipe_path,
-                r#"
+        Self::from_recipe(
+            |project_dir, recipe_path| {
+                fs::write(project_dir.join("package.json"), r#"{"name":"m2a-npm"}"#).unwrap();
+                fs::write(
+                    recipe_path,
+                    r#"
 [package]
 name = "m2a-fixture"
 version = "1.0.0"
@@ -199,12 +224,14 @@ path = "."
 [build]
 install = "npm install atomic-lockfile"
 "#,
-            )
-            .unwrap();
-        })
+                )
+                .unwrap();
+            },
+            true,
+        )
     }
 
-    fn from_recipe(write: impl FnOnce(&Path, &Path)) -> Self {
+    fn from_recipe(write: impl FnOnce(&Path, &Path), install_fake_npm: bool) -> Self {
         let work = tempfile::tempdir().unwrap();
         let project_dir = work.path().join("project");
         let recipe_path = project_dir.join("recipe.toml");
@@ -227,11 +254,18 @@ install = "npm install atomic-lockfile"
             source_cache,
             sysroot,
             cook_signing_key_path,
+            install_fake_npm,
         }
     }
 
     fn write_hermetic_config(&self) -> PathBuf {
         write_shell_sysroot(&self.sysroot);
+        if self.install_fake_npm {
+            write_executable(
+                &self.sysroot.join("bin/npm"),
+                "#!/bin/sh\nprintf 'npm runtime reached under sandbox enforcement\\n' >&2\nexit 73\n",
+            );
+        }
         let config_path = self.work.path().join("hermetic.toml");
         fs::write(
             &config_path,
@@ -377,6 +411,14 @@ fn copy_host_file_into_sysroot(source: &Path, sysroot: &Path, target_relative: &
     fs::set_permissions(&destination, permissions).unwrap();
 }
 
+fn write_executable(path: &Path, content: &str) {
+    fs::create_dir_all(path.parent().expect("executable parent")).unwrap();
+    fs::write(path, content).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
 fn ldd_paths(binary: &Path) -> Vec<PathBuf> {
     let output = Command::new("ldd")
         .arg(binary)
@@ -411,12 +453,9 @@ fn verify_package_with_key(package_path: &Path, signing_key_path: &Path) -> Veri
     .unwrap()
 }
 
-fn read_package_manifest(package_path: &Path, signing_key_path: &Path) -> CcsManifest {
+fn read_package(package_path: &Path, signing_key_path: &Path) -> CcsPackage {
     let verified = verify_package_with_key(package_path, signing_key_path);
-    CcsPackage::from_verified_archive(&package_path.to_string_lossy(), &verified)
-        .unwrap()
-        .manifest()
-        .clone()
+    CcsPackage::from_verified_archive(&package_path.to_string_lossy(), &verified).unwrap()
 }
 
 #[test]

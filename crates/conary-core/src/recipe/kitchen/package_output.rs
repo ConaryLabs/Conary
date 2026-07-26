@@ -3,7 +3,7 @@
 //! CCS package finalization for a completed recipe build.
 
 use crate::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};
-use crate::ccs::manifest::{CcsManifest, ManifestProvenance};
+use crate::ccs::manifest::{CcsManifest, ManifestProvenance, Platform};
 use crate::ccs::verify::{TrustPolicy, verify_package};
 use crate::error::{Error, Result};
 use crate::recipe::hermetic::compare_host_record;
@@ -12,6 +12,8 @@ use crate::repository::requirement::parse_native_requirement;
 use crate::repository::versioning::VersionScheme;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use target_lexicon::{Architecture, OperatingSystem, Triple};
 use tracing::info;
 
 use super::Cook;
@@ -35,6 +37,7 @@ impl Cook<'_> {
         manifest.package.license = self.recipe.package.license.clone();
         manifest.package.homepage = self.recipe.package.homepage.clone();
         manifest.package.release = self.recipe.package.release.clone();
+        manifest.package.platform = Some(recipe_target_platform(self.recipe)?);
         for dependency in &self.recipe.build.requires {
             manifest.requirements.push(
                 parse_native_requirement(
@@ -51,6 +54,9 @@ impl Cook<'_> {
         }
 
         let mut build_result = CcsBuilder::new(manifest, &self.dest_dir)
+            .map_err(|error| {
+                Error::ConfigError(format!("invalid CCS build policy configuration: {error}"))
+            })?
             .build()
             .map_err(|error| Error::IoError(format!("CCS build failed: {error}")))?;
 
@@ -134,5 +140,91 @@ impl Cook<'_> {
                 .cloned(),
         );
         evidence.divergence = report;
+    }
+}
+
+fn recipe_target_platform(recipe: &crate::recipe::Recipe) -> Result<Platform> {
+    let triple = match recipe
+        .cross
+        .as_ref()
+        .and_then(|cross| cross.target.as_deref())
+    {
+        Some(target) => Triple::from_str(target).map_err(|error| {
+            Error::ConfigError(format!("invalid recipe cross target '{target}': {error}"))
+        })?,
+        None => Triple::host(),
+    };
+    if triple.architecture == Architecture::Unknown {
+        return Err(Error::ConfigError(
+            "recipe target architecture must be known".to_string(),
+        ));
+    }
+    if triple.operating_system == OperatingSystem::Unknown {
+        return Err(Error::ConfigError(
+            "recipe target operating system must be known".to_string(),
+        ));
+    }
+
+    Ok(Platform {
+        os: triple.operating_system.to_string(),
+        arch: Some(triple.architecture.to_string()),
+        libc: triple.environment.to_string(),
+        abi: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recipe_target_platform;
+    use crate::recipe::parse_recipe;
+
+    #[test]
+    fn recipe_target_platform_uses_structured_cross_target() {
+        let recipe = parse_recipe(
+            r#"
+[package]
+name = "cross-demo"
+version = "1.0"
+
+[source]
+path = "."
+
+[build]
+install = "true"
+
+[cross]
+target = "aarch64-unknown-linux-gnu"
+"#,
+        )
+        .unwrap();
+
+        let platform = recipe_target_platform(&recipe).unwrap();
+        assert_eq!(platform.os, "linux");
+        assert_eq!(platform.arch.as_deref(), Some("aarch64"));
+        assert_eq!(platform.libc, "gnu");
+    }
+
+    #[test]
+    fn recipe_target_platform_rejects_unknown_target() {
+        let recipe = parse_recipe(
+            r#"
+[package]
+name = "cross-demo"
+version = "1.0"
+
+[source]
+path = "."
+
+[build]
+install = "true"
+
+[cross]
+target = "not-a-real-target"
+"#,
+        )
+        .unwrap();
+
+        let error = recipe_target_platform(&recipe).unwrap_err();
+        assert!(error.to_string().contains("invalid recipe cross target"));
     }
 }

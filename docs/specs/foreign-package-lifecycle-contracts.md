@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 21
+last_updated: 2026-07-26
+revision: 31
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -260,7 +260,7 @@ validation prove the replacement complete for every control-flow path. That is
 a new schema contract, not a partial suppression marker or a mixture of guessed
 diagnostics and partial source-program execution.
 
-Current native lifecycle schema revision 17 has no replacement marker,
+Current native lifecycle schema revision 18 has no replacement marker,
 arbitrary extension map, reason code, effect projection, unknown-command
 evidence, diagnostic-class list/count, adapter-registry digest, publication
 policy, or parallel security-policy intent. Every source entry carries an exact
@@ -272,10 +272,17 @@ artifact and requires an exact one-to-one match. Entry presence is the exact
 lifecycle authority; there is no single-value decision tag or duplicated
 preserved-entry counter. Only actual executed argv captured at the provider
 process boundary can become selected-root or generation mutation authority.
-Revision 17 accepts neither earlier nor unknown revisions: pre-alpha artifacts
+Revision 18 accepts neither earlier nor unknown revisions: pre-alpha artifacts
 and installed rows must be reconverted, rebuilt, or discarded instead of
 migrated. Every executable source entry remains preserved; adding a lowering
 requires a later typed schema contract with its own execution proof.
+
+Revision 18 also names the exact package-origin authority `source_profile`.
+When present it is one exact public supported-profile ID whose declared package
+format must match `source_format`; family names, Remi route slugs, repository
+display names, and the former ambiguous field name are not aliases. Pre-alpha
+artifacts and database rows using the former field are rebuilt rather than
+adapted.
 
 Lifecycle format, phase, entry kind, Debian invocation, and source-specific
 metadata discriminants are closed enums. Unknown strings and persisted fields
@@ -323,9 +330,18 @@ selected repository contract. There is no placeholder scheme to patch after
 construction. Repository provenance, parsed package identity, install
 semantics, and an adopted package's exact native identity must agree before
 insertion. Missing or contradictory scheme provenance is invalid state, not a
-cue to guess from a distro, filename, repository, or version string. Remove and
-rollback snapshots retain the same scheme, optional source distro, lifecycle
-bundle, and lifecycle recovery state.
+cue to guess from a distro, filename, repository, or version string. Changeset
+metadata schema `conary.changeset.metadata.v6` is the only rollback-snapshot
+contract accepted by the current pre-alpha build; superseded metadata is reset
+with the database rather than adapted. Its typed installed-authority snapshot
+retains the trove selection, pin, source, label, repository, versioning, and
+native identity; components and their file bindings and relations; package
+requirements and provides; config authority; package and file capabilities;
+collection membership; provenance and installed-conversion lineage; lifecycle
+and CCS remove contracts; and derived-package backlinks. Restoration validates
+the complete graph before insertion and fails closed on missing or reassigned
+references. The compensating changeset and selected generation are new
+causation; historical changeset identity is not copied into restored rows.
 
 The planner emits a typed transaction graph. Transaction-wide pre-events run
 first. Each source transaction element then runs its pre-payload events,
@@ -391,6 +407,60 @@ plan and report lifecycle without executing it because it performs no mutation;
 an applied transaction must execute the complete typed graph or fail before its
 first mutation.
 
+### Shared Directory Ownership And Materialization
+
+A directory path can be declared by more than one installed package. Conary
+persists one exact `directory_claims` row per declaring trove, including that
+package's resolved directory node and optional component. The corresponding
+`files` row is not the complete ownership list: it is the currently
+materialized node plus the one claimant used as its referential anchor.
+Composite foreign keys prevent a component from being attached to another
+trove's claim or anchor.
+
+An existing directory-directory overlap is therefore not a conflict and does
+not discard either package's authority. The source package format, not the
+target distribution or the archive used as transport, selects how the visible
+directory is handled:
+
+| Source contract | Existing materialized directory |
+| --- | --- |
+| RPM | Apply the incoming directory metadata |
+| Debian/dpkg | Preserve the existing directory metadata |
+| Arch/libalpm | Preserve the existing directory metadata |
+| Conary-authored CCS | Apply the incoming directory metadata |
+
+These choices are encoded from immutable upstream inputs in
+`apps/conary/src/commands/install/shared_directory.rs`: RPM
+[`lib/fsm.cc`](https://raw.githubusercontent.com/rpm-software-management/rpm/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc),
+dpkg 1.23.7
+[`src/main/unpack.c`](https://sources.debian.org/data/main/d/dpkg/1.23.7/src/main/unpack.c)
+and
+[`src/main/remove.c`](https://sources.debian.org/data/main/d/dpkg/1.23.7/src/main/remove.c),
+and libalpm
+[`lib/libalpm/add.c`](https://gitlab.archlinux.org/pacman/pacman/-/raw/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/add.c).
+Their revisions, paths, SHA-256 digests, and typed results are one production
+contract. A CCS archive converted from a native package remains governed by
+its validated `native_lifecycle.source_format` and matching version scheme;
+the CCS container does not erase the RPM, Debian, or Arch source ABI.
+
+Removing a package deletes only its claim while peers remain. The materialized
+row is re-anchored to one exact surviving claimant without rewriting the
+visible node bytes. The last claimant authorizes a physical removal attempt;
+the reported removal count reflects the filesystem result, so a nonempty
+directory that remains is not reported as removed. Package query, component,
+SBOM, runtime, derived-package, native-lifecycle, and removal projections use a
+claim-aware payload view rather than treating the anchor as the sole owner.
+
+Rollback captures directory claims and the independently materialized node
+before any package in a single or batch transaction mutates the selected root.
+Restoration first rebuilds all package bases, then all anchors, then all claims,
+so cross-package and cyclic claim graphs do not depend on insertion order.
+Additive RPM or CCS metadata changes restore the prior materialized node even
+when the pre-existing anchor package itself was not removed. Adoption uses the
+typed `CapturedRoot` source and commits each package's files, directory claims,
+requirements, and provides atomically; package names and partial warning paths
+are not ownership authority.
+
 ## Configuration Transaction Contract
 
 Configuration handling is part of the package transaction, not a warning or a
@@ -401,6 +471,14 @@ format's typed config declaration plus three exact content identities:
 - `C`: the file or symlink currently visible in the selected root, including
   an intentional absence;
 - `N`: the incoming package artifact.
+
+Foreign conversion copies each native parser declaration into signed CCS v2
+authority without a path heuristic or package-wide policy collapse. The
+per-path authority preserves `noreplace`, RPM ghost ownership, and Debian
+remove-on-upgrade. Verified CCS construction projects those signed values into
+the same `PackageFormat::config_files()` interface used by direct native
+installation, while the signed native source format selects the exact RPM,
+Debian, or Arch transaction table below.
 
 The shared decision engine is
 `crates/conary-core/src/config_transaction.rs`. Mutable-root journaling and
@@ -452,6 +530,17 @@ Conary removes an unchanged old conffile, renames a locally modified one to
 `.dpkg-old`, removes a stale `.dpkg-dist`, and ignores the declaration while
 another installed package owns the path. Mutable-root and generation
 transactions persist the same operation and rollback snapshot.
+
+Generation config transaction schema version 4 is the only current contract.
+Regular current, incoming, and auxiliary artifacts carry exact SHA-256 plus
+`u64` size authority and reopen from CAS; the transaction never serializes
+inline base64 file contents. Materialization streams and re-verifies each
+object, publication keeps every pending reference live through generation GC,
+and missing or corrupt content fails before publication. `Remove` and `Purge`
+entries carry the exact prior `ConfigPackageState`, including `ConfigSource`;
+validation rejects a missing prior state before any generation staging path is
+created. Removal never substitutes `Auto` or any other source because the
+source changes residual retention and backup suffix semantics.
 
 Every regular file or symlink below `/etc` participates even when the archive
 does not declare native config metadata. Such a path is persisted as
@@ -516,10 +605,19 @@ Authoritative references:
 - [RPM package state machine (`lib/psm.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/psm.cc)
 - [RPM transaction orchestration (`lib/transaction.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/transaction.cc)
 - [RPM trigger implementation (`lib/rpmtriggers.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmtriggers.cc)
+- [RPM dependency-set comparison (`lib/rpmds.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc)
 
 The manual defines the public ABI. The pinned source defines the exact runtime
 ordering when a prose summary combines owner-side and installed-database
 trigger passes.
+
+RPM `Provides` is typed package authority, not a flattened display string.
+Conary preserves the capability kind, name, architecture qualifier, version
+scheme, relation, and EVR boundary from the header. `<`, `<=`, `=`, `>=`, and
+`>` are all valid provider relations. Matching reproduces `rpmdsCompare` range
+overlap, including inclusive/exclusive endpoints, unversioned existence
+provides, and RPM's partial-EVR equality behavior. It never substitutes the
+owning package EVR or reinterprets the range through another ecosystem.
 
 ### RPM Lifecycle Surface
 
@@ -687,6 +785,61 @@ Authoritative references:
 - [dpkg source](https://sources.debian.org/src/dpkg/)
 - [`init-system-helpers` 1.69~deb13u1 source](https://sources.debian.org/src/init-system-helpers/1.69~deb13u1/)
 - [`init-system-helpers` 1.69~deb13u1 manpages](https://manpages.debian.org/trixie/init-system-helpers/)
+
+### Debian Dependency Architecture Authority
+
+The dependency architecture contract is pinned to dpkg commit
+[`7004a048f4b122c133f1b08661be1399ce0a4dd7`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/lib/dpkg/depcon.c?id=7004a048f4b122c133f1b08661be1399ce0a4dd7)
+and APT commit
+[`b29056212da5d43ac8ac23ebe4c8e90f63166e06`](https://salsa.debian.org/apt-team/apt/-/blob/b29056212da5d43ac8ac23ebe4c8e90f63166e06/apt-pkg/deb/deblistparser.cc).
+Conary parses the package name and its architecture qualifier into separate
+fields and persists `Multi-Arch` as the closed `no`, `same`, `allowed`, or
+`foreign` enum. An absent Debian `Multi-Arch` field means `no`; an unknown
+value is invalid metadata. Every repository package must carry an explicit
+architecture before it can become a solver candidate.
+
+Native package parsing and signed conversion preserve the source token exactly:
+Debian `all` is not rewritten to RPM `noarch`, and Arch `any` is not rewritten
+to either value. Compatibility consumes the pair `(package scheme, exact
+token)` through the typed target-machine model. The stored token remains
+unchanged through repository, CCS, installed-state, snapshot, rollback, and
+same-format export paths.
+
+For `Depends`, `Pre-Depends`, `Recommends`, and `Suggests`, the exact provider
+rules are:
+
+- an unqualified dependency selects the depending package's effective
+  architecture, while a `Multi-Arch: foreign` provider may satisfy it across
+  architectures;
+- `package:any` selects only a `Multi-Arch: allowed` provider, including when
+  that provider has the depending package's architecture;
+- `package:native` selects the configured native architecture;
+- `package:<architecture>` selects that exact architecture; and
+- `Architecture: all` is evaluated as the configured native architecture.
+
+`Provides` has its own typed architecture authority. A provide may be
+unqualified, explicitly wildcarded as `:any`, or qualified by one exact
+architecture token. An unqualified provide inherits its owner's effective
+architecture. An explicit exact qualifier supplies the virtual capability's
+architecture independently of the owner's architecture. A literal `:native`
+in `Provides` is therefore an exact architecture token, not the dependency-side
+native selector. An explicit `:any` provide satisfies a `:any` dependency even
+when its owner is not `Multi-Arch: allowed`, but does not satisfy an
+unqualified cross-architecture dependency unless its owner is
+`Multi-Arch: foreign`. Virtual provides also inherit the owner package's
+`Multi-Arch: foreign` and `Multi-Arch: allowed` behavior.
+
+A Debian provide is either unversioned or carries one exact `= version`;
+alternatives, comparison relations, empty atoms, and malformed qualifiers are
+invalid repository metadata. An unversioned provide never satisfies a
+versioned dependency, and the owning package version is never substituted for
+a missing provide version.
+
+Debian `Conflicts`, `Replaces`, and `Breaks` remain any-architecture relations
+as dpkg specifies. No resolver stage recovers a qualifier by looking for a
+colon suffix, infers `Multi-Arch` from a package name, substitutes a package
+version for provider authority, or treats missing repository architecture as a
+universal match.
 
 Debian lifecycle authority consists of the `config`, `preinst`, `postinst`,
 `prerm`, `postrm`, and `triggers` control members. Maintainer-script bodies use
@@ -890,7 +1043,8 @@ Authoritative references:
 
 - [`alpm-install-scriptlet(5)`](https://man.archlinux.org/man/alpm-install-scriptlet.5.en)
 - [`alpm-hooks(5)`](https://man.archlinux.org/man/alpm-hooks.5.en)
-- [pacman/libalpm source](https://gitlab.archlinux.org/pacman/pacman)
+- [pinned pacman/libalpm source](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/trans.c)
+- [pinned Arch pacman build contract](https://gitlab.archlinux.org/archlinux/packaging/packages/pacman/-/blob/abdc0dfedf3ca553a02dde8551e972fe745535b7/PKGBUILD)
 
 ### `.INSTALL` Functions
 
@@ -936,10 +1090,12 @@ into shell syntax.
 
 The shell is source-profile data because ALPM packages do not carry it. The
 current supported Arch profile records `/usr/bin/bash`, matching Arch's pacman
-build (`-Dscriptlet-shell=/usr/bin/bash`). Direct local ALPM packages use that
-profile only while it is the single supported ALPM source profile; adding a
-second ALPM distribution requires its own explicit shell contract and source
-provenance rather than a host or filename guess.
+build (`-Dscriptlet-shell=/usr/bin/bash`). Conversion requires the package's
+exact public ALPM source-profile ID. A local package without source provenance
+is rejected instead of inheriting whichever ALPM profile happens to be the
+only one in the current catalog. Each additional ALPM distribution therefore
+owns an explicit shell contract; Conary never guesses from the host, filename,
+package format, route alias, or catalog population.
 
 ### ALPM Hooks
 
@@ -999,6 +1155,10 @@ Current ownership:
   `scriptlet/rpm_runtime/query_format/`;
 - Debian extraction: `crates/conary-core/src/packages/deb/native.rs` and
   `packages/deb/triggers.rs`;
+- Debian dependency, provide, and `Multi-Arch` authority:
+  `crates/conary-core/src/repository/dependency_model.rs`,
+  `repository/package_relation.rs`, `repository/parsers/debian.rs`,
+  `db/models/repository_capability.rs`, and `resolver/provider/matching.rs`;
 - Arch extraction: `crates/conary-core/src/packages/arch.rs`,
   `packages/arch/install_script.rs`, and `packages/arch/alpm_hook.rs`;
 - durable CCS bundle: `crates/conary-core/src/ccs/native_lifecycle.rs`;
@@ -1031,7 +1191,11 @@ Current ownership:
   `crates/conary-core/src/generation/root_manifest/`,
   `apps/conary/src/commands/generation/selected_root.rs`,
   `apps/conary/src/commands/generation/config_transaction.rs`, and
-  `apps/conary/src/commands/generation/publication.rs`.
+  `apps/conary/src/commands/generation/publication.rs`;
+- native source-manager trace oracles and the full source/target lifecycle
+  matrix: `apps/conary/tests/fixtures/native-lifecycle-parity/`,
+  `apps/conary/tests/fixtures/native/capture-native-lifecycle-oracle.sh`, and
+  `apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh`.
 
 The minimum proof for a lifecycle change is:
 

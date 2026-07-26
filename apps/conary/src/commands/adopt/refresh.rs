@@ -14,7 +14,10 @@ use super::system::FileInfoTuple;
 use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
-use conary_core::db::models::{Changeset, ChangesetStatus, InstallSource, ProvideEntry, Trove};
+use conary_core::db::models::{
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, ProvideEntry,
+    Trove,
+};
 use conary_core::packages::{
     InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
@@ -521,7 +524,7 @@ fn replace_refresh_children_for_package(
             ],
         )?;
 
-        tx.execute("DELETE FROM files WHERE trove_id = ?1", [trove_id])?;
+        delete_refresh_payload_authority(tx, trove_id)?;
         tx.execute("DELETE FROM provides WHERE trove_id = ?1", [trove_id])?;
 
         if injection == RefreshFailureInjection::AfterDelete {
@@ -533,9 +536,12 @@ fn replace_refresh_children_for_package(
         for captured in &replacement.files {
             let file_path = &captured.source.0;
             let mut fe = captured.file_entry(trove_id);
-            fe.insert_or_replace(tx).map_err(|e| {
-                anyhow::anyhow!("failed to insert refreshed file {file_path} for {trove_name}: {e}")
-            })?;
+            fe.insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to insert refreshed file {file_path} for {trove_name}: {e}"
+                    )
+                })?;
         }
 
         super::requirements::replace_package_requirements(
@@ -553,7 +559,7 @@ fn replace_refresh_children_for_package(
             if provide.is_empty() {
                 continue;
             }
-            let mut pe = ProvideEntry::new(trove_id, provide.clone(), None);
+            let mut pe = ProvideEntry::new(trove_id, provide.clone(), None, version_scheme);
             pe.insert_or_ignore(tx).map_err(|e| {
                 anyhow::anyhow!("failed to insert refreshed provide for {trove_name}: {e}")
             })?;
@@ -561,6 +567,24 @@ fn replace_refresh_children_for_package(
 
         Ok(())
     })
+}
+
+fn delete_refresh_payload_authority(tx: &rusqlite::Transaction<'_>, trove_id: i64) -> Result<()> {
+    for file in conary_core::db::models::FileEntry::find_by_trove(tx, trove_id)?
+        .into_iter()
+        .filter(|file| {
+            !matches!(
+                file.node.source.kind,
+                conary_core::payload::PayloadNodeKind::Directory
+            )
+        })
+    {
+        conary_core::db::models::FileEntry::delete(tx, &file.path)?;
+    }
+    for claim in conary_core::db::models::DirectoryClaim::find_by_trove(tx, trove_id)? {
+        conary_core::db::models::DirectoryClaim::delete(tx, &claim.path, trove_id)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -721,7 +745,12 @@ mod tests {
                 conary_core::repository::versioning::VersionScheme::Rpm,
                 &[requirement],
             )?;
-            let mut provide = ProvideEntry::new(trove_id, "curl".to_string(), None);
+            let mut provide = ProvideEntry::new(
+                trove_id,
+                "curl".to_string(),
+                None,
+                conary_core::repository::versioning::VersionScheme::Rpm,
+            );
             provide.insert(tx)?;
             changeset.update_status(tx, ChangesetStatus::Applied)?;
             Ok(trove_id)

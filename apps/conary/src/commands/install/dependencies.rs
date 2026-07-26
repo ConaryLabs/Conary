@@ -16,9 +16,8 @@ use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::repository;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
-use conary_core::resolver::{MissingDependency, SatResolution, SatSource};
+use conary_core::resolver::{SatResolution, SatSource};
 use conary_core::scriptlet::SandboxMode;
-use conary_core::version::VersionConstraint;
 use std::collections::HashMap;
 use tempfile::TempDir;
 use tracing::info;
@@ -34,8 +33,6 @@ pub(super) struct DepAnalysisContext<'a> {
     pub(super) db_path: &'a str,
     pub(super) sandbox_mode: SandboxMode,
     pub(super) policy: &'a conary_core::repository::resolution_policy::ResolutionPolicy,
-    pub(super) primary_flavor:
-        Option<conary_core::repository::dependency_model::RepositoryDependencyFlavor>,
 }
 
 /// Handle dependency analysis: resolve, prompt, and install repository deps.
@@ -91,23 +88,18 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
         ));
     }
 
-    let missing = missing_repository_deps_from_sat_result(&sat_result, ctx.pkg.name())?;
+    let selected = resolved_repository_deps_from_sat_result(&sat_result, ctx.pkg.name());
 
-    if missing.is_empty() {
+    if selected.is_empty() {
         println!("All dependencies already satisfied");
         return Ok(());
     }
 
-    info!("Found {} missing dependencies", missing.len());
-
-    let selection_options = repository::SelectionOptions {
-        policy: Some(ctx.policy.clone()),
-        is_root: false,
-        primary_flavor: ctx.primary_flavor,
-        ..Default::default()
+    info!("Found {} missing dependencies", selected.len());
+    let dep_plan = dep_resolution::DepResolutionPlan {
+        to_install: selected,
+        unresolvable: Vec::new(),
     };
-    let dep_plan =
-        dep_resolution::plan_repository_dependencies(ctx.conn, &missing, &selection_options)?;
 
     // Confirmation prompt for non-trivial dependency installs
     let total_changes = dep_plan.to_install.len();
@@ -126,7 +118,7 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
         }
     }
 
-    handle_dep_installs(ctx, &dep_plan, &selection_options, &progress).await?;
+    handle_dep_installs(ctx, &dep_plan, &progress).await?;
 
     // Check for unresolvable dependencies
     check_unresolvable_deps(ctx, &dep_plan)?;
@@ -134,27 +126,18 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
     Ok(())
 }
 
-pub(super) fn missing_repository_deps_from_sat_result(
+pub(super) fn resolved_repository_deps_from_sat_result(
     sat_result: &SatResolution,
     required_by: &str,
-) -> Result<Vec<MissingDependency>> {
+) -> Vec<dep_resolution::ResolvedDep> {
     sat_result
         .install_order
         .iter()
         .filter(|p| p.source == SatSource::Repository)
-        .map(|package| {
-            let constraint = VersionConstraint::parse(&format!("= {}", package.version))
-                .with_context(|| {
-                    format!(
-                        "SAT selected invalid repository version '{}' for package '{}'",
-                        package.version, package.name
-                    )
-                })?;
-            Ok(MissingDependency {
-                name: package.name.clone(),
-                constraint,
-                required_by: vec![required_by.to_string()],
-            })
+        .cloned()
+        .map(|package| dep_resolution::ResolvedDep {
+            package,
+            required_by: vec![required_by.to_string()],
         })
         .collect()
 }
@@ -163,34 +146,21 @@ pub(super) fn missing_repository_deps_from_sat_result(
 async fn handle_dep_installs(
     ctx: &DepAnalysisContext<'_>,
     dep_plan: &dep_resolution::DepResolutionPlan,
-    selection_options: &repository::SelectionOptions,
     progress: &InstallProgress,
 ) -> Result<()> {
     if dep_plan.to_install.is_empty() {
         return Ok(());
     }
 
-    let dep_requests: Vec<(String, conary_core::version::VersionConstraint)> = dep_plan
-        .to_install
-        .iter()
-        .map(|dependency| (dependency.name.clone(), dependency.constraint.clone()))
-        .collect();
-
     if ctx.dry_run {
         println!(
             "  Would install {} dependencies from Remi:",
-            dep_requests.len()
+            dep_plan.to_install.len()
         );
-        // Validate that deps are actually resolvable even in dry-run
-        let to_download = repository::resolve_dependencies_transitive_requests(
-            ctx.conn,
-            &dep_requests,
-            10,
-            selection_options,
-        )
-        .context("dependency dry-run could not produce a complete repository plan")?;
-        for (name, _) in &dep_requests {
-            println!("    {}", name);
+        let to_download =
+            dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install)?;
+        for dependency in &dep_plan.to_install {
+            println!("    {}", dependency.package.name);
         }
         if to_download.is_empty() {
             println!("  (all dependencies already available locally)");
@@ -198,18 +168,12 @@ async fn handle_dep_installs(
         return Ok(());
     }
 
-    println!("  Installing {} dependencies:", dep_requests.len());
-    for (name, _) in &dep_requests {
-        println!("    {}", name);
+    println!("  Installing {} dependencies:", dep_plan.to_install.len());
+    for dependency in &dep_plan.to_install {
+        println!("    {}", dependency.package.name);
     }
 
-    // Use transitive resolution with full version constraints
-    match repository::resolve_dependencies_transitive_requests(
-        ctx.conn,
-        &dep_requests,
-        10,
-        selection_options,
-    ) {
+    match dep_resolution::exact_repository_downloads(ctx.conn, &dep_plan.to_install) {
         Ok(to_download) => {
             if !to_download.is_empty() {
                 progress.set_phase(ctx.pkg.name(), InstallPhase::InstallingDeps);
@@ -238,8 +202,12 @@ async fn handle_dep_installs(
                     match prepare_package_for_batch(
                         dep_path,
                         ctx.db_path,
+                        conary_core::db::models::InstallReason::Dependency,
                         &reason,
                         ctx.allow_downgrade,
+                        provenance_by_dep
+                            .get(dep_name)
+                            .and_then(|provenance| provenance.source_profile.as_deref()),
                     ) {
                         Ok(Some(prepared)) => {
                             let mut prepared = prepared;
@@ -313,36 +281,4 @@ fn check_unresolvable_deps(
         ctx.pkg.name(),
         dep_plan.unresolvable.len()
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_repository_deps_preserve_sat_selected_version() {
-        let sat_result = conary_core::resolver::SatResolution {
-            install_order: vec![
-                conary_core::resolver::SatPackage {
-                    name: "kernel-core".to_string(),
-                    version: "6.19.10-300.fc44".to_string(),
-                    source: conary_core::resolver::SatSource::Repository,
-                },
-                conary_core::resolver::SatPackage {
-                    name: "glibc".to_string(),
-                    version: "2.43-2.fc44".to_string(),
-                    source: conary_core::resolver::SatSource::Installed,
-                },
-            ],
-            remove_order: Vec::new(),
-            conflict_message: None,
-        };
-
-        let missing = missing_repository_deps_from_sat_result(&sat_result, "kernel").unwrap();
-
-        assert_eq!(missing.len(), 1);
-        assert_eq!(missing[0].name, "kernel-core");
-        assert_eq!(missing[0].constraint.to_string(), "= 6.19.10-300.fc44");
-        assert_eq!(missing[0].required_by, vec!["kernel"]);
-    }
 }

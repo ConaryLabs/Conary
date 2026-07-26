@@ -3,7 +3,7 @@
 //! Focused parser and model-policy tests.
 
 use super::*;
-use crate::repository::resolution_policy::SelectionMode;
+use crate::repository::resolution_policy::DependencyMixingPolicy;
 
 fn minimal_model_toml() -> &'static str {
     r#"
@@ -100,7 +100,6 @@ fn test_to_toml_roundtrip() {
 
     let toml = model.to_toml().unwrap();
     assert!(toml.contains("[system]"));
-    assert!(toml.contains("profile = \"balanced/latest-anywhere\""));
     let parsed = parse_model_string(&toml).unwrap();
 
     assert_eq!(parsed.config.install, model.config.install);
@@ -123,7 +122,10 @@ trusted_keys = ["d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511
     assert_eq!(model.include.models.len(), 2);
     assert_eq!(model.include.models[0], "group-base-server@myrepo:stable");
     assert_eq!(model.include.on_conflict, ConflictStrategy::Local);
-    assert!(model.include.trusted_keys.is_empty());
+    assert_eq!(
+        model.include.trusted_keys,
+        vec!["d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"]
+    );
 }
 
 #[test]
@@ -414,56 +416,68 @@ mixing = "guarded"
 }
 
 #[test]
-fn test_parse_source_policy_profile_and_pin() {
+fn test_parse_source_policy_allowlist_and_pin() {
     let input = r#"
 [model]
 version = 1
 
 [system]
-profile = "balanced/latest-anywhere"
 allowed_distros = ["fedora-44", "arch"]
 
 [system.pin]
 distro = "arch"
-strength = "hard"
+strength = "strict"
 "#;
     let model: SystemModel = toml::from_str(input).unwrap();
-    assert_eq!(
-        model.system.profile.as_deref(),
-        Some("balanced/latest-anywhere")
-    );
     assert_eq!(
         model.system.allowed_distros,
         vec!["fedora-44".to_string(), "arch".to_string()]
     );
     let pin = model.system.effective_pin().expect("expected source pin");
     assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.strength.as_deref(), Some("hard"));
+    assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
 }
 
 #[test]
-fn test_parse_package_overrides() {
+fn source_policy_allowlist_requires_unique_exact_public_profiles() {
+    for allowed_distros in [
+        r#"["fedora"]"#,
+        r#"["rpm"]"#,
+        r#"["fedora-44", "fedora-44"]"#,
+    ] {
+        let input = format!(
+            r#"
+[model]
+version = 1
+
+[system]
+allowed_distros = {allowed_distros}
+"#
+        );
+        let error = toml::from_str::<SystemModel>(&input)
+            .expect_err("invalid source allowlist must fail")
+            .to_string();
+        assert!(
+            error.contains("unsupported public distro profile")
+                || error.contains("duplicate public distro profile"),
+            "{allowed_distros}: {error}"
+        );
+    }
+}
+
+#[test]
+fn removed_package_overrides_are_rejected() {
     let input = r#"
 [model]
 version = 1
 
 [overrides]
-mesa = { from = "fedora-41" }
-nvidia-driver = { from = "rpmfusion-41", reason = "closed source drivers" }
-kernel = { from = "fedora-44", scope = "family", reason = "prefer fedora kernels" }
+mesa = { from = "fedora-44" }
 "#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-    assert_eq!(model.overrides.len(), 3);
-    assert_eq!(model.overrides["mesa"].from, "fedora-41");
-    assert_eq!(
-        model.overrides["nvidia-driver"].reason.as_deref(),
-        Some("closed source drivers")
-    );
-    assert_eq!(model.overrides["kernel"].scope.as_deref(), Some("family"));
-    assert_eq!(
-        model.overrides["kernel"].reason.as_deref(),
-        Some("prefer fedora kernels")
-    );
+    let error = toml::from_str::<SystemModel>(input)
+        .expect_err("unapplied package override tables must be rejected")
+        .to_string();
+    assert!(error.contains("unknown field `overrides`"), "{error}");
 }
 
 #[test]
@@ -473,13 +487,8 @@ fn test_default_source_policy_has_no_pin() {
 version = 1
 "#;
     let model: SystemModel = toml::from_str(input).unwrap();
-    assert_eq!(
-        model.system.profile.as_deref(),
-        Some("balanced/latest-anywhere")
-    );
     assert!(model.system.allowed_distros.is_empty());
     assert!(model.system.effective_pin().is_none());
-    assert!(model.overrides.is_empty());
 }
 
 #[test]
@@ -519,29 +528,25 @@ convergence = "full-ownership"
 }
 
 #[test]
-fn test_parse_convergence_with_pin_and_profile() {
+fn test_parse_convergence_with_pin_and_allowlist() {
     let input = r#"
 [model]
 version = 1
 
 [system]
-profile = "balanced/latest-anywhere"
 convergence = "full-ownership"
 allowed_distros = ["arch", "fedora-44"]
 
 [system.pin]
 distro = "arch"
-strength = "hard"
+strength = "strict"
 "#;
     let model: SystemModel = toml::from_str(input).unwrap();
     assert_eq!(model.system.convergence, ConvergenceIntent::FullOwnership);
-    assert_eq!(
-        model.system.profile.as_deref(),
-        Some("balanced/latest-anywhere")
-    );
+    assert_eq!(model.system.allowed_distros, ["arch", "fedora-44"]);
     let pin = model.system.effective_pin().unwrap();
     assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.strength.as_deref(), Some("hard"));
+    assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
 }
 
 #[test]
@@ -550,7 +555,7 @@ fn test_convergence_intent_roundtrip_via_toml() {
     model.system.convergence = ConvergenceIntent::CasBacked;
     model.system.pin = Some(SourcePinConfig {
         distro: "arch".to_string(),
-        strength: Some("hard".to_string()),
+        strength: DependencyMixingPolicy::Strict,
     });
 
     let toml = model.to_toml().unwrap();
@@ -559,7 +564,7 @@ fn test_convergence_intent_roundtrip_via_toml() {
     assert_eq!(parsed.system.convergence, ConvergenceIntent::CasBacked);
     let pin = parsed.system.effective_pin().unwrap();
     assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.strength.as_deref(), Some("hard"));
+    assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
 }
 
 #[test]
@@ -589,136 +594,33 @@ fn test_convergence_intent_display_names() {
 }
 
 #[test]
-fn test_override_scope_exact_wins_over_family_and_class() {
-    let input = r#"
-[model]
-version = 1
-
-[overrides]
-kernel = { from = "fedora-44", scope = "family", reason = "prefer fedora kernels" }
-kernel-core = { from = "arch", reason = "exact match override" }
-libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
-"#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-
-    // Exact match wins even though family and class are available
-    let result = model.resolve_override("kernel-core", Some("kernel"), Some("libs"));
-    assert!(result.is_some());
-    let (key, config) = result.unwrap();
-    assert_eq!(key, "kernel-core");
-    assert_eq!(config.from, "arch");
-}
-
-#[test]
-fn test_override_scope_family_wins_over_class() {
-    let input = r#"
-[model]
-version = 1
-
-[overrides]
-kernel = { from = "fedora-44", scope = "family", reason = "prefer fedora kernels" }
-libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
-"#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-
-    // No exact match for "kernel-headers", family "kernel" should win over class "libs"
-    let result = model.resolve_override("kernel-headers", Some("kernel"), Some("libs"));
-    assert!(result.is_some());
-    let (key, config) = result.unwrap();
-    assert_eq!(key, "kernel");
-    assert_eq!(config.from, "fedora-44");
-}
-
-#[test]
-fn test_override_scope_class_fallback() {
-    let input = r#"
-[model]
-version = 1
-
-[overrides]
-libs = { from = "ubuntu-noble", scope = "class", reason = "prefer ubuntu libs" }
-"#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-
-    // No exact or family match, class should match
-    let result = model.resolve_override("libssl", None, Some("libs"));
-    assert!(result.is_some());
-    let (key, config) = result.unwrap();
-    assert_eq!(key, "libs");
-    assert_eq!(config.from, "ubuntu-noble");
-}
-
-#[test]
-fn test_override_scope_no_match_returns_none() {
-    let input = r#"
-[model]
-version = 1
-
-[overrides]
-mesa = { from = "fedora-41" }
-"#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-
-    let result = model.resolve_override("vim", None, None);
-    assert!(result.is_none());
-}
-
-#[test]
 fn test_source_policy_default_is_unconfigured() {
     let config = SystemConfig::default();
     assert!(!config.is_source_policy_configured());
 }
 
 #[test]
-fn source_policy_default_profile_maps_to_latest_selection_mode() {
-    let config = SystemConfig::default();
-    assert_eq!(
-        config.effective_selection_mode(),
-        Some(SelectionMode::Latest)
-    );
-}
-
-#[test]
-fn source_policy_explicit_selection_mode_overrides_profile_mapping() {
-    let config = SystemConfig {
-        profile: Some("balanced/latest-anywhere".to_string()),
-        selection_mode: Some("policy".to_string()),
-        ..Default::default()
-    };
-    assert_eq!(
-        config.effective_selection_mode(),
-        Some(SelectionMode::Policy)
-    );
-}
-
-#[test]
-fn source_policy_non_default_profile_counts_as_configuration() {
-    let config = SystemConfig {
-        profile: Some("conservative/policy-first".to_string()),
-        ..Default::default()
-    };
-    assert!(config.is_source_policy_configured());
-}
-
-#[test]
-fn source_policy_implicit_default_profile_is_not_counted_as_explicit_configuration() {
+fn source_policy_default_is_not_counted_as_explicit_configuration() {
     let model = parse_model_string(minimal_model_toml()).unwrap();
     assert!(!model.system.is_source_policy_configured());
 }
 
 #[test]
-fn source_policy_explicit_default_profile_counts_as_configuration() {
-    let model = parse_model_string(&model_toml_with_system(
+fn removed_source_profile_is_rejected() {
+    let error = parse_model_string(&model_toml_with_system(
         "profile = \"balanced/latest-anywhere\"",
     ))
-    .unwrap();
-    assert!(model.system.is_source_policy_configured());
+    .expect_err("decorative source profiles must be rejected")
+    .to_string();
+    assert!(error.contains("unknown field `profile`"), "{error}");
 }
 
 #[test]
-fn source_policy_unknown_profile_is_rejected() {
-    let model = parse_model_string(&model_toml_with_system("profile = \"mystery/not-real\""));
-    assert!(model.is_err());
+fn removed_selection_mode_is_rejected() {
+    let error = parse_model_string(&model_toml_with_system("selection_mode = \"latest\""))
+        .expect_err("decorative selection modes must be rejected")
+        .to_string();
+    assert!(error.contains("unknown field `selection_mode`"), "{error}");
 }
 
 #[test]
@@ -726,11 +628,46 @@ fn test_source_policy_with_distro_pin_is_configured() {
     let config = SystemConfig {
         pin: Some(SourcePinConfig {
             distro: "arch".to_string(),
-            strength: Some("hard".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         }),
         ..SystemConfig::default()
     };
     assert!(config.is_source_policy_configured());
+}
+
+#[test]
+fn unsupported_source_pin_strength_is_rejected() {
+    let input = r#"
+[model]
+version = 1
+
+[system.pin]
+distro = "arch"
+strength = "hard"
+"#;
+    let error = toml::from_str::<SystemModel>(input)
+        .expect_err("source pin strength must be one exact typed policy")
+        .to_string();
+    assert!(error.contains("unknown variant `hard`"), "{error}");
+}
+
+#[test]
+fn unsupported_source_pin_profile_is_rejected() {
+    let input = r#"
+[model]
+version = 1
+
+[system.pin]
+distro = "fedora"
+strength = "guarded"
+"#;
+    let error = toml::from_str::<SystemModel>(input)
+        .expect_err("source pin must name one exact public profile")
+        .to_string();
+    assert!(
+        error.contains("unsupported public distro profile 'fedora'"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@ mod cas;
 pub mod durable;
 pub mod fsverity;
 pub mod path;
+pub mod selected_root;
 pub mod vfs;
 
 pub use cas::{CasStore, object_path};

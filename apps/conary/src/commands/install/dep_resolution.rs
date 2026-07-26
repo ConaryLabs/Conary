@@ -7,19 +7,20 @@
 //! must resolve through exact repository metadata.
 
 use anyhow::{Context, Result};
+use conary_core::db::models::{Repository, RepositoryPackage};
 use conary_core::repository;
+#[cfg(test)]
 use conary_core::repository::versioning::{
     RepoVersionConstraint, VersionScheme, repo_version_satisfies,
 };
-use conary_core::resolver::MissingDependency;
+use conary_core::resolver::{MissingDependency, SatPackage, SatSource};
+#[cfg(test)]
 use conary_core::version::VersionConstraint;
-use tracing::debug;
 
 /// A dependency selected for installation from a configured repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDep {
-    pub name: String,
-    pub constraint: VersionConstraint,
+    pub package: SatPackage,
     pub required_by: Vec<String>,
 }
 
@@ -31,6 +32,7 @@ pub struct DepResolutionPlan {
     pub unresolvable: Vec<MissingDependency>,
 }
 
+#[cfg(test)]
 pub(super) fn version_satisfies_constraint(
     scheme: VersionScheme,
     version: &str,
@@ -75,69 +77,59 @@ pub(super) fn version_satisfies_constraint(
     }
 }
 
-/// Plan every missing requirement against normalized repository facts.
-///
-/// A successful lookup proves that a configured repository has an exact
-/// package or capability provider. A lookup failure remains an explicit
-/// unresolved requirement; it is never converted into a live-host guess.
-pub fn plan_repository_dependencies(
+pub fn exact_repository_downloads(
     conn: &rusqlite::Connection,
-    missing: &[MissingDependency],
-    options: &repository::SelectionOptions,
-) -> Result<DepResolutionPlan> {
-    let mut plan = DepResolutionPlan::default();
-
-    for dep in missing {
-        let request = [(dep.name.clone(), dep.constraint.clone())];
-        match repository::resolve_dependency_requests(conn, &request, options) {
-            Ok(resolved) if !resolved.is_empty() => {
-                let selected = &resolved[0].1.package;
-                let constraint = VersionConstraint::parse(&format!("= {}", selected.version))
-                    .with_context(|| {
-                        format!(
-                            "repository selected invalid version '{}' for dependency '{}'",
-                            selected.version, dep.name
-                        )
-                    })?;
-                plan.to_install.push(ResolvedDep {
-                    name: selected.name.clone(),
-                    constraint,
-                    required_by: dep.required_by.clone(),
-                });
+    selected: &[ResolvedDep],
+) -> Result<Vec<(String, repository::PackageWithRepo)>> {
+    selected
+        .iter()
+        .map(|dependency| {
+            let expected = &dependency.package;
+            if expected.source != SatSource::Repository {
+                anyhow::bail!(
+                    "dependency '{}' is not a SAT-selected repository package",
+                    expected.name
+                );
             }
-            Ok(_) | Err(conary_core::Error::NotFound(_)) => {
-                plan.unresolvable.push(dep.clone());
+            let package_id = expected
+                .repo_package_id
+                .context("SAT-selected repository dependency has no repository package identity")?;
+            let repository_id = expected
+                .repository_id
+                .context("SAT-selected repository dependency has no repository identity")?;
+            let package = RepositoryPackage::find_by_id(conn, package_id)?
+                .context("SAT-selected repository package row disappeared before execution")?;
+            let repository = Repository::find_by_id(conn, repository_id)?
+                .context("SAT-selected repository row disappeared before execution")?;
+            let exact = package.repository_id == repository_id
+                && package.name == expected.name
+                && package.version == expected.version
+                && Some(package.package_release.as_str()) == expected.package_release.as_deref()
+                && package.architecture == expected.architecture
+                && package.version_scheme == expected.version_scheme
+                && expected.repository_name.as_deref() == Some(repository.name.as_str());
+            if !exact {
+                anyhow::bail!(
+                    "SAT-selected repository identity for '{}-{}' drifted before execution",
+                    expected.name,
+                    expected.version
+                );
             }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to resolve repository dependency '{}'", dep.name)
-                });
-            }
-        }
-    }
-
-    plan.to_install.sort_by(|left, right| {
-        left.name.cmp(&right.name).then_with(|| {
-            left.constraint
-                .to_string()
-                .cmp(&right.constraint.to_string())
+            Ok((
+                expected.name.clone(),
+                repository::PackageWithRepo {
+                    package,
+                    repository,
+                },
+            ))
         })
-    });
-    plan.to_install
-        .dedup_by(|left, right| left.name == right.name && left.constraint == right.constraint);
-
-    debug!(
-        "Repository dependency plan: {} to install, {} unresolved",
-        plan.to_install.len(),
-        plan.unresolvable.len()
-    );
-    Ok(plan)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
+    use conary_core::db::models::{Repository, RepositoryPackage};
     use conary_core::db::schema;
     use conary_core::repository::versioning::VersionScheme;
 
@@ -174,74 +166,59 @@ mod tests {
         package
     }
 
-    fn dependency(name: &str, constraint: VersionConstraint) -> MissingDependency {
-        MissingDependency {
-            name: name.to_string(),
-            constraint,
+    fn selected(package: &RepositoryPackage, repository: &Repository) -> ResolvedDep {
+        ResolvedDep {
+            package: SatPackage {
+                name: package.name.clone(),
+                version: package.version.clone(),
+                package_release: Some(package.package_release.clone()),
+                architecture: package.architecture.clone(),
+                version_scheme: package.version_scheme,
+                repo_package_id: package.id,
+                repository_id: repository.id,
+                repository_name: Some(repository.name.clone()),
+                installed_trove_id: None,
+                source: SatSource::Repository,
+            },
             required_by: vec!["consumer".to_string()],
         }
     }
 
     #[test]
-    fn missing_package_becomes_exact_repository_install() {
+    fn exact_repository_download_preserves_selected_row() {
         let conn = test_db();
-        add_repository_package(&conn, "openssl-libs", "3.5.1-1");
-
-        let plan = plan_repository_dependencies(
-            &conn,
-            &[dependency("openssl-libs", VersionConstraint::Any)],
-            &repository::SelectionOptions::default(),
+        let mut package = add_repository_package(&conn, "openssl-libs", "3.5.1-1");
+        package.package_release = "7".to_string();
+        conn.execute(
+            "UPDATE repository_packages SET package_release = '7' WHERE id = ?1",
+            [package.id.unwrap()],
         )
         .unwrap();
+        let repository = Repository::find_by_name(&conn, "test").unwrap().unwrap();
 
-        assert!(plan.unresolvable.is_empty());
-        assert_eq!(plan.to_install.len(), 1);
-        assert_eq!(plan.to_install[0].name, "openssl-libs");
-        assert_eq!(plan.to_install[0].constraint.to_string(), "= 3.5.1-1");
+        let downloads =
+            exact_repository_downloads(&conn, &[selected(&package, &repository)]).unwrap();
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].1.package.id, package.id);
+        assert_eq!(downloads[0].1.package.package_release, "7");
     }
 
     #[test]
-    fn normalized_capability_selects_declared_provider() {
+    fn exact_repository_download_rejects_row_drift() {
         let conn = test_db();
         let package = add_repository_package(&conn, "glibc", "2.43-2");
-        let mut provide = RepositoryProvide::new(
-            package.id.unwrap(),
-            "libc.so.6(GLIBC_2.34)(64bit)".to_string(),
-            None,
-            "soname".to_string(),
-            None,
-            VersionScheme::Rpm,
-        );
-        provide.insert(&conn).unwrap();
-
-        let plan = plan_repository_dependencies(
-            &conn,
-            &[dependency(
-                "libc.so.6(GLIBC_2.34)(64bit)",
-                VersionConstraint::Any,
-            )],
-            &repository::SelectionOptions::default(),
+        let repository = Repository::find_by_name(&conn, "test").unwrap().unwrap();
+        let selected = selected(&package, &repository);
+        conn.execute(
+            "UPDATE repository_packages SET package_release = '9' WHERE id = ?1",
+            [package.id.unwrap()],
         )
         .unwrap();
 
-        assert!(plan.unresolvable.is_empty());
-        assert_eq!(plan.to_install[0].name, "glibc");
-    }
-
-    #[test]
-    fn package_names_and_runtime_capabilities_have_no_special_exceptions() {
-        let conn = test_db();
-        let missing = vec![
-            dependency("systemd", VersionConstraint::Any),
-            dependency("libc.so.6(GLIBC_2.34)(64bit)", VersionConstraint::Any),
-            dependency("/usr/bin/sh", VersionConstraint::Any),
-        ];
-
-        let plan =
-            plan_repository_dependencies(&conn, &missing, &repository::SelectionOptions::default())
-                .unwrap();
-
-        assert!(plan.to_install.is_empty());
-        assert_eq!(plan.unresolvable, missing);
+        let error = exact_repository_downloads(&conn, &[selected])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("drifted before execution"), "{error}");
     }
 }

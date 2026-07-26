@@ -110,7 +110,7 @@ case "$*" in
         printf 'changesets\nrepositories\ntroves\n'
         ;;
     *"SELECT key || '=' || value FROM settings"*)
-        printf 'source.selection-mode=all\n'
+        printf 'source.allowed-distros=["arch"]\n'
         ;;
     *)
         printf 'unexpected sqlite3 command: %s\n' "$*" >&2
@@ -172,7 +172,7 @@ assert_contains "$bundle/conary-version.txt" "conary 0.8.0"
 assert_contains "$bundle/db-integrity-check.txt" "ok"
 assert_contains "$bundle/db-tables.txt" "troves"
 assert_contains "$bundle/distro-info.txt" "Resolution can mix configured feeds."
-assert_contains "$bundle/source-settings.txt" "source.selection-mode=all"
+assert_contains "$bundle/source-settings.txt" 'source.allowed-distros=["arch"]'
 
 assert_not_contains "$bundle/repo-list.txt" "user:password"
 assert_not_contains "$bundle/repo-list.txt" "token123"

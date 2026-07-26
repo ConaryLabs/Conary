@@ -147,6 +147,9 @@ fn capability_kind(kind: Option<RepositoryCapabilityKind>) -> String {
         RepositoryCapabilityKind::Virtual => "virtual",
         RepositoryCapabilityKind::Soname => "soname",
         RepositoryCapabilityKind::File => "file",
+        RepositoryCapabilityKind::Path => "path",
+        RepositoryCapabilityKind::Binary => "binary",
+        RepositoryCapabilityKind::PkgConfig => "pkgconfig",
         RepositoryCapabilityKind::Generic => "generic",
     }
     .to_string()

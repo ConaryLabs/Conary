@@ -2,11 +2,14 @@
 
 #[cfg(test)]
 use super::FileSnapshot;
+use super::MaterializedDirectorySnapshot;
+use super::RollbackSystemAuthority;
 use super::TroveSnapshot;
 use anyhow::{Result, bail};
+use conary_core::generation::root_manifest::CapturedSelectedRoot;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const CHANGESET_METADATA_SCHEMA: &str = "conary.changeset.metadata.v4";
+pub(crate) const CHANGESET_METADATA_SCHEMA: &str = "conary.changeset.metadata.v6";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,28 +54,6 @@ pub(crate) struct AdoptionWarning {
 }
 
 impl AdoptionWarning {
-    pub(crate) fn partial_insert_failure(
-        package: impl Into<String>,
-        total_inserts: usize,
-        failed_inserts: usize,
-    ) -> Self {
-        Self {
-            package: package.into(),
-            reason: "partial_metadata_insert_failure".to_string(),
-            total_inserts,
-            failed_inserts,
-        }
-    }
-
-    pub(crate) fn all_insert_failure(package: impl Into<String>, total_inserts: usize) -> Self {
-        Self {
-            package: package.into(),
-            reason: "all_metadata_inserts_failed".to_string(),
-            total_inserts,
-            failed_inserts: total_inserts,
-        }
-    }
-
     pub(crate) fn refresh_replacement_failure(
         package: impl Into<String>,
         message: impl Into<String>,
@@ -92,21 +73,47 @@ pub(crate) struct ChangesetMetadataEnvelope {
     pub schema: String,
     #[serde(default)]
     pub removed_troves: Vec<TroveSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_root: Option<CapturedSelectedRoot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_system_authority: Option<RollbackSystemAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_materialized_directories: Option<Vec<MaterializedDirectorySnapshot>>,
     #[serde(default)]
     pub deferred_follow_up: Vec<DeferredFollowUp>,
     #[serde(default)]
     pub adoption_warnings: Vec<AdoptionWarning>,
 }
 
-pub(crate) fn metadata_with_removed_troves(snapshots: Vec<TroveSnapshot>) -> Result<String> {
-    metadata_with_envelope_sections(snapshots, Vec::new(), Vec::new())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RollbackAuthority {
+    pub removed_troves: Vec<TroveSnapshot>,
+    pub selected_root: CapturedSelectedRoot,
+    pub system: RollbackSystemAuthority,
+    pub materialized_directories: Vec<MaterializedDirectorySnapshot>,
+}
+
+pub(crate) fn metadata_with_removed_troves(
+    snapshots: Vec<TroveSnapshot>,
+    rollback_materialized_directories: Vec<MaterializedDirectorySnapshot>,
+    rollback_root: CapturedSelectedRoot,
+    rollback_system_authority: RollbackSystemAuthority,
+) -> Result<String> {
+    metadata_with_envelope_sections(
+        snapshots,
+        Some(rollback_root),
+        Some(rollback_system_authority),
+        Some(rollback_materialized_directories),
+        Vec::new(),
+        Vec::new(),
+    )
 }
 
 pub(crate) fn metadata_with_deferred_follow_up(
     snapshots: Vec<TroveSnapshot>,
     deferred_follow_up: Vec<DeferredFollowUp>,
 ) -> Result<String> {
-    metadata_with_envelope_sections(snapshots, deferred_follow_up, Vec::new())
+    metadata_with_envelope_sections(snapshots, None, None, None, deferred_follow_up, Vec::new())
 }
 
 pub(crate) fn metadata_with_adoption_warnings(
@@ -114,17 +121,36 @@ pub(crate) fn metadata_with_adoption_warnings(
     deferred_follow_up: Vec<DeferredFollowUp>,
     adoption_warnings: Vec<AdoptionWarning>,
 ) -> Result<String> {
-    metadata_with_envelope_sections(snapshots, deferred_follow_up, adoption_warnings)
+    metadata_with_envelope_sections(
+        snapshots,
+        None,
+        None,
+        None,
+        deferred_follow_up,
+        adoption_warnings,
+    )
 }
 
 fn metadata_with_envelope_sections(
     snapshots: Vec<TroveSnapshot>,
+    rollback_root: Option<CapturedSelectedRoot>,
+    rollback_system_authority: Option<RollbackSystemAuthority>,
+    rollback_materialized_directories: Option<Vec<MaterializedDirectorySnapshot>>,
     deferred_follow_up: Vec<DeferredFollowUp>,
     adoption_warnings: Vec<AdoptionWarning>,
 ) -> Result<String> {
+    validate_rollback_authority_binding(
+        &snapshots,
+        rollback_root.as_ref(),
+        rollback_system_authority.as_ref(),
+        rollback_materialized_directories.as_deref(),
+    )?;
     serde_json::to_string(&ChangesetMetadataEnvelope {
         schema: CHANGESET_METADATA_SCHEMA.to_string(),
         removed_troves: snapshots,
+        rollback_root,
+        rollback_system_authority,
+        rollback_materialized_directories,
         deferred_follow_up,
         adoption_warnings,
     })
@@ -135,10 +161,35 @@ pub(crate) fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveS
     Ok(parse_changeset_metadata(Some(snapshot_json))?.removed_troves)
 }
 
+pub(crate) fn parse_rollback_authority(snapshot_json: &str) -> Result<Option<RollbackAuthority>> {
+    let envelope = parse_changeset_metadata(Some(snapshot_json))?;
+    Ok(
+        match (
+            envelope.rollback_root,
+            envelope.rollback_system_authority,
+            envelope.rollback_materialized_directories,
+        ) {
+            (Some(selected_root), Some(system), Some(materialized_directories)) => {
+                Some(RollbackAuthority {
+                    removed_troves: envelope.removed_troves,
+                    selected_root,
+                    system,
+                    materialized_directories,
+                })
+            }
+            (None, None, None) => None,
+            _ => unreachable!("rollback authority binding was validated"),
+        },
+    )
+}
+
 fn empty_changeset_metadata() -> ChangesetMetadataEnvelope {
     ChangesetMetadataEnvelope {
         schema: CHANGESET_METADATA_SCHEMA.to_string(),
         removed_troves: Vec::new(),
+        rollback_root: None,
+        rollback_system_authority: None,
+        rollback_materialized_directories: None,
         deferred_follow_up: Vec::new(),
         adoption_warnings: Vec::new(),
     }
@@ -160,7 +211,14 @@ fn parse_changeset_metadata(snapshot_json: Option<&str>) -> Result<ChangesetMeta
         );
     }
 
-    serde_json::from_value(value).map_err(Into::into)
+    let envelope: ChangesetMetadataEnvelope = serde_json::from_value(value)?;
+    validate_rollback_authority_binding(
+        &envelope.removed_troves,
+        envelope.rollback_root.as_ref(),
+        envelope.rollback_system_authority.as_ref(),
+        envelope.rollback_materialized_directories.as_deref(),
+    )?;
+    Ok(envelope)
 }
 
 pub(crate) fn deferred_follow_up(snapshot_json: Option<&str>) -> Result<Vec<DeferredFollowUp>> {
@@ -185,6 +243,9 @@ pub(crate) fn append_deferred_follow_up_metadata(
     envelope.deferred_follow_up.push(follow_up);
     let metadata = metadata_with_envelope_sections(
         envelope.removed_troves,
+        envelope.rollback_root,
+        envelope.rollback_system_authority,
+        envelope.rollback_materialized_directories,
         envelope.deferred_follow_up,
         envelope.adoption_warnings,
     )?;
@@ -213,6 +274,9 @@ pub(crate) fn append_adoption_warning_metadata(
     envelope.adoption_warnings.extend(warnings);
     let metadata = metadata_with_envelope_sections(
         envelope.removed_troves,
+        envelope.rollback_root,
+        envelope.rollback_system_authority,
+        envelope.rollback_materialized_directories,
         envelope.deferred_follow_up,
         envelope.adoption_warnings,
     )?;
@@ -223,24 +287,79 @@ pub(crate) fn append_adoption_warning_metadata(
     Ok(())
 }
 
+fn validate_rollback_authority_binding(
+    snapshots: &[TroveSnapshot],
+    rollback_root: Option<&CapturedSelectedRoot>,
+    rollback_system_authority: Option<&RollbackSystemAuthority>,
+    rollback_materialized_directories: Option<&[MaterializedDirectorySnapshot]>,
+) -> Result<()> {
+    if !snapshots.is_empty()
+        && (rollback_root.is_none()
+            || rollback_system_authority.is_none()
+            || rollback_materialized_directories.is_none())
+    {
+        bail!(
+            "changeset rollback trove snapshots require exact pre-mutation selected-root, materialized-directory, and native-system authority"
+        );
+    }
+    if rollback_root.is_some() != rollback_system_authority.is_some()
+        || rollback_root.is_some() != rollback_materialized_directories.is_some()
+    {
+        bail!(
+            "changeset rollback root, materialized-directory, and native-system authority must be persisted together"
+        );
+    }
+    if let Some(root) = rollback_root {
+        root.generation.validate()?;
+        root.state.validate()?;
+    }
+    if let Some(system) = rollback_system_authority {
+        system.validate()?;
+    }
+    if let Some(directories) = rollback_materialized_directories {
+        let mut paths = std::collections::BTreeSet::new();
+        for directory in directories {
+            directory.validate()?;
+            if !paths.insert(directory.path.as_str()) {
+                bail!(
+                    "changeset rollback authority repeats materialized directory '{}'",
+                    directory.path
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
+    use conary_core::generation::root_manifest::{
+        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest, MutableStateManifest,
+    };
+    use conary_core::payload::{
+        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
+
+    fn rollback_root() -> CapturedSelectedRoot {
+        let mut root = PayloadNode::regular(0o755);
+        root.kind = PayloadNodeKind::Directory;
+        root.mode = libc::S_IFDIR | 0o755;
+        CapturedSelectedRoot {
+            generation: GenerationRootManifest {
+                version: GENERATION_ROOT_MANIFEST_VERSION,
+                root: ResolvedPayloadNode::from_numeric_source(root).unwrap(),
+                entries: Vec::new(),
+            },
+            state: MutableStateManifest::empty(),
+        }
+    }
 
     fn snapshot(name: &str) -> TroveSnapshot {
-        TroveSnapshot {
-            name: name.to_string(),
-            version: "1.0.0".to_string(),
-            architecture: Some("x86_64".to_string()),
-            description: None,
-            install_source: "repository".to_string(),
-            source_distro: None,
-            version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
-            native_lifecycle: None,
-            ccs_remove_hook: None,
-            installed_from_repository_id: None,
-            files: vec![FileSnapshot {
+        let mut snapshot = TroveSnapshot::test_package(
+            name,
+            "1.0.0",
+            vec![FileSnapshot {
                 path: "/usr/bin/fixture".to_string(),
                 node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755))
                     .unwrap(),
@@ -248,8 +367,13 @@ mod tests {
                     sha256: "0".repeat(64),
                     size: 7,
                 }),
+                installed_at: "2026-01-01T00:00:00Z".to_string(),
+                component: None,
             }],
-        }
+        );
+        snapshot.architecture = Some("x86_64".to_string());
+        snapshot.install_source = conary_core::db::models::InstallSource::Repository;
+        snapshot
     }
 
     #[test]
@@ -260,9 +384,15 @@ mod tests {
             message: "root is not self-contained".to_string(),
             retry_command: Some("conary system state create \"retry\"".to_string()),
         };
-        let raw =
-            metadata_with_deferred_follow_up(vec![snapshot("fixture")], vec![warning.clone()])
-                .unwrap();
+        let raw = metadata_with_envelope_sections(
+            vec![snapshot("fixture")],
+            Some(rollback_root()),
+            Some(RollbackSystemAuthority::default()),
+            Some(Vec::new()),
+            vec![warning.clone()],
+            Vec::new(),
+        )
+        .unwrap();
 
         let parsed = parse_rollback_snapshots(&raw).unwrap();
         let deferred = deferred_follow_up(Some(&raw)).unwrap();
@@ -286,7 +416,7 @@ mod tests {
     #[test]
     fn rejects_superseded_schema_without_fallback() {
         let raw = serde_json::json!({
-            "schema": "conary.changeset.metadata.v2",
+            "schema": "conary.changeset.metadata.v5",
             "removed_troves": [snapshot("fixture")],
         })
         .to_string();
@@ -294,7 +424,53 @@ mod tests {
         let err = parse_rollback_snapshots(&raw).unwrap_err().to_string();
 
         assert!(err.contains("Unsupported changeset metadata schema"));
-        assert!(err.contains("conary.changeset.metadata.v2"));
+        assert!(err.contains("conary.changeset.metadata.v5"));
+    }
+
+    #[test]
+    fn rollback_authority_sections_are_required_as_one_exact_v6_contract() {
+        let complete = metadata_with_removed_troves(
+            Vec::new(),
+            Vec::new(),
+            rollback_root(),
+            RollbackSystemAuthority::default(),
+        )
+        .unwrap();
+        let complete: serde_json::Value = serde_json::from_str(&complete).unwrap();
+
+        for missing in [
+            "rollback_root",
+            "rollback_system_authority",
+            "rollback_materialized_directories",
+        ] {
+            let mut incomplete = complete.clone();
+            incomplete.as_object_mut().unwrap().remove(missing);
+            let error = parse_rollback_authority(&incomplete.to_string())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(
+                    "rollback root, materialized-directory, and native-system authority must be persisted together"
+                ),
+                "{missing}: {error}"
+            );
+        }
+
+        let snapshots_without_authority = serde_json::json!({
+            "schema": CHANGESET_METADATA_SCHEMA,
+            "removed_troves": [snapshot("fixture")],
+            "deferred_follow_up": [],
+            "adoption_warnings": [],
+        });
+        let error = parse_rollback_authority(&snapshots_without_authority.to_string())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "trove snapshots require exact pre-mutation selected-root, materialized-directory, and native-system authority"
+            ),
+            "{error}"
+        );
     }
 
     #[test]
@@ -315,7 +491,13 @@ mod tests {
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut changeset = conary_core::db::models::Changeset::new("Remove fixture".to_string());
         let changeset_id = changeset.insert(&conn).unwrap();
-        let initial = metadata_with_removed_troves(vec![snapshot("fixture")]).unwrap();
+        let initial = metadata_with_removed_troves(
+            vec![snapshot("fixture")],
+            Vec::new(),
+            rollback_root(),
+            RollbackSystemAuthority::default(),
+        )
+        .unwrap();
         conn.execute(
             "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
             rusqlite::params![initial, changeset_id],

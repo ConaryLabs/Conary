@@ -12,7 +12,8 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, FileEntry, InstallSource, ProvideEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallSource,
+    ProvideEntry, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
@@ -20,21 +21,16 @@ use conary_core::packages::{
 use conary_core::repository::dependency_model::RepositoryRequirementGroup;
 use conary_core::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
-use tracing::debug;
 
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::cas_capture::{capture_package_files, validate_package_files};
 use super::checkpoint::write_db_checkpoint;
-use super::outcome::{metadata_insert_succeeded, write_warning_metadata};
 use super::system::FileInfoTuple;
-use crate::commands::AdoptionWarning;
 
 mod file_validation;
 use file_validation::validate_planned_file_claims;
-
-const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AdoptionMode {
@@ -210,7 +206,6 @@ struct PlannedPackage {
     files: Vec<FileInfoTuple>,
     requirements: Vec<RepositoryRequirementGroup>,
     provides: Vec<String>,
-    shared_directories_skipped: usize,
     duplicate_file_entries_skipped: usize,
 }
 
@@ -519,7 +514,6 @@ fn collect_planned_package(
     let mut files = Vec::with_capacity(raw_files.len());
     let mut conflicts = Vec::new();
     let mut seen_paths = HashSet::new();
-    let mut shared_directories_skipped = 0usize;
     let mut duplicate_file_entries_skipped = 0usize;
 
     for file in raw_files {
@@ -538,15 +532,18 @@ fn collect_planned_package(
             .map(|trove| trove.name.as_str())
             .unwrap_or("<missing tracked owner>");
 
-        if owner_name == LIVE_ROOT_PACKAGE_NAME || owner_name == identity.native.name() {
-            files.push(file);
-        } else if live_path_is_directory(&file.0)?
+        let existing_owner_is_reusable = owner
+            .as_ref()
+            .is_some_and(|trove| trove.install_source == InstallSource::CapturedRoot)
+            || owner_name == identity.native.name();
+        let existing_path_is_shared_directory = !existing_owner_is_reusable
+            && live_path_is_directory(&file.0)?
             && matches!(
                 existing.node.source.kind,
                 conary_core::payload::PayloadNodeKind::Directory
-            )
-        {
-            shared_directories_skipped += 1;
+            );
+        if existing_owner_is_reusable || existing_path_is_shared_directory {
+            files.push(file);
         } else {
             conflicts.push(FileConflict {
                 path: file.0,
@@ -565,7 +562,6 @@ fn collect_planned_package(
             files,
             requirements,
             provides,
-            shared_directories_skipped,
             duplicate_file_entries_skipped,
         },
         conflicts,
@@ -635,7 +631,7 @@ fn resolve_planned_file_claims(outcomes: &mut [PackagePlanOutcome]) -> Result<()
                 continue;
             };
             if *owner_is_directory && live_path_is_directory(&file.0)? {
-                package.shared_directories_skipped += 1;
+                retained.push(file);
             } else {
                 conflicts.push(FileConflict {
                     path: file.0.clone(),
@@ -762,21 +758,6 @@ fn render_outcome(outcome: &PackagePlanOutcome, preview: bool) {
 }
 
 fn render_package_warnings(package: &PlannedPackage) {
-    if package.shared_directories_skipped > 0 {
-        let warning = format!(
-            "{} shared director{} already tracked; existing recorded ownership will be preserved",
-            package.shared_directories_skipped,
-            if package.shared_directories_skipped == 1 {
-                "y is"
-            } else {
-                "ies are"
-            }
-        );
-        crate::ui::row(
-            crate::ui::Status::Warn,
-            &[&package.identity.requested, &warning],
-        );
-    }
     if package.duplicate_file_entries_skipped > 0 {
         let warning = format!(
             "{} duplicate native file entr{} ignored",
@@ -858,7 +839,7 @@ fn execute_adoption_plan(
         ));
 
         write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
-        let (changeset_id, adopted, has_warnings) = conary_core::db::transaction(conn, |tx| {
+        let changeset_id = conary_core::db::transaction(conn, |tx| {
             validate_planned_file_claims(tx, package)?;
             let changeset_id = changeset.insert(tx)?;
 
@@ -877,82 +858,50 @@ fn execute_adoption_plan(
             let trove_id = trove.insert(tx)?;
 
             progress.set_phase(selector, AdoptPhase::Inserting);
-            let total_inserts = captured_files.len()
-                + package.requirements.len()
-                + package
-                    .provides
-                    .iter()
-                    .filter(|provide| !provide.is_empty())
-                    .count();
-            let mut insert_failures = 0usize;
-
             for captured in &captured_files {
                 let file_path = &captured.source.0;
                 let mut file_entry = captured.file_entry(trove_id);
-                if let Err(error) = file_entry.insert_or_replace(tx) {
-                    debug!("Failed to insert file {file_path}: {error}");
-                    insert_failures += 1;
-                }
+                file_entry
+                    .insert_or_replace(
+                        tx,
+                        ExistingDirectoryMaterialization::ApplyIncoming,
+                    )
+                    .map_err(|error| {
+                        conary_core::Error::ConfigError(format!(
+                            "failed to persist exact adopted payload authority for {file_path}: {error}"
+                        ))
+                    })?;
             }
 
-            if let Err(error) = super::requirements::insert_package_requirements(
+            super::requirements::insert_package_requirements(
                 tx,
                 trove_id,
                 plan.version_scheme,
                 identity.native.name(),
                 &package.requirements,
-            ) {
-                debug!("Failed to insert exact requirements: {error}");
-                insert_failures += package.requirements.len().max(1);
-            }
+            )
+            .map_err(|error| {
+                conary_core::Error::ConfigError(format!(
+                    "failed to persist exact adopted requirements for {selector}: {error}"
+                ))
+            })?;
 
             for provide in &package.provides {
                 if provide.is_empty() {
                     continue;
                 }
-                let mut entry = ProvideEntry::new(trove_id, provide.clone(), None);
-                if let Err(error) = entry.insert_or_ignore(tx) {
-                    debug!("Failed to insert provide {provide}: {error}");
-                    insert_failures += 1;
-                }
+                let mut entry =
+                    ProvideEntry::new(trove_id, provide.clone(), None, plan.version_scheme);
+                entry.insert_or_ignore(tx)?;
             }
 
-            if !metadata_insert_succeeded(total_inserts, insert_failures) {
-                Trove::delete(tx, trove_id)?;
-                changeset.update_status(tx, ChangesetStatus::RolledBack)?;
-                return Ok((changeset_id, false, false));
-            }
-
-            let warnings = if total_inserts > 0 && insert_failures > 0 {
-                vec![AdoptionWarning::partial_insert_failure(
-                    selector,
-                    total_inserts,
-                    insert_failures,
-                )]
-            } else {
-                Vec::new()
-            };
-            let has_warnings = !warnings.is_empty();
-            write_warning_metadata(tx, changeset_id, warnings).map_err(|error| {
-                conary_core::Error::Io(std::io::Error::other(error.to_string()))
-            })?;
             changeset.update_status(tx, ChangesetStatus::Applied)?;
-            Ok((changeset_id, true, has_warnings))
+            Ok(changeset_id)
         })?;
 
-        if adopted {
-            create_state_snapshot(conn, changeset_id, &format!("Adopt {selector}"))?;
-        }
+        create_state_snapshot(conn, changeset_id, &format!("Adopt {selector}"))?;
         write_db_checkpoint(db_path, CheckpointReason::PostSuccess)?;
 
-        if !adopted {
-            continue;
-        }
-        if has_warnings {
-            crate::ui::warn(
-                "Adopted with warnings. Run `conary system history` to inspect adoption warning metadata.",
-            );
-        }
         progress.complete_package(selector);
     }
 

@@ -22,6 +22,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use conary_core::payload::PayloadContentAuthority;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -161,8 +162,18 @@ pub async fn put_seed(
         return (StatusCode::BAD_REQUEST, "target_triple must not be empty").into_response();
     }
 
-    if meta.image_cas_hash.is_empty() {
-        return (StatusCode::BAD_REQUEST, "image_cas_hash must not be empty").into_response();
+    if (PayloadContentAuthority {
+        sha256: meta.image_cas_hash.clone(),
+        size: 0,
+    })
+    .validate()
+    .is_err()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "image_cas_hash must be a lowercase raw 64-hex SHA-256 digest",
+        )
+            .into_response();
     }
 
     let packages_json = serde_json::to_string(&meta.packages.unwrap_or_default())
@@ -641,16 +652,16 @@ mod tests {
         conn.execute(
             "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
              VALUES ('seed-x86', 'x86_64-conary-linux-gnu', 'community', 'conary 0.9.0',
-                     '[\"gcc\",\"glibc\"]', '[\"sig:abc\"]', 'deadbeef01')",
-            [],
+                     '[\"gcc\",\"glibc\"]', '[\"sig:abc\"]', ?1)",
+            ["1".repeat(64)],
         )
         .unwrap();
 
         conn.execute(
             "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
              VALUES ('seed-arm', 'aarch64-conary-linux-gnu', 'selfbuilt', NULL,
-                     '[\"gcc\"]', '[]', 'deadbeef02')",
-            [],
+                     '[\"gcc\"]', '[]', ?1)",
+            ["2".repeat(64)],
         )
         .unwrap();
 
@@ -683,8 +694,8 @@ mod tests {
         conn.execute(
             "INSERT INTO seeds (seed_id, target_triple, source, builder, packages_json, verified_by_json, image_cas_hash)
              VALUES ('seed-corrupt', 'x86_64-conary-linux-gnu', 'community', NULL,
-                     'not-json', '[]', 'deadbeef03')",
-            [],
+                     'not-json', '[]', ?1)",
+            ["3".repeat(64)],
         )
         .unwrap();
 

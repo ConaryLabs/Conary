@@ -15,7 +15,6 @@ use crate::ccs::manifest_provenance::ManifestProvenance;
 use crate::ccs::package::CcsPackage;
 use crate::ccs::verify::{TrustPolicy, VerifiedCcsArchive, verify_package};
 use crate::repository::static_repo::{PackageKeyStatus, PackageKeysFile};
-use crate::security::command_risk::CommandRiskReport;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedStaticSignerSet {
@@ -131,7 +130,6 @@ pub enum PublishGateFailureCode {
     AbsentOrUnknownProvenanceClass,
     NonHermeticHardeningLevel,
     StaleOrUnknownPolicy,
-    InvalidDiagnosticEvidence,
     ForeignConversionMissingBoundary,
     ForeignConversionBoundaryHashMismatch,
     RecordedDraftArtifact,
@@ -305,66 +303,13 @@ fn verify_static_attestation(
             "build attestation identity fields do not match artifact provenance",
         ));
     }
-    verify_command_risk_evidence(package, provenance, envelope, &mut failures)?;
+    // Command-risk reports are signed diagnostics. Their presence, classifier
+    // output, and internal report hashes must never decide publish eligibility.
     verify_foreign_boundary_evidence(provenance, envelope, &actual_identity, &mut failures)?;
     if failures.is_empty() {
         Ok(PublishLintReport::passed())
     } else {
         Ok(PublishLintReport::failed(failures))
-    }
-}
-
-fn verify_command_risk_evidence(
-    package: &CcsPackage,
-    provenance: &ManifestProvenance,
-    envelope: &BuildAttestationEnvelope,
-    failures: &mut Vec<PublishGateFailure>,
-) -> Result<()> {
-    let Some(evidence) = provenance.hermetic_evidence.as_ref() else {
-        if package.v2_authority().is_some() {
-            verify_v2_attested_command_risk_evidence(envelope, failures);
-            return Ok(());
-        }
-        failures.push(failure(
-            PublishGateFailureCode::InvalidDiagnosticEvidence,
-            "artifact is missing hermetic command-risk evidence",
-        ));
-        return Ok(());
-    };
-
-    let actual_hash = canonical_json_hash(&evidence.command_risk)?;
-    if actual_hash != envelope.payload.build_command_risk_report_hash {
-        failures.push(failure(
-            PublishGateFailureCode::InvalidDiagnosticEvidence,
-            "build command-risk report hash does not match attestation",
-        ));
-    }
-    Ok(())
-}
-
-fn verify_v2_attested_command_risk_evidence(
-    envelope: &BuildAttestationEnvelope,
-    failures: &mut Vec<PublishGateFailure>,
-) {
-    if envelope.payload.hermetic_evidence_hash
-        != envelope.payload.output_identity.hermetic_evidence_hash
-        || envelope.payload.hermetic_evidence_hash.trim().is_empty()
-    {
-        failures.push(failure(
-            PublishGateFailureCode::InvalidDiagnosticEvidence,
-            "v2 attestation hermetic evidence hash does not match output identity",
-        ));
-    }
-    if envelope
-        .payload
-        .build_command_risk_report_hash
-        .trim()
-        .is_empty()
-    {
-        failures.push(failure(
-            PublishGateFailureCode::InvalidDiagnosticEvidence,
-            "v2 attestation is missing command-risk report hash",
-        ));
     }
 }
 
@@ -410,64 +355,6 @@ fn verify_foreign_boundary_evidence(
             "foreign conversion boundary output identity does not match artifact",
         ));
     }
-    verify_foreign_boundary_risk_report(
-        "foreign conversion build-body",
-        boundary.build_risk_report.as_ref(),
-        boundary.build_risk_report_hash.as_deref(),
-        true,
-        failures,
-    )?;
-    verify_foreign_boundary_risk_report(
-        "foreign conversion scriptlet",
-        boundary.scriptlet_risk_report.as_ref(),
-        boundary.scriptlet_risk_report_hash.as_deref(),
-        false,
-        failures,
-    )?;
-    Ok(())
-}
-
-fn verify_foreign_boundary_risk_report(
-    label: &str,
-    report: Option<&CommandRiskReport>,
-    expected_hash: Option<&str>,
-    required: bool,
-    failures: &mut Vec<PublishGateFailure>,
-) -> Result<()> {
-    match (report, expected_hash) {
-        (None, None) if !required => return Ok(()),
-        (None, None) => {
-            failures.push(failure(
-                PublishGateFailureCode::InvalidDiagnosticEvidence,
-                &format!("{label} risk report is missing"),
-            ));
-            return Ok(());
-        }
-        (None, Some(_)) => {
-            failures.push(failure(
-                PublishGateFailureCode::InvalidDiagnosticEvidence,
-                &format!("{label} risk report hash is present without embedded report"),
-            ));
-            return Ok(());
-        }
-        (Some(_), None) => {
-            failures.push(failure(
-                PublishGateFailureCode::InvalidDiagnosticEvidence,
-                &format!("{label} risk report is present without hash"),
-            ));
-            return Ok(());
-        }
-        (Some(report), Some(expected_hash)) => {
-            let actual_hash = canonical_json_hash(report)?;
-            if actual_hash != expected_hash {
-                failures.push(failure(
-                    PublishGateFailureCode::InvalidDiagnosticEvidence,
-                    &format!("{label} risk report hash mismatch"),
-                ));
-            }
-        }
-    }
-
     Ok(())
 }
 

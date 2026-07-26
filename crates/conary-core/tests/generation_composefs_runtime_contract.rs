@@ -300,6 +300,10 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
         "ordinary transaction recovery must repair /conary/current selection without live-mounting it"
     );
     assert!(
+        !recovery_rs.contains("mark_complete_through"),
+        "core link/artifact recovery must not make app-owned publication debt terminal"
+    );
+    assert!(
         transaction_rs.contains("BUILT -> SELECTED -> DONE")
             && !transaction_rs.contains("BUILT -> MOUNTED -> DONE"),
         "transaction lifecycle docs must describe atomic generation selection, not legacy live mounting"
@@ -310,20 +314,28 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
 fn publication_writes_generation_db_backup_before_marking_debt_complete() {
     let publication_rs = fs::read_to_string(app_source("commands/generation/publication.rs"))
         .expect("failed to read generation publication source");
+    let replay_rs = publication_rs
+        .split_once("fn replay_publication")
+        .map(|(_, replay)| replay)
+        .expect("publication must expose the persisted replay machine");
 
-    let mark_active = publication_rs
+    let mark_active = replay_rs
         .find("mark_generation_state_active")
         .expect("publication must mark the selected generation active");
-    let backup = publication_rs
+    let backup = replay_rs
         .find("create_generation_db_backup")
         .expect("publication must write a generation-bound DB backup");
-    let mark_complete = publication_rs
-        .find("GenerationPublication::mark_complete_through")
-        .expect("publication must mark covered debt complete");
+    let backup_phase = replay_rs
+        .find("GenerationPublicationPhase::DatabaseBackedUp")
+        .expect("publication must persist generation DB backup completion");
 
     assert!(
-        mark_active < backup && backup < mark_complete,
-        "generation DB backup must be written after current generation/state activation but before publication debt is marked complete"
+        mark_active < backup && backup < backup_phase,
+        "generation DB backup must be written after state activation and before the durable backup phase is recorded"
+    );
+    assert!(
+        publication_rs.contains("debt.mark_complete_through"),
+        "publication must finalize covered debt through the backup-gated model API"
     );
 }
 

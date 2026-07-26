@@ -184,10 +184,10 @@ fn build_purl(trove: &conary_core::db::models::Trove) -> String {
 /// Get SHA256 hashes for package files (aggregate)
 fn get_package_hashes(conn: &rusqlite::Connection, trove_id: i64) -> Result<Vec<cyclonedx::Hash>> {
     // Get unique file hashes from the package
-    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
+    let payload = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?;
 
     // Include first non-empty sha256 as a representative hash
-    for file in &files {
+    for file in payload.entries() {
         if let Some(content) = file.content.as_ref() {
             return Ok(vec![cyclonedx::Hash {
                 alg: "SHA-256".to_string(),

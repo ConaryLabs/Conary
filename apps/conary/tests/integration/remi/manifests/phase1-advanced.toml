@@ -27,7 +27,7 @@ fatal = true
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[test.step]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}"
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile ${REMI_DISTRO}"
 
 [test.step.assert]
 exit_code = 0

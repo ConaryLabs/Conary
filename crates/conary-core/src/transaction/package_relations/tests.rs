@@ -4,7 +4,7 @@ use super::*;
 use crate::db::models::TroveType;
 use crate::db::testing::create_test_db;
 use crate::error::Error;
-use crate::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFile};
+use crate::packages::traits::{PackageFile, ProvidedCapability};
 use crate::repository::dependency_model::RepositoryRequirementGroup;
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::requirement::parse_native_requirement;
@@ -12,7 +12,7 @@ use crate::repository::requirement::parse_native_requirement;
 struct TestPackage {
     name: String,
     version: String,
-    provides: Vec<Dependency>,
+    provides: Vec<ProvidedCapability>,
     relations: Vec<RepositoryRequirementGroup>,
 }
 
@@ -49,7 +49,7 @@ impl PackageFormat for TestPackage {
         &[]
     }
 
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         &self.provides
     }
 
@@ -57,8 +57,8 @@ impl PackageFormat for TestPackage {
         &self.relations
     }
 
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
-        Ok(Vec::new())
+    fn package_payload(&self) -> Result<crate::packages::PackagePayload> {
+        Ok(crate::packages::PackagePayload::default())
     }
 
     fn to_trove(&self) -> Trove {
@@ -78,6 +78,16 @@ fn install_trove(conn: &Connection, name: &str, version: &str, scheme: VersionSc
         TroveType::Package,
         scheme,
     );
+    trove.architecture = Some(
+        if scheme == VersionScheme::Debian {
+            "amd64"
+        } else {
+            "x86_64"
+        }
+        .to_string(),
+    );
+    trove.debian_multi_arch = (scheme == VersionScheme::Debian)
+        .then_some(crate::repository::dependency_model::DebianMultiArch::No);
     trove.insert(conn).unwrap()
 }
 
@@ -206,7 +216,8 @@ fn rpm_with_requires_both_capabilities_from_one_package() {
         (separate_a, "cap-a"),
         (separate_b, "cap-b"),
     ] {
-        let mut provide = ProvideEntry::new(trove_id, capability.to_string(), None);
+        let mut provide =
+            ProvideEntry::new(trove_id, capability.to_string(), None, VersionScheme::Rpm);
         provide.insert(&conn).unwrap();
     }
     let relation = parse_native_relation(
@@ -511,7 +522,8 @@ fn incoming_provider_prevents_unnecessary_deconfiguration() {
     .unwrap();
     InstalledRequirementGroup::insert_groups(&conn, consumer, VersionScheme::Debian, &[dependency])
         .unwrap();
-    let mut old_provide = ProvideEntry::new(old, "virtual-api".to_string(), None);
+    let mut old_provide =
+        ProvideEntry::new(old, "virtual-api".to_string(), None, VersionScheme::Debian);
     old_provide.insert(&conn).unwrap();
     let relation = parse_native_relation(
         RepositoryRequirementKind::Replace,
@@ -522,11 +534,13 @@ fn incoming_provider_prevents_unnecessary_deconfiguration() {
     let package = TestPackage {
         name: "newpkg".to_string(),
         version: "2".to_string(),
-        provides: vec![Dependency {
+        provides: vec![ProvidedCapability {
+            kind: crate::repository::dependency_model::RepositoryCapabilityKind::Virtual,
             name: "virtual-api".to_string(),
             version: None,
-            dep_type: DependencyType::Runtime,
-            description: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: Default::default(),
         }],
         relations: vec![relation],
     };

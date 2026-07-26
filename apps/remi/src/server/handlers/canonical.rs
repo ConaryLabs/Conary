@@ -13,10 +13,15 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use conary_core::db::models::CanonicalMappingAuthority;
+
 use super::{open_handler_db, run_blocking};
+
+type CanonicalMapAccumulator = (String, Option<String>, BTreeMap<String, String>);
 
 /// Canonical package lookup response
 #[derive(Debug, Serialize)]
@@ -33,7 +38,7 @@ pub struct CanonicalLookupResponse {
 pub struct ImplementationInfo {
     pub distro: String,
     pub distro_name: String,
-    pub source: String,
+    pub source: CanonicalMappingAuthority,
 }
 
 /// Search query parameters
@@ -163,14 +168,18 @@ pub async fn groups_list(
 #[derive(Debug, Serialize)]
 pub struct CanonicalMapEntry {
     pub canonical: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     pub implementations: std::collections::BTreeMap<String, String>,
 }
 
 /// Full canonical map response returned by `GET /v1/canonical/map`.
 #[derive(Debug, Serialize)]
 pub struct CanonicalMapResponse {
-    pub version: u32,
-    pub generated_at: String,
+    pub schema_version: u32,
+    pub revision: u64,
+    pub generated_at: Option<String>,
     pub entries: Vec<CanonicalMapEntry>,
 }
 
@@ -189,65 +198,92 @@ pub async fn canonical_map(
     let response = run_blocking("canonical_map", move || {
         let conn = open_handler_db(&db_path)?;
 
-        let version: u32 = conary_core::db::models::get_metadata(
+        let revision_value = conary_core::db::models::get_metadata(
             &conn,
             conary_core::db::models::MetadataTable::Server,
-            "canonical_map_version",
+            "canonical_map_revision",
         )
         .map_err(anyhow::Error::from)?
-        .as_deref()
-        .unwrap_or("0")
-        .parse()
-        .unwrap_or(0);
+        .ok_or_else(|| anyhow::anyhow!("canonical map revision metadata is missing"))?;
+        let revision = revision_value.parse::<u64>().map_err(|error| {
+            anyhow::anyhow!("canonical map revision '{revision_value}' is invalid: {error}")
+        })?;
+        let generated_at = conary_core::db::models::get_metadata(
+            &conn,
+            conary_core::db::models::MetadataTable::Server,
+            "last_canonical_rebuild",
+        )
+        .map_err(anyhow::Error::from)?;
+        match (revision, generated_at.as_deref()) {
+            (0, None) => {}
+            (0, Some(_)) => {
+                anyhow::bail!("canonical map revision is zero but a rebuild timestamp is present")
+            }
+            (_, None) => {
+                anyhow::bail!("canonical map revision {revision} has no rebuild timestamp")
+            }
+            (_, Some(timestamp)) => {
+                chrono::DateTime::parse_from_rfc3339(timestamp).map_err(|error| {
+                    anyhow::anyhow!("canonical map rebuild timestamp is invalid: {error}")
+                })?;
+            }
+        }
 
         let mut stmt = conn.prepare(
-            "SELECT cp.name, pi.distro, pi.distro_name
+            "SELECT cp.name, cp.kind, cp.category, pi.distro, pi.distro_name
              FROM canonical_packages cp
              JOIN package_implementations pi ON pi.canonical_id = cp.id
              ORDER BY cp.name, pi.distro",
         )?;
 
-        let mut entries_map: std::collections::BTreeMap<
-            String,
-            std::collections::BTreeMap<String, String>,
-        > = std::collections::BTreeMap::new();
+        let mut entries_map: BTreeMap<String, CanonicalMapAccumulator> = BTreeMap::new();
 
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })?;
 
         for row in rows {
-            let (canonical, distro, distro_name) = row?;
-            entries_map
+            let (canonical, kind, category, distro, distro_name) = row?;
+            let (_, _, implementations) = entries_map
                 .entry(canonical)
-                .or_default()
-                .insert(distro, distro_name);
+                .or_insert_with(|| (kind, category, BTreeMap::new()));
+            implementations.insert(distro, distro_name);
         }
 
         let entries: Vec<CanonicalMapEntry> = entries_map
             .into_iter()
-            .map(|(canonical, implementations)| CanonicalMapEntry {
-                canonical,
-                implementations,
-            })
+            .map(
+                |(canonical, (kind, category, implementations))| CanonicalMapEntry {
+                    canonical,
+                    kind,
+                    category,
+                    implementations,
+                },
+            )
             .collect();
+        if revision == 0 && !entries.is_empty() {
+            anyhow::bail!("canonical map has entries but its persisted revision is zero");
+        }
 
         Ok((
-            version,
+            revision,
             CanonicalMapResponse {
-                version,
-                generated_at: chrono::Utc::now().to_rfc3339(),
+                schema_version: conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
+                revision,
+                generated_at,
                 entries,
             },
         ))
     })
     .await?;
 
-    let (version, map_response) = response;
+    let (revision, map_response) = response;
     let json = super::serialize_json(&map_response, "canonical map")?;
     let checksum = conary_core::hash::sha256(json.as_bytes());
     let etag = format!("\"sha256:{checksum}\"");
@@ -273,8 +309,8 @@ pub async fn canonical_map(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
     );
     response.headers_mut().insert(
-        "X-Conary-Canonical-Version",
-        version
+        "X-Conary-Canonical-Revision",
+        revision
             .to_string()
             .parse()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
@@ -295,14 +331,14 @@ mod tests {
             description: Some("Apache HTTP Server".to_string()),
             implementations: vec![
                 ImplementationInfo {
-                    distro: "fedora-41".to_string(),
+                    distro: "fedora-44".to_string(),
                     distro_name: "httpd".to_string(),
-                    source: "curated".to_string(),
+                    source: CanonicalMappingAuthority::Contract,
                 },
                 ImplementationInfo {
-                    distro: "ubuntu-noble".to_string(),
+                    distro: "ubuntu-26.04".to_string(),
                     distro_name: "apache2".to_string(),
-                    source: "curated".to_string(),
+                    source: CanonicalMappingAuthority::Contract,
                 },
             ],
         };
@@ -318,12 +354,12 @@ mod tests {
         let info = ImplementationInfo {
             distro: "arch".to_string(),
             distro_name: "nginx".to_string(),
-            source: "auto".to_string(),
+            source: CanonicalMappingAuthority::Remi,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("arch"));
         assert!(json.contains("nginx"));
-        assert!(json.contains("auto"));
+        assert!(json.contains("remi"));
     }
 
     #[test]
@@ -343,29 +379,36 @@ mod tests {
     #[test]
     fn test_canonical_map_response_serialization() {
         let mut impls = std::collections::BTreeMap::new();
-        impls.insert("fedora".to_string(), "openssl".to_string());
-        impls.insert("ubuntu".to_string(), "libssl3".to_string());
+        impls.insert("fedora-44".to_string(), "openssl".to_string());
+        impls.insert("ubuntu-26.04".to_string(), "libssl3".to_string());
 
         let response = CanonicalMapResponse {
-            version: 1,
-            generated_at: "2026-03-16T00:00:00Z".to_string(),
+            schema_version: 1,
+            revision: 7,
+            generated_at: Some("2026-03-16T00:00:00Z".to_string()),
             entries: vec![CanonicalMapEntry {
                 canonical: "openssl".to_string(),
+                kind: "package".to_string(),
+                category: Some("security".to_string()),
                 implementations: impls,
             }],
         };
         let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"version\":1"));
+        assert!(json.contains("\"schema_version\":1"));
+        assert!(json.contains("\"revision\":7"));
         assert!(json.contains("\"canonical\":\"openssl\""));
-        assert!(json.contains("\"fedora\":\"openssl\""));
-        assert!(json.contains("\"ubuntu\":\"libssl3\""));
+        assert!(json.contains("\"kind\":\"package\""));
+        assert!(json.contains("\"category\":\"security\""));
+        assert!(json.contains("\"fedora-44\":\"openssl\""));
+        assert!(json.contains("\"ubuntu-26.04\":\"libssl3\""));
     }
 
     #[test]
     fn test_canonical_map_empty_entries() {
         let response = CanonicalMapResponse {
-            version: 1,
-            generated_at: "2026-03-16T00:00:00Z".to_string(),
+            schema_version: 1,
+            revision: 7,
+            generated_at: Some("2026-03-16T00:00:00Z".to_string()),
             entries: vec![],
         };
         let json = serde_json::to_string(&response).unwrap();

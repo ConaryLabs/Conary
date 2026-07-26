@@ -12,7 +12,9 @@ pub enum GenerationPublicationPhase {
     Building,
     ArtifactReady,
     CurrentPublished,
+    ConfigurationProjected,
     ActiveMarked,
+    DatabaseBackedUp,
 }
 
 impl GenerationPublicationPhase {
@@ -22,7 +24,9 @@ impl GenerationPublicationPhase {
             Self::Building => "building",
             Self::ArtifactReady => "artifact_ready",
             Self::CurrentPublished => "current_published",
+            Self::ConfigurationProjected => "configuration_projected",
             Self::ActiveMarked => "active_marked",
+            Self::DatabaseBackedUp => "database_backed_up",
         }
     }
 }
@@ -228,15 +232,37 @@ impl GenerationPublication {
     }
 
     pub fn mark_complete_through(
+        &self,
         conn: &Connection,
         applied_high_water_changeset_id: Option<i64>,
         state_number: i64,
         generation_number: i64,
     ) -> Result<usize> {
+        let id = self
+            .id
+            .ok_or_else(|| crate::error::Error::MissingId("publication id missing".to_string()))?;
+        let backup_is_durable = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM generation_publications
+                 WHERE id = ?1
+                   AND phase = 'database_backed_up'
+                   AND status = 'running'
+                   AND recoverable = 1
+                   AND state_number = ?2
+                   AND generation_number = ?3
+             )",
+            params![id, state_number, generation_number],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !backup_is_durable {
+            return Err(crate::error::Error::RecoveryFailed(format!(
+                "publication debt {id} cannot become terminal before its exact generation DB backup is durable"
+            )));
+        }
         let rows = conn.execute(
             "UPDATE generation_publications
              SET status = 'complete',
-                 phase = 'active_marked',
+                 phase = 'database_backed_up',
                  published_through_changeset_id = ?1,
                  state_number = COALESCE(state_number, ?2),
                  generation_number = COALESCE(generation_number, ?3),
@@ -339,7 +365,14 @@ mod tests {
 
     fn exact_config_transaction() -> GenerationConfigTransaction {
         let node = ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o640)).unwrap();
-        let artifact = crate::config_transaction::ConfigArtifact::regular(b"exact", node).unwrap();
+        let artifact = crate::config_transaction::ConfigArtifact::regular(
+            crate::payload::PayloadContentAuthority {
+                sha256: crate::hash::sha256(b"exact"),
+                size: 5,
+            },
+            node,
+        )
+        .unwrap();
         GenerationConfigTransaction {
             entries: vec![crate::config_transaction::ConfigPathTransaction {
                 path: "/etc/exact.conf".to_string(),
@@ -364,6 +397,14 @@ mod tests {
         assert_eq!(
             GenerationPublicationPhase::from_str("artifact_ready").unwrap(),
             GenerationPublicationPhase::ArtifactReady
+        );
+        assert_eq!(
+            GenerationPublicationPhase::from_str("configuration_projected").unwrap(),
+            GenerationPublicationPhase::ConfigurationProjected
+        );
+        assert_eq!(
+            GenerationPublicationPhase::from_str("database_backed_up").unwrap(),
+            GenerationPublicationPhase::DatabaseBackedUp
         );
         assert!(GenerationPublicationPhase::from_str("current_renamed").is_err());
         assert_eq!(
@@ -413,20 +454,68 @@ mod tests {
         a.mark_failed(&conn, "forced").unwrap();
         b.set_phase(
             &conn,
-            GenerationPublicationPhase::ArtifactReady,
+            GenerationPublicationPhase::DatabaseBackedUp,
             GenerationPublicationStatus::Running,
             Some(7),
             Some(7),
         )
         .unwrap();
 
-        let completed =
-            GenerationPublication::mark_complete_through(&conn, Some(cs_b), 7, 7).unwrap();
+        let completed = b.mark_complete_through(&conn, Some(cs_b), 7, 7).unwrap();
         assert_eq!(completed, 2);
         assert!(
             GenerationPublication::pending_recoverable(&conn)
                 .unwrap()
                 .is_empty()
+        );
+        let completed_b = GenerationPublication::find_by_id(&conn, b.id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            completed_b.phase,
+            GenerationPublicationPhase::DatabaseBackedUp
+        );
+    }
+
+    #[test]
+    fn publication_cannot_become_terminal_before_database_backup_phase() {
+        let (_tmp, conn) = crate::db::testing::create_test_db();
+        let debt = GenerationPublication::create_pending(
+            &conn,
+            None,
+            None,
+            "/tmp/conary.db",
+            "/tmp/conary",
+            "crash boundary",
+            &Default::default(),
+        )
+        .unwrap();
+
+        for phase in [
+            GenerationPublicationPhase::ArtifactReady,
+            GenerationPublicationPhase::CurrentPublished,
+            GenerationPublicationPhase::ConfigurationProjected,
+            GenerationPublicationPhase::ActiveMarked,
+        ] {
+            debt.set_phase(
+                &conn,
+                phase,
+                GenerationPublicationStatus::Running,
+                Some(7),
+                Some(7),
+            )
+            .unwrap();
+            let error = debt
+                .mark_complete_through(&conn, None, 7, 7)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("cannot become terminal"), "{error}");
+        }
+        assert_eq!(
+            GenerationPublication::pending_recoverable(&conn)
+                .unwrap()
+                .len(),
+            1
         );
     }
 
@@ -458,7 +547,15 @@ mod tests {
             debt.id
         );
 
-        GenerationPublication::mark_complete_through(&conn, Some(cs_a), 1, 1).unwrap();
+        debt.set_phase(
+            &conn,
+            GenerationPublicationPhase::DatabaseBackedUp,
+            GenerationPublicationStatus::Running,
+            Some(1),
+            Some(1),
+        )
+        .unwrap();
+        debt.mark_complete_through(&conn, Some(cs_a), 1, 1).unwrap();
         assert!(
             GenerationPublication::pending_for_changeset(&conn, cs_a)
                 .unwrap()

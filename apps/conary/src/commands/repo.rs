@@ -39,7 +39,7 @@ pub struct RepoAddOptions {
     pub replace: bool,
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
-    pub remi_distro: Option<String>,
+    pub source_profile: Option<String>,
     pub security_advisory_support: SecurityAdvisorySupport,
 }
 
@@ -50,22 +50,23 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     // Validate Remi strategy configuration before any static-repository probe.
     if let Some(ref strategy) = opts.default_strategy
         && strategy == "remi"
+        && opts.remi_endpoint.is_none()
     {
-        if opts.remi_endpoint.is_none() {
-            anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
-        }
-        if opts.remi_distro.is_none() {
-            anyhow::bail!("--remi-distro is required when --default-strategy=remi");
-        }
-        if let Some(distro) = opts.remi_distro.as_deref()
-            && conary_core::repository::supported_profiles::profile_by_public_id(distro).is_none()
-        {
-            anyhow::bail!(
-                "unsupported Remi distro '{}'; use an exact public distro ID",
-                distro
-            );
-        }
+        anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
     }
+
+    let supplied_profile = opts
+        .source_profile
+        .as_deref()
+        .map(|source_profile| {
+            conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unsupported source profile '{source_profile}'; use an exact public profile ID"
+                    )
+                })
+        })
+        .transpose()?;
 
     if super::repo_static::try_cmd_repo_add_static(&opts).await? {
         return Ok(());
@@ -83,6 +84,32 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
             "--package-format is required for non-static repositories; choose rpm, deb, arch, or json"
         )
     })?;
+    let profile = supplied_profile.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--source-profile is required for non-static repositories; use an exact public profile ID"
+        )
+    })?;
+    let format_matches = matches!(
+        (package_format, profile.package_format()),
+        (
+            RepositoryFormat::Fedora,
+            conary_core::repository::supported_profiles::ProfilePackageFormat::Rpm
+        ) | (
+            RepositoryFormat::Debian,
+            conary_core::repository::supported_profiles::ProfilePackageFormat::Deb
+        ) | (
+            RepositoryFormat::Arch,
+            conary_core::repository::supported_profiles::ProfilePackageFormat::Arch
+        ) | (RepositoryFormat::Json, _)
+    );
+    if !format_matches {
+        anyhow::bail!(
+            "source profile '{}' uses '{}' packages, not '{}' metadata",
+            profile.id(),
+            profile.package_format().as_str(),
+            package_format.as_str()
+        );
+    }
     let parser_config = exact_parser_config(
         package_format,
         opts.distribution,
@@ -90,18 +117,18 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         opts.architecture,
         opts.database,
     )?;
-    let trust_policy = exact_trust_policy(
+    let trust_policy = exact_trust_policy(ExactTrustPolicyInput {
         package_format,
-        opts.debian_release_keys,
-        opts.rpm_metadata_keys,
-        opts.rpm_metalink,
-        opts.rpm_package_keys,
-        opts.arch_keyring,
-        opts.arch_keyring_format,
-        opts.arch_master_keys,
-        opts.arch_packager_key_threshold,
-        opts.arch_database_signature,
-    )?;
+        debian_release_keys: opts.debian_release_keys,
+        rpm_metadata_keys: opts.rpm_metadata_keys,
+        rpm_metalink: opts.rpm_metalink,
+        rpm_package_keys: opts.rpm_package_keys,
+        arch_keyring: opts.arch_keyring,
+        arch_keyring_format: opts.arch_keyring_format,
+        arch_master_keys: opts.arch_master_keys,
+        arch_packager_key_threshold: opts.arch_packager_key_threshold,
+        arch_database_signature: opts.arch_database_signature,
+    })?;
 
     let db_path = opts.db_path;
 
@@ -118,7 +145,7 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     repo.priority = opts.priority;
     repo.default_strategy = opts.default_strategy;
     repo.default_strategy_endpoint = opts.remi_endpoint;
-    repo.default_strategy_distro = opts.remi_distro;
+    repo.source_profile = Some(profile.id().to_string());
     repo.security_advisory_support = opts.security_advisory_support;
 
     if let Err(error) = repo.insert(&conn) {
@@ -144,6 +171,12 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     }
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
+    println!(
+        "  Source Profile: {}",
+        repo.source_profile
+            .as_deref()
+            .expect("repository insertion validated its source profile")
+    );
     if let Some(policy) = repo.trust_policy.as_ref() {
         println!("  Repository Trust: {}", describe_trust_policy(policy));
     } else {
@@ -156,20 +189,17 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     // Show default strategy if configured
     if let Some(ref strategy) = repo.default_strategy {
         println!("  Default Strategy: {}", strategy);
-        if strategy == "remi" {
-            if let Some(ref endpoint) = repo.default_strategy_endpoint {
-                println!("  Remi Endpoint: {}", endpoint);
-            }
-            if let Some(ref distro) = repo.default_strategy_distro {
-                println!("  Remi Distro: {}", distro);
-            }
+        if strategy == "remi"
+            && let Some(ref endpoint) = repo.default_strategy_endpoint
+        {
+            println!("  Remi Endpoint: {}", endpoint);
         }
     }
 
     Ok(())
 }
 
-fn exact_trust_policy(
+struct ExactTrustPolicyInput {
     package_format: RepositoryFormat,
     debian_release_keys: Vec<OpenPgpTrustRoot>,
     rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
@@ -180,7 +210,21 @@ fn exact_trust_policy(
     arch_master_keys: Vec<String>,
     arch_packager_key_threshold: Option<usize>,
     arch_database_signature: Option<ArchSignatureRequirement>,
-) -> Result<Option<RepositoryTrustPolicy>> {
+}
+
+fn exact_trust_policy(input: ExactTrustPolicyInput) -> Result<Option<RepositoryTrustPolicy>> {
+    let ExactTrustPolicyInput {
+        package_format,
+        debian_release_keys,
+        rpm_metadata_keys,
+        rpm_metalink,
+        rpm_package_keys,
+        arch_keyring,
+        arch_keyring_format,
+        arch_master_keys,
+        arch_packager_key_threshold,
+        arch_database_signature,
+    } = input;
     let reject = |flag: &str, present: bool| -> Result<()> {
         if present {
             anyhow::bail!("{flag} is not valid for {}", package_format.as_str());
@@ -614,7 +658,7 @@ mod tests {
     use conary_core::db::models::{Repository, SecurityAdvisorySupport};
 
     #[tokio::test]
-    async fn repo_add_rejects_internal_remi_route_slug() {
+    async fn repo_add_rejects_internal_source_route_slug() {
         let err = cmd_repo_add(RepoAddOptions {
             name: "remi-fedora".to_string(),
             url: "https://remi.example.invalid".to_string(),
@@ -641,13 +685,13 @@ mod tests {
             replace: false,
             default_strategy: Some("remi".to_string()),
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
-            remi_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Unknown,
         })
         .await
         .unwrap_err();
 
-        assert!(err.to_string().contains("exact public distro ID"));
+        assert!(err.to_string().contains("unsupported source profile"));
     }
 
     #[tokio::test]
@@ -685,7 +729,7 @@ mod tests {
             replace: false,
             default_strategy: None,
             remi_endpoint: None,
-            remi_distro: None,
+            source_profile: Some("fedora-44".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Supported,
         })
         .await

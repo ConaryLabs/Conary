@@ -119,33 +119,6 @@ impl ScriptletExecutor {
             }
         }
     }
-
-    /// Generate wrapper script for Arch .INSTALL function libraries
-    ///
-    /// Arch .INSTALL files define functions like post_install(), pre_upgrade(), etc.
-    /// but don't call them. We need to source the file and call the appropriate function.
-    pub(super) fn prepare_arch_wrapper(&self, content: &str, phase: &str) -> Result<String> {
-        // Map phase to Arch function name
-        let function_name = match phase {
-            "pre-install" => "pre_install",
-            "post-install" => "post_install",
-            "pre-remove" => "pre_remove",
-            "post-remove" => "post_remove",
-            "pre-upgrade" => "pre_upgrade",
-            "post-upgrade" => "post_upgrade",
-            unsupported => {
-                return Err(Error::scriptlet(
-                    ScriptletFailureKind::ContractViolation,
-                    format!("unsupported Arch lifecycle phase '{unsupported}'"),
-                ));
-            }
-        };
-
-        Ok(format!(
-            "#!/bin/bash\nset -e\n\n# Arch .INSTALL content:\n{}\n\n# Call the function if it exists\nif declare -f {} > /dev/null; then\n    {} \"$@\"\nfi\n",
-            content, function_name, function_name
-        ))
-    }
 }
 
 fn package_format_name(package_format: PackageFormat) -> &'static str {
@@ -363,38 +336,6 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("unsupported arch lifecycle phase 'pre-remove' for upgrade-removal")
-        );
-    }
-
-    #[test]
-    fn test_arch_wrapper_generation() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
-
-        let content = "post_install() {\n    echo \"Hello\"\n}";
-        let wrapper = executor
-            .prepare_arch_wrapper(content, "post-install")
-            .unwrap();
-
-        assert!(wrapper.contains("#!/bin/bash"));
-        assert!(wrapper.contains("set -e"));
-        assert!(wrapper.contains(content));
-        assert!(wrapper.contains("post_install \"$@\""));
-    }
-
-    #[test]
-    fn arch_wrapper_rejects_unknown_phase_instead_of_running_post_install() {
-        let executor =
-            ScriptletExecutor::new(Path::new("/"), "test-pkg", "1.0.0", PackageFormat::Arch);
-
-        let error = executor
-            .prepare_arch_wrapper("post_install() { :; }", "trigger")
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported Arch lifecycle phase 'trigger'"),
-            "{error}"
         );
     }
 }

@@ -7,6 +7,7 @@
 //! are data errors; they never acquire an ordering through fallback logic.
 
 use crate::db::models::RepositoryPackage;
+use crate::repository::dependency_model::ProvideVersionRelation;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::str::FromStr;
@@ -74,6 +75,8 @@ pub enum VersionComparisonError {
         constraint: String,
         reason: String,
     },
+    #[error("invalid CCS package release '{release}': {reason}")]
+    InvalidPackageRelease { release: String, reason: String },
 }
 
 pub type VersionResult<T> = std::result::Result<T, VersionComparisonError>;
@@ -251,6 +254,208 @@ pub fn repo_version_satisfies(
     })
 }
 
+/// Match one source-native provided range against a requirement range.
+///
+/// RPM uses `rpmdsCompare`: a versioned provide is a range, not a point. Its
+/// comparison therefore asks whether the provide and requirement ranges
+/// overlap. Other supported formats currently permit only exact versioned
+/// provides.
+pub fn provided_range_matches_requirement(
+    scheme: VersionScheme,
+    provide_relation: Option<ProvideVersionRelation>,
+    provide_version: Option<&str>,
+    requirement: &RepoVersionConstraint,
+) -> VersionResult<bool> {
+    if provide_relation.is_some() != provide_version.is_some() {
+        return Err(VersionComparisonError::InvalidConstraint {
+            scheme: scheme.as_str(),
+            constraint: format!(
+                "provider relation {:?} with boundary {:?}",
+                provide_relation, provide_version
+            ),
+            reason: "a versioned provide must carry both a relation and boundary".to_string(),
+        });
+    }
+
+    let Some(provide_relation) = provide_relation else {
+        return Ok(match scheme {
+            // rpm's existence-test rule overlaps a same-name versioned range.
+            VersionScheme::Rpm => true,
+            VersionScheme::Conary | VersionScheme::Debian | VersionScheme::Arch => {
+                matches!(requirement, RepoVersionConstraint::Any)
+            }
+        });
+    };
+    let provide_version = provide_version.expect("relation and version pairing checked above");
+    validate_repo_version(scheme, provide_version)?;
+
+    if matches!(requirement, RepoVersionConstraint::Any) {
+        return Ok(true);
+    }
+    if scheme == VersionScheme::Rpm {
+        return rpm_provided_range_overlaps_requirement(
+            provide_relation,
+            provide_version,
+            requirement,
+        );
+    }
+    if provide_relation != ProvideVersionRelation::Equal {
+        return Err(VersionComparisonError::InvalidConstraint {
+            scheme: scheme.as_str(),
+            constraint: format!("{} {provide_version}", provide_relation.as_str()),
+            reason: "this source format only permits exact versioned provides".to_string(),
+        });
+    }
+    repo_version_satisfies(scheme, provide_version, requirement)
+}
+
+fn rpm_provided_range_overlaps_requirement(
+    provide_relation: ProvideVersionRelation,
+    provide_version: &str,
+    requirement: &RepoVersionConstraint,
+) -> VersionResult<bool> {
+    let requirement_relation = match requirement {
+        RepoVersionConstraint::Exact(_) => ProvideVersionRelation::Equal,
+        RepoVersionConstraint::GreaterThan(_) => ProvideVersionRelation::GreaterThan,
+        RepoVersionConstraint::GreaterOrEqual(_) => ProvideVersionRelation::GreaterOrEqual,
+        RepoVersionConstraint::LessThan(_) => ProvideVersionRelation::LessThan,
+        RepoVersionConstraint::LessOrEqual(_) => ProvideVersionRelation::LessOrEqual,
+        RepoVersionConstraint::Any => return Ok(true),
+        RepoVersionConstraint::NotEqual(version) => {
+            return Err(VersionComparisonError::InvalidConstraint {
+                scheme: VersionScheme::Rpm.as_str(),
+                constraint: format!("!= {version}"),
+                reason: "RPM dependency ranges do not define a not-equal relation".to_string(),
+            });
+        }
+    };
+    let requirement_version = constraint_boundary(requirement)
+        .expect("all non-Any requirement relations above have a boundary");
+    validate_repo_version(VersionScheme::Rpm, requirement_version)?;
+
+    let provide = rpm_evr_parts(provide_version);
+    let required = rpm_evr_parts(requirement_version);
+    let ordering = rpm_dependency_boundary_cmp(&provide, &required)?;
+
+    // rpmverOverlap treats a missing release as an intentionally partial EVR:
+    // equality on the side without a release overlaps any release at the same
+    // epoch and version.
+    if ordering == Ordering::Equal
+        && ((provide.release.is_some()
+            && required.release.is_none()
+            && relation_includes_equal(requirement_relation))
+            || (required.release.is_some()
+                && provide.release.is_none()
+                && relation_includes_equal(provide_relation)))
+    {
+        return Ok(true);
+    }
+
+    Ok(match ordering {
+        Ordering::Less => {
+            relation_includes_greater(provide_relation)
+                || relation_includes_less(requirement_relation)
+        }
+        Ordering::Greater => {
+            relation_includes_less(provide_relation)
+                || relation_includes_greater(requirement_relation)
+        }
+        Ordering::Equal => {
+            (relation_includes_equal(provide_relation)
+                && relation_includes_equal(requirement_relation))
+                || (relation_includes_less(provide_relation)
+                    && relation_includes_less(requirement_relation))
+                || (relation_includes_greater(provide_relation)
+                    && relation_includes_greater(requirement_relation))
+        }
+    })
+}
+
+fn constraint_boundary(constraint: &RepoVersionConstraint) -> Option<&str> {
+    match constraint {
+        RepoVersionConstraint::Any => None,
+        RepoVersionConstraint::Exact(version)
+        | RepoVersionConstraint::GreaterThan(version)
+        | RepoVersionConstraint::GreaterOrEqual(version)
+        | RepoVersionConstraint::LessThan(version)
+        | RepoVersionConstraint::LessOrEqual(version)
+        | RepoVersionConstraint::NotEqual(version) => Some(version),
+    }
+}
+
+#[derive(Debug)]
+struct RpmEvrParts<'a> {
+    epoch: Option<&'a str>,
+    version: &'a str,
+    release: Option<&'a str>,
+}
+
+fn rpm_evr_parts(raw: &str) -> RpmEvrParts<'_> {
+    let (epoch, version_release) = raw
+        .split_once(':')
+        .map_or((None, raw), |(epoch, rest)| (Some(epoch), rest));
+    let (version, release) = version_release
+        .split_once('-')
+        .map_or((version_release, None), |(version, release)| {
+            (version, Some(release))
+        });
+    RpmEvrParts {
+        epoch,
+        version,
+        release,
+    }
+}
+
+fn rpm_dependency_boundary_cmp(
+    left: &RpmEvrParts<'_>,
+    right: &RpmEvrParts<'_>,
+) -> VersionResult<Ordering> {
+    let epoch = match (left.epoch, right.epoch) {
+        (Some(left), Some(right)) => compare_repo_versions(VersionScheme::Rpm, left, right)?,
+        (Some(left), None) if left.parse::<u64>().expect("validated RPM epoch") > 0 => {
+            Ordering::Greater
+        }
+        (None, Some(right)) if right.parse::<u64>().expect("validated RPM epoch") > 0 => {
+            Ordering::Less
+        }
+        _ => Ordering::Equal,
+    };
+    if epoch != Ordering::Equal {
+        return Ok(epoch);
+    }
+    let version = compare_repo_versions(VersionScheme::Rpm, left.version, right.version)?;
+    if version != Ordering::Equal {
+        return Ok(version);
+    }
+    match (left.release, right.release) {
+        (Some(left), Some(right)) => compare_repo_versions(VersionScheme::Rpm, left, right),
+        _ => Ok(Ordering::Equal),
+    }
+}
+
+const fn relation_includes_less(relation: ProvideVersionRelation) -> bool {
+    matches!(
+        relation,
+        ProvideVersionRelation::LessThan | ProvideVersionRelation::LessOrEqual
+    )
+}
+
+const fn relation_includes_equal(relation: ProvideVersionRelation) -> bool {
+    matches!(
+        relation,
+        ProvideVersionRelation::Equal
+            | ProvideVersionRelation::LessOrEqual
+            | ProvideVersionRelation::GreaterOrEqual
+    )
+}
+
+const fn relation_includes_greater(relation: ProvideVersionRelation) -> bool {
+    matches!(
+        relation,
+        ProvideVersionRelation::GreaterThan | ProvideVersionRelation::GreaterOrEqual
+    )
+}
+
 /// Resolve the persisted scheme authority for a repository package.
 pub fn resolve_package_version_scheme(pkg: &RepositoryPackage) -> VersionScheme {
     pkg.version_scheme
@@ -262,7 +467,75 @@ pub fn compare_repo_package_versions(
 ) -> VersionResult<Ordering> {
     let a_scheme = resolve_package_version_scheme(a);
     let b_scheme = resolve_package_version_scheme(b);
-    compare_mixed_repo_versions(a_scheme, &a.version, b_scheme, &b.version)
+    compare_package_identities(
+        a_scheme,
+        &a.version,
+        non_empty_release(&a.package_release),
+        b_scheme,
+        &b.version,
+        non_empty_release(&b.package_release),
+    )
+}
+
+/// Validate the monotonically increasing release number of one signed CCS
+/// build. Release `0` is reserved for sources that have no CCS envelope.
+pub fn validate_package_release(release: &str) -> VersionResult<u64> {
+    if release.is_empty() {
+        return Err(VersionComparisonError::InvalidPackageRelease {
+            release: release.to_string(),
+            reason: "release is empty".to_string(),
+        });
+    }
+    if !release.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(VersionComparisonError::InvalidPackageRelease {
+            release: release.to_string(),
+            reason: "release must be an unsigned decimal integer".to_string(),
+        });
+    }
+    let value =
+        release
+            .parse::<u64>()
+            .map_err(|_| VersionComparisonError::InvalidPackageRelease {
+                release: release.to_string(),
+                reason: "release exceeds the supported integer range".to_string(),
+            })?;
+    if value == 0 {
+        return Err(VersionComparisonError::InvalidPackageRelease {
+            release: release.to_string(),
+            reason: "release must be greater than zero".to_string(),
+        });
+    }
+    Ok(value)
+}
+
+/// Compare complete package identities. The source-native version algebra
+/// orders versions first; the signed CCS build release breaks equal-version
+/// ties. A source artifact without a CCS envelope has implicit release zero.
+pub fn compare_package_identities(
+    a_scheme: VersionScheme,
+    a_version: &str,
+    a_release: Option<&str>,
+    b_scheme: VersionScheme,
+    b_version: &str,
+    b_release: Option<&str>,
+) -> VersionResult<Ordering> {
+    let version = compare_mixed_repo_versions(a_scheme, a_version, b_scheme, b_version)?;
+    if version != Ordering::Equal {
+        return Ok(version);
+    }
+    let a_release = a_release
+        .map(validate_package_release)
+        .transpose()?
+        .unwrap_or(0);
+    let b_release = b_release
+        .map(validate_package_release)
+        .transpose()?
+        .unwrap_or(0);
+    Ok(a_release.cmp(&b_release))
+}
+
+fn non_empty_release(release: &str) -> Option<&str> {
+    (!release.is_empty()).then_some(release)
 }
 
 #[derive(Clone, Copy)]
@@ -471,6 +744,93 @@ mod tests {
     }
 
     #[test]
+    fn rpm_provided_ranges_use_upstream_overlap_semantics() {
+        use ProvideVersionRelation::{Equal, GreaterOrEqual, GreaterThan};
+
+        for (provide_relation, provide_version, requirement, expected) in [
+            (
+                GreaterOrEqual,
+                "2",
+                RepoVersionConstraint::LessThan("3".to_string()),
+                true,
+            ),
+            (
+                GreaterOrEqual,
+                "3",
+                RepoVersionConstraint::LessThan("2".to_string()),
+                false,
+            ),
+            (
+                GreaterThan,
+                "2",
+                RepoVersionConstraint::LessThan("2".to_string()),
+                false,
+            ),
+            (
+                GreaterOrEqual,
+                "2",
+                RepoVersionConstraint::LessOrEqual("2".to_string()),
+                true,
+            ),
+            (
+                GreaterThan,
+                "2",
+                RepoVersionConstraint::LessOrEqual("2".to_string()),
+                false,
+            ),
+            (
+                Equal,
+                "1.0",
+                RepoVersionConstraint::Exact("1.0-9".to_string()),
+                true,
+            ),
+        ] {
+            assert_eq!(
+                provided_range_matches_requirement(
+                    VersionScheme::Rpm,
+                    Some(provide_relation),
+                    Some(provide_version),
+                    &requirement,
+                )
+                .unwrap(),
+                expected,
+                "{provide_relation:?} {provide_version} versus {requirement:?}"
+            );
+        }
+        assert!(
+            provided_range_matches_requirement(
+                VersionScheme::Rpm,
+                None,
+                None,
+                &RepoVersionConstraint::GreaterOrEqual("999".to_string()),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn non_rpm_provides_require_exact_version_authority() {
+        assert!(
+            provided_range_matches_requirement(
+                VersionScheme::Debian,
+                Some(ProvideVersionRelation::Equal),
+                Some("2.0"),
+                &RepoVersionConstraint::GreaterOrEqual("1.0".to_string()),
+            )
+            .unwrap()
+        );
+        assert!(
+            provided_range_matches_requirement(
+                VersionScheme::Debian,
+                Some(ProvideVersionRelation::GreaterOrEqual),
+                Some("2.0"),
+                &RepoVersionConstraint::GreaterOrEqual("1.0".to_string()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn validated_repository_version_compares_and_satisfies() {
         let a = RepositoryVersion::new("1.2.3-2.fc44".to_string(), VersionScheme::Rpm).unwrap();
         let b = RepositoryVersion::new("1.2.3-1.fc44".to_string(), VersionScheme::Rpm).unwrap();
@@ -480,5 +840,25 @@ mod tests {
         let constraint =
             parse_repo_constraint(VersionScheme::Debian, ">= 0.9").expect("constraint");
         assert!(version.satisfies(&constraint).unwrap());
+    }
+
+    #[test]
+    fn ccs_release_is_numeric_positive_and_orders_equal_versions() {
+        for invalid in ["", "0", "-1", "1.0", " 1", "1 "] {
+            assert!(validate_package_release(invalid).is_err(), "{invalid:?}");
+        }
+        assert_eq!(validate_package_release("12").unwrap(), 12);
+        assert_eq!(
+            compare_package_identities(
+                VersionScheme::Conary,
+                "1.2.3",
+                Some("10"),
+                VersionScheme::Conary,
+                "1.2.3",
+                Some("2"),
+            )
+            .unwrap(),
+            Ordering::Greater
+        );
     }
 }

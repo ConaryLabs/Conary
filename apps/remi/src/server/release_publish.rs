@@ -257,9 +257,10 @@ mod tests {
     use conary_core::ccs::builder::write_v2_ccs_package;
     use conary_core::ccs::signing::SigningKeyPair;
     use conary_core::ccs::v2::schema::{
-        AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, FORMAT_VERSION_V2,
-        FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2, PackageKindTagV2,
-        PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+        AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
+        FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
+        PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
+        ProvidedCapabilityV2,
     };
     use conary_core::db::schema;
     use conary_core::payload::{PayloadContentAuthority, PayloadNode};
@@ -274,6 +275,7 @@ mod tests {
     use tower::ServiceExt;
 
     const TEST_DISTRO: &str = "fedora";
+    const TEST_PROFILE: &str = "fedora-44";
 
     struct ReleaseFixture {
         _temp: tempfile::TempDir,
@@ -357,8 +359,8 @@ mod tests {
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM converted_packages
-                     WHERE distro = ?1 AND package_name = ?2",
-                    params![TEST_DISTRO, package],
+                     WHERE source_profile = ?1 AND package_name = ?2",
+                    params![TEST_PROFILE, package],
                     |row| row.get(0),
                 )
                 .unwrap();
@@ -370,9 +372,9 @@ mod tests {
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM native_package_publications
-                     WHERE distro = ?1 AND name = ?2 AND package_release = ?3
+                     WHERE source_profile = ?1 AND name = ?2 AND package_release = ?3
                        AND status = 'public'",
-                    params![TEST_DISTRO, package, package_release],
+                    params![TEST_PROFILE, package, package_release],
                     |row| row.get(0),
                 )
                 .unwrap();
@@ -383,8 +385,8 @@ mod tests {
             let conn = rusqlite::Connection::open(&self.db_path).unwrap();
             conn.query_row(
                 "SELECT COUNT(*) FROM native_package_publications
-                 WHERE distro = ?1 AND name = ?2 AND status = ?3",
-                params![TEST_DISTRO, package, status],
+                 WHERE source_profile = ?1 AND name = ?2 AND status = ?3",
+                params![TEST_PROFILE, package, status],
                 |row| row.get(0),
             )
             .unwrap()
@@ -707,6 +709,21 @@ mod tests {
         attested_release_artifact_with_release(signer, name, version, "1", b"release payload")
     }
 
+    fn exact_self_provider(name: &str, version: &str) -> ProvidedCapabilityV2 {
+        ProvidedCapabilityV2 {
+            kind: DependencyKindV2::Package,
+            name: name.to_string(),
+            provider_version: Some(version.to_string()),
+            version_relation: Some(
+                conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+            ),
+            version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
+            architecture_qualifier: Default::default(),
+            target: None,
+            component: None,
+        }
+    }
+
     fn attested_release_artifact_with_release(
         signer: &SigningKeyPair,
         name: &str,
@@ -746,6 +763,7 @@ mod tests {
                 version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
                 release: release.to_string(),
                 architecture: Some("x86_64".to_string()),
+                debian_multi_arch: None,
                 platform: Some("linux".to_string()),
                 kind: PackageKindTagV2::Package,
             },
@@ -764,9 +782,10 @@ mod tests {
                 config: Vec::new(),
                 policy: PackagePolicyV2::default(),
             }),
-            provides: Vec::new(),
+            provides: vec![exact_self_provider(name, version)],
             requirements: Vec::new(),
             relations: Vec::new(),
+            capabilities: None,
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {
@@ -856,6 +875,7 @@ mod tests {
                 version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
                 release: "1".to_string(),
                 architecture: Some("x86_64".to_string()),
+                debian_multi_arch: None,
                 platform: Some("linux".to_string()),
                 kind: PackageKindTagV2::Package,
             },
@@ -874,9 +894,10 @@ mod tests {
                 config: Vec::new(),
                 policy: PackagePolicyV2::default(),
             }),
-            provides: Vec::new(),
+            provides: vec![exact_self_provider(name, version)],
             requirements: Vec::new(),
             relations: Vec::new(),
+            capabilities: None,
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {

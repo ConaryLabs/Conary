@@ -111,13 +111,28 @@ fn test_whatprovides_query() {
         let trove_id = trove.insert(tx)?;
 
         // Add provides
-        let mut p1 = ProvideEntry::new(trove_id, "openssl".to_string(), Some("3.0.0".to_string()));
+        let mut p1 = ProvideEntry::new(
+            trove_id,
+            "openssl".to_string(),
+            Some("3.0.0".to_string()),
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         p1.insert(tx)?;
 
-        let mut p2 = ProvideEntry::new(trove_id, "soname(libssl.so.3)".to_string(), None);
+        let mut p2 = ProvideEntry::new(
+            trove_id,
+            "soname(libssl.so.3)".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         p2.insert(tx)?;
 
-        let mut p3 = ProvideEntry::new(trove_id, "soname(libcrypto.so.3)".to_string(), None);
+        let mut p3 = ProvideEntry::new(
+            trove_id,
+            "soname(libcrypto.so.3)".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
         p3.insert(tx)?;
 
         Ok(())
@@ -179,7 +194,22 @@ fn test_query_operations() {
     // Test finding files by package
     let nginx_id = nginx_troves[0].id.unwrap();
     let files = FileEntry::find_by_trove(&conn, nginx_id).unwrap();
-    assert_eq!(files.len(), 2, "nginx should have 2 files");
+    let paths = files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        paths,
+        std::collections::BTreeSet::from([
+            "/etc",
+            "/etc/nginx",
+            "/etc/nginx/nginx.conf",
+            "/usr",
+            "/usr/sbin",
+            "/usr/sbin/nginx",
+        ]),
+        "nginx should carry exact directory and file authority"
+    );
 
     // Test non-existent package
     let nonexistent = Trove::find_by_name(&conn, "nonexistent").unwrap();
@@ -444,9 +474,16 @@ fn whatprovides_reads_normalized_installed_provider_metadata_without_guessing_su
         conary_core::repository::versioning::VersionScheme::Conary,
     );
     let openssl_id = openssl.insert(&conn).unwrap();
-    ProvideEntry::new_typed(openssl_id, "soname", "libssl.so.3".to_string(), None)
-        .insert(&conn)
-        .unwrap();
+    ProvideEntry::new_typed(
+        openssl_id,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::Soname,
+        "libssl.so.3".to_string(),
+        None,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        Default::default(),
+    )
+    .insert(&conn)
+    .unwrap();
 
     let mut openssl30 = Trove::new(
         "openssl30-libs".to_string(),
@@ -455,9 +492,16 @@ fn whatprovides_reads_normalized_installed_provider_metadata_without_guessing_su
         conary_core::repository::versioning::VersionScheme::Conary,
     );
     let openssl30_id = openssl30.insert(&conn).unwrap();
-    ProvideEntry::new_typed(openssl30_id, "soname", "libssl.so.30".to_string(), None)
-        .insert(&conn)
-        .unwrap();
+    ProvideEntry::new_typed(
+        openssl30_id,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::Soname,
+        "libssl.so.30".to_string(),
+        None,
+        conary_core::repository::versioning::VersionScheme::Conary,
+        Default::default(),
+    )
+    .insert(&conn)
+    .unwrap();
     drop(conn);
 
     let output = run_conary(&[
@@ -748,7 +792,7 @@ fn test_dependency_queries() {
     let deps = InstalledRequirementAtom::find_by_trove(&conn, nginx_id).unwrap();
     assert_eq!(deps.len(), 1, "nginx should have 1 dependency");
     assert_eq!(deps[0].depends_on_name, "openssl");
-    assert_eq!(deps[0].version_constraint, Some(">= 3.0".to_string()));
+    assert_eq!(deps[0].version_constraint, Some(">= 3.0.0".to_string()));
 
     // Test reverse dependency lookup via provides
     let openssl_providers = ProvideEntry::find_all_by_capability(&conn, "openssl").unwrap();

@@ -27,11 +27,22 @@ pub(super) fn validate_incoming_version_against_dependents(
         return Ok(());
     }
 
+    let native_architecture = conary_core::repository::registry::detect_system_arch();
     let mut violations = Vec::new();
     for dependent in &before {
         let Some(trove_id) = dependent.installed_trove_id else {
             continue;
         };
+        let depending_architecture = dependent
+            .architecture
+            .as_deref()
+            .filter(|architecture| !architecture.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "installed dependent '{}' has no architecture authority",
+                    dependent.name
+                )
+            })?;
         for stored in InstalledRequirementGroup::find_by_trove(conn, trove_id)? {
             if !matches!(
                 stored.kind,
@@ -42,11 +53,15 @@ pub(super) fn validate_incoming_version_against_dependents(
             let was_satisfied = conary_core::resolver::requirement_expression_satisfied(
                 &stored.requirement.expression,
                 stored.version_scheme,
+                depending_architecture,
+                &native_architecture,
                 &before,
             )?;
             let remains_satisfied = conary_core::resolver::requirement_expression_satisfied(
                 &stored.requirement.expression,
                 stored.version_scheme,
+                depending_architecture,
+                &native_architecture,
                 &after,
             )?;
             if was_satisfied && !remains_satisfied {
@@ -98,18 +113,19 @@ mod tests {
             TroveType::Package,
             scheme,
         );
+        trove.architecture = Some(conary_core::repository::registry::detect_system_arch());
         trove.insert(conn).unwrap()
     }
 
     #[test]
     fn incoming_version_is_checked_against_typed_installed_groups() {
         let (_temp, conn) = database();
-        package(&conn, "dep-liba", "1.5", VersionScheme::Conary);
-        let app = package(&conn, "dep-app", "1", VersionScheme::Conary);
+        package(&conn, "dep-liba", "1.5.0", VersionScheme::Conary);
+        let app = package(&conn, "dep-app", "1.0.0", VersionScheme::Conary);
         let requirement = conary_core::repository::requirement::parse_native_requirement(
             RepositoryRequirementKind::Depends,
             VersionScheme::Conary,
-            "dep-liba < 2",
+            "dep-liba < 2.0.0",
         )
         .unwrap();
         InstalledRequirementGroup::insert_groups(&conn, app, VersionScheme::Conary, &[requirement])
@@ -118,15 +134,19 @@ mod tests {
         let error = validate_incoming_version_against_dependents(
             &conn,
             "dep-liba",
-            "2.0",
+            "2.0.0",
             VersionScheme::Conary,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("dep-app requires dep-liba < 2"));
+        assert!(
+            error
+                .to_string()
+                .contains("dep-app requires dep-liba < 2.0.0")
+        );
         validate_incoming_version_against_dependents(
             &conn,
             "dep-liba",
-            "1.9",
+            "1.9.0",
             VersionScheme::Conary,
         )
         .unwrap();

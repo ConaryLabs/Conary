@@ -11,8 +11,8 @@
 //! - Implicit delta updates (download only missing chunks)
 //! - Efficient repository storage (chunks stored once, referenced many times)
 
-use anyhow::{Context, Result};
-use fastcdc::v2020::FastCDC;
+use anyhow::{Context, Result, bail};
+use fastcdc::v2020::{FastCDC, StreamCDC};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -147,7 +147,62 @@ impl Chunker {
         chunks
     }
 
+    /// Stream chunks from a reader through a bounded buffer.
+    ///
+    /// The visitor receives one complete chunk at a time, so callers can persist
+    /// or otherwise consume arbitrarily large artifacts without retaining the
+    /// artifact or all of its chunks in memory. The returned size is the exact
+    /// number of contiguous source bytes processed.
+    pub fn visit_reader_chunks<R, F>(&self, reader: R, mut visit: F) -> Result<u64>
+    where
+        R: Read,
+        F: FnMut(&Chunk) -> Result<()>,
+    {
+        let chunker = StreamCDC::new(
+            reader,
+            self.min_size as usize,
+            self.avg_size as usize,
+            self.max_size as usize,
+        );
+        let mut processed = 0_u64;
+
+        for entry in chunker {
+            let entry = entry.context("stream content-defined chunk")?;
+            if entry.offset != processed {
+                bail!(
+                    "streamed chunk offset is not contiguous: expected {processed}, got {}",
+                    entry.offset
+                );
+            }
+            if entry.data.len() != entry.length {
+                bail!(
+                    "streamed chunk length disagrees with its data: {} != {}",
+                    entry.length,
+                    entry.data.len()
+                );
+            }
+            let length =
+                u32::try_from(entry.length).context("streamed chunk length exceeds u32")?;
+            let chunk = Chunk {
+                hash: crate::hash::sha256_bytes(&entry.data),
+                offset: entry.offset,
+                length,
+                data: entry.data,
+            };
+            visit(&chunk)?;
+            processed = processed
+                .checked_add(u64::from(length))
+                .context("streamed artifact size overflow")?;
+        }
+
+        Ok(processed)
+    }
+
     /// Chunk a file
+    ///
+    /// This aggregate API retains all chunk bytes in the result. Use
+    /// [`Self::visit_reader_chunks`] when the caller can consume chunks
+    /// incrementally and needs bounded memory.
     pub fn chunk_file(&self, path: &Path) -> Result<ChunkedFile> {
         let mut file =
             File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
@@ -155,8 +210,6 @@ impl Chunker {
         let metadata = file.metadata()?;
         let size = metadata.len();
 
-        // Read entire file into memory (for files up to a few hundred MB this is fine)
-        // For very large files, we'd want a streaming approach
         let mut data = Vec::with_capacity(size as usize);
         file.read_to_end(&mut data)?;
 
@@ -570,6 +623,32 @@ mod tests {
         // Verify file hash
         let expected_hash: [u8; 32] = crate::hash::sha256_bytes(&data);
         assert_eq!(chunked.file_hash, expected_hash);
+    }
+
+    #[test]
+    fn test_streaming_chunks_match_slice_boundaries_and_reassemble() {
+        let data = pseudo_random_data(8_675_309, 1_250_000);
+        let chunker = Chunker::new();
+        let expected = chunker.chunk_bytes(&data);
+        let mut streamed = Vec::new();
+
+        let processed = chunker
+            .visit_reader_chunks(std::io::Cursor::new(&data), |chunk| {
+                streamed.push(chunk.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(processed, data.len() as u64);
+        assert_eq!(streamed.len(), expected.len());
+        for (streamed, expected) in streamed.iter().zip(expected.iter()) {
+            assert_eq!(streamed.offset, expected.offset);
+            assert_eq!(streamed.length, expected.length);
+            assert_eq!(streamed.hash, expected.hash);
+            assert_eq!(streamed.data, expected.data);
+        }
+        let reassembled: Vec<u8> = streamed.into_iter().flat_map(|chunk| chunk.data).collect();
+        assert_eq!(reassembled, data);
     }
 
     #[test]

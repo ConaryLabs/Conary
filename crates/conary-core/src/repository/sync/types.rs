@@ -5,7 +5,6 @@ use crate::db::models::{
     RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::repository::remi_metadata::{RemiProvide, RemiRequirementGroup};
-use std::collections::HashMap;
 
 /// A single synced package row with all its normalized capability data.
 #[derive(Debug, Clone)]
@@ -66,21 +65,4 @@ pub(super) struct RemiPackageEntry {
     pub(super) provides: Vec<RemiProvide>,
     pub(super) requirement_groups: Vec<RemiRequirementGroup>,
     pub(super) metadata: Option<serde_json::Value>,
-}
-
-/// Owned canonical map response ready for a blocking persistence phase.
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct CanonicalMapSnapshot {
-    #[allow(dead_code)] // Wire format field; only entries is consumed
-    pub(super) version: u32,
-    #[allow(dead_code)] // Wire format field; only entries is consumed
-    pub(super) generated_at: String,
-    pub(super) entries: Vec<CanonicalMapEntry>,
-}
-
-/// A single entry in the canonical map response.
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct CanonicalMapEntry {
-    pub(super) canonical: String,
-    pub(super) implementations: HashMap<String, String>,
 }

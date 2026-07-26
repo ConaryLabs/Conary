@@ -137,9 +137,10 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 #[cfg(all(test, feature = "composefs-rs"))]
 mod tests {
     use super::super::test_support::{
-        assert_invalid_runtime_input_error, assert_missing_cas_object_error, regular_file_entry,
-        runtime_generation_db_with_invalid_regular_file,
+        assert_cas_size_mismatch_error, assert_missing_cas_object_error,
+        insert_regular_file_with_parents,
         runtime_generation_db_with_missing_regular_file_cas_object,
+        runtime_generation_db_with_wrong_sized_regular_file_cas_object,
     };
     use super::*;
     use crate::ccs::manifest::FileCapability;
@@ -151,21 +152,21 @@ mod tests {
 
     #[cfg(feature = "composefs-rs")]
     #[test]
-    fn rebuild_generation_image_rejects_invalid_runtime_input() {
-        let (_tmp, conn, generations_root, boot_root) =
-            runtime_generation_db_with_invalid_regular_file();
+    fn rebuild_generation_image_rejects_wrong_sized_regular_file_cas_object() {
+        let (_tmp, conn, generations_root, boot_root, bad_hash) =
+            runtime_generation_db_with_wrong_sized_regular_file_cas_object();
 
         let error = rebuild_generation_image_with_boot_root(
             &conn,
             &generations_root,
             7,
-            "invalid runtime input",
+            "wrong-sized runtime CAS object",
             &boot_root,
         )
         .unwrap_err()
         .to_string();
 
-        assert_invalid_runtime_input_error(&error);
+        assert_cas_size_mismatch_error(&error, &bad_hash);
         assert!(!generations_root.join("7/.conary-artifact.json").exists());
     }
     #[cfg(feature = "composefs-rs")]
@@ -217,22 +218,22 @@ mod tests {
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(
+        insert_regular_file_with_parents(
+            &conn,
             "/usr/bin/hello",
             hello_hash,
             b"hello".len(),
             0o100755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
-        let mut init = regular_file_entry(
-            "/usr/sbin/init",
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
             init_hash,
             b"init".len(),
             0o100755,
             trove_id,
         );
-        init.insert(&conn).unwrap();
 
         rebuild_generation_image_with_boot_root(
             &conn,
@@ -276,17 +277,22 @@ mod tests {
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(
+        insert_regular_file_with_parents(
+            &conn,
             "/usr/bin/hello",
             hello_hash,
             b"hello".len(),
             0o755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
-        let mut init =
-            regular_file_entry("/usr/sbin/init", init_hash, b"init".len(), 0o755, trove_id);
-        init.insert(&conn).unwrap();
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
+            init_hash,
+            b"init".len(),
+            0o755,
+            trove_id,
+        );
 
         InstalledFileCapability::replace_for_trove(
             &conn,

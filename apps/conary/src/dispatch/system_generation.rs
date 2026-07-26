@@ -126,7 +126,7 @@ pub(super) async fn dispatch_system_generation_command(
                 LiveMutationClass::AlwaysLive,
                 false,
             )?;
-            commands::generation::commands::cmd_generation_gc(keep, &db.db_path).await
+            commands::generation::gc::cmd_generation_gc(keep, &db.db_path).await
         }
         cli::GenerationCommands::Info { number } => {
             commands::generation::commands::cmd_generation_info(number).await

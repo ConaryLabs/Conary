@@ -66,6 +66,14 @@ git remote add upstream https://github.com/ConaryLabs/Conary.git
 
 ### Using Coding Assistants
 
+Conary explicitly welcomes contributors who work with an LLM or coding agent.
+Use the tool that works for you; contributions are evaluated on the resulting
+design, code, safety, tests, and review evidence, not on whether a human typed
+every line. The repository is deliberately structured so a person and their
+coding buddy can discover ownership and proof without private prompt lore.
+Agent assistance does not weaken branch, review, security, or verification
+requirements, and no proprietary assistant is required.
+
 If you work with an LLM coding tool, start with:
 
 1. `AGENTS.md`
@@ -270,7 +278,7 @@ and four shared crates.
 | `crates/conary-core/src/generation/` | EROFS generation building, composefs mounting, artifact export, CAS GC |
 | `crates/conary-core/src/derivation/` | CAS-layered derivation engine for bootstrap |
 | `crates/conary-core/src/trust/` | TUF supply chain trust |
-| `crates/conary-core/src/canonical/` | Cross-distro canonical name mapping (AppStream, Repology) |
+| `crates/conary-core/src/canonical/` | Exact versioned cross-distro package-map contracts; AppStream/Repology discovery caches are non-authoritative |
 | `crates/conary-core/src/self_update.rs` | Self-update version checking, download, atomic replacement |
 | `crates/conary-core/src/hash.rs` | Multi-algorithm hashing (SHA-256, XXH128) |
 
@@ -324,8 +332,7 @@ GitHub is the day-to-day coordination surface for Conary work:
 | Issue | Problem, in/out scope, acceptance criteria, current status, and follow-up work |
 | Pull request | Proposed diff, review discussion, exact verification, and integration record |
 | Roadmap | Ordered project state, blockers, and proof expectations across issues |
-| Design or plan | Durable decisions or multi-step execution detail that would be too large or unstable in an issue |
-| Canonical docs and specs | Current product, operator, architecture, and persisted-contract truth |
+| Canonical docs and specs | Current product, operator, architecture, persisted-contract truth, and durable design decisions |
 
 Issues and PRs link these surfaces together; they do not replace durable
 repository documentation.

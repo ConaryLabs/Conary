@@ -60,8 +60,11 @@ owner = "myapp"
 unit = "myapp.service"
 enable = false
 
-[config]
-files = ["/etc/myapp/config.toml"]
+[[config.files]]
+path = "/etc/myapp/config.toml"
+noreplace = true
+ghost = false
+remove_on_upgrade = false
 "#;
     let manifest = CcsManifest::parse(toml).unwrap();
     assert_eq!(manifest.package.name, "myapp");
@@ -78,6 +81,27 @@ fn test_generate_minimal() {
     let toml = manifest.to_toml().unwrap();
     assert!(toml.contains("name = \"test\""));
     assert!(toml.contains("version = \"0.1.0\""));
+}
+
+#[test]
+fn package_wide_config_policy_is_not_in_the_current_manifest_schema() {
+    let toml = r#"
+[package]
+name = "old-config-shape"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "retired config shape"
+
+[config]
+files = []
+noreplace = true
+"#;
+
+    let error = CcsManifest::parse(toml).unwrap_err();
+
+    assert!(error.to_string().contains("noreplace"), "{error}");
 }
 
 #[test]
@@ -102,12 +126,12 @@ fn flat_requires_section_is_not_in_the_current_manifest_schema() {
     let error = CcsManifest::parse(
         r#"
 [package]
-name = "legacy-flat"
+name = "retired-flat"
 version = "1.0.0"
 version_scheme = "conary"
 release = "1"
 kind = "package"
-description = "legacy flat requirement"
+description = "retired flat requirement"
 
 [requires]
 packages = [{ name = "openssl", version = ">= 3" }]
@@ -668,10 +692,10 @@ description = "nginx converted from RPM"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 17
+schema_revision = 18
 source_format = "rpm"
 source_family = "fedora-rhel"
-source_distro = "fedora"
+source_profile = "fedora-44"
 source_release = "44"
 source_arch = "x86_64"
 source_package = "nginx"
@@ -744,10 +768,10 @@ description = "policy fixture"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 17
+schema_revision = 18
 source_format = "rpm"
 source_family = "rpm"
-source_distro = "fedora"
+source_profile = "fedora-44"
 source_release = "44"
 source_arch = "x86_64"
 source_package = "demo-policy"
@@ -802,6 +826,8 @@ name = "must-not-be-dropped"
 fn typed_package_relations_round_trip_through_manifest_toml() {
     let mut manifest = CcsManifest::new_minimal("replacement", "2.0-1");
     manifest.package.version_scheme = crate::repository::versioning::VersionScheme::Debian;
+    manifest.package.debian_multi_arch =
+        Some(crate::repository::dependency_model::DebianMultiArch::No);
     manifest.relations.push(
         crate::repository::package_relation::parse_native_relation(
             crate::repository::dependency_model::RepositoryRequirementKind::Replace,

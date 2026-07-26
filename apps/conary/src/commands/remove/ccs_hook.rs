@@ -4,7 +4,6 @@
 
 use anyhow::{Context, Result};
 use conary_core::db::models::{InstalledCcsRemoveHook, Trove};
-use conary_core::repository::versioning::VersionScheme;
 use conary_core::scriptlet::{PackageFormat, SandboxMode, ScriptletExecutor};
 use std::path::Path;
 use tracing::info;
@@ -28,19 +27,7 @@ pub(crate) fn load_ccs_remove_hook(
     trove: &Trove,
 ) -> Result<Option<InstalledCcsRemoveHook>> {
     let trove_id = trove.id.context("CCS remove-hook owner has no trove id")?;
-    let hook = InstalledCcsRemoveHook::find_by_trove(conn, trove_id)?;
-    let Some(hook) = hook else {
-        return Ok(None);
-    };
-    let version_scheme = trove.version_scheme;
-    if version_scheme != VersionScheme::Conary {
-        anyhow::bail!(
-            "installed CCS remove hook for '{}' conflicts with package version scheme '{}'",
-            trove.name,
-            version_scheme.as_str()
-        );
-    }
-    Ok(Some(hook))
+    InstalledCcsRemoveHook::find_by_trove(conn, trove_id).map_err(Into::into)
 }
 
 pub(crate) fn preflight_loaded_ccs_remove_hook(

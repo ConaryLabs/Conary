@@ -88,9 +88,10 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
 
     let conn = conary_core::db::open(&db_path).unwrap();
     let mut converted = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "pkg".to_string(),
         "1.0".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:source".to_string(),
         &["sha256:chunk".to_string()],
@@ -98,7 +99,6 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
     );
-    converted.package_architecture = Some("x86_64".to_string());
     let summary = ScriptletBundleSummary {
         scriptlet_fidelity: "native-free".to_string(),
         ..ScriptletBundleSummary::default()
@@ -133,9 +133,10 @@ fn malformed_current_conversion_metadata_is_an_internal_data_error() {
     std::fs::write(&ccs_path, b"fake ccs").unwrap();
 
     let mut converted = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "pkg".to_string(),
         "1.0".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:source".to_string(),
         &["abc".to_string()],
@@ -171,9 +172,10 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
 
     let conn = conary_core::db::open(&db_path).unwrap();
     let mut converted = ConvertedPackage::new_repository(
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "p11-kit-trust".to_string(),
         "0.25.8-1.fc44".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:stale".to_string(),
         &[],
@@ -181,7 +183,6 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
     );
-    converted.package_architecture = Some("x86_64".to_string());
     converted.conversion_version = CONVERSION_VERSION - 1;
     converted.insert(&conn).unwrap();
 

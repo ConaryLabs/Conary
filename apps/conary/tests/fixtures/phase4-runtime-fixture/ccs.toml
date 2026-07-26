@@ -6,11 +6,15 @@ release = "1"
 kind = "package"
 description = "Phase 4 runtime fixture for config, label, trigger, and shell coverage"
 license = "MIT"
+homepage = "https://conary.io/fixtures/phase4-runtime-fixture"
 
 [package.platform]
 os = "linux"
 arch = "x86_64"
 libc = "gnu"
+
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
 
 [provides]
 capabilities = ["phase4-runtime-fixture"]
@@ -19,8 +23,10 @@ binaries = ["/usr/bin/phase4-runtime-fixture"]
 [components]
 default = ["runtime", "config"]
 
-[config]
-files = ["/etc/phase4-runtime-fixture/app.conf"]
+[[config.files]]
+path = "/etc/phase4-runtime-fixture/app.conf"
 noreplace = true
+ghost = false
+remove_on_upgrade = false
 
 [hooks]

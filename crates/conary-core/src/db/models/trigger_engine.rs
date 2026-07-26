@@ -32,7 +32,7 @@ impl<'a> TriggerEngine<'a> {
 
         for path in file_paths {
             for trigger in &triggers {
-                if trigger.matches(path) {
+                if trigger.matches(path)? {
                     let trigger_id = trigger.id.unwrap_or(0);
                     matches
                         .entry(trigger_id)

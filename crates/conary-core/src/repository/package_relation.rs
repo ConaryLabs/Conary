@@ -7,8 +7,9 @@
 //! expressions; callers must never recover these semantics from substrings.
 
 use super::dependency_model::{
-    ConditionalRequirementBehavior, RepositoryRequirementClause, RepositoryRequirementExpression,
-    RepositoryRequirementGroup, RepositoryRequirementKind,
+    ConditionalRequirementBehavior, ProvideArchitectureQualifier, RepositoryCapabilityKind,
+    RepositoryProvide, RepositoryRequirementClause, RepositoryRequirementExpression,
+    RepositoryRequirementGroup, RepositoryRequirementKind, RequirementArchitectureQualifier,
 };
 use super::versioning::{RepoVersionConstraint, repo_version_satisfies};
 use super::versioning::{VersionScheme, parse_repo_constraint};
@@ -464,7 +465,7 @@ fn parse_debian_relation(input: &str) -> Result<RepositoryRequirementExpression,
     )?))
 }
 
-pub(super) fn parse_debian_atom(input: &str) -> Result<RepositoryRequirementClause, String> {
+pub(crate) fn parse_debian_atom(input: &str) -> Result<RepositoryRequirementClause, String> {
     let input = input.trim();
     let name_end = input
         .char_indices()
@@ -472,16 +473,19 @@ pub(super) fn parse_debian_atom(input: &str) -> Result<RepositoryRequirementClau
             (character.is_whitespace() || matches!(character, '(' | '[' | '<')).then_some(index)
         })
         .unwrap_or(input.len());
-    let name = &input[..name_end];
-    validate_debian_name(name, input)?;
+    let native_name = &input[..name_end];
+    let (name, architecture_qualifier) = parse_debian_name(native_name, input)?;
     let suffix = input[name_end..].trim_start();
     if suffix.starts_with('[') || suffix.starts_with('<') {
         return Err(format!(
-            "Debian architecture/profile restrictions are not valid in binary negative relationships: {input}"
+            "Debian architecture/profile restrictions are not valid in binary package relationships: {input}"
         ));
     }
     if suffix.is_empty() {
-        return Ok(RepositoryRequirementClause::name_only(name.to_string()));
+        let mut clause = RepositoryRequirementClause::name_only(name.to_string());
+        clause.architecture_qualifier = architecture_qualifier;
+        clause.native_text = Some(input.to_string());
+        return Ok(clause);
     }
     if !suffix.starts_with('(') || !suffix.ends_with(')') {
         return Err(format!("malformed Debian relation atom: {input}"));
@@ -503,13 +507,53 @@ pub(super) fn parse_debian_atom(input: &str) -> Result<RepositoryRequirementClau
     {
         return Err(format!("invalid Debian relation constraint: {input}"));
     }
-    Ok(RepositoryRequirementClause::versioned(
-        name.to_string(),
-        format!("{operator} {version}"),
-    ))
+    let mut clause =
+        RepositoryRequirementClause::versioned(name.to_string(), format!("{operator} {version}"));
+    clause.architecture_qualifier = architecture_qualifier;
+    clause.native_text = Some(input.to_string());
+    Ok(clause)
 }
 
-pub(super) fn parse_arch_atom(input: &str) -> Result<RepositoryRequirementClause, String> {
+/// Parse one Debian `Provides` atom with dpkg's exact version and architecture
+/// grammar. Only an exact provided version is meaningful to dpkg.
+pub(crate) fn parse_debian_provide(input: &str) -> Result<RepositoryProvide, String> {
+    let clause = parse_debian_atom(input)?;
+    let version = match clause.version_constraint.as_deref() {
+        None => None,
+        Some(raw) => match parse_repo_constraint(VersionScheme::Debian, raw)
+            .map_err(|error| error.to_string())?
+        {
+            RepoVersionConstraint::Exact(version) => Some(version),
+            _ => {
+                return Err(format!(
+                    "Debian Provides permits only an exact '=' version: {input}"
+                ));
+            }
+        },
+    };
+    let architecture_qualifier = match clause.architecture_qualifier {
+        RequirementArchitectureQualifier::Unqualified => ProvideArchitectureQualifier::Implicit,
+        RequirementArchitectureQualifier::Any => ProvideArchitectureQualifier::Any,
+        RequirementArchitectureQualifier::Native => {
+            ProvideArchitectureQualifier::Exact("native".to_string())
+        }
+        RequirementArchitectureQualifier::Exact(architecture) => {
+            ProvideArchitectureQualifier::Exact(architecture)
+        }
+    };
+    Ok(RepositoryProvide {
+        name: clause.name,
+        kind: RepositoryCapabilityKind::Virtual,
+        version_relation: version
+            .as_ref()
+            .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
+        version,
+        architecture_qualifier,
+        native_text: Some(input.trim().to_string()),
+    })
+}
+
+pub(crate) fn parse_arch_atom(input: &str) -> Result<RepositoryRequirementClause, String> {
     if input.contains(char::is_whitespace) {
         return Err(format!(
             "Arch relation must use the exact inline grammar: {input}"
@@ -553,8 +597,11 @@ fn validate_name(name: &str, input: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_debian_name(name: &str, input: &str) -> Result<(), String> {
-    let (package_name, architecture_qualifier) = name
+fn parse_debian_name<'a>(
+    name: &'a str,
+    input: &str,
+) -> Result<(&'a str, RequirementArchitectureQualifier), String> {
+    let (package_name, architecture) = name
         .split_once(':')
         .map_or((name, None), |(package, arch)| (package, Some(arch)));
     let mut characters = package_name.chars();
@@ -568,16 +615,28 @@ fn validate_debian_name(name: &str, input: &str) -> Result<(), String> {
                 || character.is_ascii_digit()
                 || matches!(character, '+' | '-' | '.')
         })
-        || architecture_qualifier.is_some_and(|qualifier| {
-            qualifier.is_empty()
-                || !qualifier.chars().all(|character| {
-                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-                })
-        })
     {
         return Err(format!("invalid Debian package relation name: {input}"));
     }
-    Ok(())
+    let architecture_qualifier = match architecture {
+        None => RequirementArchitectureQualifier::Unqualified,
+        Some("any") => RequirementArchitectureQualifier::Any,
+        Some("native") => RequirementArchitectureQualifier::Native,
+        Some(architecture)
+            if !architecture.is_empty()
+                && architecture.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                }) =>
+        {
+            RequirementArchitectureQualifier::Exact(architecture.to_string())
+        }
+        Some(_) => {
+            return Err(format!(
+                "invalid Debian dependency architecture qualifier: {input}"
+            ));
+        }
+    };
+    Ok((package_name, architecture_qualifier))
 }
 
 fn validate_arch_name(name: &str, input: &str) -> Result<(), String> {

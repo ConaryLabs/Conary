@@ -97,6 +97,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                         db_path: &common.db.db_path,
                         root: &common.root,
                         version,
+                        package_release: None,
                         repo,
                         architecture: None,
                         dry_run,
@@ -107,7 +108,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                         convert_to_ccs,
                         ownership,
                         yes,
-                        from_distro: from,
+                        from_profile: from,
                         repository_provenance: None,
                     },
                 )

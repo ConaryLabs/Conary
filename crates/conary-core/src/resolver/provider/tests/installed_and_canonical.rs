@@ -72,7 +72,10 @@ fn installed_arch_package_in_provider_selection() {
     let constraint = ConaryConstraint::Repository {
         scheme: VersionScheme::Arch,
         constraint: RepoVersionConstraint::GreaterOrEqual("2.39".to_string()),
+        capability_kind: None,
         raw: Some(">= 2.39".to_string()),
+        architecture_qualifier: Default::default(),
+        depending_architecture: "x86_64".to_string(),
     };
     assert!(
         constraint_matches_package(&constraint, &solvable.version, solvable.version_scheme,)
@@ -113,7 +116,7 @@ fn native_ccs_package_uses_explicit_conary_version_scheme() {
 
 #[test]
 fn canonical_index_loads_cross_distro_equivalents() {
-    use crate::db::models::{CanonicalPackage, PackageImplementation};
+    use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
 
     let (_dir, conn) = setup_test_db();
 
@@ -122,17 +125,17 @@ fn canonical_index_loads_cross_distro_equivalents() {
 
     let mut fedora = PackageImplementation::new(
         canonical_id,
-        "fedora".to_string(),
+        "fedora-44".to_string(),
         "openssl".to_string(),
-        "auto".to_string(),
+        CanonicalMappingAuthority::Contract,
     );
     fedora.insert(&conn).unwrap();
 
     let mut debian = PackageImplementation::new(
         canonical_id,
-        "debian".to_string(),
+        "ubuntu-26.04".to_string(),
         "libssl3".to_string(),
-        "auto".to_string(),
+        CanonicalMappingAuthority::Contract,
     );
     debian.insert(&conn).unwrap();
 
@@ -140,7 +143,7 @@ fn canonical_index_loads_cross_distro_equivalents() {
         canonical_id,
         "arch".to_string(),
         "openssl".to_string(),
-        "auto".to_string(),
+        CanonicalMappingAuthority::Contract,
     );
     arch.insert(&conn).unwrap();
 

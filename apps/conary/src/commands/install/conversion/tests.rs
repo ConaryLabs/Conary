@@ -12,12 +12,13 @@ use conary_core::db::models::{
     Repository, RepositoryPackageKey, RepositoryPackageKeyStatus, Trove,
 };
 use conary_core::hash;
-use conary_core::packages::traits::{Dependency, ExtractedFile, PackageFile, PackageFormat};
+use conary_core::packages::traits::{
+    ExtractedFile, PackageFile, PackageFormat, ProvidedCapability,
+};
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
 use conary_core::repository::RepositorySourceKind;
-use conary_core::version::VersionConstraint;
 use std::collections::HashMap;
 
 struct FakeNativePackage {
@@ -26,7 +27,18 @@ struct FakeNativePackage {
     description: Option<String>,
     files: Vec<PackageFile>,
     extracted_files: Vec<ExtractedFile>,
-    provides: Vec<Dependency>,
+    provides: Vec<ProvidedCapability>,
+}
+
+fn test_regular_node(permissions: u32) -> PayloadNode {
+    let mut node = PayloadNode::regular(permissions);
+    node.user = conary_core::payload::PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::geteuid() }),
+    };
+    node.group = conary_core::payload::PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::getegid() }),
+    };
+    node
 }
 
 impl FakeNativePackage {
@@ -42,12 +54,12 @@ impl FakeNativePackage {
             description: Some("fake nginx native package".to_string()),
             files: vec![PackageFile {
                 path: "/usr/sbin/nginx".to_string(),
-                node: PayloadNode::regular(0o755),
+                node: test_regular_node(0o755),
                 content: Some(content_authority.clone()),
             }],
             extracted_files: vec![ExtractedFile {
                 path: "/usr/sbin/nginx".to_string(),
-                node: PayloadNode::regular(0o755),
+                node: test_regular_node(0o755),
                 content,
                 content_authority: Some(content_authority),
             }],
@@ -70,7 +82,7 @@ impl PackageFormat for FakeNativePackage {
     }
 
     fn version_scheme(&self) -> conary_core::repository::versioning::VersionScheme {
-        conary_core::repository::versioning::VersionScheme::Conary
+        conary_core::repository::versioning::VersionScheme::Rpm
     }
 
     fn architecture(&self) -> Option<&str> {
@@ -91,12 +103,14 @@ impl PackageFormat for FakeNativePackage {
         &[]
     }
 
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         &self.provides
     }
 
-    fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
-        Ok(self.extracted_files.clone())
+    fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
+        conary_core::packages::PackagePayload::from_extracted_in_memory(
+            self.extracted_files.clone(),
+        )
     }
 
     fn to_trove(&self) -> Trove {
@@ -104,7 +118,7 @@ impl PackageFormat for FakeNativePackage {
             self.name.clone(),
             self.version.clone(),
             conary_core::db::models::TroveType::Package,
-            conary_core::repository::versioning::VersionScheme::Conary,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         )
     }
 }
@@ -162,6 +176,42 @@ fn stage_test_boot_assets(root: &std::path::Path) {
     )
     .unwrap();
     std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
+}
+
+fn published_or_pending_generation_has_path(db_path: &std::path::Path, path: &str) -> bool {
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
+    if let Some(generation) =
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap()
+    {
+        let artifact = conary_core::generation::artifact::load_generation_artifact(
+            &runtime_root.generation_path(generation),
+        )
+        .unwrap();
+        return artifact
+            .generation_root
+            .entries
+            .iter()
+            .chain(&artifact.mutable_state.entries)
+            .any(|entry| entry.path == path);
+    }
+
+    let conn = conary_core::db::open(db_path).unwrap();
+    let debt = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)
+        .unwrap()
+        .pop()
+        .expect("converted install should retain exact publication debt");
+    let captured = crate::commands::generation::selected_root::load_publication_candidate(
+        &runtime_root,
+        &debt,
+    )
+    .unwrap();
+    captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+        .any(|entry| entry.path == path)
 }
 
 fn write_runtime_ccs_package(
@@ -274,10 +324,15 @@ fn insert_static_repository_with_keys(
 fn static_provenance(repository_id: i64) -> RepositoryInstallProvenance {
     RepositoryInstallProvenance {
         repository_id,
-        source_distro: Some("fedora".to_string()),
-        version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
+        source_profile: None,
+        version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
         source_kind: RepositorySourceKind::Static,
     }
+}
+
+fn test_resolution_policy() -> conary_core::repository::resolution_policy::ResolutionPolicy {
+    conary_core::repository::resolution_policy::ResolutionPolicy::new()
+        .with_mixing(conary_core::repository::resolution_policy::DependencyMixingPolicy::Permissive)
 }
 
 fn converted_install_options<'a>(
@@ -285,8 +340,13 @@ fn converted_install_options<'a>(
     db_path: &'a str,
     install_root: &'a std::path::Path,
     repository_provenance: Option<RepositoryInstallProvenance>,
-) -> ConvertedCcsInstallOptions<'a> {
-    ConvertedCcsInstallOptions {
+) -> CcsArtifactInstallOptions<'a> {
+    let envelope_authority = if repository_provenance.is_some() {
+        CcsEnvelopeAuthority::Repository
+    } else {
+        CcsEnvelopeAuthority::LocalDev
+    };
+    CcsArtifactInstallOptions {
         ccs_path: ccs_path.to_str().unwrap(),
         db_path,
         root: install_root.to_str().unwrap(),
@@ -294,9 +354,12 @@ fn converted_install_options<'a>(
         sandbox_mode: SandboxMode::Always,
         no_deps: true,
         allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
         yes: true,
         dependency_passes_remaining: 0,
+        envelope_authority,
         repository_provenance,
+        resolution_policy: test_resolution_policy(),
     }
 }
 
@@ -314,13 +377,25 @@ async fn try_convert_to_ccs_does_not_guess_capability_policy() {
     native_fixture.write_file(&native_path).unwrap();
 
     let package = FakeNativePackage::nginx();
-    let result = try_convert_to_ccs(&package, &native_path, PackageFormatType::Rpm, db_path_str)
-        .await
-        .expect("conversion without declared capabilities must not require policy approval");
+    let result = try_convert_to_ccs(
+        &package,
+        &native_path,
+        PackageFormatType::Rpm,
+        db_path_str,
+        &test_resolution_policy(),
+    )
+    .await
+    .expect("conversion without declared capabilities must not require policy approval");
     let ConversionResult::Converted { ccs_path, .. } = result else {
         panic!("conversion unexpectedly skipped");
     };
-    let verified = verify_ccs_package_authority(db_path_str, Path::new(&ccs_path), None).unwrap();
+    let verified = verify_ccs_package_authority(
+        db_path_str,
+        Path::new(&ccs_path),
+        &CcsEnvelopeAuthority::LocalDev,
+        None,
+    )
+    .unwrap();
     let converted = CcsPackage::from_verified_archive(&ccs_path, &verified).unwrap();
     assert!(
         converted.manifest().capabilities.is_none(),
@@ -374,7 +449,7 @@ async fn converted_ccs_install_executes_directory_hooks() {
     });
     let package_path = write_runtime_ccs_package(temp_dir.path(), "converted-hooked", manifest);
 
-    install_converted_ccs(ConvertedCcsInstallOptions {
+    install_ccs_artifact(CcsArtifactInstallOptions {
         ccs_path: package_path.to_str().unwrap(),
         db_path: db_path_str,
         root: install_root.to_str().unwrap(),
@@ -382,14 +457,21 @@ async fn converted_ccs_install_executes_directory_hooks() {
         sandbox_mode: SandboxMode::Always,
         no_deps: true,
         allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
         yes: true,
         dependency_passes_remaining: 0,
+        envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        resolution_policy: test_resolution_policy(),
     })
     .await
     .unwrap();
 
-    assert!(install_root.join("var/lib/converted-hooked").is_dir());
+    assert!(!install_root.join("var/lib/converted-hooked").exists());
+    assert!(published_or_pending_generation_has_path(
+        &db_path,
+        "/var/lib/converted-hooked"
+    ));
 }
 
 #[tokio::test]
@@ -412,7 +494,7 @@ async fn static_repo_ccs_install_rejects_repository_without_package_authority() 
         &unlisted_key,
     );
 
-    let err = install_converted_ccs(converted_install_options(
+    let err = install_ccs_artifact(converted_install_options(
         &package_path,
         db_path_str,
         &install_root,
@@ -451,7 +533,7 @@ async fn static_repo_ccs_install_rejects_unlisted_signing_key() {
         &unlisted_key,
     );
 
-    let err = install_converted_ccs(converted_install_options(
+    let err = install_ccs_artifact(converted_install_options(
         &package_path,
         db_path_str,
         &install_root,
@@ -461,7 +543,7 @@ async fn static_repo_ccs_install_rejects_unlisted_signing_key() {
     .unwrap_err();
 
     assert!(
-        format!("{err:?}").contains("Static repository package signature verification failed"),
+        format!("{err:?}").contains("package signer is not trusted"),
         "static package signed by an unlisted key should fail: {err:?}"
     );
 }
@@ -489,7 +571,7 @@ async fn static_repo_ccs_install_accepts_active_package_key() {
         &active_key,
     );
 
-    install_converted_ccs(converted_install_options(
+    install_ccs_artifact(converted_install_options(
         &package_path,
         db_path_str,
         &install_root,
@@ -532,7 +614,7 @@ async fn static_repo_ccs_install_rejects_retired_only_package_key() {
         &retired_key,
     );
 
-    let err = install_converted_ccs(converted_install_options(
+    let err = install_ccs_artifact(converted_install_options(
         &package_path,
         db_path_str,
         &install_root,
@@ -542,7 +624,7 @@ async fn static_repo_ccs_install_rejects_retired_only_package_key() {
     .unwrap_err();
 
     assert!(
-        format!("{err:?}").contains("Static repository package signature verification failed"),
+        format!("{err:?}").contains("no verified package-authority keys"),
         "static package signed only by a retired key should fail: {err:?}"
     );
 }
@@ -568,12 +650,12 @@ async fn non_static_repo_ccs_install_requires_repository_package_authority() {
     let repo_id = insert_static_repository_with_keys(db_path_str, &[]);
     let provenance = RepositoryInstallProvenance {
         repository_id: repo_id,
-        source_distro: Some("fedora".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
         source_kind: RepositorySourceKind::Remi,
     };
 
-    let error = install_converted_ccs(converted_install_options(
+    let error = install_ccs_artifact(converted_install_options(
         &package_path,
         db_path_str,
         &install_root,
@@ -607,7 +689,7 @@ async fn converted_ccs_install_rolls_back_post_hook_failure() {
     let package_path =
         write_runtime_ccs_package(temp_dir.path(), "converted-post-hook-fails", manifest);
 
-    let error = install_converted_ccs(ConvertedCcsInstallOptions {
+    let error = install_ccs_artifact(CcsArtifactInstallOptions {
         ccs_path: package_path.to_str().unwrap(),
         db_path: db_path_str,
         root: install_root.to_str().unwrap(),
@@ -615,9 +697,12 @@ async fn converted_ccs_install_rolls_back_post_hook_failure() {
         sandbox_mode: SandboxMode::Always,
         no_deps: true,
         allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
         yes: true,
         dependency_passes_remaining: 0,
+        envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        resolution_policy: test_resolution_policy(),
     })
     .await
     .unwrap_err();
@@ -696,7 +781,7 @@ async fn converted_ccs_install_rejects_symlink_child_payload() {
     let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
     write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
 
-    let err = install_converted_ccs(ConvertedCcsInstallOptions {
+    let err = install_ccs_artifact(CcsArtifactInstallOptions {
         ccs_path: package_path.to_str().unwrap(),
         db_path: db_path_str,
         root: install_root.to_str().unwrap(),
@@ -704,9 +789,12 @@ async fn converted_ccs_install_rejects_symlink_child_payload() {
         sandbox_mode: SandboxMode::Always,
         no_deps: true,
         allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
         yes: true,
         dependency_passes_remaining: 0,
+        envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        resolution_policy: test_resolution_policy(),
     })
     .await
     .unwrap_err();
@@ -780,7 +868,7 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
     let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
     write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
 
-    let err = install_converted_ccs(ConvertedCcsInstallOptions {
+    let err = install_ccs_artifact(CcsArtifactInstallOptions {
         ccs_path: package_path.to_str().unwrap(),
         db_path: db_path_str,
         root: install_root.to_str().unwrap(),
@@ -788,9 +876,12 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
         sandbox_mode: SandboxMode::Always,
         no_deps: true,
         allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
         yes: true,
         dependency_passes_remaining: 0,
+        envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        resolution_policy: test_resolution_policy(),
     })
     .await
     .unwrap_err();
@@ -810,129 +901,6 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
     assert_eq!(persisted, 0);
 }
 
-#[tokio::test]
-async fn converted_ccs_install_rejects_prompted_capabilities_before_db_mutation() {
-    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-    let temp_dir = tempfile::tempdir().unwrap();
-    let install_root = temp_dir.path().join("root");
-    let db_path = temp_dir.path().join("conary.db");
-    let db_path_str = db_path.to_str().unwrap();
-
-    std::fs::create_dir_all(&install_root).unwrap();
-    conary_core::db::init(db_path_str).unwrap();
-    stage_test_boot_assets(temp_dir.path());
-
-    let mut manifest = CcsManifest::new_minimal("converted-prompted-capability", "1.0.0");
-    manifest.capabilities = Some(CapabilityDeclaration {
-        version: 1,
-        rationale: Some("binds a privileged test port".to_string()),
-        network: NetworkCapabilities {
-            connect_tcp: Vec::new(),
-            bind_tcp: vec![80],
-            none: false,
-        },
-        filesystem: FilesystemCapabilities::default(),
-        syscalls: SyscallCapabilities::default(),
-        linux: conary_core::capability::LinuxCapabilities {
-            required: vec!["cap-net-bind-service".to_string()],
-        },
-    });
-    let package_path =
-        write_runtime_ccs_package(temp_dir.path(), "converted-prompted-capability", manifest);
-
-    let err = install_converted_ccs(ConvertedCcsInstallOptions {
-        ccs_path: package_path.to_str().unwrap(),
-        db_path: db_path_str,
-        root: install_root.to_str().unwrap(),
-        dry_run: false,
-        sandbox_mode: SandboxMode::Always,
-        no_deps: true,
-        allow_downgrade: false,
-        yes: true,
-        dependency_passes_remaining: 0,
-        repository_provenance: None,
-    })
-    .await
-    .unwrap_err();
-
-    assert!(
-        err.to_string()
-            .contains("requires capability cap-net-bind-service"),
-        "converted CCS install should fail closed for prompted capabilities: {err:?}"
-    );
-    let conn = conary_core::db::open(db_path_str).unwrap();
-    let trove_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM troves WHERE name = 'converted-prompted-capability'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let changeset_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(trove_count, 0);
-    assert_eq!(changeset_count, 0);
-    assert!(
-        std::fs::read_link(temp_dir.path().join("current")).is_err(),
-        "capability rejection must happen before generation activation"
-    );
-}
-
-#[tokio::test]
-async fn converted_ccs_install_accepts_prompted_capabilities_when_allowed() {
-    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-    let temp_dir = tempfile::tempdir().unwrap();
-    let install_root = temp_dir.path().join("root");
-    let db_path = temp_dir.path().join("conary.db");
-    let db_path_str = db_path.to_str().unwrap();
-
-    std::fs::create_dir_all(&install_root).unwrap();
-    conary_core::db::init(db_path_str).unwrap();
-    stage_test_boot_assets(temp_dir.path());
-
-    let mut manifest = CcsManifest::new_minimal("converted-allowed-capability", "1.0.0");
-    manifest.capabilities = Some(CapabilityDeclaration {
-        version: 1,
-        rationale: Some("binds a privileged test port".to_string()),
-        network: NetworkCapabilities {
-            connect_tcp: Vec::new(),
-            bind_tcp: vec![80],
-            none: false,
-        },
-        filesystem: FilesystemCapabilities::default(),
-        syscalls: SyscallCapabilities::default(),
-        linux: conary_core::capability::LinuxCapabilities {
-            required: vec!["cap-net-bind-service".to_string()],
-        },
-    });
-    let package_path =
-        write_runtime_ccs_package(temp_dir.path(), "converted-allowed-capability", manifest);
-
-    install_converted_ccs(ConvertedCcsInstallOptions {
-        ccs_path: package_path.to_str().unwrap(),
-        db_path: db_path_str,
-        root: install_root.to_str().unwrap(),
-        dry_run: false,
-        sandbox_mode: SandboxMode::Always,
-        no_deps: true,
-        allow_downgrade: false,
-        yes: true,
-        dependency_passes_remaining: 0,
-        repository_provenance: None,
-    })
-    .await
-    .unwrap();
-
-    let conn = conary_core::db::open(db_path_str).unwrap();
-    let trove_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM troves WHERE name = 'converted-allowed-capability'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(trove_count, 1);
-}
-
+mod authority;
+mod capabilities;
 mod dependencies;

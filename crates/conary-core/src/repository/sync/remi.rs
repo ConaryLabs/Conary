@@ -1,8 +1,11 @@
 // conary-core/src/repository/sync/remi.rs
 
+use crate::canonical::exchange::{
+    CanonicalMapSnapshot, expected_checksum, parse_snapshot, replace_remi_snapshot,
+};
 use crate::db::models::{
-    CanonicalPackage, PackageImplementation, Repository, RepositoryPackage, RepositoryProvide,
-    RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
+    Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+    RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -20,9 +23,7 @@ use tracing::{debug, info, warn};
 
 use super::apply_trusted_package_security_advisory;
 use super::native::persist_native_sync_rows;
-use super::types::{
-    CanonicalMapSnapshot, RemiMetadataResponse, RemiPackageEntry, SyncedPackageRow,
-};
+use super::types::{RemiMetadataResponse, RemiPackageEntry, SyncedPackageRow};
 
 pub(super) fn remi_sync_row(
     repo_id: i64,
@@ -115,7 +116,7 @@ pub(super) fn remi_sync_row(
         ref value => Some(value.to_string()),
     };
 
-    package.distro = Some(public_profile_id.to_string());
+    package.source_profile = Some(public_profile_id.to_string());
 
     if !wire_provides
         .iter()
@@ -144,7 +145,9 @@ pub(super) fn remi_sync_row(
                 provide.kind,
                 provide.raw,
                 provide.version_scheme,
-            ))
+            )
+            .with_version_relation(provide.version_relation)
+            .with_architecture_qualifier(provide.architecture_qualifier))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -263,9 +266,9 @@ fn validate_remi_relation_group(
 /// the Remi server's `/v1/{distro}/metadata` endpoint instead of parsing
 /// traditional repo formats (repomd.xml, Packages, etc.).
 pub(super) async fn fetch_remi_sync_rows(repo: &Repository) -> Result<Vec<SyncedPackageRow>> {
-    let configured_target = repo.default_strategy_distro.as_deref().ok_or_else(|| {
+    let configured_target = repo.source_profile.as_deref().ok_or_else(|| {
         Error::ConfigError(format!(
-            "Repository '{}' has strategy 'remi' but no distro configured (use --remi-distro)",
+            "Repository '{}' has strategy 'remi' but no source profile configured (use --source-profile)",
             repo.name
         ))
     })?;
@@ -391,45 +394,28 @@ async fn fetch_remi_metadata_once(
 
 /// Fetch the canonical package map from a Remi endpoint and persist it locally.
 ///
-/// Downloads the full canonical map from `{endpoint}/v1/canonical/map` and upserts
-/// each entry into `canonical_packages` and `package_implementations`. This is
-/// non-fatal: callers should log failures at debug level and continue.
+/// Downloads and checksum-verifies the full map from
+/// `{endpoint}/v1/canonical/map`. Persistence atomically replaces Remi-owned
+/// rows while preserving non-conflicting Contract authority.
 pub(super) async fn fetch_canonical_map_snapshot(endpoint: &str) -> Result<CanonicalMapSnapshot> {
     let url = format!("{}/v1/canonical/map", endpoint.trim_end_matches('/'));
     debug!("Fetching canonical map from {}", url);
 
     let client = RepositoryClient::new()?;
-    let bytes = client.download_to_bytes(&url).await?;
+    let (headers, bytes) = client.download_to_bytes_with_headers(&url).await?;
+    let checksum = expected_checksum(&headers)?;
+    crate::hash::verify_sha256(&bytes, &checksum).map_err(|error| Error::ChecksumMismatch {
+        expected: error.expected,
+        actual: error.actual,
+    })?;
 
-    serde_json::from_slice(&bytes).map_err(|error| {
+    parse_snapshot(&bytes).map_err(|error| {
         Error::ParseError(format!("Failed to parse canonical map from {url}: {error}"))
     })
 }
 
 pub(super) fn persist_canonical_map(conn: &Connection, map: &CanonicalMapSnapshot) -> Result<u64> {
-    let tx = conn.unchecked_transaction()?;
-    let mut count = 0u64;
-
-    for entry in &map.entries {
-        let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
-        let Some(canonical_id) = canonical.insert_or_ignore(&tx)? else {
-            continue;
-        };
-
-        for (distro, distro_name) in &entry.implementations {
-            let mut implementation = PackageImplementation::new(
-                canonical_id,
-                distro.clone(),
-                distro_name.clone(),
-                "remi".to_string(),
-            );
-            implementation.insert_or_ignore(&tx)?;
-            count += 1;
-        }
-    }
-
-    tx.commit()?;
-    Ok(count)
+    replace_remi_snapshot(conn, map).map(|count| count as u64)
 }
 
 pub(super) async fn fetch_and_persist_canonical_map(
@@ -462,9 +448,14 @@ mod tests {
             provides: vec![RemiProvide {
                 capability: name.to_string(),
                 version: Some(version.to_string()),
+                version_relation: Some(
+                    crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                ),
                 kind: "package".to_string(),
                 raw: Some(name.to_string()),
                 version_scheme,
+                architecture_qualifier:
+                    crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
             }],
             requirement_groups: Vec::new(),
             metadata: None,
@@ -520,7 +511,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(row.package.distro.as_deref(), Some("ubuntu-26.04"));
+        assert_eq!(row.package.source_profile.as_deref(), Some("ubuntu-26.04"));
         assert_eq!(row.package.version_scheme, VersionScheme::Debian);
     }
 
@@ -540,7 +531,7 @@ mod tests {
             )
             .unwrap();
 
-            assert_eq!(row.package.distro.as_deref(), Some(public_id));
+            assert_eq!(row.package.source_profile.as_deref(), Some(public_id));
             assert!(
                 row.package
                     .download_url
@@ -595,7 +586,7 @@ mod tests {
     fn remi_wire_relation_persists_exact_obsolete_authority() {
         let (_temp, conn) = create_test_db();
         let mut repository = Repository::new("fedora".to_string(), "https://remi.test".to_string());
-        repository.default_strategy_distro = Some("fedora-44".to_string());
+        repository.source_profile = Some("fedora-44".to_string());
         let repository_id = repository.insert(&conn).unwrap();
         let relation = parse_native_relation(
             RepositoryRequirementKind::Obsolete,

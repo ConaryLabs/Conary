@@ -6,8 +6,8 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
-    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryDependencyFlavor,
-    RepositoryRequirementGroup, RepositoryRequirementKind,
+    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
 };
 use crate::repository::parsers::PackageMetadata;
 use rusqlite::Connection;
@@ -115,6 +115,8 @@ pub(super) fn normalized_repository_capabilities(
                     provide.native_text.clone(),
                     scheme,
                 )
+                .with_version_relation(provide.version_relation)
+                .with_architecture_qualifier(provide.architecture_qualifier.clone())
             })
             .collect()
     } else {
@@ -129,21 +131,15 @@ pub(super) fn normalized_repository_capabilities(
     }
 }
 
-pub(super) fn distro_flavor_to_db(flavor: RepositoryDependencyFlavor) -> String {
-    match flavor {
-        RepositoryDependencyFlavor::Conary => "conary".to_string(),
-        RepositoryDependencyFlavor::Rpm => "rpm".to_string(),
-        RepositoryDependencyFlavor::Deb => "deb".to_string(),
-        RepositoryDependencyFlavor::Arch => "arch".to_string(),
-    }
-}
-
 pub(in crate::repository) fn capability_kind_to_db(kind: RepositoryCapabilityKind) -> String {
     match kind {
         RepositoryCapabilityKind::PackageName => "package".to_string(),
         RepositoryCapabilityKind::Virtual => "virtual".to_string(),
         RepositoryCapabilityKind::Soname => "soname".to_string(),
         RepositoryCapabilityKind::File => "file".to_string(),
+        RepositoryCapabilityKind::Path => "path".to_string(),
+        RepositoryCapabilityKind::Binary => "binary".to_string(),
+        RepositoryCapabilityKind::PkgConfig => "pkgconfig".to_string(),
         RepositoryCapabilityKind::Generic => "generic".to_string(),
     }
 }

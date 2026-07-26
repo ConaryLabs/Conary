@@ -39,7 +39,7 @@ async fn ccs_install_persists_capability_declarations() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,

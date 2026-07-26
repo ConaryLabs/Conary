@@ -23,6 +23,7 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
+    existing.architecture = Some(conary_core::repository::registry::detect_system_arch());
     let existing_id = existing.insert(&conn).unwrap();
     drop(conn);
 

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub struct ServerConversionResult {
     pub name: String,
     pub version: String,
-    pub distro: String,
+    pub source_profile: Option<String>,
     pub chunk_hashes: Vec<String>,
     pub total_size: u64,
     pub content_hash: String,
@@ -65,7 +65,7 @@ mod tests {
         let result = ServerConversionResult {
             name: "nginx".to_string(),
             version: "1.28.0".to_string(),
-            distro: "fedora".to_string(),
+            source_profile: Some("fedora-44".to_string()),
             chunk_hashes: vec![],
             total_size: 0,
             content_hash: "sha256:test".to_string(),
@@ -83,7 +83,7 @@ mod tests {
         let result = ServerConversionResult {
             name: "nginx".to_string(),
             version: "1.24.0".to_string(),
-            distro: "fedora".to_string(),
+            source_profile: Some("fedora-44".to_string()),
             chunk_hashes: vec!["abc123".to_string()],
             total_size: 1024,
             content_hash: "sha256:deadbeef".to_string(),

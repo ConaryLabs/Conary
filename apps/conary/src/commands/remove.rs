@@ -1,9 +1,10 @@
-// src/commands/remove.rs
+// apps/conary/src/commands/remove.rs
 //! Package removal commands
 
 mod autoremove;
 mod ccs_hook;
 mod command;
+mod directory_ownership;
 mod native_graph;
 #[cfg(test)]
 pub(super) mod test_support;
@@ -16,7 +17,8 @@ pub(crate) use ccs_hook::{
     preflight_loaded_ccs_remove_hook,
 };
 pub use command::cmd_remove;
-pub(crate) use native_graph::execute_installed_trove_remove_graph;
+pub(crate) use directory_ownership::PackagePayloadOwnership;
+pub(crate) use transaction::{commit_remove_db, prepare_remove_for_state_restore, snapshot_trove};
 #[allow(unused_imports)]
 pub(crate) use types::RemoveInnerResult;
 pub(crate) use types::RemoveLifecycleOptions;

@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use conary_core::ccs::native_transaction::{NativeInstalledCapability, NativeInstalledPackage};
-use conary_core::db::models::{FileEntry, ProvideEntry, Trove};
+use conary_core::db::models::{PackagePayloadOwnership, ProvideEntry, Trove};
 use rusqlite::Connection;
 use std::collections::{BTreeSet, HashSet};
 
@@ -15,9 +15,10 @@ pub(super) fn installed_packages_before(conn: &Connection) -> Result<Vec<NativeI
             let trove_id = trove
                 .id
                 .with_context(|| format!("installed package '{}' has no trove id", trove.name))?;
-            let paths = FileEntry::find_by_trove(conn, trove_id)?
-                .into_iter()
-                .map(|file| file.path)
+            let paths = PackagePayloadOwnership::load(conn, trove_id)?
+                .lifecycle_paths()
+                .iter()
+                .cloned()
                 .collect::<BTreeSet<_>>();
             Ok(NativeInstalledPackage {
                 package_name: trove.name,
@@ -51,7 +52,7 @@ pub(super) fn declared_capabilities_excluding(
             capabilities.push(NativeInstalledCapability {
                 name: provide.capability,
                 version: provide.version,
-                version_scheme,
+                version_scheme: provide.version_scheme,
             });
         }
     }

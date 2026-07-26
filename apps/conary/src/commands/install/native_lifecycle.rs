@@ -3,7 +3,6 @@
 //! Install-side carrier for validated native lifecycle metadata.
 
 use super::PackageFormatType;
-use conary_core::packages::traits::ExtractedFile;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct NativeLifecycleInstallState {
@@ -26,7 +25,7 @@ impl NativeLifecycleInstallState {
     pub(crate) fn from_native_package(
         package: &dyn conary_core::packages::PackageFormat,
         format: PackageFormatType,
-        files: &[ExtractedFile],
+        source_profile_id: Option<&str>,
     ) -> anyhow::Result<Self> {
         let source_format = match format {
             PackageFormatType::Rpm => "rpm",
@@ -35,8 +34,8 @@ impl NativeLifecycleInstallState {
         };
         let bundle = conary_core::ccs::convert::build_direct_native_lifecycle_bundle(
             package,
-            files,
             source_format,
+            source_profile_id,
         )?;
         Self::from_bundle(bundle.as_ref())
     }

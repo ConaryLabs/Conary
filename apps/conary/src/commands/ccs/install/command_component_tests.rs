@@ -36,7 +36,7 @@ async fn ccs_install_respects_manifest_component_selection() {
             "chosen".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -52,8 +52,10 @@ async fn ccs_install_respects_manifest_component_selection() {
     )];
     let mut files = chosen_files.clone();
     files.extend(skipped_files.clone());
+    let mut manifest = CcsManifest::new_minimal("custom-components", "1.0.0");
+    manifest.components.default = vec!["chosen".to_string()];
     let result = BuildResult {
-        manifest: CcsManifest::new_minimal("custom-components", "1.0.0"),
+        manifest,
         components: HashMap::from([
             (
                 "chosen".to_string(),

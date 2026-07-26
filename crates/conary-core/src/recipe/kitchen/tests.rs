@@ -589,6 +589,7 @@ fn cook_cached_requires_the_configured_signing_authority() {
 
     let manifest = crate::ccs::manifest::CcsManifest::new_minimal("test", "1.0.0");
     let build = crate::ccs::builder::CcsBuilder::new(manifest, &payload)
+        .unwrap()
         .build()
         .unwrap();
     let package_path = dir.path().join("cached.ccs");

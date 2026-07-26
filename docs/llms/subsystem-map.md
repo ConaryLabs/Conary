@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 46
-summary: Compact assistant subsystem orientation index with detailed path and proof routing delegated to feature ownership cards.
+last_updated: 2026-07-26
+revision: 51
+summary: Route serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -54,14 +54,33 @@ commands.
   publication:
   `docs/modules/feature-ownership.md` slugs `install`, `adopt`, and `ccs`, plus
   `docs/modules/test-fixtures.md`. Exact shared config decisions start in
-  `crates/conary-core/src/config_transaction.rs`; selected-root config capture
+  `crates/conary-core/src/config_transaction.rs` and
+  `crates/conary-core/src/config_transaction/`; selected-root config capture
   and publication are owned by
   `apps/conary/src/commands/generation/config_transaction.rs`,
   `apps/conary/src/commands/generation/selected_root.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
   execution starts in
   `apps/conary/src/commands/install/transaction/selected_root.rs`; removal starts
-  in `apps/conary/src/commands/remove/native_graph.rs`. Debian dpkg process
+  in `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
+  session acquires and owns the canonical runtime mutation lock before
+  materialization; the lock implementation starts in
+  `crates/conary-core/src/transaction/mod.rs`. Exact rollback execution and
+  typed compensating lineage start in
+  `apps/conary/src/commands/system/rollback_command.rs` and
+  `crates/conary-core/src/db/models/changeset.rs`. Exact rollback capture
+  starts in `apps/conary/src/commands/installed_authority_snapshot.rs` and
+  `apps/conary/src/commands/installed_authority_snapshot/`; installed-state
+  reconstruction starts in
+  `apps/conary/src/commands/system/rollback_restore.rs` and
+  `apps/conary/src/commands/system/rollback_restore/`. Shared-directory
+  materialization starts in
+  `apps/conary/src/commands/install/shared_directory.rs`; exact persisted
+  claims and package-facing payload ownership start in
+  `crates/conary-core/src/db/models/directory_claim.rs` and
+  `crates/conary-core/src/db/models/package_payload_ownership.rs`; bounded
+  selected-root node inspection starts in
+  `crates/conary-core/src/filesystem/selected_root.rs`. Debian dpkg process
   environment, administrative state, trigger/config capture, and
   update-alternatives projection start in
   `apps/conary/src/commands/install/native_events/debian_runtime.rs` and
@@ -79,6 +98,12 @@ commands.
   `crates/conary-core/src/repository/trust.rs` and
   `crates/conary-core/src/repository/trust/openpgp.rs`; ecosystem parsers start
   in `crates/conary-core/src/repository/parsers/`.
+- Canonical package equivalence and Remi map exchange:
+  `docs/modules/feature-ownership.md` slug `canonical-map`, plus
+  `docs/modules/source-selection.md`. Start with
+  `crates/conary-core/src/canonical/exchange.rs` for the versioned wire and
+  atomic Remi snapshot, `canonical/rules.rs` for literal local contracts, and
+  `db/models/canonical.rs` for typed persistence authority.
 - Generation, bootstrap, and QEMU proof:
   `docs/modules/feature-ownership.md` slugs `generation` and `bootstrap`, plus
   `crates/conary-core/src/generation/root_manifest.rs`,
@@ -88,7 +113,9 @@ commands.
   `crates/conary-core/src/activation/security_policy/`,
   `crates/conary-core/src/scriptlet/activation_capture.rs`,
   `crates/conary-core/src/db/models/generation_activation.rs`,
+  `crates/conary-core/src/generation/gc.rs`,
   `apps/conary/src/commands/generation/activation_intents.rs`,
+  `apps/conary/src/commands/generation/gc.rs`,
   `docs/modules/bootstrap.md`, and
   `docs/operations/bootstrap-selfhosting-vm.md`.
 - CCS authoring, conversion, native package contracts, and repository feed
@@ -116,8 +143,12 @@ commands.
 ## Stable Patterns
 
 - Generation-aware mutation authority is the exact cumulative selected root,
-  captured and persisted before its SQLite transaction commits. Publication
-  never reconstructs filesystem effects from a database-only snapshot.
+  materialized only after the runtime mutation lock is held, captured and
+  persisted before its SQLite transaction commits, and published before the
+  lock owner is released. Publication never reconstructs filesystem effects
+  from a database-only snapshot. Forward changesets and rollback changesets
+  carry distinct typed lineage so compensating rows do not become LIFO
+  mutation authority.
 - Resolution is SAT-only; start from the active resolver and install flows, not
   older graph-based assumptions.
 - Keep shared operation vocabulary in `conary-core` and daemon-only request or

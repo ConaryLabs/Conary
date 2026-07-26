@@ -8,13 +8,27 @@ use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::deb::DebPackage;
+use conary_core::packages::payload::PackagePayload;
 use conary_core::packages::rpm::RpmPackage;
-use conary_core::packages::traits::{Dependency, DependencyType, ExtractedFile, PackageFormat};
+use conary_core::packages::traits::{PackageFormat, ProvidedCapability};
+use conary_core::repository::dependency_model::{
+    ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+};
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
 #[cfg(test)]
 use conary_core::repository::versioning::VersionScheme;
+use conary_core::repository::versioning::VersionScheme as RepositoryVersionScheme;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+type ProvideIdentity = (
+    RepositoryCapabilityKind,
+    String,
+    Option<String>,
+    Option<ProvideVersionRelation>,
+    RepositoryVersionScheme,
+    ProvideArchitectureQualifier,
+);
 
 impl ConversionService {
     /// Create a safe CCS filename from package name and version
@@ -58,24 +72,20 @@ impl ConversionService {
     pub(super) fn parse_package(
         &self,
         path: &Path,
-        distro: &str,
-    ) -> Result<(PackageMetadata, Vec<ExtractedFile>, &'static str)> {
+        source_profile: &str,
+    ) -> Result<(PackageMetadata, PackagePayload, &'static str)> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
-        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .ok_or_else(|| {
-            anyhow!(
-                "distribution route '{}' does not map to exactly one public profile",
-                distro
-            )
-        })?;
+        let profile =
+            conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+                .ok_or_else(|| anyhow!("unsupported exact source profile '{source_profile}'"))?;
 
         match profile.package_format() {
             ProfilePackageFormat::Arch => {
                 let pkg = ArchPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse Arch package: {}", e))?;
                 let files = pkg
-                    .extract_file_contents()
-                    .map_err(|e| anyhow!("Failed to extract Arch package contents: {}", e))?;
+                    .package_payload()
+                    .map_err(|e| anyhow!("Failed to open Arch package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "arch"))
             }
@@ -83,8 +93,8 @@ impl ConversionService {
                 let pkg = RpmPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse RPM package: {}", e))?;
                 let files = pkg
-                    .extract_file_contents()
-                    .map_err(|e| anyhow!("Failed to extract RPM package contents: {}", e))?;
+                    .package_payload()
+                    .map_err(|e| anyhow!("Failed to open RPM package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "rpm"))
             }
@@ -92,8 +102,8 @@ impl ConversionService {
                 let pkg = DebPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse DEB package: {}", e))?;
                 let files = pkg
-                    .extract_file_contents()
-                    .map_err(|e| anyhow!("Failed to extract DEB package contents: {}", e))?;
+                    .package_payload()
+                    .map_err(|e| anyhow!("Failed to open DEB package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg);
                 Ok((metadata, files, "deb"))
             }
@@ -115,28 +125,45 @@ impl ConversionService {
             return Ok(());
         }
 
-        let mut seen: HashSet<(String, Option<String>)> = metadata
+        let mut seen: HashSet<ProvideIdentity> = metadata
             .provides
             .iter()
-            .map(|provide| (provide.name.clone(), provide.version.clone()))
+            .map(|provide| {
+                (
+                    provide.kind,
+                    provide.name.clone(),
+                    provide.version.clone(),
+                    provide.version_relation,
+                    provide.version_scheme,
+                    provide.architecture_qualifier.clone(),
+                )
+            })
             .collect();
 
         for provide in repo_provides {
-            if should_skip_repository_provide(&provide, metadata) {
-                continue;
-            }
-
-            let version = repository_provide_constraint(&provide);
-            if !seen.insert((provide.capability.clone(), version.clone())) {
-                continue;
-            }
-
-            metadata.provides.push(Dependency {
+            let kind = repository_capability_kind(&provide.kind)?;
+            let exact = ProvidedCapability {
+                kind,
                 name: provide.capability,
-                version,
-                dep_type: DependencyType::Runtime,
-                description: None,
-            });
+                version: provide.version,
+                version_relation: provide.version_relation,
+                version_scheme: provide.version_scheme,
+                architecture_qualifier: provide.architecture_qualifier,
+            };
+            exact
+                .validate()
+                .map_err(|error| anyhow!("invalid normalized repository provide: {error}"))?;
+            if !seen.insert((
+                exact.kind,
+                exact.name.clone(),
+                exact.version.clone(),
+                exact.version_relation,
+                exact.version_scheme,
+                exact.architecture_qualifier.clone(),
+            )) {
+                continue;
+            }
+            metadata.provides.push(exact);
         }
 
         Ok(())
@@ -150,6 +177,7 @@ impl ConversionService {
             version: pkg.version().to_string(),
             version_scheme: pkg.version_scheme(),
             architecture: pkg.architecture().map(String::from),
+            debian_multi_arch: pkg.debian_multi_arch(),
             description: pkg.description().map(String::from),
             files: pkg.files().to_vec(),
             requirements: pkg.requirements().to_vec(),
@@ -162,45 +190,20 @@ impl ConversionService {
     }
 }
 
-fn should_skip_repository_provide(provide: &RepositoryProvide, metadata: &PackageMetadata) -> bool {
-    provide.capability.is_empty()
-        || provide.capability == metadata.name
-        || provide.capability.starts_with('/')
-        || provide.capability.starts_with("rpmlib(")
-        || provide.kind == "file"
-}
-
-fn repository_provide_constraint(provide: &RepositoryProvide) -> Option<String> {
-    if let Some(raw) = provide.raw.as_deref()
-        && let Some(constraint) = constraint_from_raw_provide(raw, &provide.capability)
-    {
-        return Some(constraint);
+fn repository_capability_kind(value: &str) -> Result<RepositoryCapabilityKind> {
+    match value {
+        "package" => Ok(RepositoryCapabilityKind::PackageName),
+        "virtual" => Ok(RepositoryCapabilityKind::Virtual),
+        "soname" => Ok(RepositoryCapabilityKind::Soname),
+        "file" => Ok(RepositoryCapabilityKind::File),
+        "path" => Ok(RepositoryCapabilityKind::Path),
+        "binary" => Ok(RepositoryCapabilityKind::Binary),
+        "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "generic" => Ok(RepositoryCapabilityKind::Generic),
+        other => Err(anyhow!(
+            "unsupported normalized repository provide kind '{other}'"
+        )),
     }
-
-    provide
-        .version
-        .as_deref()
-        .map(str::trim)
-        .filter(|version| !version.is_empty())
-        .map(|version| format!("= {version}"))
-}
-
-fn constraint_from_raw_provide(raw: &str, capability: &str) -> Option<String> {
-    let suffix = raw.strip_prefix(capability)?.trim_start();
-    if suffix.is_empty() {
-        return None;
-    }
-
-    for op in ["<=", ">=", "=", "<", ">"] {
-        if let Some(version) = suffix.strip_prefix(op) {
-            let version = version.trim();
-            if !version.is_empty() {
-                return Some(format!("{op} {version}"));
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]
@@ -335,7 +338,11 @@ mod tests {
 
         assert!(metadata.provides.iter().any(|provide| {
             provide.name == "kernel-uname-r"
-                && provide.version.as_deref() == Some("= 6.17.1-300.fc44.x86_64")
+                && provide.version.as_deref() == Some("6.17.1-300.fc44.x86_64")
+                && provide.version_relation
+                    == Some(
+                        conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+                    )
         }));
     }
 }

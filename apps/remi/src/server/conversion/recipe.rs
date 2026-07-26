@@ -94,7 +94,7 @@ impl ConversionService {
         Ok(ServerConversionResult {
             name: recipe.package.name,
             version: recipe.package.version,
-            distro: "recipe".to_string(),
+            source_profile: None,
             chunk_hashes,
             total_size,
             content_hash,

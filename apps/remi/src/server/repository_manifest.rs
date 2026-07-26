@@ -270,7 +270,7 @@ impl RepositoryDefinition {
         repository.metadata_expire = self.metadata_expire_seconds;
         repository.default_strategy = None;
         repository.default_strategy_endpoint = None;
-        repository.default_strategy_distro = Some(self.profile.clone());
+        repository.source_profile = Some(self.profile.clone());
         repository.tuf_enabled = false;
         repository.tuf_root_version = None;
         repository.tuf_root_url = None;
@@ -285,7 +285,7 @@ impl RepositoryDefinition {
             || repository.content_url != self.content_url
             || repository.parser_config.as_ref() != Some(&self.parser)
             || repository.trust_policy.as_ref() != Some(&self.trust)
-            || repository.default_strategy_distro.as_deref() != Some(self.profile.as_str())
+            || repository.source_profile.as_deref() != Some(self.profile.as_str())
     }
 
     fn differs(&self, repository: &Repository) -> bool {
@@ -413,10 +413,7 @@ mod tests {
             .unwrap();
         assert_eq!(repository.package_format, RepositoryFormat::Fedora);
         assert_eq!(repository.managed_by, RepositoryOwnership::RemiConfig);
-        assert_eq!(
-            repository.default_strategy_distro.as_deref(),
-            Some("fedora-44")
-        );
+        assert_eq!(repository.source_profile.as_deref(), Some("fedora-44"));
     }
 
     #[test]
@@ -431,6 +428,7 @@ mod tests {
                 architecture: "x86_64".to_string(),
             })
             .unwrap();
+        existing.source_profile = Some("fedora-44".to_string());
         existing
             .set_trust_policy(manifest().repositories[0].trust.clone())
             .unwrap();

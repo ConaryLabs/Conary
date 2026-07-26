@@ -18,14 +18,14 @@ use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Source distro flavor
+// Exact source profile
 // ---------------------------------------------------------------------------
 
 /// Which native ecosystem a dependency originates from.
 ///
 /// This is intentionally parallel to [`VersionScheme`] but is used to tag
 /// dependency entries rather than version strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RepositoryDependencyFlavor {
     /// Conary-native package metadata and version ordering.
     Conary,
@@ -65,6 +65,12 @@ pub enum RepositoryCapabilityKind {
     Soname,
     /// A filesystem path (e.g. `/usr/bin/python3`).
     File,
+    /// A distinct path capability.
+    Path,
+    /// An executable name capability.
+    Binary,
+    /// A pkg-config module capability.
+    PkgConfig,
     /// Anything that does not fit the above categories.
     Generic,
 }
@@ -176,6 +182,65 @@ pub enum ConditionalRequirementBehavior {
 // Provides
 // ---------------------------------------------------------------------------
 
+/// Architecture carried by one source-native provided capability.
+///
+/// Debian `Provides` atoms may omit a qualifier, advertise the wildcard
+/// `:any`, or name one exact architecture. This is distinct from a dependency
+/// qualifier: a literal `:native` in `Provides` is an exact architecture token,
+/// not the dependency-side native-architecture selector.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "architecture", rename_all = "snake_case")]
+pub enum ProvideArchitectureQualifier {
+    /// Inherit the providing package's architecture.
+    #[default]
+    Implicit,
+    /// Debian's explicit wildcard `:any` provide.
+    Any,
+    /// One exact source architecture token.
+    Exact(String),
+}
+
+/// Source-native relation attached to a versioned provided capability.
+///
+/// RPM permits all five ordered relations on `Provides`; Debian and Arch
+/// currently emit only [`Self::Equal`]. An unversioned existence provide is
+/// represented by no relation and no version, never by an `Any` range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvideVersionRelation {
+    LessThan,
+    LessOrEqual,
+    Equal,
+    GreaterOrEqual,
+    GreaterThan,
+}
+
+impl ProvideVersionRelation {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LessThan => "lt",
+            Self::LessOrEqual => "le",
+            Self::Equal => "eq",
+            Self::GreaterOrEqual => "ge",
+            Self::GreaterThan => "gt",
+        }
+    }
+
+    pub fn parse_exact(value: &str) -> Result<Self, String> {
+        match value {
+            "lt" => Ok(Self::LessThan),
+            "le" => Ok(Self::LessOrEqual),
+            "eq" => Ok(Self::Equal),
+            "ge" => Ok(Self::GreaterOrEqual),
+            "gt" => Ok(Self::GreaterThan),
+            _ => Err(format!(
+                "unsupported persisted provider version relation '{value}'"
+            )),
+        }
+    }
+}
+
 /// A single capability that a repository package advertises.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RepositoryProvide {
@@ -191,6 +256,15 @@ pub struct RepositoryProvide {
     /// may provide `libfoo.so.1` with provide-version `1.3`.
     pub version: Option<String>,
 
+    /// Ordered relation associated with `version`.
+    ///
+    /// This is paired with `version`: both are absent for an existence provide,
+    /// and both are present for a versioned range.
+    pub version_relation: Option<ProvideVersionRelation>,
+
+    /// Exact source-native architecture of this provided capability.
+    pub architecture_qualifier: ProvideArchitectureQualifier,
+
     /// The original native text for diagnostics (e.g. `"kernel-core-uname-r = 6.19.6-200.fc44.x86_64"`).
     pub native_text: Option<String>,
 }
@@ -199,10 +273,13 @@ impl RepositoryProvide {
     /// Create a provide for the package name itself (always present).
     #[must_use]
     pub fn package_name(name: String, version: Option<String>) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             name,
             kind: RepositoryCapabilityKind::PackageName,
             version,
+            version_relation,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -210,10 +287,13 @@ impl RepositoryProvide {
     /// Create a virtual provide.
     #[must_use]
     pub fn virtual_cap(name: String, version: Option<String>) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             name,
             kind: RepositoryCapabilityKind::Virtual,
             version,
+            version_relation,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -221,10 +301,13 @@ impl RepositoryProvide {
     /// Create a soname provide.
     #[must_use]
     pub fn soname(name: String, version: Option<String>) -> Self {
+        let version_relation = version.as_ref().map(|_| ProvideVersionRelation::Equal);
         Self {
             name,
             kind: RepositoryCapabilityKind::Soname,
             version,
+            version_relation,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -236,6 +319,8 @@ impl RepositoryProvide {
             name: path,
             kind: RepositoryCapabilityKind::File,
             version: None,
+            version_relation: None,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
         }
     }
@@ -244,6 +329,67 @@ impl RepositoryProvide {
 // ---------------------------------------------------------------------------
 // Requirement clauses and groups
 // ---------------------------------------------------------------------------
+
+/// Architecture qualifier attached to one source-native dependency atom.
+///
+/// Debian dependency names may be unqualified, use the special `:any` or
+/// `:native` qualifiers, or name one exact Debian architecture. The parsed
+/// qualifier remains separate from the package name so later layers never
+/// have to recover mutation authority from string suffixes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "architecture", rename_all = "snake_case")]
+pub enum RequirementArchitectureQualifier {
+    /// No source-native architecture qualifier was written.
+    #[default]
+    Unqualified,
+    /// Debian `:any`.
+    Any,
+    /// Debian `:native`.
+    Native,
+    /// One exact Debian architecture qualifier such as `:amd64`.
+    Exact(String),
+}
+
+/// Debian package `Multi-Arch` behavior.
+///
+/// Absence of the control field is exactly [`Self::No`] under Debian Policy.
+/// This type is package metadata and must not be inferred from dependency
+/// spellings, repository names, or target distro names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebianMultiArch {
+    /// The field is absent or explicitly `no`.
+    #[default]
+    No,
+    /// Same-name packages of multiple architectures may be co-installed.
+    Same,
+    /// Cross-architecture use requires an explicit `:any` dependency.
+    Allowed,
+    /// Unqualified dependencies may be satisfied across architectures.
+    Foreign,
+}
+
+impl DebianMultiArch {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Same => "same",
+            Self::Allowed => "allowed",
+            Self::Foreign => "foreign",
+        }
+    }
+
+    pub fn parse_exact(value: &str) -> Result<Self, String> {
+        match value {
+            "no" => Ok(Self::No),
+            "same" => Ok(Self::Same),
+            "allowed" => Ok(Self::Allowed),
+            "foreign" => Ok(Self::Foreign),
+            _ => Err(format!("invalid Debian Multi-Arch value: {value:?}")),
+        }
+    }
+}
 
 /// A single alternative inside a requirement group.
 ///
@@ -267,6 +413,10 @@ pub struct RepositoryRequirementClause {
     /// [`super::versioning::parse_repo_constraint`] using the appropriate
     /// [`VersionScheme`].
     pub version_constraint: Option<String>,
+
+    /// Exact source-native architecture qualifier.
+    #[serde(default)]
+    pub architecture_qualifier: RequirementArchitectureQualifier,
 
     /// The original native text for this single clause.
     pub native_text: Option<String>,
@@ -363,6 +513,7 @@ impl RepositoryRequirementClause {
             name,
             capability_kind: None,
             version_constraint: None,
+            architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
             native_text: None,
         }
     }
@@ -374,6 +525,7 @@ impl RepositoryRequirementClause {
             name,
             capability_kind: None,
             version_constraint: Some(constraint),
+            architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
             native_text: None,
         }
     }

@@ -19,6 +19,7 @@ fn insert_repository_requirement(
         name: capability.to_string(),
         capability_kind: Some(capability_kind),
         version_constraint: version_constraint.map(str::to_string),
+        architecture_qualifier: Default::default(),
         native_text: Some(native_text.to_string()),
     };
     let expression = RepositoryRequirementExpression::Atom(clause);
@@ -35,6 +36,9 @@ fn insert_repository_requirement(
         RepositoryCapabilityKind::Virtual => "virtual",
         RepositoryCapabilityKind::Soname => "soname",
         RepositoryCapabilityKind::File => "file",
+        RepositoryCapabilityKind::Path => "path",
+        RepositoryCapabilityKind::Binary => "binary",
+        RepositoryCapabilityKind::PkgConfig => "pkgconfig",
         RepositoryCapabilityKind::Generic => "generic",
     };
     let mut requirement = RepositoryRequirement::new(
@@ -118,13 +122,13 @@ fn test_replatform_execution_plan_collects_replace_actions() {
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     arch_repo.insert(&conn).unwrap();
 
     let actions = vec![
         DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: crate::repository::resolution_policy::DependencyMixingPolicy::Strict,
         },
         DiffAction::ReplatformReplace {
             package: "vim".to_string(),
@@ -212,7 +216,7 @@ fn test_replatform_execution_plan_reports_missing_versioned_install_route() {
         "arch-core".to_string(),
         "https://example.test/arch".to_string(),
     );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     arch_repo.insert(&conn).unwrap();
 
     let actions = vec![DiffAction::ReplatformReplace {
@@ -245,19 +249,16 @@ fn test_replatform_execution_plan_reports_any_version_route_only() {
         "arch-core".to_string(),
         "https://example.test/arch".to_string(),
     );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/vim-latest.ccs".to_string(),
-            checksum: "sha256:any-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: 22,
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.insert(&conn).unwrap();
 
     let actions = vec![DiffAction::ReplatformReplace {
@@ -279,7 +280,7 @@ fn test_replatform_execution_plan_reports_any_version_route_only() {
     assert!(!plan.transactions[0].executable);
     assert_eq!(
         plan.transactions[0].install_route.as_deref(),
-        Some("resolution:binary")
+        Some("resolution:repository_package")
     );
     assert_eq!(
         plan.transactions[0].blocked_reason,
@@ -294,20 +295,17 @@ fn test_replatform_execution_plan_marks_transaction_executable_only_when_all_leg
         "arch-core".to_string(),
         "https://example.test/arch".to_string(),
     );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/vim-9.1.0.ccs".to_string(),
-            checksum: "sha256:exact".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: 22,
         }],
     );
     resolution.version = Some("9.1.0".to_string());
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.insert(&conn).unwrap();
 
     let actions = vec![DiffAction::ReplatformReplace {
@@ -341,7 +339,7 @@ fn test_replatform_execution_plan_marks_transaction_blocked_when_route_is_missin
         "arch-core".to_string(),
         "https://example.test/arch".to_string(),
     );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     arch_repo.insert(&conn).unwrap();
 
     let actions = vec![DiffAction::ReplatformReplace {
@@ -380,19 +378,16 @@ fn test_replatform_execution_plan_marks_exact_version_resolution_executable() {
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/vim-9.1.0.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: 22,
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("9.1.0".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -415,7 +410,7 @@ fn test_replatform_execution_plan_marks_exact_version_resolution_executable() {
     assert!(plan.transactions[0].executable);
     assert_eq!(
         plan.transactions[0].install_route.as_deref(),
-        Some("resolution:binary")
+        Some("resolution:repository_package")
     );
     assert_eq!(plan.transactions[0].blocked_reason, None);
 }
@@ -428,7 +423,7 @@ fn test_replatform_execution_plan_blocks_when_target_dependencies_are_missing() 
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut target_pkg = RepositoryPackage::new(
@@ -454,13 +449,10 @@ fn test_replatform_execution_plan_blocks_when_target_dependencies_are_missing() 
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/vim-9.1.0.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: target_pkg.id.unwrap(),
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("9.1.0".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -499,7 +491,7 @@ fn test_replatform_execution_plan_accepts_tracked_capability_provider_for_target
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut target_pkg = RepositoryPackage::new(
@@ -525,13 +517,10 @@ fn test_replatform_execution_plan_accepts_tracked_capability_provider_for_target
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/vim-9.1.0.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: target_pkg.id.unwrap(),
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("9.1.0".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -547,9 +536,11 @@ fn test_replatform_execution_plan_accepts_tracked_capability_provider_for_target
 
     let mut provide = ProvideEntry::new_typed(
         provider_trove_id,
-        "soname",
+        crate::repository::dependency_model::RepositoryCapabilityKind::Soname,
         "libmagic.so.1".to_string(),
         None,
+        crate::repository::versioning::VersionScheme::Conary,
+        Default::default(),
     );
     provide.insert(&conn).unwrap();
 
@@ -582,7 +573,7 @@ fn test_replatform_execution_plan_accepts_repo_metadata_provider_for_target_depe
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut target_pkg = RepositoryPackage::new(
@@ -599,16 +590,16 @@ fn test_replatform_execution_plan_accepts_repo_metadata_provider_for_target_depe
     insert_repository_requirement(
         &conn,
         target_pkg.id.unwrap(),
-        "kernel-core-uname-r",
+        "kernel-uname-r",
         crate::repository::dependency_model::RepositoryCapabilityKind::Virtual,
-        Some("= 6.19.6-200.fc44.x86_64"),
-        "kernel-core-uname-r = 6.19.6-200.fc44.x86_64",
+        Some("= 6.19.6-1"),
+        "kernel-uname-r = 6.19.6-1",
     );
 
     let mut provider_pkg = RepositoryPackage::new(
         arch_repo_id,
         "kernel-core".to_string(),
-        "6.19.6-200.fc44".to_string(),
+        "6.19.6-1".to_string(),
         crate::repository::versioning::VersionScheme::Arch,
         "sha256:kernel-core".to_string(),
         123,
@@ -618,10 +609,10 @@ fn test_replatform_execution_plan_accepts_repo_metadata_provider_for_target_depe
     provider_pkg.insert(&conn).unwrap();
     let mut provide = RepositoryProvide::new(
         provider_pkg.id.unwrap(),
-        "kernel-core-uname-r".to_string(),
-        Some("6.19.6-200.fc44.x86_64".to_string()),
+        "kernel-uname-r".to_string(),
+        Some("6.19.6-1".to_string()),
         "virtual".to_string(),
-        Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
+        Some("kernel-uname-r = 6.19.6-1".to_string()),
         crate::repository::versioning::VersionScheme::Arch,
     );
     provide.insert(&conn).unwrap();
@@ -629,13 +620,10 @@ fn test_replatform_execution_plan_accepts_repo_metadata_provider_for_target_depe
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "kernel".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/kernel-6.19.6-1.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: target_pkg.id.unwrap(),
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("6.19.6-1".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -668,7 +656,7 @@ fn test_replatform_execution_plan_accepts_debian_repo_metadata_provider_for_targ
         "https://example.test/ubuntu".to_string(),
     );
     deb_repo.default_strategy = Some("binary".to_string());
-    deb_repo.default_strategy_distro = Some("ubuntu-26.04".to_string());
+    deb_repo.source_profile = Some("ubuntu-26.04".to_string());
     let deb_repo_id = deb_repo.insert(&conn).unwrap();
 
     let mut target_pkg = RepositoryPackage::new(
@@ -715,13 +703,10 @@ fn test_replatform_execution_plan_accepts_debian_repo_metadata_provider_for_targ
     let mut resolution = PackageResolution::new(
         deb_repo_id,
         "mailer".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/ubuntu/mailer-1.0-1.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: target_pkg.id.unwrap(),
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("1.0-1".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -754,7 +739,7 @@ fn test_replatform_execution_plan_accepts_debian_normalized_provider_with_versio
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
     deb_repo.default_strategy = Some("binary".to_string());
-    deb_repo.default_strategy_distro = Some("ubuntu-26.04".to_string());
+    deb_repo.source_profile = Some("ubuntu-26.04".to_string());
     let deb_repo_id = deb_repo.insert(&conn).unwrap();
 
     let mut target_pkg = RepositoryPackage::new(
@@ -802,13 +787,10 @@ fn test_replatform_execution_plan_accepts_debian_normalized_provider_with_versio
     let mut resolution = PackageResolution::new(
         deb_repo_id,
         "mailer".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://archive.ubuntu.com/ubuntu/pool/mailer_1.0-1.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: target_pkg.id.unwrap(),
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("1.0-1".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -841,7 +823,7 @@ fn test_replatform_execution_plan_accepts_arch_normalized_provider_for_target_de
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     let mut target_pkg = RepositoryPackage::new(
@@ -888,13 +870,10 @@ fn test_replatform_execution_plan_accepts_arch_normalized_provider_for_target_de
     let mut resolution = PackageResolution::new(
         arch_repo_id,
         "mailer".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: "https://example.test/arch/mailer-1.0-1.ccs".to_string(),
-            checksum: "sha256:exact-version".to_string(),
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: target_pkg.id.unwrap(),
         }],
     );
-    resolution.primary_strategy = PrimaryStrategy::Binary;
     resolution.version = Some("1.0-1".to_string());
     resolution.insert(&conn).unwrap();
 
@@ -927,7 +906,7 @@ fn test_replatform_execution_plan_reports_architecture_mismatch() {
         "https://example.test/arch".to_string(),
     );
     arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     arch_repo.insert(&conn).unwrap();
 
     let actions = vec![DiffAction::ReplatformReplace {

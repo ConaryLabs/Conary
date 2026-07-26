@@ -1,400 +1,353 @@
 // conary-core/src/canonical/rules.rs
 
-//! YAML-based canonical mapping rules engine (Repology-compatible format).
+//! Exact, versioned canonical package-map contracts.
 //!
-//! Rules map distro-specific package names to canonical names. Each rule can match
-//! by exact name, regex pattern, and/or repository. Rules are evaluated in order;
-//! the first match wins.
+//! Canonical equivalence affects package selection and therefore mutation
+//! authority. The contract deliberately supports only literal canonical names,
+//! literal package names, and exact supported profile IDs. Regexes, aliases,
+//! filename precedence, and first-match behavior are not part of the format.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use regex::Regex;
 use serde::Deserialize;
 
+use crate::repository::supported_profiles::profile_by_public_id;
 use crate::{Error, Result};
 
-/// A repo constraint that accepts either a single string or a list of strings.
-///
-/// This allows YAML rules to use either `repo: fedora` (convenient for simple rules)
-/// or `repo: [fedora, arch]` (when the same mapping applies to multiple repos).
-#[derive(Debug, Clone, Deserialize)]
+const CONTRACT_VERSION: u32 = 1;
+
+/// One profile ID or a list of profile IDs.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
-pub enum StringOrVec {
-    /// A single repo string (e.g., `repo: fedora`).
-    Single(String),
-    /// Multiple repo strings (e.g., `repo: [fedora, arch]`).
-    Multiple(Vec<String>),
+pub enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
 }
 
-impl StringOrVec {
-    /// Check whether a value is contained in this constraint.
-    pub fn contains(&self, value: &str) -> bool {
+impl OneOrMany {
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &str> + '_> {
         match self {
-            Self::Single(s) => s == value,
-            Self::Multiple(v) => v.iter().any(|s| s == value),
+            Self::One(value) => Box::new(std::iter::once(value.as_str())),
+            Self::Many(values) => Box::new(values.iter().map(String::as_str)),
         }
     }
 }
 
-/// A single canonical mapping rule (Repology-compatible format).
-#[derive(Debug, Clone, Deserialize)]
-pub struct Rule {
-    /// Canonical name to assign when this rule matches.
-    #[serde(default)]
-    pub setname: String,
-
-    /// Exact distro package name to match.
-    #[serde(default)]
-    pub name: String,
-
-    /// Regex pattern for name matching (alternative to exact `name`).
-    #[serde(default)]
-    pub namepat: Option<String>,
-
-    /// Repository constraint: single string or array of strings.
-    #[serde(default)]
-    pub repo: Option<StringOrVec>,
-
-    /// Kind classification (e.g., "group").
+/// One exact mapping from a canonical identity to a package in one or more
+/// supported profiles.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactMapping {
+    pub canonical: String,
+    pub package: String,
+    pub profiles: OneOrMany,
     #[serde(default)]
     pub kind: Option<String>,
-
-    /// Category classification.
     #[serde(default)]
     pub category: Option<String>,
 }
 
-/// Parsed YAML document containing a list of rules.
-#[derive(Debug, Clone, Deserialize)]
-struct RuleFile {
-    rules: Vec<Rule>,
+impl ExactMapping {
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        self.kind.as_deref().unwrap_or("package")
+    }
 }
 
-/// Parse a YAML string into a list of rules.
-///
-/// The YAML must contain a top-level `rules` key with a list of rule objects.
-pub fn parse_rules(yaml: &str) -> Result<Vec<Rule>> {
-    let file: RuleFile = serde_yaml::from_str(yaml)
-        .map_err(|e| Error::ParseError(format!("YAML parse error: {e}")))?;
-    Ok(file.rules)
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContractDocument {
+    version: u32,
+    mappings: Vec<ExactMapping>,
 }
 
-/// A compiled rule with pre-compiled regex for efficient matching.
+/// A validated collection of exact canonical mappings.
 #[derive(Debug, Clone)]
-struct CompiledRule {
-    rule: Rule,
-    name_regex: Option<Regex>,
+pub struct CanonicalMapContract {
+    mappings: Vec<ExactMapping>,
 }
 
-/// Engine that holds compiled rules and resolves package names to canonical names.
-#[derive(Debug, Clone)]
-pub struct RulesEngine {
-    compiled: Vec<CompiledRule>,
-}
-
-impl RulesEngine {
-    /// Create a new rules engine from a list of rules.
-    ///
-    /// Regex patterns in `namepat` fields are compiled at construction time.
-    pub fn new(rules: Vec<Rule>) -> Result<Self> {
-        let mut compiled = Vec::with_capacity(rules.len());
-        for rule in rules {
-            let name_regex = if let Some(ref pat) = rule.namepat {
-                let anchored = anchor_regex(pat);
-                let re = Regex::new(&anchored)
-                    .map_err(|e| Error::ParseError(format!("Invalid regex '{pat}': {e}")))?;
-                Some(re)
-            } else {
-                None
-            };
-            compiled.push(CompiledRule { rule, name_regex });
-        }
-        Ok(Self { compiled })
+impl CanonicalMapContract {
+    /// Validate mappings assembled from one or more contract documents.
+    pub fn new(mappings: Vec<ExactMapping>) -> Result<Self> {
+        validate_mappings(&mappings)?;
+        Ok(Self { mappings })
     }
 
-    /// Load all `.yaml` / `.yml` files from a directory, sorted by filename.
+    /// Load all YAML contract documents in a directory.
     ///
-    /// Rules from files sorted earlier alphabetically take precedence.
+    /// Filenames affect only stable diagnostics. Precedence does not exist:
+    /// duplicate or conflicting authority is rejected across the full set.
     pub fn load_from_dir(dir: &Path) -> Result<Self> {
-        let mut entries: Vec<_> = std::fs::read_dir(dir)
-            .map_err(|e| Error::IoError(format!("Cannot read directory {}: {e}", dir.display())))?
+        let mut paths = std::fs::read_dir(dir)
+            .map_err(|error| {
+                Error::IoError(format!(
+                    "cannot read canonical contract directory {}: {error}",
+                    dir.display()
+                ))
+            })?
             .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                let ext = path.extension()?.to_str()?;
-                if ext == "yaml" || ext == "yml" {
-                    Some(path)
-                } else {
-                    None
-                }
+                let path = entry.ok()?.path();
+                matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("yaml" | "yml")
+                )
+                .then_some(path)
             })
-            .collect();
-        entries.sort();
+            .collect::<Vec<_>>();
+        paths.sort();
 
-        let mut all_rules = Vec::new();
-        for path in entries {
-            let content = std::fs::read_to_string(path.as_path())
-                .map_err(|e| Error::IoError(format!("Cannot read {}: {e}", path.display())))?;
-            let mut rules = parse_rules(&content)?;
-            all_rules.append(&mut rules);
+        let mut mappings = Vec::new();
+        for path in paths {
+            let text = std::fs::read_to_string(&path).map_err(|error| {
+                Error::IoError(format!(
+                    "cannot read canonical contract {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let contract = parse_contract(&text).map_err(|error| {
+                Error::ParseError(format!(
+                    "canonical contract {} is invalid: {error}",
+                    path.display()
+                ))
+            })?;
+            mappings.extend(contract.mappings);
         }
 
-        Self::new(all_rules)
+        Self::new(mappings)
     }
 
-    /// Resolve a distro package name (and optional repo) to a canonical name.
-    ///
-    /// Rules are evaluated in order; the first match wins. A rule matches if:
-    /// - Its `name` matches exactly (or `name` is empty and `namepat` is used)
-    /// - Its `namepat` regex matches the package name (if present)
-    /// - Its `repo` matches the given repo (if the rule specifies a repo)
-    pub fn resolve(&self, name: &str, repo: Option<&str>) -> Option<String> {
-        for compiled in &self.compiled {
-            let rule = &compiled.rule;
-
-            // Skip rules that are kind-only (no name/namepat to match against).
-            if rule.name.is_empty() && rule.namepat.is_none() {
-                continue;
-            }
-
-            // Check repo constraint.
-            if let Some(ref rule_repo) = rule.repo {
-                match repo {
-                    Some(r) if rule_repo.contains(r) => {}
-                    _ => continue,
-                }
-            }
-
-            // Check name match (exact or regex) and expand capture groups.
-            if let Some(ref re) = compiled.name_regex {
-                if let Some(caps) = re.captures(name)
-                    && !rule.setname.is_empty()
-                {
-                    // Use Captures::expand for correct single-pass group expansion
-                    let mut result = String::new();
-                    caps.expand(&rule.setname, &mut result);
-                    return Some(result);
-                }
-            } else if !rule.name.is_empty() && rule.name == name && !rule.setname.is_empty() {
-                return Some(rule.setname.clone());
-            }
-        }
-        None
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.mappings.len()
     }
 
-    /// Get the kind for a canonical name (e.g., "group").
-    ///
-    /// Searches rules where `setname` matches the given canonical name
-    /// and returns the first `kind` found.
-    pub fn get_kind(&self, canonical_name: &str) -> Option<String> {
-        for compiled in &self.compiled {
-            let rule = &compiled.rule;
-            if rule.setname == canonical_name
-                && let Some(ref kind) = rule.kind
-            {
-                return Some(kind.clone());
-            }
-        }
-        None
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.mappings.is_empty()
     }
 
-    /// Return the total number of rules loaded.
-    pub fn rule_count(&self) -> usize {
-        self.compiled.len()
-    }
-
-    /// Iterate over the raw rules.
-    pub fn rules(&self) -> impl Iterator<Item = &Rule> {
-        self.compiled.iter().map(|c| &c.rule)
+    pub fn mappings(&self) -> impl Iterator<Item = &ExactMapping> {
+        self.mappings.iter()
     }
 }
 
-/// Ensure a regex pattern is anchored at both ends.
-///
-/// Unanchored patterns could match substrings, leading to unexpected
-/// canonical name mappings. This adds `^` and `$` if not already present.
-fn anchor_regex(pat: &str) -> String {
-    let needs_start = !pat.starts_with('^');
-    let needs_end = !pat.ends_with('$');
-    match (needs_start, needs_end) {
-        (true, true) => format!("^(?:{pat})$"),
-        (true, false) => format!("^(?:{pat})"),
-        (false, true) => format!("(?:{pat})$"),
-        (false, false) => pat.to_string(),
+/// Parse and validate one versioned YAML contract document.
+pub fn parse_contract(yaml: &str) -> Result<CanonicalMapContract> {
+    let document: ContractDocument = serde_yaml::from_str(yaml)
+        .map_err(|error| Error::ParseError(format!("YAML parse error: {error}")))?;
+    if document.version != CONTRACT_VERSION {
+        return Err(Error::ParseError(format!(
+            "unsupported canonical contract version {}; expected {CONTRACT_VERSION}",
+            document.version
+        )));
     }
+    CanonicalMapContract::new(document.mappings)
+}
+
+fn validate_mappings(mappings: &[ExactMapping]) -> Result<()> {
+    let mut exact_owners = BTreeMap::<(String, String), String>::new();
+    let mut canonical_metadata = BTreeMap::<String, (String, Option<String>)>::new();
+
+    for mapping in mappings {
+        validate_token("canonical", &mapping.canonical)?;
+        validate_token("package", &mapping.package)?;
+        let kind = mapping.kind();
+        if !matches!(kind, "package" | "group") {
+            return Err(Error::ParseError(format!(
+                "canonical mapping '{}' has unsupported kind '{kind}'",
+                mapping.canonical
+            )));
+        }
+        if let Some(category) = mapping.category.as_deref() {
+            validate_token("category", category)?;
+        }
+
+        let metadata = (kind.to_string(), mapping.category.clone());
+        if let Some(existing) = canonical_metadata.get(&mapping.canonical) {
+            if existing != &metadata {
+                return Err(Error::ParseError(format!(
+                    "canonical mapping '{}' has conflicting kind/category metadata",
+                    mapping.canonical
+                )));
+            }
+        } else {
+            canonical_metadata.insert(mapping.canonical.clone(), metadata);
+        }
+
+        let mut profiles = BTreeSet::new();
+        for profile_id in mapping.profiles.iter() {
+            validate_token("profiles", profile_id)?;
+            if profile_by_public_id(profile_id).is_none() {
+                return Err(Error::ParseError(format!(
+                    "canonical mapping '{}' names unsupported profile '{profile_id}'",
+                    mapping.canonical
+                )));
+            }
+            if !profiles.insert(profile_id) {
+                return Err(Error::ParseError(format!(
+                    "canonical mapping '{}' repeats profile '{profile_id}'",
+                    mapping.canonical
+                )));
+            }
+
+            let key = (mapping.canonical.clone(), profile_id.to_string());
+            if let Some(existing_package) = exact_owners.insert(key, mapping.package.clone()) {
+                let detail = if existing_package == mapping.package {
+                    "duplicates"
+                } else {
+                    "conflicts with"
+                };
+                return Err(Error::ParseError(format!(
+                    "canonical mapping '{}' for profile '{profile_id}' {detail} package '{existing_package}' with package '{}'",
+                    mapping.canonical, mapping.package
+                )));
+            }
+        }
+        if profiles.is_empty() {
+            return Err(Error::ParseError(format!(
+                "canonical mapping '{}' has no profiles",
+                mapping.canonical
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_token(field: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || value != value.trim()
+        || value.chars().any(char::is_control)
+        || value.chars().any(char::is_whitespace)
+    {
+        return Err(Error::ParseError(format!(
+            "canonical contract field '{field}' must be a nonempty exact token"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_rename_rule() {
-        let yaml = r#"
-rules:
-  - name: httpd
-    setname: apache-httpd
+    const EXACT: &str = r#"
+version: 1
+mappings:
+  - canonical: apache-httpd
+    package: httpd
+    profiles: fedora-44
+  - canonical: apache-httpd
+    package: apache2
+    profiles: ubuntu-26.04
 "#;
-        let rules = parse_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].name, "httpd");
-        assert_eq!(rules[0].setname, "apache-httpd");
-        assert!(rules[0].namepat.is_none());
-        assert!(rules[0].repo.is_none());
-    }
 
     #[test]
-    fn test_parse_group_rule() {
-        let yaml = r#"
-rules:
-  - setname: xorg
-    kind: group
-    category: x11
-"#;
-        let rules = parse_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].setname, "xorg");
-        assert_eq!(rules[0].kind.as_deref(), Some("group"));
-        assert_eq!(rules[0].category.as_deref(), Some("x11"));
-    }
-
-    #[test]
-    fn test_parse_wildcard_rule() {
-        let yaml = r#"
-rules:
-  - namepat: "^python3?-(.+)$"
-    setname: "python:$1"
-"#;
-        let rules = parse_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].namepat.as_deref(), Some("^python3?-(.+)$"));
-        // The regex should compile without error.
-        let engine = RulesEngine::new(rules).unwrap();
-        assert_eq!(engine.rule_count(), 1);
-    }
-
-    #[test]
-    fn test_apply_rules() {
-        let yaml = r#"
-rules:
-  - name: httpd
-    setname: apache-httpd
-  - name: apache2
-    setname: apache-httpd
-  - namepat: "^lib(.+)-dev$"
-    setname: "$1"
-"#;
-        let engine = RulesEngine::new(parse_rules(yaml).unwrap()).unwrap();
-
+    fn parses_exact_versioned_contract() {
+        let contract = parse_contract(EXACT).unwrap();
+        assert_eq!(contract.len(), 2);
         assert_eq!(
-            engine.resolve("httpd", None),
-            Some("apache-httpd".to_string())
+            contract
+                .mappings()
+                .map(|mapping| mapping.package.as_str())
+                .collect::<Vec<_>>(),
+            ["httpd", "apache2"]
         );
-        assert_eq!(
-            engine.resolve("apache2", None),
-            Some("apache-httpd".to_string())
-        );
-        // curl has no matching rule.
-        assert_eq!(engine.resolve("curl", None), None);
-        // Regex capture group expansion: libssl-dev -> "ssl"
-        assert_eq!(engine.resolve("libssl-dev", None), Some("ssl".to_string()));
     }
 
     #[test]
-    fn test_load_rules_from_dir() {
+    fn rejects_unknown_fields_instead_of_accepting_regex_authority() {
+        let error = parse_contract(
+            r#"
+version: 1
+mappings:
+  - canonical: openssl
+    package: openssl
+    profiles: fedora-44
+    namepat: "^openssl.*$"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field `namepat`"));
+    }
+
+    #[test]
+    fn rejects_aliases_and_unknown_profiles() {
+        let error = parse_contract(
+            r#"
+version: 1
+mappings:
+  - canonical: openssl
+    package: openssl
+    profiles: fedora
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported profile 'fedora'"));
+    }
+
+    #[test]
+    fn rejects_conflicting_implementation_authority() {
+        let error = parse_contract(
+            r#"
+version: 1
+mappings:
+  - canonical: openssl
+    package: openssl
+    profiles: fedora-44
+  - canonical: openssl
+    package: openssl-libs
+    profiles: fedora-44
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("conflicts with"));
+    }
+
+    #[test]
+    fn rejects_duplicate_implementation_authority() {
+        let error = parse_contract(
+            r#"
+version: 1
+mappings:
+  - canonical: openssl
+    package: openssl
+    profiles: fedora-44
+  - canonical: openssl
+    package: openssl
+    profiles: fedora-44
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("duplicates"));
+    }
+
+    #[test]
+    fn load_rejects_conflicts_across_documents() {
         let dir = tempfile::tempdir().unwrap();
-
-        // Write two YAML files; they should be loaded in alphabetical order.
+        std::fs::write(dir.path().join("one.yaml"), EXACT).unwrap();
         std::fs::write(
-            dir.path().join("01-rename.yaml"),
+            dir.path().join("two.yaml"),
             r#"
-rules:
-  - name: vim-enhanced
-    setname: vim
+version: 1
+mappings:
+  - canonical: apache-httpd
+    package: apache
+    profiles: fedora-44
 "#,
         )
         .unwrap();
 
-        std::fs::write(
-            dir.path().join("02-groups.yml"),
-            r#"
-rules:
-  - name: nginx
-    setname: nginx
-    kind: group
-"#,
-        )
-        .unwrap();
-
-        // Also write a non-YAML file that should be ignored.
-        std::fs::write(dir.path().join("README.txt"), "not a rule file").unwrap();
-
-        let engine = RulesEngine::load_from_dir(dir.path()).unwrap();
-        assert_eq!(engine.rule_count(), 2);
-        assert_eq!(
-            engine.resolve("vim-enhanced", None),
-            Some("vim".to_string())
-        );
-        assert_eq!(engine.resolve("nginx", None), Some("nginx".to_string()));
-        assert_eq!(engine.get_kind("nginx"), Some("group".to_string()));
+        let error = CanonicalMapContract::load_from_dir(dir.path()).unwrap_err();
+        assert!(error.to_string().contains("conflicts with"));
     }
 
     #[test]
-    fn test_string_or_vec_single() {
-        let yaml = r#"
-rules:
-  - name: zlib
-    setname: zlib
-    repo: fedora
-"#;
-        let rules = parse_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-        let repo = rules[0].repo.as_ref().unwrap();
-        assert!(repo.contains("fedora"));
-        assert!(!repo.contains("arch"));
-    }
-
-    #[test]
-    fn test_string_or_vec_multiple() {
-        let yaml = r#"
-rules:
-  - name: zlib
-    setname: zlib
-    repo: [fedora, arch]
-"#;
-        let rules = parse_rules(yaml).unwrap();
-        assert_eq!(rules.len(), 1);
-        let repo = rules[0].repo.as_ref().unwrap();
-        assert!(repo.contains("fedora"));
-        assert!(repo.contains("arch"));
-        assert!(!repo.contains("ubuntu"));
-    }
-
-    #[test]
-    fn test_resolve_with_repo_array() {
-        let yaml = r#"
-rules:
-  - name: zlib
-    setname: zlib
-    repo: [fedora, arch]
-  - name: zlib1g
-    setname: zlib
-    repo: ubuntu
-"#;
-        let engine = RulesEngine::new(parse_rules(yaml).unwrap()).unwrap();
-
-        assert_eq!(
-            engine.resolve("zlib", Some("fedora")),
-            Some("zlib".to_string())
-        );
-        assert_eq!(
-            engine.resolve("zlib", Some("arch")),
-            Some("zlib".to_string())
-        );
-        assert_eq!(engine.resolve("zlib", Some("ubuntu")), None);
-        assert_eq!(
-            engine.resolve("zlib1g", Some("ubuntu")),
-            Some("zlib".to_string())
-        );
+    fn bundled_contract_is_exact_and_current() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/canonical-rules");
+        let contract = CanonicalMapContract::load_from_dir(&directory).unwrap();
+        assert!(!contract.is_empty());
     }
 }

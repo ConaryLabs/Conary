@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::backend::ContainerBackend;
+use crate::config::DistroBuildContext;
 
 struct StagedBuildContext {
     root: PathBuf,
@@ -197,7 +198,11 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
     Ok(())
 }
 
-fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuildContext> {
+fn stage_build_context(
+    containerfile: &Path,
+    distro: &str,
+    build_context: DistroBuildContext,
+) -> Result<StagedBuildContext> {
     let integration_root = containerfile
         .parent()
         .and_then(Path::parent)
@@ -251,7 +256,7 @@ fn stage_build_context(containerfile: &Path, distro: &str) -> Result<StagedBuild
 
     ensure_phase2_fixture_outputs(&root.join("fixtures"), &binary)?;
 
-    if distro.starts_with("ubuntu-") {
+    if build_context == DistroBuildContext::WorkspaceSource {
         copy_dir_filtered(
             &project_root,
             &root.join("source"),
@@ -272,6 +277,7 @@ pub async fn build_distro_image(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
+    build_context: DistroBuildContext,
 ) -> Result<String> {
     let tag = format!("conary-test-{distro}:latest");
     let force_rebuild = std::env::var("CONARY_TEST_REBUILD_IMAGE")
@@ -282,22 +288,20 @@ pub async fn build_distro_image(
         .unwrap_or(false);
 
     if reuse_existing && !force_rebuild {
-        match tokio::process::Command::new("podman")
-            .args(["image", "exists", &tag])
-            .output()
+        let images = backend
+            .list_images()
             .await
+            .context("failed to inspect existing distro test images")?;
+        if images
+            .iter()
+            .any(|image| image.tags.iter().any(|candidate| candidate == &tag))
         {
-            Ok(output) if output.status.success() => {
-                tracing::info!(image = %tag, "reusing existing distro test image");
-                return Ok(tag);
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).context("failed to check existing distro test image"),
+            tracing::info!(image = %tag, "reusing existing distro test image");
+            return Ok(tag);
         }
     }
 
-    let staged = stage_build_context(containerfile, distro)?;
+    let staged = stage_build_context(containerfile, distro, build_context)?;
     backend
         .build_image(&staged.dockerfile, &tag, HashMap::new())
         .await
@@ -306,6 +310,7 @@ pub async fn build_distro_image(
 #[cfg(test)]
 mod tests {
     use super::{find_project_root, stage_build_context};
+    use crate::config::DistroBuildContext;
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -366,7 +371,8 @@ mod tests {
         )
         .expect("write pkgbuild");
 
-        let staged = stage_build_context(&containerfile, "fedora44").expect("stage build context");
+        let staged = stage_build_context(&containerfile, "fedora44", DistroBuildContext::Binary)
+            .expect("stage build context");
 
         assert!(
             staged
@@ -481,7 +487,8 @@ printf 'fixture\n' > "$output/$file"
         permissions.set_mode(0o755);
         fs::set_permissions(&conary, permissions).expect("make fake conary executable");
 
-        let staged = stage_build_context(&containerfile, "arch").expect("stage build context");
+        let staged = stage_build_context(&containerfile, "arch", DistroBuildContext::Binary)
+            .expect("stage build context");
 
         assert!(
             staged
@@ -527,6 +534,59 @@ printf 'fixture\n' > "$output/$file"
         assert_eq!(found, workspace_root);
 
         fs::remove_dir_all(workspace_root).expect("cleanup workspace root");
+    }
+
+    #[test]
+    fn workspace_source_staging_is_controlled_by_typed_capability() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let project_root =
+            std::env::temp_dir().join(format!("conary-test-source-context-{unique}"));
+        let remi_root = project_root.join("apps/conary/tests/integration/remi");
+        let containerfile = remi_root.join("containers/Containerfile.custom");
+
+        fs::create_dir_all(remi_root.join("containers")).expect("create containers");
+        fs::create_dir_all(project_root.join("crates/example/src")).expect("create source");
+        fs::write(
+            project_root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .expect("write workspace manifest");
+        fs::write(
+            project_root.join("crates/example/src/lib.rs"),
+            "pub fn example() {}\n",
+        )
+        .expect("write source file");
+        fs::write(project_root.join("conary"), "binary").expect("write binary");
+        fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
+        fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
+
+        let source_staged = stage_build_context(
+            &containerfile,
+            "not-an-ubuntu-name",
+            DistroBuildContext::WorkspaceSource,
+        )
+        .expect("stage workspace source context");
+        assert!(
+            source_staged
+                .root
+                .join("source/crates/example/src/lib.rs")
+                .is_file()
+        );
+        drop(source_staged);
+
+        let binary_staged = stage_build_context(
+            &containerfile,
+            "ubuntu-name-does-not-matter",
+            DistroBuildContext::Binary,
+        )
+        .expect("stage binary context");
+        assert!(!binary_staged.root.join("source").exists());
+        drop(binary_staged);
+
+        fs::remove_dir_all(project_root).expect("cleanup project root");
     }
 
     #[test]

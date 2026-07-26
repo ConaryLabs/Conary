@@ -6,8 +6,8 @@ use crate::commands::install::{
     ExtractionResult, InstallSemantics, RepositoryInstallProvenance, TransactionContext,
 };
 use conary_core::db::models::{
-    Changeset, ConfigFile, ConfigSource, FileEntry, InstalledFileCapability, Repository, Trove,
-    TroveType,
+    Changeset, ConfigFile, ConfigSource, FileEntry, InstallSource, InstalledFileCapability,
+    Repository, Trove, TroveType,
 };
 use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile, PackageFormat};
 use conary_core::payload::{
@@ -41,6 +41,8 @@ fn symlink_node(target: &str) -> PayloadNode {
 struct FakePackage {
     name: String,
     version: String,
+    version_scheme: VersionScheme,
+    provides: Vec<conary_core::packages::traits::ProvidedCapability>,
     files: Vec<PackageFile>,
     extracted_files: Vec<ExtractedFile>,
     config_files: Vec<ConfigFileInfo>,
@@ -56,6 +58,12 @@ impl FakePackage {
         Self {
             name: name.to_string(),
             version: "1.0.0".to_string(),
+            version_scheme: VersionScheme::Conary,
+            provides: vec![crate::commands::test_helpers::exact_package_self_provider(
+                name,
+                "1.0.0",
+                VersionScheme::Conary,
+            )],
             files: vec![PackageFile {
                 path: path.to_string(),
                 node: node.clone(),
@@ -69,6 +77,14 @@ impl FakePackage {
             }],
             config_files: Vec::new(),
         }
+    }
+
+    fn payload_files(&self) -> Vec<conary_core::packages::payload::PackagePayloadFile> {
+        conary_core::packages::payload::PackagePayload::from_extracted_in_memory(
+            self.extracted_files.clone(),
+        )
+        .unwrap()
+        .into_files()
     }
 }
 
@@ -96,7 +112,7 @@ impl PackageFormat for FakePackage {
     }
 
     fn version_scheme(&self) -> conary_core::repository::versioning::VersionScheme {
-        conary_core::repository::versioning::VersionScheme::Conary
+        self.version_scheme
     }
 
     fn architecture(&self) -> Option<&str> {
@@ -117,8 +133,14 @@ impl PackageFormat for FakePackage {
         &[]
     }
 
-    fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
-        Ok(self.extracted_files.clone())
+    fn provides(&self) -> &[conary_core::packages::traits::ProvidedCapability] {
+        &self.provides
+    }
+
+    fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
+        conary_core::packages::PackagePayload::from_extracted_in_memory(
+            self.extracted_files.clone(),
+        )
     }
 
     fn config_files(&self) -> &[ConfigFileInfo] {
@@ -130,7 +152,7 @@ impl PackageFormat for FakePackage {
             self.name.clone(),
             self.version.clone(),
             TroveType::Package,
-            conary_core::repository::versioning::VersionScheme::Conary,
+            self.version_scheme,
         )
     }
 }
@@ -144,10 +166,11 @@ fn install_inner_replaces_live_root_owned_overlapping_path() {
     conary_core::db::init(&db_path).unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
 
-    let mut live_root = Trove::new(
+    let mut live_root = Trove::new_with_source(
         "conary-live-root".to_string(),
         "2026.05.14".to_string(),
         TroveType::Package,
+        InstallSource::CapturedRoot,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
     let live_root_id = live_root.insert(&conn).unwrap();
@@ -164,7 +187,7 @@ fn install_inner_replaces_live_root_owned_overlapping_path() {
 
     let package = FakePackage::with_file("grub2", "/boot/grub2/grub.cfg", b"new-grub");
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/boot/grub2/grub.cfg".to_string()],
@@ -184,7 +207,6 @@ fn install_inner_replaces_live_root_owned_overlapping_path() {
         semantics: InstallSemantics::ccs(VersionScheme::Conary),
         selection_reason: None,
         old_trove_to_upgrade: None,
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: None,
         defer_generation: false,
@@ -228,6 +250,12 @@ fn store_install_files_in_cas_preserves_symlink_targets() {
     let package = FakePackage {
         name: "fixture".to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Conary,
+        provides: vec![crate::commands::test_helpers::exact_package_self_provider(
+            "fixture",
+            "1.0.0",
+            VersionScheme::Conary,
+        )],
         files: vec![],
         extracted_files: vec![ExtractedFile {
             path: "/usr/bin/fixture-link".to_string(),
@@ -238,7 +266,7 @@ fn store_install_files_in_cas_preserves_symlink_targets() {
         config_files: Vec::new(),
     };
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/usr/bin/fixture-link".to_string()],
@@ -251,7 +279,7 @@ fn store_install_files_in_cas_preserves_symlink_targets() {
         language_provides: Vec::new(),
     };
 
-    let stored = store_install_files_in_cas(&engine, &extraction).unwrap();
+    let stored = store_install_files_in_cas(engine.cas(), &extraction).unwrap();
 
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].path, "/usr/bin/fixture-link");
@@ -284,6 +312,12 @@ fn install_inner_persists_declared_config_metadata() {
         "/etc/fixture/app.conf",
         b"setting=1\n",
     );
+    package.version_scheme = VersionScheme::Rpm;
+    package.provides = vec![crate::commands::test_helpers::exact_package_self_provider(
+        "phase4-runtime-fixture",
+        "1.0.0",
+        VersionScheme::Rpm,
+    )];
     package.config_files = vec![ConfigFileInfo {
         path: "/etc/fixture/app.conf".to_string(),
         noreplace: true,
@@ -291,7 +325,7 @@ fn install_inner_persists_declared_config_metadata() {
         remove_on_upgrade: false,
     }];
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Config,
             vec!["/etc/fixture/app.conf".to_string()],
@@ -311,7 +345,6 @@ fn install_inner_persists_declared_config_metadata() {
         semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
         selection_reason: None,
         old_trove_to_upgrade: None,
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: None,
         defer_generation: false,
@@ -370,7 +403,7 @@ fn install_inner_persists_selected_installed_file_capability_metadata() {
 
     let package = FakePackage::with_file("server", "/usr/bin/server", b"server\n");
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/usr/bin/server".to_string()],
@@ -394,7 +427,6 @@ fn install_inner_persists_selected_installed_file_capability_metadata() {
         semantics: InstallSemantics::ccs(VersionScheme::Conary),
         selection_reason: None,
         old_trove_to_upgrade: None,
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: Some(&file_capabilities),
         defer_generation: false,
@@ -438,12 +470,16 @@ fn install_inner_persists_usrmerge_normalized_file_capability_metadata() {
     let root = temp.path().join("root");
     let db_path = temp.path().join("conary.db");
     std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::create_dir_all(root.join("usr/sbin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", root.join("bin")).unwrap();
+    std::os::unix::fs::symlink("usr/sbin", root.join("sbin")).unwrap();
     conary_core::db::init(&db_path).unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
 
     let package = FakePackage::with_file("demo", "/usr/bin/demo", b"demo\n");
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/usr/bin/demo".to_string()],
@@ -472,7 +508,6 @@ fn install_inner_persists_usrmerge_normalized_file_capability_metadata() {
         semantics: InstallSemantics::ccs(VersionScheme::Conary),
         selection_reason: None,
         old_trove_to_upgrade: None,
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: Some(&normalized_file_capabilities),
         defer_generation: false,
@@ -531,8 +566,13 @@ fn install_inner_replaces_installed_file_capability_metadata_on_upgrade() {
 
     let mut package = FakePackage::with_file("server", "/usr/bin/server", b"server-v2\n");
     package.version = "2.0.0".to_string();
+    package.provides = vec![crate::commands::test_helpers::exact_package_self_provider(
+        "server",
+        "2.0.0",
+        VersionScheme::Conary,
+    )];
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/usr/bin/server".to_string()],
@@ -553,7 +593,6 @@ fn install_inner_replaces_installed_file_capability_metadata_on_upgrade() {
         semantics: InstallSemantics::ccs(VersionScheme::Conary),
         selection_reason: None,
         old_trove_to_upgrade: Some(&old_trove),
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: Some(&file_capabilities),
         defer_generation: false,
@@ -605,6 +644,12 @@ fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
     let package = FakePackage {
         name: "server".to_string(),
         version: "1.0.0".to_string(),
+        version_scheme: VersionScheme::Conary,
+        provides: vec![crate::commands::test_helpers::exact_package_self_provider(
+            "server",
+            "1.0.0",
+            VersionScheme::Conary,
+        )],
         files: vec![PackageFile {
             path: "/usr/bin/server-link".to_string(),
             node: symlink_node("server"),
@@ -619,7 +664,7 @@ fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
         config_files: Vec::new(),
     };
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/usr/bin/server-link".to_string()],
@@ -640,7 +685,6 @@ fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
         semantics: InstallSemantics::ccs(VersionScheme::Conary),
         selection_reason: None,
         old_trove_to_upgrade: None,
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: Some(&file_capabilities),
         defer_generation: false,
@@ -687,9 +731,15 @@ fn install_inner_applies_repository_provenance_from_resolution() {
     );
     let repo_id = repo.insert(&conn).unwrap();
 
-    let package = FakePackage::with_file("tree", "/usr/bin/tree", b"tree\n");
+    let mut package = FakePackage::with_file("tree", "/usr/bin/tree", b"tree\n");
+    package.version_scheme = VersionScheme::Rpm;
+    package.provides = vec![crate::commands::test_helpers::exact_package_self_provider(
+        "tree",
+        "1.0.0",
+        VersionScheme::Rpm,
+    )];
     let extraction = ExtractionResult {
-        extracted_files: package.extracted_files.clone(),
+        extracted_files: package.payload_files(),
         classified: HashMap::from([(
             conary_core::components::ComponentType::Runtime,
             vec!["/usr/bin/tree".to_string()],
@@ -709,13 +759,12 @@ fn install_inner_applies_repository_provenance_from_resolution() {
         semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
         selection_reason: None,
         old_trove_to_upgrade: None,
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: None,
         defer_generation: false,
         repository_provenance: Some(RepositoryInstallProvenance {
             repository_id: repo_id,
-            source_distro: Some("fedora".to_string()),
+            source_profile: Some("fedora-44".to_string()),
             version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
             source_kind: conary_core::repository::RepositorySourceKind::Native,
         }),
@@ -749,7 +798,7 @@ fn install_inner_applies_repository_provenance_from_resolution() {
     };
     assert_eq!(trove.install_source, InstallSource::Repository);
     assert_eq!(trove.installed_from_repository_id, Some(repo_id));
-    assert_eq!(trove.source_distro.as_deref(), Some("fedora"));
+    assert_eq!(trove.source_profile.as_deref(), Some("fedora-44"));
     assert_eq!(
         trove.version_scheme,
         conary_core::repository::versioning::VersionScheme::Rpm

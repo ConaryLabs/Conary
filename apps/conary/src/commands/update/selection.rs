@@ -1,18 +1,14 @@
 // src/commands/update/selection.rs
 
-//! Update candidate selection, source-switch previewing, and security metadata checks.
+//! Exact-source update candidate selection and security metadata checks.
 
 use super::super::{InstalledPackageSelector, resolve_installed_package};
 use anyhow::Result;
-use chrono::Utc;
-use conary_core::db::models::{
-    RepologyCacheEntry, Repository, RepositoryPackage, SecurityAdvisorySupport, Trove,
-};
+use conary_core::db::models::{Repository, RepositoryPackage, SecurityAdvisorySupport, Trove};
 use conary_core::repository::{
-    LatestSignal, PackageSelector, SelectionOptions,
-    dependency_model::RepositoryDependencyFlavor,
-    resolution_policy::{ResolutionPolicy, SelectionMode},
-    versioning::{compare_mixed_repo_versions, resolve_package_version_scheme},
+    PackageSelector, SelectionOptions,
+    resolution_policy::ResolutionPolicy,
+    versioning::{compare_package_identities, resolve_package_version_scheme},
 };
 use std::cmp::Ordering;
 use tracing::debug;
@@ -24,11 +20,13 @@ use tracing::debug;
 fn is_repo_version_newer(trove: &Trove, package: &RepositoryPackage) -> Result<bool> {
     let installed_scheme = trove.version_scheme;
     let repository_scheme = resolve_package_version_scheme(package);
-    let ordering = compare_mixed_repo_versions(
+    let ordering = compare_package_identities(
         installed_scheme,
         &trove.version,
+        trove.package_release.as_deref(),
         repository_scheme,
         &package.version,
+        (!package.package_release.is_empty()).then_some(package.package_release.as_str()),
     )?;
 
     if ordering != Ordering::Less {
@@ -43,19 +41,10 @@ fn is_repo_version_newer(trove: &Trove, package: &RepositoryPackage) -> Result<b
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct UpdateSourceSwitch {
-    from_distro: String,
-    to_distro: String,
-    reason: String,
-}
-
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct SelectedUpdateCandidate {
     pub(super) package: RepositoryPackage,
     pub(super) repository: Repository,
-    source_switch: Option<UpdateSourceSwitch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,26 +73,31 @@ impl UpdateCandidateSelection {
 }
 
 #[allow(dead_code)]
-fn installed_source_distro(trove: &Trove) -> Option<&str> {
-    trove.source_distro.as_deref()
+fn persisted_source_profile(trove: &Trove) -> Option<&str> {
+    trove.source_profile.as_deref()
 }
 
-#[allow(dead_code)]
-fn candidate_source_distro<'a>(
-    package: &'a RepositoryPackage,
-    repository: &'a Repository,
-) -> Option<&'a str> {
-    package
-        .distro
-        .as_deref()
-        .or(repository.default_strategy_distro.as_deref())
+fn effective_installed_source_profile(
+    conn: &rusqlite::Connection,
+    trove: &Trove,
+) -> Result<Option<String>> {
+    if let Some(profile) = &trove.source_profile {
+        return Ok(Some(profile.clone()));
+    }
+    let Some(repository_id) = trove.installed_from_repository_id else {
+        return Ok(None);
+    };
+    Ok(Repository::find_by_id(conn, repository_id)?
+        .and_then(|repository| repository.source_profile))
 }
 
 fn candidate_matches_installed_source(
     trove: &Trove,
     package: &RepositoryPackage,
     repository: &Repository,
-) -> bool {
+) -> Result<bool> {
+    let candidate_profile =
+        conary_core::repository::selector::candidate_source_profile(package, repository)?;
     if trove
         .installed_from_repository_id
         .zip(repository.id)
@@ -111,82 +105,43 @@ fn candidate_matches_installed_source(
             installed_repo_id == candidate_repo_id
         })
     {
-        return true;
+        return Ok(true);
     }
 
-    matches!(
-        (installed_source_distro(trove), candidate_source_distro(package, repository)),
+    Ok(matches!(
+        (persisted_source_profile(trove), candidate_profile),
         (Some(installed), Some(candidate)) if installed == candidate
-    )
+    ))
 }
 
-fn candidate_has_positive_latest_signal(
-    conn: &rusqlite::Connection,
-    package: &RepositoryPackage,
-    repository: &Repository,
-) -> Result<bool> {
-    let Some(canonical_id) = package.canonical_id else {
-        return Ok(false);
-    };
-    let Some(distro) = candidate_source_distro(package, repository).map(ToOwned::to_owned) else {
-        return Ok(false);
-    };
-
-    let rows = RepologyCacheEntry::find_for_canonical_and_distros(conn, canonical_id, &[distro])?;
-    let now = Utc::now();
-    for row in rows {
-        let signal = LatestSignal::from_repology(
-            row.status.as_deref().unwrap_or_default(),
-            row.version.as_deref(),
-            &row.fetched_at,
-            now,
-        )?;
-        if signal.is_positive() {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
-fn source_switch_reason() -> String {
-    "selection_mode=latest prefers the allowed source with a positive newest Repology signal"
-        .to_string()
-}
-
-// In latest mode, updates re-evaluate allowed sources rather than staying
-// pinned to the currently installed repository when a newer allowed source exists.
-// Source switches must be previewed and confirmed unless --yes is supplied.
+/// Select a newer package from the exact installed source.
+///
+/// Ordinary updates never infer a distro/source migration. Replatforming is a
+/// separate explicit operation with its own preview and confirmation.
 pub(super) fn select_update_candidate(
     conn: &rusqlite::Connection,
     trove: &Trove,
     security_only: bool,
     policy: &ResolutionPolicy,
-    primary_flavor: Option<RepositoryDependencyFlavor>,
 ) -> Result<UpdateCandidateSelection> {
+    let mut transaction_policy = policy.clone();
+    transaction_policy.set_primary_profile(effective_installed_source_profile(conn, trove)?);
     let options = SelectionOptions {
         version: None,
+        package_release: None,
         repository: None,
         architecture: trove.architecture.clone(),
-        policy: Some(policy.clone()),
+        architecture_scope: conary_core::repository::selector::ArchitectureScope::Native,
+        policy: Some(transaction_policy),
         is_root: false,
-        primary_flavor,
     };
 
     let mut eligible = Vec::new();
     for candidate in PackageSelector::search_packages(conn, &trove.name, &options)? {
-        let same_source =
-            candidate_matches_installed_source(trove, &candidate.package, &candidate.repository);
-        let newer_in_scheme = is_repo_version_newer(trove, &candidate.package)?;
-        let allow_cross_source_latest = policy.selection_mode == SelectionMode::Latest
-            && !same_source
-            && candidate_has_positive_latest_signal(
-                conn,
-                &candidate.package,
-                &candidate.repository,
-            )?;
-
-        if newer_in_scheme || allow_cross_source_latest {
+        if !candidate_matches_installed_source(trove, &candidate.package, &candidate.repository)? {
+            continue;
+        }
+        if is_repo_version_newer(trove, &candidate.package)? {
             if security_only {
                 if !candidate
                     .repository
@@ -214,81 +169,14 @@ pub(super) fn select_update_candidate(
         return Ok(UpdateCandidateSelection::NoEligibleUpdate);
     }
 
-    let selected = if policy.selection_mode == SelectionMode::Latest {
-        PackageSelector::select_best_with_options(conn, eligible, &options)?
-    } else {
-        let (same_source, other_sources): (Vec<_>, Vec<_>) =
-            eligible.into_iter().partition(|candidate| {
-                candidate_matches_installed_source(trove, &candidate.package, &candidate.repository)
-            });
-
-        if !same_source.is_empty() {
-            PackageSelector::select_best_with_options(conn, same_source, &options)?
-        } else {
-            PackageSelector::select_best_with_options(conn, other_sources, &options)?
-        }
-    };
-
-    let source_switch =
-        if candidate_matches_installed_source(trove, &selected.package, &selected.repository) {
-            None
-        } else {
-            Some(UpdateSourceSwitch {
-                from_distro: installed_source_distro(trove)
-                    .unwrap_or("current-source")
-                    .to_string(),
-                to_distro: candidate_source_distro(&selected.package, &selected.repository)
-                    .unwrap_or(selected.repository.name.as_str())
-                    .to_string(),
-                reason: source_switch_reason(),
-            })
-        };
+    let selected = PackageSelector::select_best_with_options(conn, eligible, &options)?;
 
     Ok(UpdateCandidateSelection::Selected(Box::new(
         SelectedUpdateCandidate {
             package: selected.package,
             repository: selected.repository,
-            source_switch,
         },
     )))
-}
-
-fn render_source_switch_preview_line(selection: &SelectedUpdateCandidate) -> Option<String> {
-    selection.source_switch.as_ref().map(|source_switch| {
-        format!(
-            "{}: {} -> {} ({})",
-            selection.package.name,
-            source_switch.from_distro,
-            source_switch.to_distro,
-            source_switch.reason
-        )
-    })
-}
-
-pub(super) fn requires_source_switch_confirmation(
-    updates: &[SelectedUpdateCandidate],
-    yes: bool,
-) -> bool {
-    !yes && updates.iter().any(|update| update.source_switch.is_some())
-}
-
-fn render_source_switch_preview_lines(updates: &[(Trove, SelectedUpdateCandidate)]) -> Vec<String> {
-    updates
-        .iter()
-        .filter_map(|(_, selection)| render_source_switch_preview_line(selection))
-        .collect()
-}
-
-pub(super) fn print_source_switch_preview(updates: &[(Trove, SelectedUpdateCandidate)]) {
-    let preview_lines = render_source_switch_preview_lines(updates);
-    if preview_lines.is_empty() {
-        return;
-    }
-
-    println!("\nSource switches proposed:");
-    for line in preview_lines {
-        println!("  {}", line);
-    }
 }
 
 pub(super) fn render_security_update_marker(package: &RepositoryPackage) -> String {
@@ -403,19 +291,16 @@ mod tests {
         CanonicalPackage, InstallSource, RepologyCacheEntry, Repository, RepositoryPackage,
         SecurityAdvisorySupport, Trove, TroveType,
     };
-    use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
-    use conary_core::repository::resolution_policy::{
-        DependencyMixingPolicy, ResolutionPolicy, SelectionMode,
-    };
+    use conary_core::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
     use conary_core::repository::versioning::VersionScheme;
 
-    fn seed_latest_mode_update_fixture(conn: &rusqlite::Connection) -> Trove {
+    fn seed_cross_source_update_fixture(conn: &rusqlite::Connection) -> Trove {
         let mut fedora_repo = Repository::new(
             "fedora-main".to_string(),
             "https://example.test/fedora".to_string(),
         );
         fedora_repo.priority = 50;
-        fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+        fedora_repo.source_profile = Some("fedora-44".to_string());
         let fedora_repo_id = fedora_repo.insert(conn).unwrap();
 
         let mut arch_repo = Repository::new(
@@ -423,12 +308,12 @@ mod tests {
             "https://example.test/arch".to_string(),
         );
         arch_repo.priority = 10;
-        arch_repo.default_strategy_distro = Some("arch".to_string());
+        arch_repo.source_profile = Some("arch".to_string());
         let arch_repo_id = arch_repo.insert(conn).unwrap();
 
         let mut canonical = CanonicalPackage::new("demo".to_string(), "package".to_string());
         let canonical_id = canonical.insert(conn).unwrap();
-        let fresh = Utc::now().to_rfc3339();
+        let fresh = chrono::Utc::now().to_rfc3339();
 
         RepologyCacheEntry::insert_or_replace(
             conn,
@@ -463,7 +348,7 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(fedora_repo_id);
         installed.insert(conn).unwrap();
 
@@ -477,7 +362,7 @@ mod tests {
             "https://example.test/fedora/demo-1.1.0-1.fc44.rpm".to_string(),
         );
         fedora_candidate.architecture = Some("x86_64".to_string());
-        fedora_candidate.distro = Some("fedora-44".to_string());
+        fedora_candidate.source_profile = Some("fedora-44".to_string());
         fedora_candidate.canonical_id = Some(canonical_id);
         fedora_candidate.insert(conn).unwrap();
 
@@ -491,7 +376,7 @@ mod tests {
             "https://example.test/arch/demo-1.2.0-1.pkg.tar.zst".to_string(),
         );
         arch_candidate.architecture = Some("x86_64".to_string());
-        arch_candidate.distro = Some("arch".to_string());
+        arch_candidate.source_profile = Some("arch".to_string());
         arch_candidate.canonical_id = Some(canonical_id);
         arch_candidate.insert(conn).unwrap();
 
@@ -507,7 +392,7 @@ mod tests {
             "security-repo".to_string(),
             "https://example.test/security".to_string(),
         );
-        repo.default_strategy_distro = Some("fedora-44".to_string());
+        repo.source_profile = Some("fedora-44".to_string());
         repo.security_advisory_support = support;
         let repo_id = repo.insert(conn).unwrap();
 
@@ -519,7 +404,7 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.insert(conn).unwrap();
 
@@ -533,7 +418,7 @@ mod tests {
             "https://example.test/security/openssl-1.0.1.ccs".to_string(),
         );
         candidate.architecture = Some("x86_64".to_string());
-        candidate.distro = Some("fedora-44".to_string());
+        candidate.source_profile = Some("fedora-44".to_string());
         candidate.is_security_update = candidate_is_security_update;
         if candidate_is_security_update {
             candidate.severity = Some("important".to_string());
@@ -599,7 +484,7 @@ mod tests {
             "http://127.0.0.1:18087".to_string(),
         );
         repo.priority = 500;
-        repo.default_strategy_distro = Some("ubuntu".to_string());
+        repo.source_profile = Some("ubuntu-26.04".to_string());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut package = RepositoryPackage::new(
@@ -612,7 +497,7 @@ mod tests {
             "http://127.0.0.1:18087/phase4-runtime-fixture_1.0.1_amd64.deb".to_string(),
         );
         package.architecture = Some("amd64".to_string());
-        package.distro = Some("ubuntu".to_string());
+        package.source_profile = Some("ubuntu-26.04".to_string());
         package.insert(&conn).unwrap();
 
         let mut installed = Trove::new(
@@ -622,13 +507,14 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Debian,
         );
         installed.architecture = Some("amd64".to_string());
+        installed.source_profile = Some("ubuntu-26.04".to_string());
+        installed.installed_from_repository_id = Some(repo_id);
 
         let selected = select_update_candidate(
             &conn,
             &installed,
             false,
             &ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict),
-            Some(RepositoryDependencyFlavor::Deb),
         )
         .unwrap()
         .expect("expected generic metadata-driven Debian update");
@@ -639,107 +525,18 @@ mod tests {
     }
 
     #[test]
-    fn latest_mode_update_can_switch_sources_when_newest_allowed_candidate_differs() {
+    fn repology_latest_signal_cannot_switch_update_source() {
         let (_temp, db_path) = create_test_db();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let trove = seed_latest_mode_update_fixture(&conn);
-        let policy = ResolutionPolicy::new()
-            .with_selection_mode(SelectionMode::Latest)
-            .with_mixing(DependencyMixingPolicy::Permissive);
+        let trove = seed_cross_source_update_fixture(&conn);
+        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
 
-        let selected = select_update_candidate(
-            &conn,
-            &trove,
-            false,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap()
-        .expect("expected update candidate");
-
-        assert_eq!(selected.repository.name, "arch-core");
-        assert_eq!(selected.package.version, "1.2.0-1");
-        let source_switch = selected
-            .source_switch
-            .expect("expected source-switch metadata for latest-mode update");
-        assert_eq!(source_switch.from_distro, "fedora-44");
-        assert_eq!(source_switch.to_distro, "arch");
-        assert!(source_switch.reason.contains("latest"));
-    }
-
-    #[test]
-    fn latest_mode_update_previews_source_switches_in_dry_run() {
-        let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let trove = seed_latest_mode_update_fixture(&conn);
-        let policy = ResolutionPolicy::new()
-            .with_selection_mode(SelectionMode::Latest)
-            .with_mixing(DependencyMixingPolicy::Permissive);
-
-        let selected = select_update_candidate(
-            &conn,
-            &trove,
-            false,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap()
-        .expect("expected update candidate");
-
-        let preview = render_source_switch_preview_line(&selected)
-            .expect("expected latest-mode update preview for source switch");
-        assert!(preview.contains("demo"));
-        assert!(preview.contains("fedora-44"));
-        assert!(preview.contains("arch"));
-        assert!(preview.contains("latest"));
-    }
-
-    #[test]
-    fn latest_mode_update_requires_confirmation_for_source_switch_without_yes() {
-        let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let trove = seed_latest_mode_update_fixture(&conn);
-        let policy = ResolutionPolicy::new()
-            .with_selection_mode(SelectionMode::Latest)
-            .with_mixing(DependencyMixingPolicy::Permissive);
-
-        let selected = select_update_candidate(
-            &conn,
-            &trove,
-            false,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap()
-        .expect("expected update candidate");
-
-        assert!(requires_source_switch_confirmation(
-            std::slice::from_ref(&selected),
-            false
-        ));
-        assert!(!requires_source_switch_confirmation(&[selected], true));
-    }
-
-    #[test]
-    fn policy_mode_update_prefers_current_source_candidate() {
-        let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let trove = seed_latest_mode_update_fixture(&conn);
-        let policy = ResolutionPolicy::new().with_selection_mode(SelectionMode::Policy);
-
-        let selected = select_update_candidate(
-            &conn,
-            &trove,
-            false,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap()
-        .expect("expected same-source update candidate");
+        let selected = select_update_candidate(&conn, &trove, false, &policy)
+            .unwrap()
+            .expect("expected update candidate");
 
         assert_eq!(selected.repository.name, "fedora-main");
         assert_eq!(selected.package.version, "1.1.0-1.fc44");
-        assert!(selected.source_switch.is_none());
     }
 
     #[test]
@@ -749,14 +546,7 @@ mod tests {
         let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Unknown, false);
         let policy = ResolutionPolicy::new();
 
-        let result = select_update_candidate(
-            &conn,
-            &trove,
-            true,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap();
+        let result = select_update_candidate(&conn, &trove, true, &policy).unwrap();
 
         assert!(matches!(
             result,
@@ -772,14 +562,7 @@ mod tests {
             seed_security_update_fixture(&conn, SecurityAdvisorySupport::Unsupported, false);
         let policy = ResolutionPolicy::new();
 
-        let result = select_update_candidate(
-            &conn,
-            &trove,
-            true,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap();
+        let result = select_update_candidate(&conn, &trove, true, &policy).unwrap();
 
         assert!(matches!(
             result,
@@ -794,14 +577,7 @@ mod tests {
         let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Supported, true);
         let policy = ResolutionPolicy::new();
 
-        let result = select_update_candidate(
-            &conn,
-            &trove,
-            true,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap();
+        let result = select_update_candidate(&conn, &trove, true, &policy).unwrap();
 
         assert!(matches!(result, UpdateCandidateSelection::Selected(_)));
     }
@@ -848,39 +624,23 @@ mod tests {
         let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Supported, false);
         let policy = ResolutionPolicy::new();
 
-        let result = select_update_candidate(
-            &conn,
-            &trove,
-            true,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap();
+        let result = select_update_candidate(&conn, &trove, true, &policy).unwrap();
 
         assert!(matches!(result, UpdateCandidateSelection::NoEligibleUpdate));
     }
 
     #[test]
-    fn latest_mode_update_respects_strict_mixing_and_stays_on_current_source() {
+    fn strict_mixing_update_stays_on_current_source() {
         let (_temp, db_path) = create_test_db();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let trove = seed_latest_mode_update_fixture(&conn);
-        let policy = ResolutionPolicy::new()
-            .with_selection_mode(SelectionMode::Latest)
-            .with_mixing(DependencyMixingPolicy::Strict);
+        let trove = seed_cross_source_update_fixture(&conn);
+        let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict);
 
-        let selected = select_update_candidate(
-            &conn,
-            &trove,
-            false,
-            &policy,
-            Some(RepositoryDependencyFlavor::Rpm),
-        )
-        .unwrap()
-        .expect("expected strict-mixing update candidate");
+        let selected = select_update_candidate(&conn, &trove, false, &policy)
+            .unwrap()
+            .expect("expected strict-mixing update candidate");
 
         assert_eq!(selected.repository.name, "fedora-main");
         assert_eq!(selected.package.version, "1.1.0-1.fc44");
-        assert!(selected.source_switch.is_none());
     }
 }

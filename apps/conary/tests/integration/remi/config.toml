@@ -22,6 +22,7 @@ fixture_dir = "/opt/remi-tests/fixtures"
 [distros.fedora44]
 remi_distro = "fedora-44"
 repo_name = "remi-fedora-44"
+build_context = "binary"
 test_packages = [
     { package = "which", binary = "/usr/bin/which" },
     { package = "tree", binary = "/usr/bin/tree" },
@@ -31,6 +32,7 @@ test_packages = [
 [distros."ubuntu-26.04"]
 remi_distro = "ubuntu-26.04"
 repo_name = "remi-ubuntu-26.04"
+build_context = "workspace-source"
 test_packages = [
     { package = "patch", binary = "/usr/bin/patch" },
     { package = "nano", binary = "/usr/bin/nano" },
@@ -40,6 +42,7 @@ test_packages = [
 [distros.arch]
 remi_distro = "arch"
 repo_name = "remi-arch"
+build_context = "binary"
 test_packages = [
     { package = "which", binary = "/usr/bin/which" },
     { package = "tree", binary = "/usr/bin/tree" },

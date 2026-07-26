@@ -448,9 +448,10 @@ mod tests {
         conary_core::db::schema::ensure_current(&conn).unwrap();
 
         let mut first = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "first".to_string(),
             "1".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:test1".to_string(),
             &[
@@ -465,9 +466,10 @@ mod tests {
         first.insert(&conn).unwrap();
 
         let mut second = ConvertedPackage::new_repository(
-            "debian".to_string(),
+            "ubuntu-26.04".to_string(),
             "second".to_string(),
             "1".to_string(),
+            "amd64".to_string(),
             "deb".to_string(),
             "sha256:test2".to_string(),
             &["hash_b".to_string(), "hash_d".to_string()],
@@ -492,7 +494,8 @@ mod tests {
         .unwrap();
 
         conn.execute(
-            "INSERT INTO repositories (name, url) VALUES ('fedora', 'remi-release://fedora')",
+            "INSERT INTO repositories (name, url, source_profile)
+             VALUES ('fedora', 'remi-release://fedora', 'fedora-44')",
             [],
         )
         .unwrap();
@@ -505,10 +508,10 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO native_package_publications (
-                repository_id, repository_package_id, distro, name, version, package_release,
+                repository_id, repository_package_id, source_profile, name, version, package_release,
                 architecture, package_kind, authority_format_version, status, content_hash,
                 chunk_hashes_json, total_size, package_path, target_path, trust_status
-            ) VALUES (1, 1, 'fedora', 'hello', '1.0.0', '1', 'noarch', 'package', 2,
+            ) VALUES (1, 1, 'fedora-44', 'hello', '1.0.0', '1', 'noarch', 'package', 2,
                       'public', 'native-content', '[\"native-chunk\"]', 42,
                       '/tmp/hello.ccs', 'packages/fedora/hello.ccs', 'verified')",
             [],
@@ -534,9 +537,10 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
         let mut converted = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "broken".to_string(),
             "1".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:source".to_string(),
             &["hash".to_string()],
@@ -569,7 +573,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
         conn.execute(
-            "INSERT INTO repositories (name, url) VALUES ('fedora', 'remi-release://fedora')",
+            "INSERT INTO repositories (name, url, source_profile)
+             VALUES ('fedora', 'remi-release://fedora', 'fedora-44')",
             [],
         )
         .unwrap();
@@ -582,10 +587,10 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO native_package_publications (
-                repository_id, repository_package_id, distro, name, version, package_release,
+                repository_id, repository_package_id, source_profile, name, version, package_release,
                 architecture, package_kind, authority_format_version, status, content_hash,
                 chunk_hashes_json, total_size, package_path, target_path, trust_status
-            ) VALUES (1, 1, 'fedora', 'broken', '1', '1', 'noarch', 'package', 2,
+            ) VALUES (1, 1, 'fedora-44', 'broken', '1', '1', 'noarch', 'package', 2,
                       'public', 'sha256:broken', '{bad', 1,
                       '/tmp/broken.ccs', 'packages/fedora/broken.ccs', 'verified')",
             [],

@@ -759,6 +759,36 @@ fn mode_string(mode: u32) -> String {
         .collect()
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "RpmEmbeddedLuaInvalidAccountEntry: {database} entry '{account}' has invalid {field} '{value}': {source}"
+)]
+struct InvalidAccountEntryId {
+    database: String,
+    account: String,
+    field: &'static str,
+    value: String,
+    #[source]
+    source: std::num::ParseIntError,
+}
+
+fn parse_account_id(
+    database: &str,
+    account: &str,
+    field: &'static str,
+    value: &str,
+) -> mlua::Result<u32> {
+    value.parse::<u32>().map_err(|source| {
+        mlua::Error::external(InvalidAccountEntryId {
+            database: database.to_string(),
+            account: account.to_string(),
+            field,
+            value: value.to_string(),
+            source,
+        })
+    })
+}
+
 fn account_entry(
     lua: &Lua,
     context: &LuaRuntimeContext,
@@ -790,7 +820,7 @@ fn account_entry(
         let table = lua.create_table()?;
         table.set("name", fields[0])?;
         if group {
-            table.set("gid", fields[2].parse::<u32>().unwrap_or(0))?;
+            table.set("gid", parse_account_id(file, fields[0], "gid", fields[2])?)?;
             for (index, member) in fields[3]
                 .split(',')
                 .filter(|member| !member.is_empty())
@@ -799,8 +829,8 @@ fn account_entry(
                 table.raw_set(index + 1, member)?;
             }
         } else {
-            table.set("uid", fields[2].parse::<u32>().unwrap_or(0))?;
-            table.set("gid", fields[3].parse::<u32>().unwrap_or(0))?;
+            table.set("uid", parse_account_id(file, fields[0], "uid", fields[2])?)?;
+            table.set("gid", parse_account_id(file, fields[0], "gid", fields[3])?)?;
             table.set("gecos", fields[4])?;
             table.set("dir", fields[5])?;
             table.set("shell", fields[6])?;

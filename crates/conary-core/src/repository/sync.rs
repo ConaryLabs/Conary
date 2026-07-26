@@ -22,10 +22,10 @@ use super::metadata::{
 use super::registry::{self, RepositoryFormat};
 use super::static_repo::sync::fetch_static_sync_snapshot;
 use super::trust::openpgp::PreparedOpenPgpTrust;
+use super::versioning::VersionScheme;
 pub(in crate::repository) use native::{capability_kind_to_db, convert_requirement_groups};
 use native::{
-    distro_flavor_to_db, normalized_repository_capabilities, persist_native_sync_rows,
-    persist_synced_package_rows,
+    normalized_repository_capabilities, persist_native_sync_rows, persist_synced_package_rows,
 };
 #[cfg(test)]
 use remi::remi_sync_row;
@@ -34,7 +34,7 @@ use remi::{
     persist_canonical_map, sync_repository_remi,
 };
 #[cfg(test)]
-use types::{CanonicalMapSnapshot, RemiPackageEntry};
+use types::RemiPackageEntry;
 use types::{
     JsonPackageDelta, JsonRepositorySyncSnapshot, RepositorySyncSnapshot, SyncedPackageRow,
 };
@@ -52,9 +52,11 @@ async fn fetch_repository_native_snapshot(
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
     let parser_config = repo.require_parser_config()?;
+    let source_profile = repo.require_source_profile()?;
     info!(
-        "Syncing repository {} using exact {} parser configuration",
+        "Syncing repository {} for exact profile {} using exact {} parser configuration",
         repo.name,
+        source_profile.id(),
         parser_config.format().as_str()
     );
 
@@ -67,6 +69,7 @@ async fn fetch_repository_native_snapshot(
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+    let source_profile_id = source_profile.id().to_string();
 
     if let Some(ref content_url) = repo.content_url {
         info!(
@@ -100,14 +103,16 @@ async fn fetch_repository_native_snapshot(
             );
 
             repo_pkg.architecture = pkg_meta.architecture;
+            repo_pkg.debian_multi_arch = pkg_meta.debian_multi_arch;
             repo_pkg.description = pkg_meta.description;
             repo_pkg.metadata = match &pkg_meta.extra_metadata {
                 serde_json::Value::Null => None,
                 value => Some(value.to_string()),
             };
 
-            // Persist package origin metadata from parser
-            repo_pkg.distro = Some(distro_flavor_to_db(pkg_meta.source_distro));
+            // Persist the exact repository profile. Package format remains a
+            // separate typed field and is never promoted to distro authority.
+            repo_pkg.source_profile = Some(source_profile_id.clone());
 
             // Convert parser-level requirement groups to DB models
             let (req_groups, req_group_clauses) =
@@ -499,6 +504,11 @@ fn json_repository_sync_snapshot(
             download_url,
         );
         repo_pkg.architecture = pkg_meta.architecture;
+        repo_pkg.debian_multi_arch = if version_scheme == VersionScheme::Debian {
+            Some(pkg_meta.debian_multi_arch.unwrap_or_default())
+        } else {
+            pkg_meta.debian_multi_arch
+        };
         repo_pkg.description = pkg_meta.description;
         if let (Some(source), Some(advisory)) =
             (trusted_advisory_source, pkg_meta.security_advisory.as_ref())
@@ -868,16 +878,16 @@ pub fn needs_sync(repo: &Repository) -> bool {
 /// package_implementations by (distro_name, distro) and sets canonical_id.
 /// Called after batch_insert during sync, and by `conary canonical rebuild`.
 pub fn link_canonical_ids(conn: &Connection, repo_id: i64) -> Result<usize> {
-    let repo_distro: Option<String> = conn
+    let source_profile: Option<String> = conn
         .query_row(
-            "SELECT COALESCE(default_strategy_distro, name) FROM repositories WHERE id = ?1",
+            "SELECT source_profile FROM repositories WHERE id = ?1",
             [repo_id],
             |row| row.get(0),
         )
         .optional()?
         .flatten();
 
-    let Some(distro) = repo_distro else {
+    let Some(profile) = source_profile else {
         return Ok(0);
     };
 
@@ -888,7 +898,7 @@ pub fn link_canonical_ids(conn: &Connection, repo_id: i64) -> Result<usize> {
               AND pi.distro = ?1
             LIMIT 1
         ) WHERE repository_id = ?2 AND canonical_id IS NULL",
-        params![distro, repo_id],
+        params![profile, repo_id],
     )?;
 
     if updated > 0 {

@@ -14,10 +14,6 @@ pub enum TriggerCommands {
         /// Show disabled triggers too
         #[arg(long)]
         all: bool,
-
-        /// Show only built-in triggers
-        #[arg(long)]
-        builtin: bool,
     },
 
     /// Show details of a trigger
@@ -72,7 +68,7 @@ pub enum TriggerCommands {
         db: DbArgs,
     },
 
-    /// Remove a custom trigger (built-in triggers cannot be removed)
+    /// Remove a custom trigger
     Remove {
         /// Trigger name to remove
         name: String,

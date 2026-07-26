@@ -10,7 +10,7 @@ use conary_core::components::ComponentType;
 use conary_core::db::models::DerivedPackage;
 use conary_core::dependencies::LanguageDep;
 use conary_core::packages::PackageFormat;
-use conary_core::packages::traits::ExtractedFile;
+use conary_core::packages::payload::PackagePayloadFile;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,7 +29,7 @@ impl<'a> FinalizeInstallOutput<'a> {
 
 /// Result of file extraction and exact component assignment.
 pub(super) struct ExtractionResult {
-    pub(super) extracted_files: Vec<ExtractedFile>,
+    pub(super) extracted_files: Vec<PackagePayloadFile>,
     pub(super) classified: HashMap<ComponentType, Vec<String>>,
     pub(super) component_names_by_path: Option<HashMap<String, String>>,
     pub(super) installed_component_names: Option<Vec<String>>,
@@ -44,26 +44,24 @@ pub(super) fn mark_upgraded_parent_deriveds_stale(
     parent_name: &str,
     old_version: Option<&str>,
     new_version: &str,
-) {
-    match DerivedPackage::mark_stale_if_parent_changed(conn, parent_name, old_version, new_version)
-    {
-        Ok(count) if count > 0 => {
-            info!(
-                "Marked {} derived package(s) stale after {} changed from {} to {}",
-                count,
-                parent_name,
-                old_version.unwrap_or("unknown"),
-                new_version
-            );
-        }
-        Ok(_) => {}
-        Err(e) => {
-            warn!(
-                "Failed to mark derived packages stale for upgraded parent {}: {}",
-                parent_name, e
-            );
-        }
+) -> Result<()> {
+    let count =
+        DerivedPackage::mark_stale_if_parent_changed(conn, parent_name, old_version, new_version)
+            .with_context(|| {
+            format!(
+                "Failed to persist derived-package invalidation for upgraded parent {parent_name}"
+            )
+        })?;
+    if count > 0 {
+        info!(
+            "Marked {} derived package(s) stale after {} changed from {} to {}",
+            count,
+            parent_name,
+            old_version.unwrap_or("unknown"),
+            new_version
+        );
     }
+    Ok(())
 }
 
 /// Display a dry-run summary showing what would be installed.
@@ -105,7 +103,8 @@ pub(super) fn extract_and_classify_files(
     progress.set_phase(pkg.name(), InstallPhase::Extracting);
     info!("Extracting file contents from package...");
     let extracted_files = pkg
-        .extract_file_contents()
+        .package_payload()
+        .map(conary_core::packages::payload::PackagePayload::into_files)
         .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
     info!("Extracted {} files", extracted_files.len());
 

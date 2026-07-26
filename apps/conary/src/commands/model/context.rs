@@ -11,6 +11,8 @@ use conary_core::model::{
     compute_diff_with_includes_offline, parse_model_file, planned_replatform_actions,
     replatform_estimate_from_affinities, source_policy_replatform_snapshot,
 };
+#[cfg(test)]
+use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use rusqlite::Connection;
 
 pub(super) fn load_model(model_path: &Path) -> Result<SystemModel> {
@@ -115,7 +117,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
         let affinities = vec![
             SystemAffinity {
@@ -143,7 +145,7 @@ mod tests {
         let mut diff = ModelDiff::new();
         diff.actions.push(DiffAction::SetSourcePin {
             distro: "arch".to_string(),
-            strength: Some("strict".to_string()),
+            strength: DependencyMixingPolicy::Strict,
         });
 
         let estimate = compute_replatform_estimate(&diff, &[]);
@@ -161,9 +163,6 @@ mod tests {
             r#"
 [model]
 version = 1
-
-[system]
-profile = "balanced/latest-anywhere"
 
 [system.pin]
 distro = "arch"
@@ -197,7 +196,10 @@ strength = "strict"
             .find(|transaction| transaction.package == "bash")
             .expect("expected bash transaction");
         assert!(!bash.executable);
-        assert_eq!(bash.install_route.as_deref(), Some("resolution:binary"));
+        assert_eq!(
+            bash.install_route.as_deref(),
+            Some("resolution:repository_package")
+        );
         assert_eq!(
             bash.blocked_reason,
             Some(ReplatformBlockedReason::AnyVersionRouteOnly)
@@ -209,7 +211,10 @@ strength = "strict"
             .find(|transaction| transaction.package == "vim")
             .expect("expected vim transaction");
         assert!(vim.executable);
-        assert_eq!(vim.install_route.as_deref(), Some("resolution:binary"));
+        assert_eq!(
+            vim.install_route.as_deref(),
+            Some("resolution:repository_package")
+        );
         assert_eq!(vim.blocked_reason, None);
 
         let zsh = plan

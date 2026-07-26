@@ -2,8 +2,8 @@
 
 //! SAT-based dependency resolution using resolvo.
 //!
-//! Provides `solve_install` and `solve_removal` functions that use the CDCL SAT
-//! solver to find optimal package installation plans with backtracking support.
+//! Provides policy-explicit install solving and exact removal analysis using
+//! the CDCL SAT solver with backtracking support.
 
 mod install;
 mod relations;
@@ -53,6 +53,13 @@ pub enum SatSource {
 pub struct SatPackage {
     pub name: String,
     pub version: String,
+    pub package_release: Option<String>,
+    pub architecture: Option<String>,
+    pub version_scheme: crate::repository::versioning::VersionScheme,
+    pub repo_package_id: Option<i64>,
+    pub repository_id: Option<i64>,
+    pub repository_name: Option<String>,
+    pub installed_trove_id: Option<i64>,
     pub source: SatSource,
 }
 
@@ -80,18 +87,6 @@ pub struct SatResolution {
     pub conflict_message: Option<String>,
 }
 
-/// Solve an install request using the SAT solver.
-///
-/// Takes a list of `(package_name, version_constraint)` pairs and returns a
-/// `SatResolution` containing the packages to install in dependency order, or
-/// a conflict message if the request is unsolvable.
-pub fn solve_install(
-    conn: &Connection,
-    requests: &[(String, VersionConstraint)],
-) -> Result<SatResolution> {
-    solve_install_with_policy(conn, requests, &ResolutionPolicy::new())
-}
-
 /// Solve an install request using the SAT solver with an explicit source-selection policy.
 pub fn solve_install_with_policy(
     conn: &Connection,
@@ -105,6 +100,9 @@ pub fn solve_install_with_policy(
             conflict_message: None,
         });
     }
+    policy
+        .validate_for_dependency_resolution()
+        .map_err(Error::ConfigError)?;
 
     let mut provider = install::build_provider_for_install(conn, requests, policy)?;
     let requirements = install::build_requirements(&mut provider, requests)?;
@@ -180,6 +178,9 @@ pub fn solve_requirement_groups_with_policy(
             conflict_message: None,
         });
     }
+    policy
+        .validate_for_dependency_resolution()
+        .map_err(Error::ConfigError)?;
 
     let mut provider =
         install::build_provider_for_requirement_expressions(conn, &expressions, policy)?;

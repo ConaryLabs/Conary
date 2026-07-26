@@ -1,6 +1,12 @@
 // apps/conary/src/commands/ccs/test.rs
 
 use anyhow::{Context, Result};
+use conary_core::ccs::{
+    ExecutableInterface, HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION, HostCapabilityInventory,
+    InitSystemCapability, SystemdInterface, TmpfilesInterface,
+};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 pub async fn cmd_ccs_test(
@@ -23,6 +29,7 @@ pub async fn cmd_ccs_test(
     let policy_path = workspace.path().join("trust-policy.toml");
     std::fs::create_dir_all(&root)?;
     conary_core::db::init(&db_path).context("initialize isolated test database")?;
+    persist_isolated_test_capabilities(workspace.path(), &db_path)?;
 
     let policy = if let Some(policy) = policy {
         policy
@@ -34,6 +41,7 @@ pub async fn cmd_ccs_test(
     println!("Testing CCS package in isolated dry-run workspace:");
     println!("  root: {}", root.display());
     println!("  db: {}", db_path.display());
+    println!("  host model: complete typed lifecycle interfaces (dry-run only)");
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let root_string = root.to_string_lossy().into_owned();
@@ -60,4 +68,80 @@ pub async fn cmd_ccs_test(
         println!("Kept isolated CCS test workspace: {}", kept.display());
     }
     Ok(())
+}
+
+fn persist_isolated_test_capabilities(workspace: &Path, db_path: &Path) -> Result<()> {
+    let interfaces = workspace.join("host-interfaces");
+    fs::create_dir_all(&interfaces).context("create isolated host-interface directory")?;
+
+    let systemctl = write_test_interface(
+        &interfaces,
+        "systemctl",
+        r#"case "${1:-}" in
+    --version) printf 'systemd 257\n' ;;
+    show) printf '257\n' ;;
+esac
+"#,
+    )?;
+    let sysusers = write_test_interface(
+        &interfaces,
+        "systemd-sysusers",
+        "if [ \"${1:-}\" = \"--version\" ]; then printf 'systemd 257\\n'; fi\n",
+    )?;
+    let tmpfiles = write_test_interface(
+        &interfaces,
+        "systemd-tmpfiles",
+        "if [ \"${1:-}\" = \"--version\" ]; then printf 'systemd 257\\n'; fi\n",
+    )?;
+    let sysctl = write_test_interface(
+        &interfaces,
+        "sysctl",
+        "if [ \"${1:-}\" = \"--version\" ]; then printf 'sysctl from procps-ng 4.0.6\\n'; fi\n",
+    )?;
+    let ldconfig = write_test_interface(
+        &interfaces,
+        "ldconfig",
+        "if [ \"${1:-}\" = \"--version\" ]; then printf 'ldconfig (GNU libc) 2.40\\n'; fi\n",
+    )?;
+
+    let inventory = HostCapabilityInventory {
+        schema_version: HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION,
+        init_system: InitSystemCapability::Systemd,
+        systemd: Some(
+            SystemdInterface::probe(systemctl, true)
+                .context("probe isolated systemctl contract")?,
+        ),
+        sysusers: Some(
+            ExecutableInterface::probe_sysusers(sysusers)
+                .context("probe isolated systemd-sysusers contract")?,
+        ),
+        tmpfiles: Some(
+            TmpfilesInterface::probe(tmpfiles)
+                .context("probe isolated systemd-tmpfiles contract")?,
+        ),
+        sysctl: Some(
+            ExecutableInterface::probe_sysctl(sysctl).context("probe isolated sysctl contract")?,
+        ),
+        ldconfig: Some(
+            ExecutableInterface::probe_ldconfig(ldconfig)
+                .context("probe isolated ldconfig contract")?,
+        ),
+    };
+    let conn = conary_core::db::open(db_path).context("open isolated test database")?;
+    inventory
+        .persist(&conn)
+        .context("persist isolated typed host capability inventory")
+}
+
+fn write_test_interface(directory: &Path, name: &str, body: &str) -> Result<std::path::PathBuf> {
+    let path = directory.join(name);
+    fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}exit 0\n"))
+        .with_context(|| format!("write isolated {name} interface"))?;
+    let mut permissions = fs::metadata(&path)
+        .with_context(|| format!("stat isolated {name} interface"))?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions)
+        .with_context(|| format!("make isolated {name} interface executable"))?;
+    Ok(path)
 }

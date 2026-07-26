@@ -601,12 +601,17 @@ mod tests {
             } else {
                 "1.0.0"
             };
+            let version_scheme = if source.is_adopted() {
+                conary_core::repository::versioning::VersionScheme::Rpm
+            } else {
+                conary_core::repository::versioning::VersionScheme::Conary
+            };
             let mut trove = Trove::new_with_source(
                 name.to_string(),
                 version.to_string(),
                 TroveType::Package,
                 source.clone(),
-                conary_core::repository::versioning::VersionScheme::Conary,
+                version_scheme,
             );
             if source.is_adopted() {
                 trove.architecture = Some("x86_64".to_string());

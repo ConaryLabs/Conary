@@ -67,14 +67,26 @@ pub(super) fn foreign_conversion_evidence(
 
 pub(super) fn classify_foreign_build_body_risk(
     format: &str,
-    files: &[ExtractedFile],
+    files: &[PackagePayloadFile],
 ) -> CommandRiskReport {
     merge_command_risk_reports(files.iter().filter_map(|file| {
         let path = file.path.trim_start_matches('/');
         if path != "PKGBUILD" && !path.ends_with("/PKGBUILD") {
             return None;
         }
-        let content = std::str::from_utf8(&file.content).ok()?;
+        const MAX_DIAGNOSTIC_CONTROL_BYTES: u64 = 256 * 1024;
+        let authority = file.content_authority.as_ref()?;
+        if authority.size > MAX_DIAGNOSTIC_CONTROL_BYTES {
+            return None;
+        }
+        let mut reader = file.open_content().ok()?;
+        let mut bytes = vec![0_u8; authority.size as usize];
+        std::io::Read::read_exact(reader.as_mut(), &mut bytes).ok()?;
+        let mut trailing = [0_u8; 1];
+        if std::io::Read::read(reader.as_mut(), &mut trailing).ok()? != 0 {
+            return None;
+        }
+        let content = std::str::from_utf8(&bytes).ok()?;
         Some(classify_shell_text(
             &format!("foreign-build-body:{format}:{}", file.path),
             content,
@@ -143,27 +155,4 @@ pub(super) fn build_command_risk_report_from_shared(
             })
             .collect(),
     }
-}
-
-pub(super) fn merge_native_provides(
-    provides: &mut Provides,
-    native_provides: &[crate::packages::traits::Dependency],
-) {
-    let mut capabilities: std::collections::BTreeSet<String> =
-        provides.capabilities.iter().cloned().collect();
-
-    for native in native_provides {
-        if native.dep_type != DependencyType::Runtime {
-            continue;
-        }
-
-        capabilities.insert(native.name.clone());
-        if let Some(version) = native.version.as_deref().map(str::trim)
-            && !version.is_empty()
-        {
-            capabilities.insert(format!("{} {}", native.name, version));
-        }
-    }
-
-    provides.capabilities = capabilities.into_iter().collect();
 }

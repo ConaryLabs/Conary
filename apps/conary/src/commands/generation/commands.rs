@@ -1,8 +1,7 @@
 // src/commands/generation/commands.rs
-//! CLI implementations for generation list, info, gc, build, switch, rollback,
-//! and recover commands
+//! CLI implementations for generation list, info, build, switch, rollback,
+//! and recover commands.
 
-use super::cleanup::remove_generation_etc_state;
 use super::metadata::{GenerationMetadata, is_generation_pending};
 use crate::commands::format_bytes;
 use anyhow::{Context, Result, anyhow};
@@ -11,12 +10,9 @@ use conary_core::generation::mount::{
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
-use rusqlite::Connection;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
-
-const GC_ROOTS_SETTING_KEY: &str = "generation.gc_roots";
+use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SideEffectPackageWarning {
@@ -196,295 +192,6 @@ fn render_generation_info(
     }
 
     rendered
-}
-
-/// Garbage-collect old generations, keeping the current generation, GC roots,
-/// and the most recent `keep` generations.
-///
-/// After removing old generation directories and their BLS entries, performs
-/// CAS garbage collection: queries the database for hashes referenced by
-/// surviving generations and removes unreferenced objects from the CAS store.
-pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
-    let runtime_root = runtime_root_for_generation_db_path(db_path);
-    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
-        runtime_root.root().to_path_buf(),
-        db_path.into(),
-    ))?;
-    engine.begin()?;
-    let result = cmd_generation_gc_locked(keep, db_path, &runtime_root);
-    engine.release_lock();
-    result
-}
-
-fn cmd_generation_gc_locked(
-    keep: usize,
-    db_path: &str,
-    runtime_root: &ConaryRuntimeRoot,
-) -> Result<()> {
-    let current = current_generation(runtime_root.root())?;
-    let conn = crate::commands::open_db(db_path)?;
-    let gc_roots = load_gc_roots(&conn)?;
-    let publication_roots =
-        conary_core::db::models::GenerationPublication::protected_generation_numbers(&conn)?;
-    let dir = runtime_root.generations_dir();
-
-    if !dir.exists() {
-        println!("No generations directory found. Nothing to collect.");
-        return Ok(());
-    }
-
-    let mut all_numbers: Vec<i64> = Vec::new();
-    let mut pending_numbers: Vec<i64> = Vec::new();
-
-    for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if let Ok(number) = name_str.parse::<i64>() {
-            if is_generation_pending(&entry.path()) {
-                pending_numbers.push(number);
-            } else {
-                all_numbers.push(number);
-            }
-        }
-    }
-
-    all_numbers.sort();
-    pending_numbers.sort();
-
-    // Build the keep set: current + booted + gc_roots + last N generations
-    let mut keep_set = std::collections::HashSet::new();
-
-    if let Some(cur) = current {
-        keep_set.insert(cur);
-    }
-
-    // Protect the currently-booted generation (may differ from current)
-    if let Some(booted) = booted_generation(runtime_root)? {
-        keep_set.insert(booted);
-    }
-
-    for root in &gc_roots {
-        keep_set.insert(*root);
-    }
-
-    for root in &publication_roots {
-        keep_set.insert(*root);
-    }
-
-    // Keep the last N generations (by highest number)
-    let start = all_numbers.len().saturating_sub(keep);
-    for &num in &all_numbers[start..] {
-        keep_set.insert(num);
-    }
-
-    let to_remove: Vec<i64> = all_numbers
-        .iter()
-        .filter(|n| !keep_set.contains(n))
-        .copied()
-        .collect();
-
-    let pending_to_remove = pending_numbers
-        .iter()
-        .filter(|n| !keep_set.contains(n))
-        .count();
-
-    if to_remove.is_empty() && pending_to_remove == 0 {
-        println!("Nothing to collect. All generations are kept.");
-        return Ok(());
-    }
-
-    let mut removed_count = 0u64;
-    let mut freed_bytes = 0u64;
-
-    for gen_number in &pending_numbers {
-        if keep_set.contains(gen_number) {
-            info!("Keeping pending generation {gen_number} because publication debt references it");
-            continue;
-        }
-        let gen_dir = runtime_root.generation_path(*gen_number);
-        let size = dir_size_bytes(&gen_dir);
-        match std::fs::remove_dir_all(&gen_dir) {
-            Ok(()) => {
-                info!("Removed incomplete pending generation {gen_number}");
-                removed_count += 1;
-                freed_bytes += size;
-                if let Err(error) = remove_generation_etc_state(runtime_root.root(), *gen_number) {
-                    crate::ui::warn(&format!(
-                        "failed to remove etc-state directories for incomplete generation {gen_number}: {error}"
-                    ));
-                }
-            }
-            Err(e) => {
-                crate::ui::warn(&format!(
-                    "failed to remove incomplete generation {gen_number}: {e}"
-                ));
-            }
-        }
-    }
-
-    for gen_number in &to_remove {
-        let gen_dir = runtime_root.generation_path(*gen_number);
-        let size = dir_size_bytes(&gen_dir);
-
-        match std::fs::remove_dir_all(&gen_dir) {
-            Ok(()) => {
-                info!("Removed generation {gen_number}");
-                removed_count += 1;
-                freed_bytes += size;
-                if let Err(error) = remove_generation_etc_state(runtime_root.root(), *gen_number) {
-                    crate::ui::warn(&format!(
-                        "failed to remove etc-state directories for generation {gen_number}: {error}"
-                    ));
-                }
-            }
-            Err(e) => {
-                crate::ui::warn(&format!("failed to remove generation {gen_number}: {e}"));
-            }
-        }
-
-        // Remove corresponding BLS entry
-        let bls_path =
-            std::path::PathBuf::from(format!("/boot/loader/entries/conary-gen-{gen_number}.conf"));
-        if bls_path.exists() {
-            if let Err(e) = std::fs::remove_file(&bls_path) {
-                crate::ui::warn(&format!(
-                    "failed to remove BLS entry {}: {e}",
-                    bls_path.display()
-                ));
-            } else {
-                info!("Removed BLS entry for generation {gen_number}");
-            }
-        }
-    }
-
-    println!(
-        "Collected {removed_count} generation(s), freed {}.",
-        format_bytes(freed_bytes)
-    );
-
-    // --- CAS garbage collection ---
-    // Determine which state IDs correspond to surviving generations, then
-    // remove any CAS objects not referenced by those states.
-    let surviving_numbers: Vec<i64> = all_numbers
-        .iter()
-        .filter(|n| keep_set.contains(n))
-        .copied()
-        .collect();
-
-    cas_gc(db_path, &surviving_numbers, runtime_root)?;
-
-    Ok(())
-}
-
-/// Run CAS garbage collection for the given surviving generation numbers.
-///
-/// Opens the database, maps generation numbers to state IDs, queries for
-/// live CAS hashes, and removes unreferenced objects from the CAS store.
-fn cas_gc(
-    db_path: &str,
-    surviving_gen_numbers: &[i64],
-    runtime_root: &ConaryRuntimeRoot,
-) -> Result<()> {
-    use conary_core::db::models::SystemState;
-    use conary_core::generation::gc::{gc_cas_objects, live_cas_hashes};
-
-    let conn = crate::commands::open_db(db_path)?;
-
-    // Map surviving generation numbers to system_state IDs.
-    // Generation numbers correspond to state_number in system_states.
-    let mut surviving_state_ids: Vec<i64> = Vec::new();
-    for &gen_num in surviving_gen_numbers {
-        if let Some(state) = SystemState::find_by_number(&conn, gen_num)?
-            && let Some(id) = state.id
-        {
-            surviving_state_ids.push(id);
-        }
-    }
-
-    if surviving_state_ids.is_empty() {
-        info!("No surviving states found in database; skipping CAS GC.");
-        println!("CAS GC: no surviving states in database, skipped.");
-        return Ok(());
-    }
-
-    let live_hashes = live_cas_hashes(&conn, &surviving_state_ids)?;
-    info!(
-        "{} live CAS hashes across {} surviving states",
-        live_hashes.len(),
-        surviving_state_ids.len()
-    );
-
-    let obj_dir = runtime_root.objects_dir();
-    let stats = gc_cas_objects(&obj_dir, &live_hashes)?;
-
-    if stats.objects_removed > 0 {
-        println!(
-            "CAS GC: removed {} of {} objects, freed {}.",
-            stats.objects_removed,
-            stats.objects_checked,
-            format_bytes(stats.bytes_freed)
-        );
-    } else {
-        println!(
-            "CAS GC: checked {} objects, all referenced.",
-            stats.objects_checked
-        );
-    }
-
-    Ok(())
-}
-
-/// Read the currently-booted generation from `/proc/cmdline`.
-///
-/// Returns `None` if no `conary.generation=N` parameter is present.
-fn booted_generation(runtime_root: &ConaryRuntimeRoot) -> Result<Option<i64>> {
-    let cmdline = std::fs::read_to_string("/proc/cmdline")
-        .context("Cannot read /proc/cmdline; refusing generation GC without boot authority")?;
-    booted_generation_from_cmdline(&cmdline, runtime_root.root())
-}
-
-fn booted_generation_from_cmdline(cmdline: &str, conary_root: &Path) -> Result<Option<i64>> {
-    let Some(generation) = super::activation_intents::generation_from_kernel_cmdline(cmdline)?
-    else {
-        return Ok(None);
-    };
-
-    let generation_dir = conary_root.join("generations").join(generation.to_string());
-    if generation_dir.is_dir() {
-        Ok(Some(generation))
-    } else {
-        warn!(
-            "Ignoring booted generation {} because {} does not exist",
-            generation,
-            generation_dir.display()
-        );
-        Ok(None)
-    }
-}
-
-/// Read GC root entries from the database.
-///
-/// Raw filesystem entries under the runtime GC roots directory are intentionally ignored;
-/// callers must register pins in the database before GC will honor them.
-fn load_gc_roots(conn: &Connection) -> Result<Vec<i64>> {
-    use conary_core::db::models::settings;
-
-    match settings::get(conn, GC_ROOTS_SETTING_KEY)? {
-        Some(serialized) => parse_gc_root_setting(&serialized),
-        None => Ok(Vec::new()),
-    }
-}
-
-fn parse_gc_root_setting(serialized: &str) -> Result<Vec<i64>> {
-    let mut generations = serde_json::from_str::<Vec<i64>>(serialized).map_err(|error| {
-        anyhow!(
-            "Stored generation GC roots are corrupt; refusing to discard pin authority: {error}"
-        )
-    })?;
-    generations.sort_unstable();
-    generations.dedup();
-    Ok(generations)
 }
 
 /// Calculate total size of all files under `path` recursively.
@@ -718,10 +425,7 @@ pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<(
     }
 
     let runtime_root = runtime_root_for_generation_db_path(db_path);
-    let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
-        runtime_root.root().to_path_buf(),
-        runtime_root.db_path().to_path_buf(),
-    ))?;
+    let mut engine = TransactionEngine::new(TransactionConfig::for_runtime_root(&runtime_root))?;
     engine.begin()?;
     let result = crate::commands::generation::publication::retry_pending_publication(
         &conn,
@@ -954,12 +658,26 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
     std::fs::create_dir_all(&staging)
         .map_err(|e| anyhow!("Failed to create staging directory: {e}"))?;
 
-    let mut config = conary_core::transaction::TransactionConfig::from_paths(
-        runtime_root.root().to_path_buf(),
-        runtime_root.db_path().to_path_buf(),
-    );
+    let mut config = conary_core::transaction::TransactionConfig::for_runtime_root(&runtime_root);
     config.mount_point = staging.clone();
-    let engine = conary_core::transaction::TransactionEngine::new(config)?;
+    let mut engine = conary_core::transaction::TransactionEngine::new(config)?;
+    engine.begin()?;
+
+    if !conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?.is_empty() {
+        let outcome = crate::commands::generation::publication::retry_pending_publication(
+            &conn,
+            db_path,
+            "Recover interrupted generation publication",
+        )?;
+        if outcome.needs_publication {
+            return Err(anyhow!(
+                "Generation publication recovery is still pending. Retry with: {}",
+                outcome.retry_command.unwrap_or_else(
+                    crate::commands::generation::publication::PublicationOutcome::default_retry_command
+                )
+            ));
+        }
+    }
     engine.recover_boot_selection(&conn)?;
 
     // Restore the /etc overlay after recovery mounts the generation.

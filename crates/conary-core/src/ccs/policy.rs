@@ -80,7 +80,7 @@ impl PolicyChain {
     }
 
     /// Create a policy chain from configuration
-    pub fn from_config(config: &BuildPolicyConfig) -> Result<Self> {
+    pub fn from_config(config: &BuildPolicyConfig) -> std::result::Result<Self, PolicyError> {
         let mut chain = Self::new();
 
         // Add DenyPaths if configured
@@ -224,7 +224,7 @@ pub struct DenyPathsPolicy {
 }
 
 impl DenyPathsPolicy {
-    pub fn new(patterns: &[String]) -> Result<Self> {
+    pub fn new(patterns: &[String]) -> std::result::Result<Self, PolicyError> {
         let mut compiled = Vec::new();
         for pat in patterns {
             let pattern = Pattern::new(pat).map_err(|e| {

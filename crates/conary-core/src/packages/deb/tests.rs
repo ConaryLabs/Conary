@@ -11,6 +11,7 @@ fn test_control_parsing() {
     let content = r#"Package: test-package
 Version: 1.0.0-1
 Architecture: amd64
+Multi-Arch: foreign
 Description: A test package
  This is a longer description
  that spans multiple lines.
@@ -27,6 +28,7 @@ Recommends: python3
     assert_eq!(control.name, Some("test-package".to_string()));
     assert_eq!(control.version, Some("1.0.0-1".to_string()));
     assert_eq!(control.architecture, Some("amd64".to_string()));
+    assert_eq!(control.multi_arch, DebianMultiArch::Foreign);
     assert_eq!(control.description, Some("A test package".to_string()));
     assert_eq!(
         control.maintainer,
@@ -51,6 +53,20 @@ fn control_parser_rejects_malformed_numeric_fields() {
 
     let epoch = DebPackage::parse_control("Package: test\nEpoch: not-a-number\n").unwrap_err();
     assert!(epoch.to_string().contains("Epoch"), "{epoch}");
+}
+
+#[test]
+fn control_parser_rejects_unknown_multi_arch_value() {
+    let error = DebPackage::parse_control("Package: test\nMulti-Arch: sometimes\n").unwrap_err();
+    assert!(error.to_string().contains("Multi-Arch"), "{error}");
+}
+
+#[test]
+fn control_parser_preserves_debian_all_architecture_token() {
+    let control =
+        DebPackage::parse_control("Package: portable-data\nVersion: 1\nArchitecture: all\n")
+            .unwrap();
+    assert_eq!(control.architecture.as_deref(), Some("all"));
 }
 
 #[test]
@@ -118,11 +134,34 @@ fn control_relation_rejects_malformed_exact_constraint() {
 #[test]
 fn test_dependency_list_parsing() {
     let deps = "libc6 (>= 2.34), zlib1g, python3 | python2";
-    let parsed = DebPackage::parse_dependency_list(deps);
+    let parsed = DebPackage::parse_dependency_list(deps).unwrap();
     assert_eq!(parsed.len(), 3);
     assert_eq!(parsed[0], "libc6 (>= 2.34)");
     assert_eq!(parsed[1], "zlib1g");
     assert_eq!(parsed[2], "python3 | python2");
+}
+
+#[test]
+fn dependency_list_rejects_empty_comma_atoms() {
+    for malformed in ["", ",libc6", "libc6,,zlib1g", "libc6,"] {
+        let error = DebPackage::parse_dependency_list(malformed).unwrap_err();
+        assert!(error.to_string().contains("empty atom"), "{error}");
+    }
+}
+
+#[test]
+fn control_parser_rejects_malformed_lines_and_duplicate_fields() {
+    for malformed in [
+        " continuation-without-field\n",
+        "Package: first\nthis is not a field\n",
+        "Package: first\nPackage: second\n",
+        "Package: first\n\nVersion: 1\n",
+    ] {
+        assert!(
+            DebPackage::parse_control(malformed).is_err(),
+            "malformed control metadata was accepted: {malformed:?}"
+        );
+    }
 }
 
 #[test]
@@ -161,22 +200,6 @@ fn deb_predepends_and_alternatives_preserve_exact_typed_groups() {
             .collect::<Vec<_>>(),
         vec!["default-mta", "mail-transport-agent"]
     );
-}
-
-#[test]
-fn test_single_dependency_parsing() {
-    let (name, version) = DebPackage::parse_single_dependency("libc6 (>= 2.34)");
-    assert_eq!(name, "libc6");
-    assert_eq!(version, Some(">= 2.34".to_string()));
-
-    let (name, version) = DebPackage::parse_single_dependency("zlib1g");
-    assert_eq!(name, "zlib1g");
-    assert_eq!(version, None);
-
-    // Test alternatives (should take first option)
-    let (name, version) = DebPackage::parse_single_dependency("python3 | python2");
-    assert_eq!(name, "python3");
-    assert_eq!(version, None);
 }
 
 #[test]

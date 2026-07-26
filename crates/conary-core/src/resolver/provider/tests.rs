@@ -7,9 +7,8 @@ use crate::db::models::{
     RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup, Trove,
 };
 use crate::repository::dependency_model::{
-    RepositoryRequirementClause, RepositoryRequirementExpression,
+    ProvideArchitectureQualifier, RepositoryRequirementClause, RepositoryRequirementExpression,
 };
-use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
 use crate::repository::versioning::RepoVersionConstraint;
 use crate::resolver::identity::ProvidedCapability;
 use crate::version::VersionConstraint;
@@ -22,6 +21,40 @@ fn setup_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
     db::init(&db_path).unwrap();
     let conn = db::open(&db_path).unwrap();
     (temp_dir, conn)
+}
+
+fn insert_repo_fixture(conn: &rusqlite::Connection, package: &mut RepositoryPackage) {
+    let source_profile = match package.version_scheme {
+        VersionScheme::Rpm => "fedora-44",
+        VersionScheme::Debian => "ubuntu-26.04",
+        VersionScheme::Arch => "arch",
+        VersionScheme::Conary => {
+            package.architecture = Some("x86_64".to_string());
+            package.insert(conn).unwrap();
+            return;
+        }
+    };
+    conn.execute(
+        "UPDATE repositories SET source_profile = ?1 WHERE id = ?2",
+        rusqlite::params![source_profile, package.repository_id],
+    )
+    .unwrap();
+    package.source_profile = Some(source_profile.to_string());
+    package.architecture = Some(
+        if package.version_scheme == VersionScheme::Debian {
+            "amd64"
+        } else {
+            "x86_64"
+        }
+        .to_string(),
+    );
+    package.insert(conn).unwrap();
+}
+
+fn root_provider<'db>(conn: &'db rusqlite::Connection, root_names: &[&str]) -> ConaryProvider<'db> {
+    let mut provider = ConaryProvider::new(conn);
+    provider.set_root_request_names(root_names.iter().map(|name| (*name).to_string()));
+    provider
 }
 
 fn atom_expression(name: &str) -> RepositoryRequirementExpression {
@@ -61,16 +94,23 @@ fn installed_identity(
     scheme: VersionScheme,
     trove_id: Option<i64>,
 ) -> PackageIdentity {
+    let architecture = if scheme == VersionScheme::Debian {
+        "amd64"
+    } else {
+        "x86_64"
+    };
     PackageIdentity {
         repo_package_id: None,
         name: name.to_string(),
         version: version.to_string(),
         package_release: None,
-        architecture: None,
+        architecture: Some(architecture.to_string()),
+        debian_multi_arch: (scheme == VersionScheme::Debian)
+            .then_some(crate::repository::dependency_model::DebianMultiArch::No),
         version_scheme: scheme,
         repository_id: None,
         repository_name: String::new(),
-        repository_distro: None,
+        repository_profile: None,
         repository_priority: 0,
         canonical_id: None,
         canonical_name: None,
@@ -87,16 +127,23 @@ fn repo_identity(
     scheme: VersionScheme,
     repo_package_id: Option<i64>,
 ) -> PackageIdentity {
+    let architecture = if scheme == VersionScheme::Debian {
+        "amd64"
+    } else {
+        "x86_64"
+    };
     PackageIdentity {
         repo_package_id,
         name: name.to_string(),
         version: version.to_string(),
         package_release: None,
-        architecture: None,
+        architecture: Some(architecture.to_string()),
+        debian_multi_arch: (scheme == VersionScheme::Debian)
+            .then_some(crate::repository::dependency_model::DebianMultiArch::No),
         version_scheme: scheme,
         repository_id: None,
         repository_name: String::new(),
-        repository_distro: None,
+        repository_profile: None,
         repository_priority: 0,
         canonical_id: None,
         canonical_name: None,
@@ -157,9 +204,9 @@ fn diagnostic_metadata_dependency_json_is_not_solver_authority() {
         })
         .to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["kernel"]);
     provider
         .load_repo_packages_for_names(&["kernel".to_string()])
         .unwrap();
@@ -186,7 +233,7 @@ fn load_repo_packages_uses_normalized_repository_requirements() {
         1,
         "https://example.invalid/ripgrep.pkg.tar.zst".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
     let repo_package_id = pkg.id.unwrap();
 
     let mut group = RepositoryRequirementGroup::new(
@@ -209,7 +256,7 @@ fn load_repo_packages_uses_normalized_repository_requirements() {
     );
     requirement.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["ripgrep"]);
     provider
         .load_repo_packages_for_names(&["ripgrep".to_string()])
         .unwrap();
@@ -229,7 +276,10 @@ fn load_repo_packages_uses_normalized_repository_requirements() {
         ConaryConstraint::Repository {
             scheme: VersionScheme::Arch,
             constraint: RepoVersionConstraint::GreaterOrEqual("2.39".to_string()),
+            capability_kind: None,
             raw: Some(">= 2.39".to_string()),
+            architecture_qualifier: Default::default(),
+            depending_architecture: "x86_64".to_string(),
         }
     );
 }
@@ -249,7 +299,7 @@ fn repository_clause_without_expression_group_is_rejected() {
         1,
         "https://example.invalid/ripgrep.pkg.tar.zst".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
 
     let error = RepositoryRequirement::new(
         pkg.id.unwrap(),
@@ -284,7 +334,7 @@ fn load_repo_packages_uses_normalized_repository_provides() {
         1,
         "https://example.invalid/kernel-core.rpm".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
     let repo_package_id = pkg.id.unwrap();
 
     let mut provide = RepositoryProvide::new(
@@ -297,7 +347,7 @@ fn load_repo_packages_uses_normalized_repository_provides() {
     );
     provide.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["kernel-core"]);
     provider
         .load_repo_packages_for_names(&["kernel-core".to_string()])
         .unwrap();
@@ -449,53 +499,7 @@ fn test_corrupt_solvable_name_index_is_a_typed_invariant_error() {
 }
 
 #[test]
-fn test_sort_candidates_version_descending() {
-    let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
-
-    let s1 = provider
-        .add_solvable(installed_identity("pkg", "1.0.0", VersionScheme::Rpm, None))
-        .unwrap();
-    let s2 = provider
-        .add_solvable(installed_identity("pkg", "3.0.0", VersionScheme::Rpm, None))
-        .unwrap();
-    let s3 = provider
-        .add_solvable(installed_identity(
-            "pkg",
-            "2.0.0",
-            VersionScheme::Rpm,
-            Some(1),
-        ))
-        .unwrap();
-
-    // Test sort logic directly
-    let mut solvables = [s1, s2, s3];
-    solvables.sort_by(|a, b| {
-        let pkg_a = &provider.solvables[a.0 as usize];
-        let pkg_b = &provider.solvables[b.0 as usize];
-        let version_cmp = matching::compare_package_versions_desc(
-            &pkg_a.version,
-            pkg_a.version_scheme,
-            &pkg_b.version,
-            pkg_b.version_scheme,
-        )
-        .expect("valid test versions");
-        if version_cmp != std::cmp::Ordering::Equal {
-            return version_cmp;
-        }
-        let a_installed = pkg_a.installed_trove_id.is_some();
-        let b_installed = pkg_b.installed_trove_id.is_some();
-        b_installed.cmp(&a_installed)
-    });
-
-    // Should be: 3.0.0 (repo), 2.0.0 (installed), 1.0.0 (repo)
-    assert_eq!(solvables[0], s2); // 3.0.0
-    assert_eq!(solvables[1], s3); // 2.0.0 (installed)
-    assert_eq!(solvables[2], s1); // 1.0.0
-}
-
-#[test]
-fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
+fn repology_signal_cannot_override_repository_priority() {
     let (_dir, conn) = setup_test_db();
     let fresh = chrono::Utc::now().to_rfc3339();
 
@@ -507,7 +511,7 @@ fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
         "https://example.invalid".to_string(),
     );
     fedora_repo.priority = 20;
-    fedora_repo.default_strategy_distro = Some("fedora".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
     let mut arch_repo = Repository::new(
@@ -515,18 +519,18 @@ fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
         "https://example.invalid".to_string(),
     );
     arch_repo.priority = 5;
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'python', '3.12.2-1.fc44', 'sha256:fedora', 1, 'https://example.invalid/python-fedora.rpm', 'rpm', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'python', '3.12.2-1.fc44', 'x86_64', 'sha256:fedora', 1, 'https://example.invalid/python-fedora.rpm', 'rpm', ?2)",
             rusqlite::params![fedora_repo_id, canonical_id],
         )
         .unwrap();
     conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'python', '3.13.0-1', 'sha256:arch', 1, 'https://example.invalid/python-arch.pkg.tar.zst', 'arch', ?2)",
+            "INSERT INTO repository_packages (repository_id, name, version, architecture, checksum, size, download_url, version_scheme, canonical_id)
+             VALUES (?1, 'python', '3.13.0-1', 'x86_64', 'sha256:arch', 1, 'https://example.invalid/python-arch.pkg.tar.zst', 'arch', ?2)",
             rusqlite::params![arch_repo_id, canonical_id],
         )
         .unwrap();
@@ -535,7 +539,7 @@ fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
         &conn,
         &RepologyCacheEntry {
             project_name: "python".into(),
-            distro: "fedora".into(),
+            distro: "fedora-44".into(),
             distro_name: "python".into(),
             version: Some("3.12.2".into()),
             status: Some("outdated".into()),
@@ -556,10 +560,7 @@ fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
     )
     .unwrap();
 
-    let mut provider = ConaryProvider::new_with_policy(
-        &conn,
-        ResolutionPolicy::new().with_selection_mode(SelectionMode::Latest),
-    );
+    let mut provider = root_provider(&conn, &["python"]);
     provider
         .load_repo_packages_for_names(&["python".to_string()])
         .unwrap();
@@ -573,7 +574,7 @@ fn sort_candidates_prefers_latest_signal_when_policy_requests_it() {
 
     assert_eq!(
         cache.provider().get_solvable(solvables[0]).repository_name,
-        "arch-core"
+        "fedora-remi"
     );
 }
 
@@ -627,9 +628,12 @@ fn filter_candidates_uses_provide_version_for_virtual_capabilities() {
     );
     identity.repo_package_id = Some(42);
     identity.provided_capabilities = vec![ProvidedCapability {
+        kind: crate::repository::dependency_model::RepositoryCapabilityKind::Generic,
         name: "kernel-modules-core-uname-r".to_string(),
         version: Some("6.19.6".to_string()),
+        version_relation: Some(crate::repository::dependency_model::ProvideVersionRelation::Equal),
         version_scheme: VersionScheme::Rpm,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
     }];
     let candidate = provider.add_solvable(identity).unwrap();
 
@@ -649,6 +653,7 @@ fn filter_candidates_uses_provide_version_for_virtual_capabilities() {
             matching::constraint_matches_provide(
                 constraint,
                 provided.version.as_deref(),
+                provided.version_relation,
                 provided.version_scheme,
             )
             .expect("valid test capability version")
@@ -676,7 +681,7 @@ fn or_group_loading_from_requirement_groups() {
         1,
         "https://example.invalid/bsd-mailx.deb".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
     let pkg_id = pkg.id.unwrap();
 
     // Create a group for the OR dependency
@@ -717,7 +722,7 @@ fn or_group_loading_from_requirement_groups() {
     );
     clause_b.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["bsd-mailx"]);
     provider
         .load_repo_packages_for_names(&["bsd-mailx".to_string()])
         .unwrap();
@@ -754,7 +759,7 @@ fn conditional_deps_compile_into_solver_requirements() {
         1,
         "https://example.invalid/systemd.rpm".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
     let pkg_id = pkg.id.unwrap();
 
     // A hard dependency
@@ -792,7 +797,7 @@ fn conditional_deps_compile_into_solver_requirements() {
     cond_group.native_text = Some("(systemd-boot if efi-filesystem)".to_string());
     cond_group.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["systemd"]);
     provider
         .load_repo_packages_for_names(&["systemd".to_string()])
         .unwrap();
@@ -842,7 +847,7 @@ fn debian_versioned_provide_uses_provide_version_not_package_version() {
         1,
         "https://example.invalid/libc6.deb".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
     let pkg_id = pkg.id.unwrap();
 
     let mut provide = RepositoryProvide::new(
@@ -855,7 +860,7 @@ fn debian_versioned_provide_uses_provide_version_not_package_version() {
     );
     provide.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["libc6"]);
     provider
         .load_repo_packages_for_names(&["libc6".to_string()])
         .unwrap();
@@ -892,7 +897,7 @@ fn arch_versioned_provide_uses_native_scheme() {
         1,
         "https://example.invalid/sh.pkg.tar.zst".to_string(),
     );
-    pkg.insert(&conn).unwrap();
+    insert_repo_fixture(&conn, &mut pkg);
     let pkg_id = pkg.id.unwrap();
 
     let mut provide = RepositoryProvide::new(
@@ -905,7 +910,7 @@ fn arch_versioned_provide_uses_native_scheme() {
     );
     provide.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = root_provider(&conn, &["sh"]);
     provider
         .load_repo_packages_for_names(&["sh".to_string()])
         .unwrap();
@@ -943,7 +948,9 @@ fn installed_debian_package_uses_native_version_scheme() {
         TroveType::Package,
         VersionScheme::Debian,
     );
-    trove.source_distro = Some("ubuntu".to_string());
+    trove.source_profile = Some("ubuntu-26.04".to_string());
+    trove.architecture = Some("amd64".to_string());
+    trove.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
     let trove_id = trove.insert(&conn).unwrap();
 
     insert_installed_requirement(&conn, trove_id, VersionScheme::Debian, "libgcc-s1 (>= 3.0)");
@@ -969,7 +976,10 @@ fn installed_debian_package_uses_native_version_scheme() {
         ConaryConstraint::Repository {
             scheme: VersionScheme::Debian,
             constraint: RepoVersionConstraint::GreaterOrEqual("3.0".to_string()),
+            capability_kind: None,
             raw: Some(">= 3.0".to_string()),
+            architecture_qualifier: Default::default(),
+            depending_architecture: "amd64".to_string(),
         }
     );
 }

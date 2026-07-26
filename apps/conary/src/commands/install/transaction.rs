@@ -3,7 +3,10 @@
 use super::{ExtractionResult, InstallSemantics, RepositoryInstallProvenance};
 use anyhow::{Context, Result};
 use conary_core::db::models::{ConfigFile, ConfigSource, ProvideEntry};
-use conary_core::dependencies::DependencyClass;
+use conary_core::packages::PackageFormat;
+use conary_core::repository::dependency_model::{
+    ProvideArchitectureQualifier, RepositoryCapabilityKind,
+};
 use conary_core::transaction::{PackageRelationDeconfiguration, PackageRelationRemoval};
 
 #[path = "transaction/selected_root.rs"]
@@ -22,7 +25,6 @@ pub(super) struct TransactionContext<'a> {
     pub(super) semantics: InstallSemantics,
     pub(super) selection_reason: Option<&'a str>,
     pub(super) old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
-    pub(super) ccs_manifest_provides: Option<&'a conary_core::ccs::manifest::Provides>,
     pub(super) ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
     pub(super) ccs_file_capabilities: Option<&'a [conary_core::ccs::manifest::FileCapability]>,
     pub(super) defer_generation: bool,
@@ -142,52 +144,49 @@ fn preflight_generation_file_capabilities_with_xattr_support(
     Ok(())
 }
 
-fn persist_ccs_manifest_provides(
+pub(super) fn persist_package_provides(
+    tx: &rusqlite::Transaction<'_>,
+    trove_id: i64,
+    package: &dyn PackageFormat,
+) -> Result<()> {
+    persist_declared_provides(
+        tx,
+        trove_id,
+        package.name(),
+        package.version(),
+        package.version_scheme(),
+        package.provides(),
+    )
+}
+
+pub(super) fn persist_declared_provides(
     tx: &rusqlite::Transaction<'_>,
     trove_id: i64,
     package_name: &str,
-    provides: &conary_core::ccs::manifest::Provides,
+    package_version: &str,
+    package_scheme: conary_core::repository::versioning::VersionScheme,
+    provides: &[conary_core::packages::traits::ProvidedCapability],
 ) -> Result<()> {
-    for capability in &provides.capabilities {
-        if capability == package_name {
-            continue;
-        }
-        let mut provide = ProvideEntry::new(trove_id, capability.clone(), None);
-        provide.insert_or_ignore(tx)?;
+    let exact_self = provides
+        .iter()
+        .filter(|provide| {
+            provide.kind == RepositoryCapabilityKind::PackageName
+                && provide.name == package_name
+                && provide.version.as_deref() == Some(package_version)
+                && provide.version_scheme == package_scheme
+                && provide.architecture_qualifier == ProvideArchitectureQualifier::Implicit
+        })
+        .count();
+    if exact_self != 1 {
+        anyhow::bail!(
+            "package '{}-{}' must declare exactly one exact package self-provider",
+            package_name,
+            package_version
+        );
     }
-
-    for soname in &provides.sonames {
-        insert_ccs_manifest_typed_provide(tx, trove_id, DependencyClass::Soname.prefix(), soname)?;
+    for declared in provides {
+        declared.validate()?;
+        ProvideEntry::from_declared(trove_id, declared).insert_or_ignore(tx)?;
     }
-    for binary in &provides.binaries {
-        insert_ccs_manifest_typed_provide(tx, trove_id, DependencyClass::Binary.prefix(), binary)?;
-    }
-    for module in &provides.pkgconfig {
-        insert_ccs_manifest_typed_provide(
-            tx,
-            trove_id,
-            DependencyClass::PkgConfig.prefix(),
-            module,
-        )?;
-    }
-    Ok(())
-}
-
-fn insert_ccs_manifest_typed_provide(
-    tx: &rusqlite::Transaction<'_>,
-    trove_id: i64,
-    kind: &str,
-    capability: &str,
-) -> Result<()> {
-    let mut provide = ProvideEntry::new_typed(trove_id, kind, capability.to_string(), None);
-    provide.insert_or_ignore(tx)?;
-    tx.execute(
-        "UPDATE provides
-         SET kind = ?3
-         WHERE trove_id = ?1
-           AND capability = ?2
-           AND kind = 'package'",
-        rusqlite::params![trove_id, capability, kind],
-    )?;
     Ok(())
 }

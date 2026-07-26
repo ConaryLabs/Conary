@@ -24,6 +24,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 # Hashing
+sha1 = "0.10.6"
 sha2 = "0.11.0"
 
 # Logging
@@ -80,7 +81,7 @@ x509-cert = { version = "0.2", features = ["pem", "std"] }
 # Archives
 tar = "0.4"
 flate2 = "1.0"
-rpm = { version = "0.25", default-features = false, features = ["payload", "signature-pgp"] }
+rpm = { version = "0.25", default-features = false, features = ["payload"] }
 rpm-version = "0.5.0"
 debversion = "0.5.4"
 alpm-types = "0.11.2"
@@ -115,6 +116,7 @@ schemars = "1.0"
 fs2 = "0.4"
 log = "0.4"
 regex = "1.10"
+target-lexicon = "0.13.5"
 tree-sitter = "0.26.11"
 tree-sitter-bash = "0.25.1"
 

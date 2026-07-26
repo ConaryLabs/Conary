@@ -77,6 +77,15 @@ preflight failure may stop mutation while an exact semantic is missing, but it
 is a required implementation defect to engineer, not a permanent unsupported
 class, human-review queue, blocklist, or operator reconciliation workflow.
 
+Agent-assisted contribution and operation are first-class product paths. Keep
+ownership, safety invariants, and proof discoverable from tracked repository
+truth so a contributor and coding agent need no private prompt lore. Runtime
+and fleet workflows must expose versioned, typed, inspectable resources plus
+plan/apply results through `conary-agent-contract`; MCP is an adapter to that
+contract, not a separate authority. Do not make an essential operation
+available only through ad hoc shell, interactive human judgment, or untyped
+free-form output, and do not weaken trust or approval boundaries for agents.
+
 ## Maintainability & Refactor Discipline
 
 Treat large files as review signals, not automatic failures. Planning has a

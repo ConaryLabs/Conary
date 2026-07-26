@@ -2,7 +2,6 @@
 
 //! Install-side execution of exact native package-manager transaction events.
 
-use super::ExtractionResult;
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::NativeLifecycleBundle;
 use conary_core::ccs::native_transaction::{
@@ -10,7 +9,9 @@ use conary_core::ccs::native_transaction::{
     NativePackageIdentity, NativeTransactionChange, NativeTransactionOperation,
     NativeTransactionPlan, NativeTransactionState, plan_native_transaction,
 };
-use conary_core::db::models::{ConfigFile, FileEntry, InstalledNativeLifecycleBundle, Trove};
+use conary_core::db::models::{
+    ConfigFile, InstalledNativeLifecycleBundle, PackagePayloadOwnership, Trove,
+};
 use conary_core::repository::dependency_model::PackageRelationRemovalMode;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::scriptlet::{SandboxMode, ScriptletExecutor};
@@ -49,7 +50,7 @@ pub(super) struct NativeInstallInput<'a> {
     pub package_version: &'a str,
     pub package_arch: Option<&'a str>,
     pub version_scheme: VersionScheme,
-    pub provides: &'a [conary_core::packages::traits::Dependency],
+    pub provides: &'a [conary_core::packages::traits::ProvidedCapability],
     pub new_bundle: Option<&'a NativeLifecycleBundle>,
     pub old_trove: Option<&'a Trove>,
     pub relation_removals: &'a [PackageRelationRemoval],
@@ -123,36 +124,9 @@ pub(crate) struct CapturedNativeActivation {
 impl PreparedNativeTransaction {
     pub(super) fn prepare_install(
         conn: &rusqlite::Connection,
-        package_name: &str,
-        package_version: &str,
-        package_arch: Option<&str>,
-        version_scheme: VersionScheme,
-        provides: &[conary_core::packages::traits::Dependency],
-        new_bundle: Option<&NativeLifecycleBundle>,
-        old_trove: Option<&Trove>,
-        relation_removals: &[PackageRelationRemoval],
-        relation_deconfigurations: &[PackageRelationDeconfiguration],
-        extraction: &ExtractionResult,
+        input: NativeInstallInput<'_>,
     ) -> Result<Self> {
-        Self::prepare_batch(
-            conn,
-            &[NativeInstallInput {
-                package_name,
-                package_version,
-                package_arch,
-                version_scheme,
-                provides,
-                new_bundle,
-                old_trove,
-                relation_removals,
-                relation_deconfigurations,
-                paths: extraction
-                    .extracted_files
-                    .iter()
-                    .map(|file| file.path.clone())
-                    .collect(),
-            }],
-        )
+        Self::prepare_batch(conn, &[input])
     }
 
     pub(super) fn prepare_batch(
@@ -278,9 +252,10 @@ impl PreparedNativeTransaction {
             let old_paths = old_trove_id
                 .map(|trove_id| {
                     Ok::<_, anyhow::Error>(
-                        FileEntry::find_by_trove(conn, trove_id)?
-                            .into_iter()
-                            .map(|file| file.path)
+                        PackagePayloadOwnership::load(conn, trove_id)?
+                            .lifecycle_paths()
+                            .iter()
+                            .cloned()
                             .collect::<BTreeSet<_>>(),
                     )
                 })
@@ -334,9 +309,10 @@ impl PreparedNativeTransaction {
                 )
             })?;
             counts_after.insert(trove.name.clone(), instances_after);
-            let old_paths = FileEntry::find_by_trove(conn, trove_id)?
-                .into_iter()
-                .map(|file| file.path)
+            let old_paths = PackagePayloadOwnership::load(conn, trove_id)?
+                .lifecycle_paths()
+                .iter()
+                .cloned()
                 .collect::<BTreeSet<_>>();
             let operation = if trove.version_scheme == VersionScheme::Debian {
                 debian_relation_removal_operation(conn, removal, trove_id, inputs, &old_paths)?
@@ -439,9 +415,10 @@ impl PreparedNativeTransaction {
                 .get(trove.name.as_str())
                 .copied()
                 .unwrap_or(installed_instance_count(conn, &trove.name)?);
-            let old_paths = FileEntry::find_by_trove(conn, trove_id)?
-                .into_iter()
-                .map(|file| file.path)
+            let old_paths = PackagePayloadOwnership::load(conn, trove_id)?
+                .lifecycle_paths()
+                .iter()
+                .cloned()
                 .collect::<BTreeSet<_>>();
             let source_arch = installed_bundle
                 .source_arch
@@ -540,15 +517,8 @@ impl PreparedNativeTransaction {
             }));
         }
         sort_and_deduplicate_capabilities(&mut installed_capabilities_after);
-        let mut installed_paths_after = FileEntry::find_all_ordered(conn)?
-            .into_iter()
-            .map(|file| file.path)
-            .collect::<std::collections::BTreeSet<_>>();
-        for replaced_trove_id in &replaced_trove_ids {
-            for file in FileEntry::find_by_trove(conn, *replaced_trove_id)? {
-                installed_paths_after.remove(&file.path);
-            }
-        }
+        let mut installed_paths_after =
+            PackagePayloadOwnership::installed_paths_excluding(conn, &replaced_trove_ids)?;
         for input in inputs {
             installed_paths_after.extend(input.paths.iter().cloned());
         }
@@ -737,15 +707,8 @@ impl PreparedNativeTransaction {
             .collect::<Vec<_>>();
         let installed_capabilities_after =
             declared_capabilities_excluding(conn, &removed_trove_ids)?;
-        let mut installed_paths_after = FileEntry::find_all_ordered(conn)?
-            .into_iter()
-            .map(|file| file.path)
-            .collect::<std::collections::BTreeSet<_>>();
-        for input in inputs {
-            for path in &input.paths {
-                installed_paths_after.remove(path);
-            }
-        }
+        let installed_paths_after =
+            PackagePayloadOwnership::installed_paths_excluding(conn, &removed_trove_ids)?;
         let arch_ldconfig_required_after =
             archive_paths_contain(&installed_paths_after, "etc/ld.so.conf");
         let transaction_state = NativeTransactionState {
@@ -859,11 +822,7 @@ fn executor_for_owner(owner: &NativeBundleOwner, root: &Path) -> Result<Scriptle
             // Native package-manager lifecycle behavior must persist. The install
             // transaction owns failure handling and recovery.
             .with_sandbox_mode(SandboxMode::Always);
-    Ok(if format == conary_core::scriptlet::PackageFormat::Deb {
-        executor.with_lifecycle_bridge(debian_runtime::lifecycle_bridge_config())
-    } else {
-        executor
-    })
+    Ok(executor)
 }
 
 #[cfg(test)]

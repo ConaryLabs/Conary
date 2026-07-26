@@ -257,8 +257,12 @@ fn test_derive_build_records_installable_artifact_metadata() {
     assert_eq!(artifact["parent_name"], "nginx");
     assert_eq!(artifact["parent_version"], "1.24.0");
     assert_eq!(
-        artifact["files"]["/etc/nginx/nginx.conf"]["hash"],
+        artifact["files"]["/etc/nginx/nginx.conf"]["content"]["sha256"],
         override_hash
+    );
+    assert_eq!(
+        artifact["files"]["/etc/nginx/nginx.conf"]["content"]["size"],
+        override_content.len() as u64
     );
 }
 

@@ -23,24 +23,28 @@ fn test_architecture_compatibility() {
 
     // noarch is compatible with everything
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Rpm,
         Some("noarch"),
         system_arch
     ));
 
     // Exact match is compatible
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Rpm,
         Some("x86_64"),
         system_arch
     ));
 
     // Different arch is not compatible
     assert!(!PackageSelector::is_architecture_compatible(
+        VersionScheme::Rpm,
         Some("aarch64"),
         system_arch
     ));
 
-    // None (unknown) is compatible
-    assert!(PackageSelector::is_architecture_compatible(
+    // Missing architecture is not resolution authority.
+    assert!(!PackageSelector::is_architecture_compatible(
+        VersionScheme::Rpm,
         None,
         system_arch
     ));
@@ -49,6 +53,7 @@ fn test_architecture_compatibility() {
 #[test]
 fn test_debian_amd64_compatible_with_x86_64() {
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Debian,
         Some("amd64"),
         "x86_64"
     ));
@@ -57,6 +62,7 @@ fn test_debian_amd64_compatible_with_x86_64() {
 #[test]
 fn test_debian_arm64_compatible_with_aarch64() {
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Debian,
         Some("arm64"),
         "aarch64"
     ));
@@ -65,26 +71,34 @@ fn test_debian_arm64_compatible_with_aarch64() {
 #[test]
 fn test_debian_i386_compatible_with_i686() {
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Debian,
         Some("i386"),
         "i686"
     ));
 }
 
 #[test]
-fn test_normalize_arch_mappings() {
-    assert_eq!(normalize_arch("amd64"), "x86_64");
-    assert_eq!(normalize_arch("arm64"), "aarch64");
-    assert_eq!(normalize_arch("i386"), "i686");
-    assert_eq!(normalize_arch("i486"), "i686");
-    assert_eq!(normalize_arch("i586"), "i686");
-    assert_eq!(normalize_arch("x86_64"), "x86_64");
-    assert_eq!(normalize_arch("aarch64"), "aarch64");
-    assert_eq!(normalize_arch("riscv64"), "riscv64");
+fn architecture_equivalence_requires_both_owning_schemes() {
+    assert!(package_architectures_match(
+        VersionScheme::Debian,
+        "amd64",
+        VersionScheme::Rpm,
+        "x86_64",
+        "x86_64",
+    ));
+    assert!(!package_architectures_match(
+        VersionScheme::Debian,
+        "all",
+        VersionScheme::Rpm,
+        "aarch64",
+        "x86_64",
+    ));
 }
 
 #[test]
 fn test_debian_all_architecture_compatible() {
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Debian,
         Some("all"),
         "x86_64"
     ));
@@ -93,8 +107,28 @@ fn test_debian_all_architecture_compatible() {
 #[test]
 fn test_arch_any_architecture_compatible() {
     assert!(PackageSelector::is_architecture_compatible(
+        VersionScheme::Arch,
         Some("any"),
         "x86_64"
+    ));
+}
+
+#[test]
+fn architecture_independent_tokens_are_not_cross_scheme_aliases() {
+    assert!(!PackageSelector::is_architecture_compatible(
+        VersionScheme::Rpm,
+        Some("all"),
+        "x86_64",
+    ));
+    assert!(!PackageSelector::is_architecture_compatible(
+        VersionScheme::Debian,
+        Some("noarch"),
+        "x86_64",
+    ));
+    assert!(!PackageSelector::is_architecture_compatible(
+        VersionScheme::Arch,
+        Some("all"),
+        "x86_64",
     ));
 }
 
@@ -129,7 +163,7 @@ fn select_best_uses_debian_version_ordering() {
         1,
         "https://archive.ubuntu.com/ubuntu/pool/demo_1.0~beta1_amd64.deb".to_string(),
     );
-    prerelease.architecture = Some("x86_64".to_string());
+    prerelease.architecture = Some("amd64".to_string());
     prerelease.insert(&conn).unwrap();
 
     let mut stable = RepositoryPackage::new(
@@ -141,7 +175,7 @@ fn select_best_uses_debian_version_ordering() {
         1,
         "https://archive.ubuntu.com/ubuntu/pool/demo_1.0_amd64.deb".to_string(),
     );
-    stable.architecture = Some("x86_64".to_string());
+    stable.architecture = Some("amd64".to_string());
     stable.insert(&conn).unwrap();
 
     let candidates =
@@ -198,11 +232,13 @@ fn policy_repo_scope_filters_root_request() {
         1,
         "https://example.com/curl.deb".into(),
     );
-    pkg_ubu.architecture = Some("x86_64".into());
+    pkg_ubu.architecture = Some("amd64".into());
     pkg_ubu.insert(&conn).unwrap();
 
     // With --repo fedora-44, root request should only find fedora
-    let policy = ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-44".into()));
+    let policy = ResolutionPolicy::new()
+        .with_scope(RequestScope::Repository("fedora-44".into()))
+        .with_mixing(DependencyMixingPolicy::Permissive);
 
     let options = SelectionOptions {
         policy: Some(policy),
@@ -259,11 +295,13 @@ fn policy_repo_scope_does_not_filter_transitive_deps() {
         1,
         "https://example.com/libcurl.deb".into(),
     );
-    pkg_ubu.architecture = Some("x86_64".into());
+    pkg_ubu.architecture = Some("amd64".into());
     pkg_ubu.insert(&conn).unwrap();
 
     // Request scope targets fedora, but is_root=false so scope is ignored
-    let policy = ResolutionPolicy::new().with_scope(RequestScope::Repository("fedora-44".into()));
+    let policy = ResolutionPolicy::new()
+        .with_scope(RequestScope::Repository("fedora-44".into()))
+        .with_mixing(DependencyMixingPolicy::Permissive);
 
     let options = SelectionOptions {
         policy: Some(policy),
@@ -275,7 +313,7 @@ fn policy_repo_scope_does_not_filter_transitive_deps() {
 }
 
 #[test]
-fn strict_policy_rejects_cross_flavor_dep() {
+fn strict_policy_rejects_cross_profile_dep() {
     let conn = test_db();
 
     let mut ubuntu_repo = Repository::new(
@@ -283,6 +321,7 @@ fn strict_policy_rejects_cross_flavor_dep() {
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
     ubuntu_repo.priority = 10;
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
         .unwrap()
@@ -297,16 +336,16 @@ fn strict_policy_rejects_cross_flavor_dep() {
         1,
         "https://example.com/libssl3.deb".into(),
     );
-    pkg.architecture = Some("x86_64".into());
+    pkg.architecture = Some("amd64".into());
     pkg.insert(&conn).unwrap();
 
-    // Strict policy with RPM primary flavor -- debian package should be rejected
-    let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict);
+    let policy = ResolutionPolicy::new()
+        .with_mixing(DependencyMixingPolicy::Strict)
+        .with_primary_profile("fedora-44");
 
     let options = SelectionOptions {
         policy: Some(policy),
         is_root: false,
-        primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
         ..Default::default()
     };
     let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
@@ -314,7 +353,7 @@ fn strict_policy_rejects_cross_flavor_dep() {
 }
 
 #[test]
-fn strict_policy_accepts_candidate_by_stored_version_scheme_when_repo_shape_is_generic() {
+fn strict_policy_accepts_candidate_by_exact_repository_profile() {
     let conn = test_db();
 
     let mut repo = Repository::new(
@@ -322,7 +361,7 @@ fn strict_policy_accepts_candidate_by_stored_version_scheme_when_repo_shape_is_g
         "http://127.0.0.1:18087".to_string(),
     );
     repo.priority = 500;
-    repo.default_strategy_distro = Some("ubuntu".to_string());
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     repo.insert(&conn).unwrap();
     let repo = Repository::find_by_name(&conn, "slice-d-local-update")
         .unwrap()
@@ -338,16 +377,19 @@ fn strict_policy_accepts_candidate_by_stored_version_scheme_when_repo_shape_is_g
         "http://127.0.0.1:18087/phase4-runtime-fixture_1.0.1_amd64.deb".into(),
     );
     pkg.architecture = Some("amd64".into());
-    pkg.distro = Some("ubuntu".into());
+    pkg.source_profile = Some("ubuntu-26.04".into());
     pkg.insert(&conn).unwrap();
 
     let candidates = PackageSelector::search_packages(
         &conn,
         "phase4-runtime-fixture",
         &SelectionOptions {
-            policy: Some(ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict)),
+            policy: Some(
+                ResolutionPolicy::new()
+                    .with_mixing(DependencyMixingPolicy::Strict)
+                    .with_primary_profile("ubuntu-26.04"),
+            ),
             is_root: false,
-            primary_flavor: Some(RepositoryDependencyFlavor::Deb),
             ..Default::default()
         },
     )
@@ -358,7 +400,7 @@ fn strict_policy_accepts_candidate_by_stored_version_scheme_when_repo_shape_is_g
 }
 
 #[test]
-fn permissive_policy_allows_cross_flavor_dep() {
+fn permissive_policy_allows_cross_profile_dep() {
     let conn = test_db();
 
     let mut ubuntu_repo = Repository::new(
@@ -366,6 +408,7 @@ fn permissive_policy_allows_cross_flavor_dep() {
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
     ubuntu_repo.priority = 10;
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
         .unwrap()
@@ -380,15 +423,16 @@ fn permissive_policy_allows_cross_flavor_dep() {
         1,
         "https://example.com/libssl3.deb".into(),
     );
-    pkg.architecture = Some("x86_64".into());
+    pkg.architecture = Some("amd64".into());
     pkg.insert(&conn).unwrap();
 
-    let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
+    let policy = ResolutionPolicy::new()
+        .with_mixing(DependencyMixingPolicy::Permissive)
+        .with_primary_profile("fedora-44");
 
     let options = SelectionOptions {
         policy: Some(policy),
         is_root: false,
-        primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
         ..Default::default()
     };
     let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
@@ -396,7 +440,7 @@ fn permissive_policy_allows_cross_flavor_dep() {
 }
 
 #[test]
-fn guarded_policy_allows_cross_flavor_dep() {
+fn guarded_policy_allows_cross_profile_dep() {
     let conn = test_db();
 
     let mut ubuntu_repo = Repository::new(
@@ -404,6 +448,7 @@ fn guarded_policy_allows_cross_flavor_dep() {
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
     ubuntu_repo.priority = 10;
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
         .unwrap()
@@ -418,16 +463,17 @@ fn guarded_policy_allows_cross_flavor_dep() {
         1,
         "https://example.com/libssl3.deb".into(),
     );
-    pkg.architecture = Some("x86_64".into());
+    pkg.architecture = Some("amd64".into());
     pkg.insert(&conn).unwrap();
 
-    // Guarded policy allows cross-flavor but callers should log warnings
-    let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Guarded);
+    // Guarded policy allows cross-profile candidates.
+    let policy = ResolutionPolicy::new()
+        .with_mixing(DependencyMixingPolicy::Guarded)
+        .with_primary_profile("fedora-44");
 
     let options = SelectionOptions {
         policy: Some(policy),
         is_root: false,
-        primary_flavor: Some(RepositoryDependencyFlavor::Rpm),
         ..Default::default()
     };
     let candidates = PackageSelector::search_packages(&conn, "libssl3", &options).unwrap();
@@ -480,7 +526,7 @@ fn equal_priority_cross_scheme_candidates_are_typed_ambiguity() {
         1,
         "https://example.com/curl.deb".into(),
     );
-    pkg_ubu.architecture = Some("x86_64".into());
+    pkg_ubu.architecture = Some("amd64".into());
     pkg_ubu.insert(&conn).unwrap();
 
     // With permissive policy, both candidates are present
@@ -509,7 +555,7 @@ fn equal_priority_cross_scheme_candidates_are_typed_ambiguity() {
 }
 
 #[test]
-fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
+fn repology_signal_cannot_override_exact_repository_priority() {
     let conn = test_db();
     let fresh = chrono::Utc::now().to_rfc3339();
 
@@ -525,7 +571,7 @@ fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
         "https://example.invalid".to_string(),
     );
     fedora_repo.priority = 20;
-    fedora_repo.default_strategy_distro = Some("fedora".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     fedora_repo.insert(&conn).unwrap();
     let fedora = Repository::find_by_name(&conn, "fedora-remi")
         .unwrap()
@@ -536,7 +582,7 @@ fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
         "https://example.invalid".to_string(),
     );
     arch_repo.priority = 5;
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     arch_repo.insert(&conn).unwrap();
     let arch = Repository::find_by_name(&conn, "arch-core")
         .unwrap()
@@ -552,6 +598,7 @@ fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
         "https://example.invalid/python-fedora.rpm".into(),
     );
     fedora_pkg.canonical_id = Some(canonical_id);
+    fedora_pkg.architecture = Some("x86_64".into());
     fedora_pkg.insert(&conn).unwrap();
 
     let mut arch_pkg = RepositoryPackage::new(
@@ -564,13 +611,14 @@ fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
         "https://example.invalid/python-arch.pkg.tar.zst".into(),
     );
     arch_pkg.canonical_id = Some(canonical_id);
+    arch_pkg.architecture = Some("x86_64".into());
     arch_pkg.insert(&conn).unwrap();
 
     crate::db::models::RepologyCacheEntry::insert_or_replace(
         &conn,
         &crate::db::models::RepologyCacheEntry {
             project_name: "python".into(),
-            distro: "fedora".into(),
+            distro: "fedora-44".into(),
             distro_name: "python".into(),
             version: Some("3.12.2".into()),
             status: Some("outdated".into()),
@@ -591,21 +639,18 @@ fn select_best_respects_latest_mode_for_cross_distro_exact_name_candidates() {
     )
     .unwrap();
 
-    let selected =
-        PackageSelector::find_best_package(
-            &conn,
-            "python",
-            &SelectionOptions {
-                policy: Some(ResolutionPolicy::new().with_selection_mode(
-                    crate::repository::resolution_policy::SelectionMode::Latest,
-                )),
-                is_root: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let selected = PackageSelector::find_best_package(
+        &conn,
+        "python",
+        &SelectionOptions {
+            policy: Some(ResolutionPolicy::new()),
+            is_root: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
-    assert_eq!(selected.repository.name, "arch-core");
+    assert_eq!(selected.repository.name, "fedora-remi");
 }
 
 #[test]
@@ -616,14 +661,14 @@ fn search_packages_respects_allowed_distros_by_distro_identifier() {
         "fedora-remi".to_string(),
         "https://example.invalid".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     fedora_repo.insert(&conn).unwrap();
 
     let mut arch_repo = Repository::new(
         "arch-core".to_string(),
         "https://example.invalid".to_string(),
     );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     arch_repo.insert(&conn).unwrap();
 
     let mut fedora_pkg = RepositoryPackage::new(
@@ -635,6 +680,8 @@ fn search_packages_respects_allowed_distros_by_distro_identifier() {
         1,
         "https://example.invalid/python-fedora.rpm".into(),
     );
+    fedora_pkg.architecture = Some("x86_64".to_string());
+    fedora_pkg.source_profile = Some("fedora-44".to_string());
     fedora_pkg.insert(&conn).unwrap();
 
     let mut arch_pkg = RepositoryPackage::new(
@@ -646,6 +693,8 @@ fn search_packages_respects_allowed_distros_by_distro_identifier() {
         1,
         "https://example.invalid/python-arch.pkg.tar.zst".into(),
     );
+    arch_pkg.architecture = Some("x86_64".to_string());
+    arch_pkg.source_profile = Some("arch".to_string());
     arch_pkg.insert(&conn).unwrap();
 
     let candidates = PackageSelector::search_packages(
@@ -677,4 +726,45 @@ fn search_packages_respects_allowed_distros_by_distro_identifier() {
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].repository.name, "fedora-remi");
+}
+
+#[test]
+fn permissive_policy_rejects_conflicting_package_and_repository_profiles() {
+    let conn = test_db();
+    let mut repository = Repository::new(
+        "fedora-remi".to_string(),
+        "https://example.invalid".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    repository.insert(&conn).unwrap();
+
+    let mut package = RepositoryPackage::new(
+        repository.id.unwrap(),
+        "python".to_string(),
+        "3.12.2-1.fc44".to_string(),
+        VersionScheme::Rpm,
+        "sha256:conflict".to_string(),
+        1,
+        "https://example.invalid/python.rpm".to_string(),
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.source_profile = Some("arch".to_string());
+    package.insert(&conn).unwrap();
+
+    let error = PackageSelector::search_packages(
+        &conn,
+        "python",
+        &SelectionOptions {
+            architecture: Some("x86_64".to_string()),
+            policy: Some(ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive)),
+            is_root: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error.to_string().contains("declares source profile 'arch'"),
+        "{error}"
+    );
 }

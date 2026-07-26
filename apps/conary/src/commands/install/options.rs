@@ -18,6 +18,9 @@ pub struct InstallOptions<'a> {
     pub root: &'a str,
     /// Specific version to install
     pub version: Option<String>,
+    /// Exact signed CCS build release to install. Internal restore/update
+    /// callers use this after an exact candidate has already been selected.
+    pub package_release: Option<String>,
     /// Specific repository to use
     pub repo: Option<String>,
     /// Preferred architecture to resolve/install
@@ -40,8 +43,8 @@ pub struct InstallOptions<'a> {
     pub ownership: Option<OwnershipMode>,
     /// Skip confirmation prompts
     pub yes: bool,
-    /// Install from a specific distro (cross-distro canonical resolution)
-    pub from_distro: Option<String>,
+    /// Install from an exact supported source profile.
+    pub from_profile: Option<String>,
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
     pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
@@ -50,9 +53,21 @@ pub struct InstallOptions<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepositoryInstallProvenance {
     pub repository_id: i64,
-    pub source_distro: Option<String>,
+    pub source_profile: Option<String>,
     pub version_scheme: conary_core::repository::versioning::VersionScheme,
     pub source_kind: RepositorySourceKind,
+}
+
+/// Exact authority used to verify a CCS envelope.
+///
+/// Repository provenance remains separate because a locally converted native
+/// package keeps its source repository identity while its generated CCS
+/// envelope is signed by an exact local conversion key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CcsEnvelopeAuthority {
+    LocalDev,
+    Repository,
+    ExactKey(String),
 }
 
 pub(crate) fn repository_install_provenance_from_package(
@@ -62,15 +77,23 @@ pub(crate) fn repository_install_provenance_from_package(
     let repository_id = repository
         .id
         .ok_or_else(|| anyhow::anyhow!("Selected repository has no database ID"))?;
-    let source_distro = package
-        .distro
-        .clone()
-        .or_else(|| repository.default_strategy_distro.clone());
     let version_scheme = resolve_package_version_scheme(package);
+    let source_profile =
+        conary_core::repository::selector::candidate_source_profile(package, repository)?
+            .map(str::to_string);
+    if source_profile.is_none()
+        && version_scheme != conary_core::repository::versioning::VersionScheme::Conary
+    {
+        anyhow::bail!(
+            "selected repository package '{}-{}' has no exact source profile",
+            package.name,
+            package.version
+        );
+    }
 
     Ok(RepositoryInstallProvenance {
         repository_id,
-        source_distro,
+        source_profile,
         version_scheme,
         source_kind: match repository.default_strategy.as_deref() {
             Some("static") => RepositorySourceKind::Static,
@@ -83,44 +106,50 @@ pub(crate) fn repository_install_provenance_from_package(
 pub(crate) fn verify_ccs_package_authority(
     db_path: &str,
     ccs_path: &Path,
+    envelope_authority: &CcsEnvelopeAuthority,
     repository_provenance: Option<&RepositoryInstallProvenance>,
 ) -> Result<conary_core::ccs::VerifiedCcsArchive> {
-    let keys = if let Some(provenance) = repository_provenance {
-        let conn = crate::commands::open_db(db_path)?;
-        let mut keys =
-            RepositoryPackageKey::trusted_keys_for_repository(&conn, provenance.repository_id)
+    let keys = match envelope_authority {
+        CcsEnvelopeAuthority::Repository => {
+            let provenance = repository_provenance.context(
+                "Repository CCS envelope authority requires exact repository provenance",
+            )?;
+            let conn = crate::commands::open_db(db_path)?;
+            let mut keys =
+                RepositoryPackageKey::trusted_keys_for_repository(&conn, provenance.repository_id)
+                    .with_context(|| {
+                        format!(
+                            "load active package keys for repository {}",
+                            provenance.repository_id
+                        )
+                    })?;
+            if keys.is_empty() {
+                keys = RepositoryPackageKey::trusted_tuf_targets_keys_for_repository(
+                    &conn,
+                    provenance.repository_id,
+                )
                 .with_context(|| {
                     format!(
-                        "load active package keys for repository {}",
+                        "load verified TUF targets keys for repository {}",
                         provenance.repository_id
                     )
                 })?;
-        if keys.is_empty() {
-            keys = RepositoryPackageKey::trusted_tuf_targets_keys_for_repository(
-                &conn,
-                provenance.repository_id,
-            )
-            .with_context(|| {
-                format!(
-                    "load verified TUF targets keys for repository {}",
+            }
+            if keys.is_empty() {
+                anyhow::bail!(
+                    "Repository {} has no verified package-authority keys for CCS installation",
                     provenance.repository_id
-                )
-            })?;
+                );
+            }
+            keys
         }
-        if keys.is_empty() {
-            anyhow::bail!(
-                "Repository {} has no verified package-authority keys for CCS installation",
-                provenance.repository_id
-            );
-        }
-        keys
-    } else {
-        crate::commands::ccs::local_dev_trust_policy()?
+        CcsEnvelopeAuthority::LocalDev => crate::commands::ccs::local_dev_trust_policy()?
             .context(
-                "Local CCS installation requires an initialized local-dev signing key or repository trust provenance",
+                "Local CCS installation requires an initialized local-dev signing key or explicit envelope authority",
             )?
             .trusted_keys()
-            .to_vec()
+            .to_vec(),
+        CcsEnvelopeAuthority::ExactKey(key) => vec![key.clone()],
     };
     let policy = TrustPolicy::strict(keys);
     verify_package(ccs_path, &policy).with_context(|| {
@@ -144,7 +173,7 @@ mod tests {
         );
         repository.id = Some(88);
         repository.default_strategy = Some("static".to_string());
-        repository.default_strategy_distro = Some("fedora".to_string());
+        repository.source_profile = Some("fedora-44".to_string());
         let package = RepositoryPackage::new(
             88,
             "tree".to_string(),
@@ -157,7 +186,7 @@ mod tests {
         let provenance = repository_install_provenance_from_package(&package, &repository).unwrap();
 
         assert_eq!(provenance.repository_id, 88);
-        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(provenance.source_profile.as_deref(), Some("fedora-44"));
         assert_eq!(
             provenance.version_scheme,
             conary_core::repository::versioning::VersionScheme::Rpm

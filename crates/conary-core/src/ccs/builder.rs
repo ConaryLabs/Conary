@@ -7,7 +7,7 @@
 
 use crate::ccs::chunking::{Chunker, MIN_CHUNK_SIZE};
 use crate::ccs::manifest::CcsManifest;
-use crate::ccs::policy::{PolicyAction, PolicyChain};
+use crate::ccs::policy::{PolicyAction, PolicyChain, PolicyError};
 use crate::hash;
 use crate::packages::traits::ExtractedFile;
 use crate::payload::{
@@ -25,6 +25,7 @@ mod package_writer;
 
 pub use package_writer::{
     print_build_summary, write_signed_current_ccs_package, write_v2_ccs_package,
+    write_v2_ccs_package_from_sources,
 };
 
 #[cfg(test)]
@@ -33,6 +34,10 @@ pub(crate) mod test_support;
 /// Typed errors for the CCS builder pipeline
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderError {
+    /// The manifest contains an invalid build-policy configuration.
+    #[error(transparent)]
+    PolicyConfiguration(#[from] PolicyError),
+
     /// File is not under the expected source directory
     #[error("file not under source directory: {0}")]
     FileNotUnderSource(PathBuf),
@@ -122,7 +127,7 @@ pub struct CcsBuilder {
     manifest: CcsManifest,
     source_dir: PathBuf,
     install_prefix: PathBuf,
-    policy_chain: Option<PolicyChain>,
+    policy_chain: PolicyChain,
     /// Enable CDC chunking for delta-efficient packages
     use_chunking: bool,
     /// Chunker instance (created lazily if chunking is enabled)
@@ -140,12 +145,14 @@ fn is_suspicious_component_executable(component: &str, node: &PayloadNode) -> bo
 }
 
 impl CcsBuilder {
-    /// Create a new builder
-    pub fn new(manifest: CcsManifest, source_dir: &Path) -> Self {
-        // Create policy chain from manifest configuration
-        let policy_chain = PolicyChain::from_config(&manifest.policy).ok();
+    /// Create a builder after compiling the complete manifest policy chain.
+    pub fn new(
+        manifest: CcsManifest,
+        source_dir: &Path,
+    ) -> std::result::Result<Self, BuilderError> {
+        let policy_chain = PolicyChain::from_config(&manifest.policy)?;
 
-        Self {
+        Ok(Self {
             manifest,
             source_dir: source_dir.to_path_buf(),
             install_prefix: PathBuf::from("/"),
@@ -153,18 +160,12 @@ impl CcsBuilder {
             use_chunking: false,
             chunker: None,
             package_entries: None,
-        }
+        })
     }
 
     /// Set the install prefix (default: /)
     pub fn with_install_prefix(mut self, prefix: &Path) -> Self {
         self.install_prefix = prefix.to_path_buf();
-        self
-    }
-
-    /// Set custom policy chain (overrides manifest config)
-    pub fn with_policies(mut self, chain: PolicyChain) -> Self {
-        self.policy_chain = Some(chain);
         self
     }
 
@@ -213,41 +214,35 @@ impl CcsBuilder {
         let mut chunk_stats = ChunkStats::default();
 
         for (source_path, mut entry, content) in raw_files {
-            // Apply policy chain if configured
-            let final_content = if let Some(ref chain) = self.policy_chain {
-                let (action, new_content) =
-                    chain.apply(&mut entry, content, &source_path, &self.manifest.policy)?;
-
-                match action {
-                    PolicyAction::Skip => {
-                        // Policy says skip this file
-                        continue;
-                    }
-                    PolicyAction::Reject(msg) => {
-                        return Err(BuilderError::PolicyRejected {
-                            path: entry.path.clone(),
-                            reason: msg,
-                        }
-                        .into());
-                    }
-                    PolicyAction::Keep => {
-                        // Content unchanged by policy, no rehash needed
-                        new_content
-                    }
-                    PolicyAction::Replace(_) => {
-                        let content_authority = entry.content.as_mut().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "policy attempted to replace non-regular payload node {}",
-                                entry.path
-                            )
-                        })?;
-                        content_authority.sha256 = hash::sha256(&new_content);
-                        content_authority.size = new_content.len() as u64;
-                        new_content
-                    }
+            let (action, new_content) = self.policy_chain.apply(
+                &mut entry,
+                content,
+                &source_path,
+                &self.manifest.policy,
+            )?;
+            let final_content = match action {
+                PolicyAction::Skip => {
+                    continue;
                 }
-            } else {
-                content
+                PolicyAction::Reject(msg) => {
+                    return Err(BuilderError::PolicyRejected {
+                        path: entry.path.clone(),
+                        reason: msg,
+                    }
+                    .into());
+                }
+                PolicyAction::Keep => new_content,
+                PolicyAction::Replace(_) => {
+                    let content_authority = entry.content.as_mut().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "policy attempted to replace non-regular payload node {}",
+                            entry.path
+                        )
+                    })?;
+                    content_authority.sha256 = hash::sha256(&new_content);
+                    content_authority.size = new_content.len() as u64;
+                    new_content
+                }
             };
 
             if is_suspicious_component_executable(&entry.component, &entry.node) {
@@ -381,7 +376,15 @@ impl CcsBuilder {
             .strip_prefix(&self.source_dir)
             .map_err(|_| BuilderError::FileNotUnderSource(source_path.to_path_buf()))?;
         let install_path = self.install_prefix.join(relative);
-        let install_path_str = install_path.to_string_lossy().to_string();
+        let install_path_str = install_path
+            .to_str()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "CCS payload install path derived from {} is not valid UTF-8",
+                    source_path.display()
+                )
+            })?
+            .to_string();
 
         // Get metadata
         let metadata = fs::symlink_metadata(source_path)?;
@@ -491,7 +494,15 @@ impl CcsBuilder {
             .strip_prefix("/")
             .unwrap_or_else(|_| Path::new(&file.path));
         let install_path = self.install_prefix.join(relative);
-        let install_path_str = install_path.to_string_lossy().to_string();
+        let install_path_str = install_path
+            .to_str()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "CCS payload install path derived from {} is not valid UTF-8",
+                    file.path
+                )
+            })?
+            .to_string();
         file.node.validate()?;
         file.node
             .validate_content(file.content_authority.as_ref())?;
@@ -535,16 +546,13 @@ impl CcsBuilder {
     fn scan_source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
-        for entry in WalkDir::new(&self.source_dir)
-            .into_iter()
-            .filter_map(|e| match e {
-                Ok(entry) => Some(entry),
-                Err(err) => {
-                    tracing::warn!("WalkDir error scanning source directory: {err}");
-                    None
-                }
-            })
-        {
+        for entry in WalkDir::new(&self.source_dir) {
+            let entry = entry.map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to scan complete CCS source authority at {}: {error}",
+                    self.source_dir.display()
+                )
+            })?;
             let path = entry.path();
 
             // Skip the source directory itself
@@ -670,11 +678,108 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let manifest = create_test_manifest();
 
-        let builder = CcsBuilder::new(manifest, temp_dir.path());
+        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
         let result = builder.build().unwrap();
 
         assert!(result.files.is_empty());
         assert!(result.components.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn builder_rejects_an_incomplete_source_walk() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // A privileged process can traverse mode-000 directories, so this
+        // permission-boundary proof applies only when the kernel enforces the
+        // unreadable directory for the current test process.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("visible"),
+            b"must not become a partial package",
+        )
+        .unwrap();
+        let unreadable = temp_dir.path().join("unreadable");
+        fs::create_dir(&unreadable).unwrap();
+        fs::write(unreadable.join("hidden"), b"exact authority").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o0)).unwrap();
+
+        let result = CcsBuilder::new(create_test_manifest(), temp_dir.path())
+            .unwrap()
+            .build();
+
+        // Restore access before TempDir cleanup.
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result.expect_err("an unreadable subtree must abort the CCS build");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to scan complete CCS source authority"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn builder_rejects_non_utf8_payload_paths_without_renaming_them() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let invalid_name = OsString::from_vec(vec![b'p', b'a', b'y', b'l', b'o', b'a', b'd', 0xff]);
+        fs::write(temp_dir.path().join(invalid_name), b"exact bytes").unwrap();
+
+        let error = CcsBuilder::new(create_test_manifest(), temp_dir.path())
+            .unwrap()
+            .build()
+            .expect_err("a non-UTF-8 payload path must not be signed under a lossy name");
+        assert!(
+            error.to_string().contains("is not valid UTF-8"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn invalid_policy_configuration_fails_builder_construction() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manifest = create_test_manifest();
+        manifest.policy.reject_paths = vec!["[".to_string()];
+
+        let error = match CcsBuilder::new(manifest, temp_dir.path()) {
+            Ok(_) => panic!("invalid policy configuration must not create a builder"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BuilderError::PolicyConfiguration(PolicyError::Config(_))
+        ));
+    }
+
+    #[test]
+    fn builder_always_applies_mandatory_setuid_policy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let bin_dir = temp_dir.path().join("usr/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let helper = bin_dir.join("helper");
+        fs::write(&helper, b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o6755)).unwrap();
+
+        let result = CcsBuilder::new(create_test_manifest(), temp_dir.path())
+            .unwrap()
+            .build()
+            .unwrap();
+        let helper = result
+            .files
+            .iter()
+            .find(|entry| entry.path == "/usr/bin/helper")
+            .unwrap();
+        assert_eq!(helper.node.mode & 0o6000, 0);
     }
 
     #[test]
@@ -717,7 +822,7 @@ mod tests {
         fs::write(bin_dir.join("myapp"), b"#!/bin/bash\necho hello").unwrap();
 
         let manifest = create_test_manifest();
-        let builder = CcsBuilder::new(manifest, temp_dir.path());
+        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
         let result = builder.build().unwrap();
 
         let files = result
@@ -750,7 +855,7 @@ mod tests {
         }
 
         let manifest = create_test_manifest();
-        let builder = CcsBuilder::new(manifest, temp_dir.path());
+        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
         let result = builder.build().unwrap();
 
         let payload_files = result
@@ -784,7 +889,7 @@ mod tests {
             .files
             .insert("/usr/bin/helper".to_string(), "lib".to_string());
 
-        let builder = CcsBuilder::new(manifest, temp_dir.path());
+        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
         let result = builder.build().unwrap();
 
         let helper = result
@@ -808,7 +913,7 @@ mod tests {
         std::os::unix::fs::symlink("libfoo.so.1.0.0", lib_dir.join("libfoo.so.1")).unwrap();
 
         let manifest = create_test_manifest();
-        let builder = CcsBuilder::new(manifest, temp_dir.path());
+        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
         let result = builder.build().unwrap();
 
         #[cfg(unix)]

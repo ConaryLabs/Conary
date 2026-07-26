@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::super::provider::matching::{
     constraint_matches_provide, provider_expression_matches_package,
@@ -127,6 +127,12 @@ fn atom_satisfiable(
     constraint: &ConaryConstraint,
     gone_troves: &HashSet<i64>,
 ) -> Result<bool> {
+    if let ConaryConstraint::RpmRuntime(requirement) = constraint {
+        requirement
+            .ensure_supported()
+            .map_err(|error| Error::ResolutionError(error.to_string()))?;
+        return Ok(true);
+    }
     if let ConaryConstraint::ProviderExpression { expression } = constraint {
         for id in provider.solvable_ids() {
             let package = provider.get_solvable(*id);
@@ -141,12 +147,13 @@ fn atom_satisfiable(
     }
 
     let providers = provider.find_providers(dep_name);
-    for (trove_id, provided_version) in providers {
+    for (trove_id, provided_version, provided_relation) in providers {
         if let Some(package) = provider.installed_package_for_trove(trove_id)
             && !gone_troves.contains(&trove_id)
             && constraint_matches_provide(
                 constraint,
                 provided_version.as_deref(),
+                provided_relation,
                 package.version_scheme,
             )?
         {

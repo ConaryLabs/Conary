@@ -5,6 +5,7 @@ use crate::generation::artifact::{
     ArtifactWriteInputs, BootAssetsManifest, CasObjectRef, write_generation_artifact,
 };
 use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+use crate::generation::test_support::write_root_manifests_with_objects;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -118,7 +119,8 @@ impl Fixture {
         std::fs::write(boot_assets_dir.join("initramfs.img"), b"initramfs").unwrap();
         std::fs::write(boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
-        let _cas_object = write_cas_object(&objects_dir, b"hello");
+        let cas_object = write_cas_object(&objects_dir, b"hello");
+        write_root_manifests_with_objects(&generation_dir, std::slice::from_ref(&cas_object));
         let boot_assets = BootAssetsManifest {
             version: 1,
             generation: 7,

@@ -1,10 +1,12 @@
 // apps/conary/src/commands/generation/commands/tests.rs
 //! Tests for generation command parsing, GC, publication, and rendering.
 
+use super::super::gc::{
+    booted_generation_from_cmdline, load_gc_roots, parse_gc_root_setting,
+    runtime_root_for_generation_db_path,
+};
 use super::{
-    booted_generation_from_cmdline, classify_side_effect_reasons, cmd_generation_gc_locked,
-    load_gc_roots, parse_gc_root_setting, removed_members_for_side_effect_warning,
-    render_generation_info, runtime_root_for_generation_db_path,
+    classify_side_effect_reasons, removed_members_for_side_effect_warning, render_generation_info,
 };
 use conary_core::db::models::settings;
 use conary_core::db::models::{StateDiff, StateMember};
@@ -19,6 +21,7 @@ fn member(name: &str, version: &str) -> StateMember {
         state_id: 1,
         trove_name: name.to_string(),
         trove_version: version.to_string(),
+        package_release: None,
         architecture: Some("x86_64".to_string()),
         install_reason: "explicit".to_string(),
         selection_reason: None,
@@ -102,46 +105,6 @@ fn load_gc_roots_ignores_filesystem_entries_without_db_registration() {
 
     settings::set(&conn, "generation.gc_roots", "[7,5]").unwrap();
     assert_eq!(load_gc_roots(&conn).unwrap(), vec![5, 7]);
-}
-
-#[test]
-fn generation_gc_keeps_generation_referenced_by_publication_debt() {
-    let runtime = TempDir::new().unwrap();
-    let db_path = runtime.path().join("conary.db");
-    conary_core::db::init(&db_path).unwrap();
-    let conn = conary_core::db::open(&db_path).unwrap();
-    let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
-
-    std::fs::create_dir_all(runtime_root.generations_dir()).unwrap();
-    let protected = runtime_root.generation_path(1);
-    let removable = runtime_root.generation_path(2);
-    std::fs::create_dir_all(&protected).unwrap();
-    std::fs::create_dir_all(&removable).unwrap();
-    conary_core::generation::metadata::mark_generation_pending(&protected).unwrap();
-
-    let debt = conary_core::db::models::GenerationPublication::create_pending(
-        &conn,
-        None,
-        None,
-        db_path.to_str().unwrap(),
-        runtime_root.root().to_str().unwrap(),
-        "fixture",
-        &Default::default(),
-    )
-    .unwrap();
-    debt.set_phase(
-        &conn,
-        conary_core::db::models::GenerationPublicationPhase::ArtifactReady,
-        conary_core::db::models::GenerationPublicationStatus::Failed,
-        Some(1),
-        Some(1),
-    )
-    .unwrap();
-
-    cmd_generation_gc_locked(0, db_path.to_str().unwrap(), &runtime_root).unwrap();
-
-    assert!(protected.exists());
-    assert!(!removable.exists());
 }
 
 #[test]

@@ -27,6 +27,7 @@ pub mod groups;
 pub(crate) mod hermetic_config;
 pub(crate) mod hermetic_state;
 mod install;
+mod installed_authority_snapshot;
 mod label;
 #[allow(dead_code)]
 mod live_root;
@@ -52,6 +53,7 @@ mod replatform_rendering;
 mod repo;
 mod repo_static;
 mod restore;
+mod rollback_system_authority;
 mod self_update;
 mod state;
 mod system;
@@ -67,8 +69,8 @@ pub mod verify;
 // Re-export all command handlers
 pub use adopt::{
     NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, UnadoptOptions, cmd_adopt,
-    cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts,
-    cmd_native_handoff, cmd_sync_hook_install, cmd_unadopt,
+    cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts, cmd_native_handoff,
+    cmd_sync_hook_install, cmd_unadopt,
 };
 pub use automation::{
     cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,
@@ -91,9 +93,10 @@ pub use ccs::CcsInitTemplate;
 #[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
     AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, DeferredFollowUpKind,
-    adoption_warnings, append_adoption_warning_metadata, append_deferred_follow_up_metadata,
-    classify_deferred_follow_up_kind, deferred_follow_up, metadata_with_adoption_warnings,
-    metadata_with_deferred_follow_up, metadata_with_removed_troves, parse_rollback_snapshots,
+    RollbackAuthority, adoption_warnings, append_adoption_warning_metadata,
+    append_deferred_follow_up_metadata, classify_deferred_follow_up_kind, deferred_follow_up,
+    metadata_with_adoption_warnings, metadata_with_deferred_follow_up,
+    metadata_with_removed_troves, parse_rollback_authority, parse_rollback_snapshots,
     publication_deferred_follow_up,
 };
 pub use collection::{
@@ -120,13 +123,22 @@ pub use federation::{
     cmd_federation_remove_peer, cmd_federation_stats, cmd_federation_status, cmd_federation_test,
 };
 pub use install::{InstallOptions, OwnershipMode, cmd_install};
+#[cfg(test)]
+pub(crate) use installed_authority_snapshot::{
+    CcsRemoveHookSnapshot, FileSnapshot, NativeLifecycleSnapshot,
+};
+pub(crate) use installed_authority_snapshot::{
+    MaterializedDirectorySnapshot, TroveSnapshot, capture_materialized_directory_snapshots,
+    capture_trove_snapshot,
+};
 pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
     cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,
 };
 #[allow(unused_imports)]
 pub(crate) use live_root::{
-    LiveRootFile, LiveRootStats, LiveRootTransaction, recover_pending_journals, target_path,
+    LiveRootContent, LiveRootFile, LiveRootStats, LiveRootTransaction, recover_pending_journals,
+    target_path,
 };
 pub use model::{
     ApplyOptions, cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock,
@@ -163,12 +175,13 @@ pub use repo::{
 };
 pub use repo_static::cmd_repo_reset_trust;
 pub use restore::{cmd_restore, cmd_restore_all};
+pub(crate) use rollback_system_authority::RollbackSystemAuthority;
 pub use self_update::{SelfUpdateOptions, cmd_self_update};
 pub use state::{
     cmd_state_create, cmd_state_diff, cmd_state_list, cmd_state_prune, cmd_state_restore,
     cmd_state_show,
 };
-pub use system::{cmd_gc, cmd_init, cmd_rollback, cmd_verify};
+pub use system::{cmd_init, cmd_rollback, cmd_verify};
 pub use triggers::{
     cmd_trigger_add, cmd_trigger_disable, cmd_trigger_enable, cmd_trigger_list, cmd_trigger_remove,
     cmd_trigger_run, cmd_trigger_show,
@@ -189,49 +202,6 @@ pub use update_channel::{
 
 use anyhow::{Context, Result};
 pub use conary_core::packages::PackageFormatType;
-use serde::{Deserialize, Serialize};
-
-/// Serializable trove metadata for rollback support
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct TroveSnapshot {
-    pub name: String,
-    pub version: String,
-    pub architecture: Option<String>,
-    pub description: Option<String>,
-    pub install_source: String,
-    pub source_distro: Option<String>,
-    pub version_scheme: conary_core::repository::versioning::VersionScheme,
-    pub native_lifecycle: Option<NativeLifecycleSnapshot>,
-    pub ccs_remove_hook: Option<CcsRemoveHookSnapshot>,
-    /// Repository this package was installed from (for provenance/affinity).
-    #[serde(default)]
-    pub installed_from_repository_id: Option<i64>,
-    pub files: Vec<FileSnapshot>,
-}
-
-/// Exact installed lifecycle state retained across remove rollback.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct NativeLifecycleSnapshot {
-    pub bundle_toml: String,
-    pub lifecycle_state: String,
-    pub pending_triggers: Vec<String>,
-    pub awaited_packages: Vec<conary_core::ccs::native_transaction::NativePackageIdentity>,
-}
-
-/// Exact installed CCS remove hook retained across remove rollback.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CcsRemoveHookSnapshot {
-    pub script: String,
-    pub reversible: Option<bool>,
-}
-
-/// Serializable file metadata for rollback support
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FileSnapshot {
-    pub path: String,
-    pub node: conary_core::payload::ResolvedPayloadNode,
-    pub content: Option<conary_core::payload::PayloadContentAuthority>,
-}
 
 /// Open the package database with a standard error context.
 ///

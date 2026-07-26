@@ -31,7 +31,7 @@ copy_to_guest = [
 ]
 commands = [
     "conary system init",
-    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove ${REPO_NAME} || true; conary repo add ${REPO_NAME} https://remi.conary.io --package-format json --default-strategy remi --remi-endpoint https://remi.conary.io --remi-distro fedora-44; conary repo sync ${REPO_NAME} --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo ${REPO_NAME} --yes --sandbox always --no-deps; done; ldconfig; fi",
+    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove ${REPO_NAME} || true; conary repo add ${REPO_NAME} https://remi.conary.io --package-format json --default-strategy remi --remi-endpoint https://remi.conary.io --source-profile fedora-44; conary repo sync ${REPO_NAME} --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo ${REPO_NAME} --yes --sandbox always --no-deps; done; ldconfig; fi",
     "xorriso -version >/dev/null",
     "mmd -V >/dev/null",
     "mcopy -V >/dev/null",

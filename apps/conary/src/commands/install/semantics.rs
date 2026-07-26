@@ -10,6 +10,13 @@ pub(super) enum PreparedSourceKind {
     Ccs,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum InstallIntent {
+    #[default]
+    PackageChange,
+    Replatform,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct InstallSemantics {
     pub(super) source: PreparedSourceKind,

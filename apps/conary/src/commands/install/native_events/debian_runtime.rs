@@ -16,10 +16,7 @@ mod lifecycle_bridge;
 mod trigger_mutations;
 
 pub(super) use admin_projection::{DebianAdminSnapshot, DebianConfigSnapshot, config_snapshots};
-
-pub(super) fn lifecycle_bridge_config() -> conary_core::scriptlet::LifecycleBridgeConfig {
-    lifecycle_bridge::config()
-}
+pub(super) use lifecycle_bridge::DebianLifecycleBridge;
 
 /// The upstream dpkg ABI version whose maintainer-script environment Conary
 /// implements. Bumping this requires rechecking dpkg's `script.c` contract.

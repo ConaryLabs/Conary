@@ -14,8 +14,10 @@ CREATE TABLE troves (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             version TEXT NOT NULL,
+            package_release TEXT
+                CHECK(package_release IS NULL OR length(package_release) > 0),
             type TEXT NOT NULL CHECK(type IN ('package', 'component', 'collection')),
-            architecture TEXT,
+            architecture TEXT CHECK(architecture IS NULL OR length(architecture) > 0),
             description TEXT,
             installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             installed_by_changeset_id INTEGER,
@@ -31,12 +33,37 @@ CREATE TABLE troves (
             selection_reason TEXT,
             label_id INTEGER REFERENCES labels(id),
             orphan_since TEXT,
-            source_distro TEXT,
+            source_profile TEXT
+                CHECK(source_profile IS NULL OR source_profile IN (
+                    'fedora-44', 'ubuntu-26.04', 'arch'
+                )),
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(
+                    version_scheme IN ('conary', 'rpm', 'debian', 'arch')
+                    AND (
+                        source_profile IS NULL
+                        OR (
+                            source_profile = 'fedora-44'
+                            AND version_scheme = 'rpm'
+                        )
+                        OR (
+                            source_profile = 'ubuntu-26.04'
+                            AND version_scheme = 'debian'
+                        )
+                        OR (
+                            source_profile = 'arch'
+                            AND version_scheme = 'arch'
+                        )
+                    )
+                ),
             native_package_identity_json TEXT,
             installed_from_repository_id INTEGER REFERENCES repositories(id) ON DELETE SET NULL,
-            UNIQUE(name, version, architecture),
+            debian_multi_arch TEXT
+                CHECK(debian_multi_arch IN ('no', 'same', 'allowed', 'foreign')),
+            CHECK(
+                (version_scheme = 'debian' AND debian_multi_arch IS NOT NULL)
+                OR (version_scheme != 'debian' AND debian_multi_arch IS NULL)
+            ),
             CHECK (
                 CASE
                     WHEN install_source IN ('adopted-track', 'adopted-full', 'taken') THEN
@@ -189,6 +216,8 @@ CREATE TABLE troves (
         );
 CREATE INDEX idx_troves_name ON troves(name);
 CREATE INDEX idx_troves_type ON troves(type);
+CREATE UNIQUE INDEX idx_troves_exact_identity
+ON troves(name, version, COALESCE(package_release, ''), COALESCE(architecture, ''));
 CREATE TABLE files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             path TEXT NOT NULL UNIQUE,
@@ -197,12 +226,14 @@ CREATE TABLE files (
             content_size INTEGER,
             trove_id INTEGER NOT NULL,
             installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            component_id INTEGER REFERENCES components(id) ON DELETE SET NULL,
+            component_id INTEGER,
             CHECK (
                 (content_sha256 IS NULL AND content_size IS NULL)
                 OR (content_sha256 IS NOT NULL AND content_size IS NOT NULL AND content_size >= 0)
             ),
-            FOREIGN KEY (trove_id) REFERENCES troves(id) ON DELETE CASCADE
+            FOREIGN KEY (trove_id) REFERENCES troves(id) ON DELETE CASCADE,
+            FOREIGN KEY (component_id, trove_id)
+                REFERENCES components(id, parent_trove_id)
         );
 CREATE INDEX idx_files_path ON files(path);
 CREATE INDEX idx_files_trove_id ON files(trove_id);
@@ -255,10 +286,40 @@ CREATE TABLE provides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
             capability TEXT NOT NULL,
-            version TEXT, kind TEXT DEFAULT 'package', canonical_id INTEGER REFERENCES canonical_packages(id),
-            UNIQUE(trove_id, capability)
+            version TEXT,
+            version_relation TEXT
+                CHECK(version_relation IN ('lt', 'le', 'eq', 'ge', 'gt')),
+            kind TEXT NOT NULL CHECK(kind IN (
+                'package', 'virtual', 'soname', 'file',
+                'path', 'binary', 'pkgconfig', 'generic'
+            )),
+            version_scheme TEXT NOT NULL
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+            architecture_qualifier_kind TEXT NOT NULL
+                CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
+            architecture_qualifier TEXT,
+            canonical_id INTEGER REFERENCES canonical_packages(id),
+            CHECK(
+                (version IS NULL AND version_relation IS NULL)
+                OR
+                (version IS NOT NULL AND version_relation IS NOT NULL)
+            ),
+            CHECK(
+                (architecture_qualifier_kind = 'exact'
+                    AND architecture_qualifier IS NOT NULL
+                    AND length(architecture_qualifier) > 0)
+                OR
+                (architecture_qualifier_kind IN ('implicit', 'any')
+                    AND architecture_qualifier IS NULL)
+            )
         );
 CREATE INDEX idx_provides_capability ON provides(capability);
+CREATE UNIQUE INDEX idx_provides_exact_contract
+        ON provides(
+            trove_id, kind, capability, COALESCE(version, ''),
+            COALESCE(version_relation, ''), version_scheme,
+            architecture_qualifier_kind, COALESCE(architecture_qualifier, '')
+        );
 CREATE TABLE package_requirement_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trove_id INTEGER NOT NULL REFERENCES troves(id) ON DELETE CASCADE,
@@ -288,7 +349,8 @@ CREATE TABLE components (
             description TEXT,
             installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             is_installed INTEGER NOT NULL DEFAULT 1,
-            UNIQUE(parent_trove_id, name)
+            UNIQUE(parent_trove_id, name),
+            UNIQUE(id, parent_trove_id)
         );
 CREATE INDEX idx_components_parent ON components(parent_trove_id);
 CREATE INDEX idx_components_name ON components(name);
@@ -325,12 +387,10 @@ CREATE TABLE triggers (
             handler TEXT NOT NULL,
             priority INTEGER NOT NULL DEFAULT 50,
             enabled INTEGER NOT NULL DEFAULT 1,
-            builtin INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 CREATE INDEX idx_triggers_name ON triggers(name);
 CREATE INDEX idx_triggers_enabled ON triggers(enabled) WHERE enabled = 1;
-CREATE INDEX idx_triggers_builtin ON triggers(builtin);
 CREATE TABLE trigger_dependencies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trigger_id INTEGER NOT NULL REFERENCES triggers(id) ON DELETE CASCADE,
@@ -352,22 +412,8 @@ CREATE TABLE changeset_triggers (
         );
 CREATE INDEX idx_changeset_triggers_changeset ON changeset_triggers(changeset_id);
 CREATE INDEX idx_changeset_triggers_status ON changeset_triggers(status);
-INSERT INTO triggers (name, description, pattern, handler, priority, builtin)
-VALUES
-    ('ldconfig', 'Update shared library cache', '/usr/lib/*.so*,/usr/lib64/*.so*,/lib/*.so*,/lib64/*.so*', '/sbin/ldconfig', 10, 1),
-    ('update-mime-database', 'Update MIME type database', '/usr/share/mime/*', 'update-mime-database /usr/share/mime', 30, 1),
-    ('update-desktop-database', 'Update desktop entry database', '/usr/share/applications/*.desktop', 'update-desktop-database /usr/share/applications', 30, 1),
-    ('gtk-update-icon-cache', 'Update GTK icon cache', '/usr/share/icons/*', 'gtk-update-icon-cache -f /usr/share/icons/hicolor', 40, 1),
-    ('glib-compile-schemas', 'Compile GSettings schemas', '/usr/share/glib-2.0/schemas/*.xml,/usr/share/glib-2.0/schemas/*.gschema.override', 'glib-compile-schemas /usr/share/glib-2.0/schemas', 30, 1),
-    ('systemd-tmpfiles', 'Create tmpfiles entries', '/usr/lib/tmpfiles.d/*.conf', 'systemd-tmpfiles --create', 20, 1),
-    ('systemd-sysusers', 'Create system users', '/usr/lib/sysusers.d/*.conf', 'systemd-sysusers', 15, 1),
-    ('systemctl-daemon-reload', 'Reload systemd daemon', '/usr/lib/systemd/system/*,/usr/lib/systemd/user/*', 'systemctl daemon-reload', 50, 1),
-    ('fc-cache', 'Update font cache', '/usr/share/fonts/*', 'fc-cache -s', 40, 1),
-    ('depmod', 'Update kernel module dependencies', '/lib/modules/*/modules.*,/usr/lib/modules/*/*.ko*', 'depmod -a', 20, 1);
-INSERT INTO trigger_dependencies (trigger_id, depends_on)
-SELECT id, 'systemd-sysusers'
-FROM triggers
-WHERE name = 'systemd-tmpfiles';
+-- Trigger rows are explicit operator authority. Package path spelling does
+-- not seed or infer lifecycle mutation handlers.
 CREATE TABLE system_states (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             state_number INTEGER NOT NULL UNIQUE,
@@ -645,22 +691,28 @@ CREATE TABLE "state_members" (
             state_id INTEGER NOT NULL REFERENCES system_states(id) ON DELETE CASCADE,
             trove_name TEXT NOT NULL,
             trove_version TEXT NOT NULL,
-            architecture TEXT,
+            package_release TEXT
+                CHECK(package_release IS NULL OR length(package_release) > 0),
+            architecture TEXT CHECK(architecture IS NULL OR length(architecture) > 0),
             install_reason TEXT NOT NULL,
-            selection_reason TEXT,
-            UNIQUE(state_id, trove_name, architecture)
+            selection_reason TEXT
         );
+CREATE UNIQUE INDEX idx_state_members_exact_identity
+ON state_members(
+    state_id,
+    trove_name,
+    trove_version,
+    COALESCE(package_release, ''),
+    COALESCE(architecture, '')
+);
 CREATE INDEX idx_state_members_state ON state_members(state_id);
 CREATE INDEX idx_state_members_name ON state_members(trove_name);
-CREATE TABLE state_cas_hashes (
-            state_id INTEGER NOT NULL REFERENCES system_states(id) ON DELETE CASCADE,
-            sha256_hash TEXT NOT NULL,
-            UNIQUE(state_id, sha256_hash)
-        );
-CREATE INDEX idx_state_cas_hashes_state ON state_cas_hashes(state_id);
 CREATE TABLE "changesets" (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             description TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'mutation' CHECK(
+                kind IN ('mutation', 'rollback')
+            ),
             status TEXT NOT NULL CHECK(
                 status IN ('pending', 'applied', 'rolled_back')
             ),
@@ -668,13 +720,23 @@ CREATE TABLE "changesets" (
             applied_at TEXT,
             rolled_back_at TEXT,
             reversed_by_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
+            reverts_changeset_id INTEGER REFERENCES changesets(id),
             tx_uuid TEXT,
-            metadata TEXT
+            metadata TEXT,
+            CHECK (
+                (kind = 'mutation' AND reverts_changeset_id IS NULL)
+                OR (kind = 'rollback' AND reverts_changeset_id IS NOT NULL)
+            ),
+            CHECK (kind = 'mutation' OR reversed_by_changeset_id IS NULL),
+            CHECK (kind = 'mutation' OR status != 'rolled_back')
         );
 CREATE INDEX idx_changesets_status ON changesets(status);
 CREATE INDEX idx_changesets_created_at ON changesets(created_at);
 CREATE UNIQUE INDEX idx_changesets_tx_uuid
             ON changesets(tx_uuid) WHERE tx_uuid IS NOT NULL;
+CREATE UNIQUE INDEX idx_changesets_reverts
+            ON changesets(reverts_changeset_id)
+            WHERE reverts_changeset_id IS NOT NULL;
 CREATE TABLE generation_publications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trigger_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
@@ -687,7 +749,9 @@ CREATE TABLE generation_publications (
                 'building',
                 'artifact_ready',
                 'current_published',
-                'active_marked'
+                'configuration_projected',
+                'active_marked',
+                'database_backed_up'
             )),
             status TEXT NOT NULL CHECK(status IN (
                 'pending',
@@ -699,7 +763,7 @@ CREATE TABLE generation_publications (
             state_number INTEGER,
             generation_number INTEGER,
             summary TEXT NOT NULL,
-            config_transaction_json TEXT NOT NULL DEFAULT '{"schema_version":2,"entries":[]}',
+            config_transaction_json TEXT NOT NULL DEFAULT '{"schema_version":4,"entries":[]}',
             last_error TEXT,
             retry_count INTEGER NOT NULL DEFAULT 0,
             recoverable INTEGER NOT NULL DEFAULT 1,
@@ -770,7 +834,22 @@ CREATE TABLE installed_native_lifecycle_bundles (
             trove_id INTEGER NOT NULL UNIQUE REFERENCES troves(id) ON DELETE CASCADE,
             source_format TEXT NOT NULL,
             source_family TEXT NOT NULL,
-            source_distro TEXT,
+            source_profile TEXT
+                CHECK(
+                    source_profile IS NULL
+                    OR (
+                        source_profile = 'fedora-44'
+                        AND source_format = 'rpm'
+                    )
+                    OR (
+                        source_profile = 'ubuntu-26.04'
+                        AND source_format = 'deb'
+                    )
+                    OR (
+                        source_profile = 'arch'
+                        AND source_format = 'arch'
+                    )
+                ),
             source_release TEXT,
             source_arch TEXT,
             source_package TEXT NOT NULL,

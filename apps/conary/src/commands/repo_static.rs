@@ -165,6 +165,9 @@ async fn persist_static_repository(
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
     println!("  Default Strategy: static");
+    if let Some(source_profile) = repo.source_profile.as_deref() {
+        println!("  Source Profile: {source_profile}");
+    }
     println!(
         "  Security Advisories: {}",
         repo.security_advisory_support.as_str()
@@ -187,7 +190,9 @@ fn apply_static_repo_options(
     repo.trust_policy = None;
     repo.default_strategy = Some("static".to_string());
     repo.default_strategy_endpoint = None;
-    repo.default_strategy_distro = None;
+    repo.source_profile = opts.source_profile.clone();
+    repo.package_format = conary_core::repository::RepositoryFormat::Unspecified;
+    repo.parser_config = None;
     repo.tuf_enabled = true;
     repo.tuf_root_version = None;
     repo.tuf_root_url = Some(metadata_url.to_string());

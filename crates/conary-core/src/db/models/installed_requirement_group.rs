@@ -203,7 +203,7 @@ mod tests {
             &conn,
             trove_id,
             VersionScheme::Debian,
-            &[relation.clone()],
+            std::slice::from_ref(&relation),
         )
         .unwrap();
 
@@ -234,7 +234,7 @@ mod tests {
             &conn,
             trove_id,
             VersionScheme::Rpm,
-            &[requirement.clone()],
+            std::slice::from_ref(&requirement),
         )
         .unwrap();
 

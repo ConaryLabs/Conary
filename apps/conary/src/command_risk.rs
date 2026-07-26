@@ -277,7 +277,6 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             status,
             dry_run,
             refresh,
-            convert,
             sync_hook,
             quiet,
             from_sync_hook,
@@ -287,7 +286,6 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             status: *status,
             dry_run: *dry_run,
             refresh: *refresh,
-            convert: *convert,
             sync_hook: *sync_hook,
             quiet: *quiet,
             from_sync_hook: *from_sync_hook,
@@ -304,7 +302,6 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             *dry_run,
             *yes,
         )),
-        cli::SystemCommands::Gc { .. } => Some(local_state("conary system gc")),
         cli::SystemCommands::DbBackup { command } => Some(classify_db_backup(command)),
         cli::SystemCommands::State(command) => Some(classify_state(command)),
         cli::SystemCommands::Generation(command) => Some(classify_generation(command)),
@@ -343,7 +340,6 @@ struct AdoptRiskInput {
     status: bool,
     dry_run: bool,
     refresh: bool,
-    convert: bool,
     sync_hook: bool,
     quiet: bool,
     from_sync_hook: bool,
@@ -375,8 +371,6 @@ fn classify_adopt(input: AdoptRiskInput) -> Option<CommandRiskPolicy> {
             "conary system adopt --system --dry-run"
         } else if input.refresh {
             "conary system adopt --refresh --dry-run"
-        } else if input.convert {
-            "conary system adopt --convert --dry-run"
         } else {
             "conary system adopt <pkg> --dry-run"
         };
@@ -387,8 +381,6 @@ fn classify_adopt(input: AdoptRiskInput) -> Option<CommandRiskPolicy> {
         "conary system adopt --system"
     } else if input.refresh {
         "conary system adopt --refresh"
-    } else if input.convert {
-        "conary system adopt --convert"
     } else {
         "conary system adopt <pkg>"
     };
@@ -544,8 +536,7 @@ fn classify_distro(command: &cli::DistroCommands) -> CommandRiskPolicy {
         }
         cli::DistroCommands::Set { .. }
         | cli::DistroCommands::Remove { .. }
-        | cli::DistroCommands::Mixing { .. }
-        | cli::DistroCommands::SelectionMode { .. } => local_state("conary distro"),
+        | cli::DistroCommands::Mixing { .. } => local_state("conary distro"),
     }
 }
 
@@ -609,9 +600,7 @@ fn classify_ccs(command: &cli::CcsCommands) -> CommandRiskPolicy {
         | cli::CcsCommands::Verify { .. }
         | cli::CcsCommands::Sign { .. }
         | cli::CcsCommands::Keygen { .. }
-        | cli::CcsCommands::Export { .. }
-        | cli::CcsCommands::Shell { .. }
-        | cli::CcsCommands::Run { .. } => read_only("conary ccs non-host command"),
+        | cli::CcsCommands::Export { .. } => read_only("conary ccs non-host command"),
     }
 }
 

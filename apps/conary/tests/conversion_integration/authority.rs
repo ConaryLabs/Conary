@@ -10,7 +10,7 @@ fn golden_conversion_native_free_is_current_without_entries() {
     let files = create_test_files("adapter-registry-native-free");
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &files,
             "rpm",
@@ -57,7 +57,7 @@ update-alternatives --install /usr/bin/editor editor /usr/bin/demo-editor 50
     let files = golden_payload_files("adapter-registry-fully-replaced");
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &files,
             "rpm",
@@ -100,7 +100,7 @@ fn golden_conversion_unknown_command_preserves_typed_lifecycle() {
     let files = create_test_files("lifecycle-execution-unknown-shell");
 
     let result = converter
-        .convert(
+        .convert_in_memory_for_test(
             &metadata,
             &files,
             "rpm",

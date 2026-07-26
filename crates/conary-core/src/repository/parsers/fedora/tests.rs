@@ -1,6 +1,7 @@
 // conary-core/src/repository/parsers/fedora/tests.rs
 
 use super::*;
+use crate::repository::dependency_model::{ConditionalRequirementBehavior, ProvideVersionRelation};
 
 fn parser() -> FedoraParser {
     let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Rpm {
@@ -90,10 +91,12 @@ fn test_parse_primary_xml_captures_namespaced_requires_and_provides() {
     <location href="Packages/k/kernel-core-6.19.6-200.fc44.x86_64.rpm"/>
     <format>
       <rpm:provides>
-        <rpm:entry name="kernel-core-uname-r" flags="EQ" ver="6.19.6-200.fc44.x86_64"/>
+        <rpm:entry name="kernel-core-uname-r" flags="EQ" epoch="2" ver="6.19.6" rel="200.fc44"/>
+        <rpm:entry name="kernel-abi" flags="GE" epoch="1" ver="6.19" rel="4"/>
       </rpm:provides>
       <rpm:requires>
-        <rpm:entry name="systemd" flags="GE" ver="255"/>
+        <rpm:entry name="systemd" flags="GE" epoch="1" ver="255" rel="3"/>
+        <rpm:entry name="rpmlib(CompressedFileNames)" flags="LE" epoch="0" ver="3.0.4" rel="1"/>
       </rpm:requires>
     </format>
   </package>
@@ -113,13 +116,155 @@ fn test_parse_primary_xml_captures_namespaced_requires_and_provides() {
         .iter()
         .filter_map(|value| value.as_str())
         .collect::<Vec<_>>();
-    assert!(provides.contains(&"kernel-core-uname-r = 6.19.6-200.fc44.x86_64"));
+    assert!(provides.contains(&"kernel-core-uname-r = 2:6.19.6-200.fc44"));
+    assert!(provides.contains(&"kernel-abi >= 1:6.19-4"));
+    let ranged_provide = pkg
+        .provides
+        .iter()
+        .find(|provide| provide.name == "kernel-abi")
+        .expect("ranged RPM provide");
+    assert_eq!(ranged_provide.version.as_deref(), Some("1:6.19-4"));
+    assert_eq!(
+        ranged_provide.version_relation,
+        Some(ProvideVersionRelation::GreaterOrEqual)
+    );
     assert!(
         pkg.requirements
             .iter()
-            .any(|requirement| requirement.native_text.as_deref() == Some("systemd >= 255"))
+            .any(|requirement| requirement.native_text.as_deref() == Some("systemd >= 1:255-3"))
+    );
+    assert!(
+        pkg.requirements
+            .iter()
+            .flat_map(|requirement| requirement.expression.atoms())
+            .all(|clause| !clause.name.starts_with("rpmlib("))
     );
     assert!(metadata.get("rpm_requires").is_none());
+}
+
+#[test]
+fn primary_xml_rejects_nameless_dependency_entries() {
+    let parser = parser();
+    let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>nameless-requirement</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1" rel="1"/>
+    <checksum type="sha256">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</checksum>
+    <size package="1"/>
+    <location href="Packages/n/nameless-requirement.rpm"/>
+    <format>
+      <rpm:requires>
+        <rpm:entry flags="GE" epoch="0" ver="1" rel="1"/>
+      </rpm:requires>
+    </format>
+  </package>
+</metadata>
+"#;
+
+    let error = parser
+        .parse_primary_xml(xml, "https://example.com")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires entry is missing its required name attribute"),
+        "{error}"
+    );
+}
+
+#[test]
+fn primary_xml_rejects_unimplemented_rpm_runtime_features() {
+    let parser = parser();
+    let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>unsupported-runtime-feature</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1" rel="1"/>
+    <checksum type="sha256">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</checksum>
+    <size package="1"/>
+    <location href="Packages/u/unsupported-runtime-feature.rpm"/>
+    <format>
+      <rpm:requires>
+        <rpm:entry name="rpmlib(ConcurrentAccess)" flags="LE" epoch="0" ver="4.1" rel="1"/>
+      </rpm:requires>
+    </format>
+  </package>
+</metadata>
+"#;
+
+    let error = parser
+        .parse_primary_xml(xml, "https://example.com")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not implement RPM runtime capability"),
+        "{error}"
+    );
+}
+
+#[test]
+fn primary_xml_runtime_true_short_circuits_mixed_rich_or_requirement() {
+    let parser = parser();
+    let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>mixed-runtime-feature</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1" rel="1"/>
+    <checksum type="sha256">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</checksum>
+    <size package="1"/>
+    <location href="Packages/m/mixed-runtime-feature.rpm"/>
+    <format>
+      <rpm:requires>
+        <rpm:entry name="(missing-provider or rpmlib(CompressedFileNames) &lt;= 3.0.4-1)"/>
+      </rpm:requires>
+    </format>
+  </package>
+</metadata>
+"#;
+
+    let packages = parser
+        .parse_primary_xml(xml, "https://example.com")
+        .unwrap();
+
+    assert!(packages[0].requirements.is_empty());
+}
+
+#[test]
+fn primary_xml_package_cannot_forge_package_manager_runtime_provides() {
+    let parser = parser();
+    let xml = r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>runtime-forger</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="1" rel="1"/>
+    <checksum type="sha256">dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</checksum>
+    <size package="1"/>
+    <location href="Packages/r/runtime-forger.rpm"/>
+    <format>
+      <rpm:provides>
+        <rpm:entry name="rpmlib(CompressedFileNames)" flags="EQ" ver="3.0.4" rel="1"/>
+      </rpm:provides>
+    </format>
+  </package>
+</metadata>
+"#;
+
+    let error = parser
+        .parse_primary_xml(xml, "https://example.com")
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("typed runtime ledger is the sole authority"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -257,7 +402,7 @@ fn primary_xml_rejects_malformed_rpm_relation_constraint() {
 fn test_builder_sets_source_distro_and_version_scheme() {
     let builder = valid_builder();
     let pkg = builder.build("https://example.com").unwrap();
-    assert_eq!(pkg.source_distro, RepositoryDependencyFlavor::Rpm);
+    assert_eq!(pkg.dependency_flavor, RepositoryDependencyFlavor::Rpm);
     assert_eq!(pkg.version_scheme, VersionScheme::Rpm);
 }
 

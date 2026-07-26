@@ -8,14 +8,299 @@
 //! All functions now work with `(version: &str, scheme: VersionScheme)` pairs
 //! from `PackageIdentity` instead of the former `ConaryPackageVersion` enum.
 
+use crate::repository::dependency_model::{
+    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RequirementArchitectureQualifier,
+};
+use crate::repository::selector::{PackageSelector, package_architectures_match};
 use crate::repository::versioning::{
-    RepoVersionConstraint, VersionResult, VersionScheme, compare_mixed_repo_versions,
-    repo_version_satisfies,
+    RepoVersionConstraint, VersionComparisonError, VersionResult, VersionScheme,
+    provided_range_matches_requirement, repo_version_satisfies,
 };
 use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
 use super::types::{CapabilityExpression, ConaryConstraint};
+
+/// Check source-native architecture semantics before version/capability
+/// matching. Every repository candidate must carry an explicit architecture.
+pub(crate) fn constraint_architecture_matches_package(
+    constraint: &ConaryConstraint,
+    package: &PackageIdentity,
+    native_architecture: &str,
+) -> bool {
+    let Some(package_architecture) = package.architecture.as_deref() else {
+        return false;
+    };
+    let Some(package_multi_arch) = valid_multi_arch_authority(package) else {
+        return false;
+    };
+    match constraint {
+        ConaryConstraint::RpmRuntime(_) => false,
+        ConaryConstraint::Requested(_) | ConaryConstraint::ProviderExpression { .. } => {
+            PackageSelector::is_architecture_compatible(
+                package.version_scheme,
+                Some(package_architecture),
+                native_architecture,
+            )
+        }
+        ConaryConstraint::Repository {
+            scheme: VersionScheme::Debian,
+            architecture_qualifier,
+            depending_architecture,
+            ..
+        } => debian_architecture_matches(
+            architecture_qualifier,
+            depending_architecture,
+            native_architecture,
+            package.version_scheme,
+            package_architecture,
+            package_multi_arch,
+        ),
+        ConaryConstraint::Repository {
+            scheme,
+            depending_architecture,
+            ..
+        } => package_architectures_match(
+            package.version_scheme,
+            package_architecture,
+            *scheme,
+            depending_architecture,
+            native_architecture,
+        ),
+    }
+}
+
+/// Match dependency architecture authority against one exact provided
+/// capability. Debian provider qualifiers are independent of the owning
+/// package architecture and therefore cannot be checked at package scope.
+pub(crate) fn constraint_architecture_matches_provide(
+    constraint: &ConaryConstraint,
+    package: &PackageIdentity,
+    qualifier: &ProvideArchitectureQualifier,
+    provide_scheme: VersionScheme,
+    native_architecture: &str,
+) -> bool {
+    if matches!(constraint, ConaryConstraint::RpmRuntime(_)) {
+        return false;
+    }
+    let Some(package_architecture) = package.architecture.as_deref() else {
+        return false;
+    };
+    let Some(package_multi_arch) = valid_multi_arch_authority(package) else {
+        return false;
+    };
+    match constraint {
+        ConaryConstraint::Repository {
+            scheme: VersionScheme::Debian,
+            architecture_qualifier,
+            depending_architecture,
+            ..
+        } => debian_provide_architecture_matches(
+            architecture_qualifier,
+            depending_architecture,
+            native_architecture,
+            DebianProvideArchitecture {
+                package_scheme: package.version_scheme,
+                package_architecture,
+                package_multi_arch,
+                provide_scheme,
+                provide_qualifier: qualifier,
+            },
+        ),
+        ConaryConstraint::Repository {
+            scheme,
+            depending_architecture,
+            ..
+        } => provide_architecture_matches_exact_target(
+            package.version_scheme,
+            package_architecture,
+            provide_scheme,
+            qualifier,
+            *scheme,
+            depending_architecture,
+            native_architecture,
+        ),
+        ConaryConstraint::Requested(_) | ConaryConstraint::ProviderExpression { .. } => {
+            provide_architecture_matches_native_target(
+                package.version_scheme,
+                package_architecture,
+                provide_scheme,
+                qualifier,
+                native_architecture,
+            )
+        }
+        ConaryConstraint::RpmRuntime(_) => unreachable!("returned above"),
+    }
+}
+
+fn debian_architecture_matches(
+    qualifier: &RequirementArchitectureQualifier,
+    depending_architecture: &str,
+    native_architecture: &str,
+    provider_scheme: VersionScheme,
+    provider_architecture: &str,
+    provider_multi_arch: Option<DebianMultiArch>,
+) -> bool {
+    match qualifier {
+        RequirementArchitectureQualifier::Unqualified => {
+            provider_multi_arch == Some(DebianMultiArch::Foreign)
+                || package_architectures_match(
+                    provider_scheme,
+                    provider_architecture,
+                    VersionScheme::Debian,
+                    depending_architecture,
+                    native_architecture,
+                )
+        }
+        RequirementArchitectureQualifier::Any => {
+            provider_multi_arch == Some(DebianMultiArch::Allowed)
+        }
+        RequirementArchitectureQualifier::Native => PackageSelector::is_architecture_compatible(
+            provider_scheme,
+            Some(provider_architecture),
+            native_architecture,
+        ),
+        RequirementArchitectureQualifier::Exact(architecture) => package_architectures_match(
+            provider_scheme,
+            provider_architecture,
+            VersionScheme::Debian,
+            architecture,
+            native_architecture,
+        ),
+    }
+}
+
+struct DebianProvideArchitecture<'a> {
+    package_scheme: VersionScheme,
+    package_architecture: &'a str,
+    package_multi_arch: Option<DebianMultiArch>,
+    provide_scheme: VersionScheme,
+    provide_qualifier: &'a ProvideArchitectureQualifier,
+}
+
+fn debian_provide_architecture_matches(
+    dependency_qualifier: &RequirementArchitectureQualifier,
+    depending_architecture: &str,
+    native_architecture: &str,
+    provide: DebianProvideArchitecture<'_>,
+) -> bool {
+    let DebianProvideArchitecture {
+        package_scheme,
+        package_architecture,
+        package_multi_arch,
+        provide_scheme,
+        provide_qualifier,
+    } = provide;
+    if matches!(
+        dependency_qualifier,
+        RequirementArchitectureQualifier::Unqualified
+    ) && package_multi_arch == Some(DebianMultiArch::Foreign)
+    {
+        return true;
+    }
+    if matches!(dependency_qualifier, RequirementArchitectureQualifier::Any)
+        && package_multi_arch == Some(DebianMultiArch::Allowed)
+    {
+        return true;
+    }
+
+    match dependency_qualifier {
+        RequirementArchitectureQualifier::Unqualified => {
+            !matches!(provide_qualifier, ProvideArchitectureQualifier::Any)
+                && provide_architecture_matches_exact_target(
+                    package_scheme,
+                    package_architecture,
+                    provide_scheme,
+                    provide_qualifier,
+                    VersionScheme::Debian,
+                    depending_architecture,
+                    native_architecture,
+                )
+        }
+        RequirementArchitectureQualifier::Any => {
+            matches!(provide_qualifier, ProvideArchitectureQualifier::Any)
+        }
+        RequirementArchitectureQualifier::Native => provide_architecture_matches_native_target(
+            package_scheme,
+            package_architecture,
+            provide_scheme,
+            provide_qualifier,
+            native_architecture,
+        ),
+        RequirementArchitectureQualifier::Exact(architecture) => {
+            provide_architecture_matches_exact_target(
+                package_scheme,
+                package_architecture,
+                provide_scheme,
+                provide_qualifier,
+                VersionScheme::Debian,
+                architecture,
+                native_architecture,
+            )
+        }
+    }
+}
+
+fn provide_architecture_matches_native_target(
+    package_scheme: VersionScheme,
+    package_architecture: &str,
+    provide_scheme: VersionScheme,
+    provide_qualifier: &ProvideArchitectureQualifier,
+    native_architecture: &str,
+) -> bool {
+    match provide_qualifier {
+        ProvideArchitectureQualifier::Implicit => PackageSelector::is_architecture_compatible(
+            package_scheme,
+            Some(package_architecture),
+            native_architecture,
+        ),
+        ProvideArchitectureQualifier::Any => true,
+        ProvideArchitectureQualifier::Exact(architecture) => {
+            PackageSelector::is_architecture_compatible(
+                provide_scheme,
+                Some(architecture),
+                native_architecture,
+            )
+        }
+    }
+}
+
+fn provide_architecture_matches_exact_target(
+    package_scheme: VersionScheme,
+    package_architecture: &str,
+    provide_scheme: VersionScheme,
+    provide_qualifier: &ProvideArchitectureQualifier,
+    target_scheme: VersionScheme,
+    target_architecture: &str,
+    native_architecture: &str,
+) -> bool {
+    match provide_qualifier {
+        ProvideArchitectureQualifier::Implicit => package_architectures_match(
+            package_scheme,
+            package_architecture,
+            target_scheme,
+            target_architecture,
+            native_architecture,
+        ),
+        ProvideArchitectureQualifier::Any => true,
+        ProvideArchitectureQualifier::Exact(architecture) => package_architectures_match(
+            provide_scheme,
+            architecture,
+            target_scheme,
+            target_architecture,
+            native_architecture,
+        ),
+    }
+}
+
+fn valid_multi_arch_authority(package: &PackageIdentity) -> Option<Option<DebianMultiArch>> {
+    match (package.version_scheme, package.debian_multi_arch) {
+        (VersionScheme::Debian, Some(value)) => Some(Some(value)),
+        (VersionScheme::Debian, None) | (_, Some(_)) => None,
+        (_, None) => Some(None),
+    }
+}
 
 /// Check whether a constraint matches a package's version.
 ///
@@ -43,7 +328,7 @@ pub fn constraint_matches_package(
             }
             Ok(false)
         }
-        ConaryConstraint::ProviderExpression { .. } => Ok(false),
+        ConaryConstraint::RpmRuntime(_) | ConaryConstraint::ProviderExpression { .. } => Ok(false),
     }
 }
 
@@ -56,12 +341,44 @@ pub fn constraint_matches_package(
 pub(crate) fn constraint_matches_provide(
     constraint: &ConaryConstraint,
     provide_version: Option<&str>,
+    provide_relation: Option<ProvideVersionRelation>,
     provide_scheme: VersionScheme,
 ) -> VersionResult<bool> {
-    if let Some(pv) = provide_version {
-        return constraint_matches_package(constraint, pv, provide_scheme);
+    match constraint {
+        ConaryConstraint::Repository {
+            scheme, constraint, ..
+        } => {
+            if !matches!(constraint, RepoVersionConstraint::Any) && *scheme != provide_scheme {
+                return Ok(false);
+            }
+            provided_range_matches_requirement(
+                provide_scheme,
+                provide_relation,
+                provide_version,
+                constraint,
+            )
+        }
+        ConaryConstraint::Requested(VersionConstraint::Any) => Ok(true),
+        ConaryConstraint::Requested(requested) => match (provide_relation, provide_version) {
+            (Some(ProvideVersionRelation::Equal), Some(version)) => {
+                requested_constraint_matches(requested, version, provide_scheme)
+            }
+            (None, None) => Ok(false),
+            (Some(relation), Some(version)) => Err(VersionComparisonError::InvalidConstraint {
+                scheme: provide_scheme.as_str(),
+                constraint: format!("{} {version}", relation.as_str()),
+                reason:
+                    "non-exact native provider ranges require a source-native repository constraint"
+                        .to_string(),
+            }),
+            _ => Err(VersionComparisonError::InvalidConstraint {
+                scheme: provide_scheme.as_str(),
+                constraint: "incomplete provider range".to_string(),
+                reason: "a versioned provide must carry both relation and boundary".to_string(),
+            }),
+        },
+        ConaryConstraint::RpmRuntime(_) | ConaryConstraint::ProviderExpression { .. } => Ok(false),
     }
-    Ok(constraint_is_unversioned(constraint))
 }
 
 pub(crate) fn provider_expression_matches_package(
@@ -71,10 +388,17 @@ pub(crate) fn provider_expression_matches_package(
     match expression {
         CapabilityExpression::Atom {
             name,
+            capability_kind,
             scheme,
             constraint,
         } => {
-            if package.name == *name {
+            if matches!(
+                capability_kind,
+                None | Some(
+                    crate::repository::dependency_model::RepositoryCapabilityKind::PackageName
+                )
+            ) && package.name == *name
+            {
                 if matches!(constraint, RepoVersionConstraint::Any) {
                     return Ok(true);
                 }
@@ -83,17 +407,20 @@ pub(crate) fn provider_expression_matches_package(
                 }
                 return repo_version_satisfies(*scheme, &package.version, constraint);
             }
-            for capability in package
-                .provided_capabilities
-                .iter()
-                .filter(|capability| capability.name == *name)
-            {
+            for capability in package.provided_capabilities.iter().filter(|capability| {
+                capability.name == *name
+                    && capability_kind.is_none_or(|kind| capability.kind == kind)
+            }) {
                 if matches!(constraint, RepoVersionConstraint::Any) {
                     return Ok(true);
                 }
-                if let Some(version) = capability.version.as_deref()
-                    && *scheme == capability.version_scheme
-                    && repo_version_satisfies(*scheme, version, constraint)?
+                if *scheme == capability.version_scheme
+                    && provided_range_matches_requirement(
+                        *scheme,
+                        capability.version_relation,
+                        capability.version.as_deref(),
+                        constraint,
+                    )?
                 {
                     return Ok(true);
                 }
@@ -119,19 +446,6 @@ pub(crate) fn provider_expression_matches_package(
         CapabilityExpression::Not(operand) => {
             Ok(!provider_expression_matches_package(operand, package)?)
         }
-    }
-}
-
-fn constraint_is_unversioned(constraint: &ConaryConstraint) -> bool {
-    match constraint {
-        ConaryConstraint::Requested(VersionConstraint::Any)
-        | ConaryConstraint::Repository {
-            constraint: RepoVersionConstraint::Any,
-            ..
-        } => true,
-        ConaryConstraint::Requested(_)
-        | ConaryConstraint::Repository { .. }
-        | ConaryConstraint::ProviderExpression { .. } => false,
     }
 }
 
@@ -166,15 +480,145 @@ fn requested_constraint_matches(
     repo_version_satisfies(scheme, version, &native)
 }
 
-/// Compare two package versions in descending order (highest first).
-///
-/// Scheme disagreement is a typed error rather than a fallback ordering.
-pub(super) fn compare_package_versions_desc(
-    a_version: &str,
-    a_scheme: VersionScheme,
-    b_version: &str,
-    b_scheme: VersionScheme,
-) -> VersionResult<std::cmp::Ordering> {
-    // compare_repo_versions returns descending when args are (scheme, b, a)
-    compare_mixed_repo_versions(b_scheme, b_version, a_scheme, a_version)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::versioning::RepoVersionConstraint;
+
+    fn package(architecture: &str, multi_arch: DebianMultiArch) -> PackageIdentity {
+        PackageIdentity {
+            repo_package_id: Some(1),
+            name: "libfoo".to_string(),
+            version: "1".to_string(),
+            package_release: None,
+            architecture: Some(architecture.to_string()),
+            debian_multi_arch: Some(multi_arch),
+            version_scheme: VersionScheme::Debian,
+            repository_id: Some(1),
+            repository_name: "debian".to_string(),
+            repository_profile: Some("ubuntu-26.04".to_string()),
+            repository_priority: 0,
+            canonical_id: None,
+            canonical_name: None,
+            installed_trove_id: None,
+            installed_pinned: false,
+            provided_capabilities: Vec::new(),
+        }
+    }
+
+    fn constraint(qualifier: RequirementArchitectureQualifier) -> ConaryConstraint {
+        ConaryConstraint::Repository {
+            scheme: VersionScheme::Debian,
+            constraint: RepoVersionConstraint::Any,
+            capability_kind: None,
+            raw: None,
+            architecture_qualifier: qualifier,
+            depending_architecture: "amd64".to_string(),
+        }
+    }
+
+    #[test]
+    fn debian_multi_arch_qualifiers_follow_dpkg_contract() {
+        let native = "x86_64";
+        let same = package("amd64", DebianMultiArch::No);
+        let foreign = package("arm64", DebianMultiArch::Foreign);
+        let allowed = package("arm64", DebianMultiArch::Allowed);
+
+        assert!(constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Unqualified),
+            &same,
+            native,
+        ));
+        assert!(constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Unqualified),
+            &foreign,
+            native,
+        ));
+        assert!(!constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Unqualified),
+            &allowed,
+            native,
+        ));
+        assert!(constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Any),
+            &allowed,
+            native,
+        ));
+        assert!(!constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Any),
+            &foreign,
+            native,
+        ));
+        assert!(constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Native),
+            &same,
+            native,
+        ));
+        assert!(constraint_architecture_matches_package(
+            &constraint(RequirementArchitectureQualifier::Exact("arm64".to_string())),
+            &allowed,
+            native,
+        ));
+    }
+
+    #[test]
+    fn debian_provide_qualifiers_follow_dpkg_contract() {
+        let native = "x86_64";
+        let arm64 = package("arm64", DebianMultiArch::No);
+        let foreign = package("arm64", DebianMultiArch::Foreign);
+
+        assert!(constraint_architecture_matches_provide(
+            &constraint(RequirementArchitectureQualifier::Any),
+            &arm64,
+            &ProvideArchitectureQualifier::Any,
+            VersionScheme::Debian,
+            native,
+        ));
+        assert!(!constraint_architecture_matches_provide(
+            &constraint(RequirementArchitectureQualifier::Unqualified),
+            &arm64,
+            &ProvideArchitectureQualifier::Any,
+            VersionScheme::Debian,
+            native,
+        ));
+        assert!(constraint_architecture_matches_provide(
+            &constraint(RequirementArchitectureQualifier::Unqualified),
+            &arm64,
+            &ProvideArchitectureQualifier::Exact("amd64".to_string()),
+            VersionScheme::Debian,
+            native,
+        ));
+        assert!(constraint_architecture_matches_provide(
+            &constraint(RequirementArchitectureQualifier::Unqualified),
+            &foreign,
+            &ProvideArchitectureQualifier::Implicit,
+            VersionScheme::Debian,
+            native,
+        ));
+    }
+
+    #[test]
+    fn unversioned_debian_provide_never_satisfies_versioned_dependency() {
+        let constraint = ConaryConstraint::Repository {
+            scheme: VersionScheme::Debian,
+            constraint: RepoVersionConstraint::GreaterOrEqual("2".to_string()),
+            capability_kind: None,
+            raw: Some(">= 2".to_string()),
+            architecture_qualifier: RequirementArchitectureQualifier::Unqualified,
+            depending_architecture: "amd64".to_string(),
+        };
+
+        assert!(
+            !constraint_matches_provide(&constraint, None, None, VersionScheme::Debian).unwrap()
+        );
+        assert!(
+            constraint_matches_provide(
+                &constraint,
+                Some("2"),
+                Some(ProvideVersionRelation::Equal),
+                VersionScheme::Debian,
+            )
+            .unwrap()
+        );
+    }
 }

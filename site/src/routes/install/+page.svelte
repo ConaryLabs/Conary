@@ -226,7 +226,7 @@
 
 				<div class="button-row report-actions">
 					<a href={previewRelease.feedbackUrl} class="btn btn-primary">
-						Open beta feedback <span aria-hidden="true">↗</span>
+						Open pre-alpha feedback <span aria-hidden="true">↗</span>
 					</a>
 					<a href={previewRelease.testerGuideUrl} class="btn btn-secondary">
 						Read the pinned guide <span aria-hidden="true">↗</span>

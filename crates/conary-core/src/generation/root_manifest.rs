@@ -12,10 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 pub use composefs::build_erofs_image_from_root_manifest;
-pub(crate) use materialize::overlay_payload_entries;
 pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
-    materialize_generation_root, materialize_state_root,
+    materialize_generation_root, materialize_state_root, overlay_payload_entries,
 };
 pub use scan::{
     capture_existing_payload_node, capture_root_node, scan_payload_tree, scan_selected_root,
@@ -69,7 +68,8 @@ pub struct MutableStateManifest {
 }
 
 /// Selected-root capture split by its exact publication owners.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapturedSelectedRoot {
     pub generation: GenerationRootManifest,
     pub state: MutableStateManifest,
@@ -174,6 +174,12 @@ impl MutableStateManifest {
             )
         })?;
         validate_hardlinks(&self.entries)
+    }
+
+    pub fn regular_contents(&self) -> impl Iterator<Item = &PayloadContentAuthority> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.content.as_ref())
     }
 
     pub fn write_to(&self, generation_dir: &Path) -> crate::Result<()> {

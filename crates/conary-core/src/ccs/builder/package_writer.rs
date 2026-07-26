@@ -20,6 +20,65 @@ pub fn write_v2_ccs_package(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<()> {
+    write_v2_ccs_package_with_open(
+        authority,
+        output_path,
+        signing_key,
+        debug_toml,
+        build_attestation,
+        foreign_conversion_boundary,
+        |path| {
+            let payload = payloads_by_path
+                .get(path)
+                .with_context(|| format!("missing payload for {path}"))?;
+            Ok(Box::new(std::io::Cursor::new(payload.as_slice())) as Box<dyn std::io::Read>)
+        },
+    )
+}
+
+/// Emit a signed CCS archive from independently reopenable payload sources.
+pub fn write_v2_ccs_package_from_sources(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    payloads: &[crate::packages::payload::PackagePayloadFile],
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    debug_toml: Option<&str>,
+    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+) -> Result<()> {
+    let mut by_path = std::collections::HashMap::with_capacity(payloads.len());
+    for file in payloads {
+        if by_path.insert(file.path.as_str(), file).is_some() {
+            anyhow::bail!("payload source path {} appears more than once", file.path);
+        }
+    }
+    write_v2_ccs_package_with_open(
+        authority,
+        output_path,
+        signing_key,
+        debug_toml,
+        build_attestation,
+        foreign_conversion_boundary,
+        |path| {
+            by_path
+                .get(path)
+                .with_context(|| format!("missing payload source for {path}"))?
+                .open_content()
+                .map(|reader| reader as Box<dyn std::io::Read>)
+                .map_err(anyhow::Error::from)
+        },
+    )
+}
+
+fn write_v2_ccs_package_with_open<'a>(
+    authority: &crate::ccs::v2::AuthorityDocumentV2,
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    debug_toml: Option<&str>,
+    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+    mut open_payload: impl FnMut(&str) -> Result<Box<dyn std::io::Read + 'a>>,
+) -> Result<()> {
     use crate::ccs::builder::{ComponentData, FileEntry};
     use crate::ccs::v2::schema::PackageKindV2;
     use flate2::Compression;
@@ -73,6 +132,7 @@ pub fn write_v2_ccs_package(
         .collect();
 
     let objects_dir = temp_dir.path().join("objects");
+    let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
     for file in &data.files {
         let entry = FileEntry {
             path: file.path.clone(),
@@ -88,24 +148,15 @@ pub fn write_v2_ccs_package(
                     file.path
                 )
             })?;
-            let payload = payloads_by_path
-                .get(&file.path)
-                .with_context(|| format!("missing payload for {}", file.path))?;
-            if crate::hash::sha256(payload) != content.sha256
-                || payload.len() as u64 != content.size
-            {
-                anyhow::bail!(
-                    "payload for {} does not match signed v2 authority",
-                    file.path
-                );
-            }
-            if content.sha256.len() < 2 {
-                anyhow::bail!("invalid signed v2 sha256 for {}", file.path);
-            }
-            let (prefix, suffix) = content.sha256.split_at(2);
-            let object_dir = objects_dir.join(prefix);
-            fs::create_dir_all(&object_dir)?;
-            fs::write(object_dir.join(suffix), payload)?;
+            let mut reader = open_payload(&file.path)?;
+            object_store
+                .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
+                .with_context(|| {
+                    format!(
+                        "payload for {} does not match signed v2 authority",
+                        file.path
+                    )
+                })?;
         }
         let component = components
             .get_mut(&file.component)
@@ -217,6 +268,56 @@ fn append_dir_with_mtime<W: std::io::Write>(
     archive_path: &str,
     mtime: u64,
 ) -> Result<()> {
+    let mut entries = Vec::new();
+    collect_archive_entries(base_path, archive_path, &mut entries)?;
+    for directories in [true, false] {
+        for (path, entry_archive_path, file_type) in &entries {
+            if file_type.is_dir() != directories {
+                continue;
+            }
+            if file_type.is_dir() {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_mode(0o755);
+                header.set_size(0);
+                header.set_mtime(mtime);
+                header.set_cksum();
+
+                archive.append_data(&mut header, entry_archive_path, std::io::empty())?;
+            } else if file_type.is_file() {
+                let metadata = fs::metadata(path)?;
+                let mut content = fs::File::open(path)?;
+
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_mode(metadata.permissions().mode());
+                header.set_size(metadata.len());
+                header.set_mtime(mtime);
+                header.set_cksum();
+
+                archive.append_data(&mut header, entry_archive_path, &mut content)?;
+            } else if file_type.is_symlink() {
+                let target = fs::read_link(path)?;
+
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_mode(0o777);
+                header.set_size(0);
+                header.set_mtime(mtime);
+                header.set_cksum();
+
+                archive.append_link(&mut header, entry_archive_path, &target)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_archive_entries(
+    base_path: &Path,
+    archive_path: &str,
+    collected: &mut Vec<(std::path::PathBuf, String, std::fs::FileType)>,
+) -> Result<()> {
     let mut entries = fs::read_dir(base_path)?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
@@ -229,40 +330,10 @@ fn append_dir_with_mtime<W: std::io::Write>(
         } else {
             format!("{}/{}", archive_path, file_name_str)
         };
-
+        let path = entry.path();
+        collected.push((path.clone(), entry_archive_path.clone(), file_type));
         if file_type.is_dir() {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Directory);
-            header.set_mode(0o755);
-            header.set_size(0);
-            header.set_mtime(mtime);
-            header.set_cksum();
-
-            archive.append_data(&mut header, &entry_archive_path, std::io::empty())?;
-            append_dir_with_mtime(archive, &entry.path(), &entry_archive_path, mtime)?;
-        } else if file_type.is_file() {
-            let content = fs::read(entry.path())?;
-            let metadata = entry.metadata()?;
-
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Regular);
-            header.set_mode(metadata.permissions().mode());
-            header.set_size(content.len() as u64);
-            header.set_mtime(mtime);
-            header.set_cksum();
-
-            archive.append_data(&mut header, &entry_archive_path, content.as_slice())?;
-        } else if file_type.is_symlink() {
-            let target = fs::read_link(entry.path())?;
-
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_mode(0o777);
-            header.set_size(0);
-            header.set_mtime(mtime);
-            header.set_cksum();
-
-            archive.append_link(&mut header, &entry_archive_path, &target)?;
+            collect_archive_entries(&path, &entry_archive_path, collected)?;
         }
     }
 

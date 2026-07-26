@@ -2,16 +2,99 @@
 
 use super::super::context::compute_model_diff;
 use super::super::test_support::{
-    ReplatformMetadataFailpointReset, build_test_ccs_package, build_test_ccs_package_with_bundle,
-    serve_test_file, typed_rpm_replatform_upgrade_bundle,
+    ReplatformMetadataFailpointReset, build_test_ccs_package,
+    insert_test_repository_package_resolution, insert_test_static_ccs_repository, serve_test_file,
+    typed_rpm_replatform_upgrade_bundle,
 };
 use super::*;
 use crate::commands::test_helpers::create_test_db;
 use conary_core::db::models::{DistroPin, InstalledNativeLifecycleBundle, settings};
 use conary_core::model::capture_current_state;
 use conary_core::model::parser::SystemModel;
-use conary_core::repository::{SETTINGS_KEY_ALLOWED_DISTROS, SETTINGS_KEY_SELECTION_MODE};
+use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
+use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use tempfile::tempdir;
+
+fn replatform_variant(architecture: Option<&str>, marker: &str) -> Trove {
+    let mut trove = Trove::new(
+        "vim".to_string(),
+        "9.1.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    );
+    trove.architecture = architecture.map(str::to_string);
+    trove.description = Some(marker.to_string());
+    trove.source_profile = Some("fedora-44".to_string());
+    trove
+}
+
+#[test]
+fn replatform_variant_prefers_exact_architecture_over_independent_fallback() {
+    let matches = vec![
+        replatform_variant(None, "noarch"),
+        replatform_variant(Some("x86_64"), "exact"),
+    ];
+
+    let selected = select_replatform_variant(&matches, Some("x86_64"), "vim")
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.description.as_deref(), Some("exact"));
+}
+
+#[test]
+fn replatform_variant_uses_one_architecture_independent_fallback() {
+    let matches = vec![
+        replatform_variant(Some("aarch64"), "incompatible"),
+        replatform_variant(None, "noarch"),
+    ];
+
+    let selected = select_replatform_variant(&matches, Some("x86_64"), "vim")
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.description.as_deref(), Some("noarch"));
+}
+
+#[test]
+fn replatform_variant_fails_closed_on_ambiguous_compatible_fallback() {
+    let matches = vec![
+        replatform_variant(None, "noarch-a"),
+        replatform_variant(None, "noarch-b"),
+    ];
+
+    let error = select_replatform_variant(&matches, Some("x86_64"), "vim")
+        .expect_err("multiple compatible fallbacks must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("multiple architecture-independent matches")
+    );
+}
+
+#[test]
+fn replatform_absent_architecture_selects_only_unambiguous_variant() {
+    let matches = vec![replatform_variant(Some("x86_64"), "concrete")];
+
+    let selected = select_replatform_variant(&matches, None, "vim")
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.description.as_deref(), Some("concrete"));
+}
+
+#[test]
+fn replatform_absent_architecture_fails_closed_on_multiple_variants() {
+    let matches = vec![
+        replatform_variant(Some("x86_64"), "x86_64"),
+        replatform_variant(Some("aarch64"), "aarch64"),
+    ];
+
+    let error = select_replatform_variant(&matches, None, "vim")
+        .expect_err("missing selector must not choose an arbitrary architecture");
+    assert!(
+        error
+            .to_string()
+            .contains("multiple installed variants but no architecture selector")
+    );
+}
 
 #[tokio::test]
 async fn test_model_apply_updates_source_policy_without_package_changes() {
@@ -47,45 +130,7 @@ strength = "strict"
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     let pin = DistroPin::get_current(&conn).unwrap().unwrap();
     assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.mixing_policy, "strict");
-}
-
-#[tokio::test]
-async fn test_model_apply_updates_selection_mode_without_package_changes() {
-    let (_temp_file, db_path) = create_test_db();
-    let model_dir = tempdir().unwrap();
-    let model_path = model_dir.path().join("system.toml");
-    std::fs::write(
-        &model_path,
-        r#"
-[model]
-version = 1
-
-[system]
-selection_mode = "latest"
-"#,
-    )
-    .unwrap();
-
-    cmd_model_apply(ApplyOptions {
-        model_path: model_path.to_str().unwrap(),
-        db_path: &db_path,
-        root: "/",
-        dry_run: false,
-        skip_optional: false,
-        strict: false,
-        autoremove: false,
-        offline: true,
-    })
-    .await
-    .unwrap();
-
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    assert_eq!(
-        settings::get(&conn, SETTINGS_KEY_SELECTION_MODE).unwrap(),
-        Some("latest".to_string())
-    );
-    assert!(DistroPin::get_current(&conn).unwrap().is_none());
+    assert_eq!(pin.mixing_policy, DependencyMixingPolicy::Strict);
 }
 
 #[tokio::test]
@@ -128,9 +173,13 @@ allowed_distros = ["arch"]
 
 #[tokio::test]
 async fn test_model_apply_executes_replatform_replacement_when_route_is_executable() {
+    const TEST_NAME: &str = "commands::model::apply::tests::test_model_apply_executes_replatform_replacement_when_route_is_executable";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     use conary_core::db::models::{
-        DistroPin, InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
-        RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+        DistroPin, InstallSource, LabelEntry, Repository, RepositoryPackage, Trove, TroveType,
     };
 
     let (_temp_file, db_path) = create_test_db();
@@ -138,26 +187,28 @@ async fn test_model_apply_executes_replatform_replacement_when_route_is_executab
     let install_root = temp_dir.path().join("root");
     std::fs::create_dir_all(&install_root).unwrap();
 
-    let package_path = build_test_ccs_package(temp_dir.path(), "vim", "9.1.0");
+    let package_path = build_test_ccs_package(
+        temp_dir.path(),
+        "vim",
+        "9.1.0",
+        conary_core::repository::versioning::VersionScheme::Arch,
+        None,
+    );
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", "strict").unwrap();
+    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Strict).unwrap();
 
     let mut fedora_repo = Repository::new(
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
-    let mut arch_repo = Repository::new(
-        "arch-core".to_string(),
-        "https://example.test/arch".to_string(),
-    );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
-    let arch_repo_id = arch_repo.insert(&conn).unwrap();
+    let arch_repo_id =
+        insert_test_static_ccs_repository(&conn, "arch-core", "https://example.test/arch", "arch");
 
     let mut fedora_label = LabelEntry::new(
         "fedora".to_string(),
@@ -176,7 +227,7 @@ async fn test_model_apply_executes_replatform_replacement_when_route_is_executab
     );
     installed.label_id = Some(fedora_label_id);
     installed.architecture = Some("x86_64".to_string());
-    installed.source_distro = Some("fedora-44".to_string());
+    installed.source_profile = Some("fedora-44".to_string());
     installed.installed_from_repository_id = Some(fedora_repo_id);
     installed.insert(&conn).unwrap();
 
@@ -194,21 +245,9 @@ async fn test_model_apply_executes_replatform_replacement_when_route_is_executab
         package_url.clone(),
     );
     arch_pkg.architecture = Some("x86_64".to_string());
-    arch_pkg.distro = Some("arch".to_string());
-    arch_pkg.insert(&conn).unwrap();
-
-    let mut exact_resolution = PackageResolution::new(
-        arch_repo_id,
-        "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
-        }],
-    );
-    exact_resolution.version = Some("9.1.0".to_string());
-    exact_resolution.primary_strategy = PrimaryStrategy::Binary;
-    exact_resolution.insert(&conn).unwrap();
+    arch_pkg.source_profile = Some("arch".to_string());
+    let arch_package_id = arch_pkg.insert(&conn).unwrap();
+    insert_test_repository_package_resolution(&conn, arch_repo_id, arch_package_id, "vim", "9.1.0");
     drop(conn);
 
     let model_path = temp_dir.path().join("system.toml");
@@ -246,7 +285,7 @@ strength = "strict"
     assert_eq!(installed_troves.len(), 1);
     let installed = &installed_troves[0];
     assert_eq!(installed.version, "9.1.0");
-    assert_eq!(installed.source_distro.as_deref(), Some("arch"));
+    assert_eq!(installed.source_profile.as_deref(), Some("arch"));
     assert_eq!(
         installed.version_scheme,
         conary_core::repository::versioning::VersionScheme::Arch
@@ -264,9 +303,14 @@ strength = "strict"
 
 #[tokio::test]
 async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
+    const TEST_NAME: &str =
+        "commands::model::apply::tests::test_model_apply_replatform_executes_typed_rpm_lifecycle";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     use conary_core::db::models::{
-        InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
-        RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+        InstallSource, LabelEntry, Repository, RepositoryPackage, Trove, TroveType,
     };
 
     let (_temp_file, db_path) = create_test_db();
@@ -274,58 +318,57 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
     let install_root = temp_dir.path().join("root");
     std::fs::create_dir_all(&install_root).unwrap();
 
-    let package_path = build_test_ccs_package_with_bundle(
+    let package_path = build_test_ccs_package(
         temp_dir.path(),
         "vim",
         "9.1.0",
+        conary_core::repository::versioning::VersionScheme::Rpm,
         Some(typed_rpm_replatform_upgrade_bundle("vim", "9.1.0")),
     );
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", "strict").unwrap();
+    DistroPin::set(&conn, "arch", DependencyMixingPolicy::Strict).unwrap();
 
-    let mut fedora_repo = Repository::new(
-        "fedora".to_string(),
-        "https://example.test/fedora".to_string(),
-    );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
-    let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
-
-    let mut arch_repo = Repository::new(
-        "arch-core".to_string(),
-        "https://example.test/arch".to_string(),
-    );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
+    let mut arch_repo =
+        Repository::new("arch".to_string(), "https://example.test/arch".to_string());
+    arch_repo.source_profile = Some("arch".to_string());
     let arch_repo_id = arch_repo.insert(&conn).unwrap();
 
-    let mut fedora_label = LabelEntry::new(
-        "fedora".to_string(),
-        "f43".to_string(),
+    let fedora_repo_id = insert_test_static_ccs_repository(
+        &conn,
+        "fedora",
+        "https://example.test/fedora",
+        "fedora-44",
+    );
+
+    let mut arch_label = LabelEntry::new(
+        "arch".to_string(),
+        "rolling".to_string(),
         "stable".to_string(),
     );
-    fedora_label.repository_id = Some(fedora_repo_id);
-    let fedora_label_id = fedora_label.insert(&conn).unwrap();
+    arch_label.repository_id = Some(arch_repo_id);
+    let arch_label_id = arch_label.insert(&conn).unwrap();
 
     let mut installed = Trove::new_with_source(
         "vim".to_string(),
         "9.0.1".to_string(),
         TroveType::Package,
         InstallSource::Repository,
-        conary_core::repository::versioning::VersionScheme::Rpm,
+        conary_core::repository::versioning::VersionScheme::Arch,
     );
-    installed.label_id = Some(fedora_label_id);
+    installed.label_id = Some(arch_label_id);
     installed.architecture = Some("x86_64".to_string());
-    installed.source_distro = Some("fedora-44".to_string());
-    installed.installed_from_repository_id = Some(fedora_repo_id);
+    installed.source_profile = Some("arch".to_string());
+    installed.installed_from_repository_id = Some(arch_repo_id);
     installed.insert(&conn).unwrap();
 
-    let mut arch_pkg = RepositoryPackage::new(
-        arch_repo_id,
+    let mut fedora_pkg = RepositoryPackage::new(
+        fedora_repo_id,
         "vim".to_string(),
         "9.1.0".to_string(),
-        conary_core::repository::versioning::VersionScheme::Arch,
+        conary_core::repository::versioning::VersionScheme::Rpm,
         package_checksum.clone(),
         std::fs::metadata(&package_path)
             .unwrap()
@@ -334,22 +377,16 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
             .unwrap(),
         package_url.clone(),
     );
-    arch_pkg.architecture = Some("x86_64".to_string());
-    arch_pkg.distro = Some("arch".to_string());
-    arch_pkg.insert(&conn).unwrap();
-
-    let mut exact_resolution = PackageResolution::new(
-        arch_repo_id,
-        "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
-        }],
+    fedora_pkg.architecture = Some("x86_64".to_string());
+    fedora_pkg.source_profile = Some("fedora-44".to_string());
+    let fedora_package_id = fedora_pkg.insert(&conn).unwrap();
+    insert_test_repository_package_resolution(
+        &conn,
+        fedora_repo_id,
+        fedora_package_id,
+        "vim",
+        "9.1.0",
     );
-    exact_resolution.version = Some("9.1.0".to_string());
-    exact_resolution.primary_strategy = PrimaryStrategy::Binary;
-    exact_resolution.insert(&conn).unwrap();
 
     let model: SystemModel = toml::from_str(
         r#"
@@ -357,7 +394,7 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
 version = 1
 
 [system.pin]
-distro = "arch"
+distro = "fedora-44"
 strength = "strict"
 "#,
     )
@@ -377,7 +414,10 @@ strength = "strict"
             .await
             .unwrap();
 
-    assert_eq!(executed, 1);
+    assert_eq!(
+        executed, 1,
+        "typed RPM replatform should execute: {errors:?}"
+    );
     assert!(
         errors.is_empty(),
         "unexpected replatform errors: {errors:?}"
@@ -388,12 +428,12 @@ strength = "strict"
     assert_eq!(installed_troves.len(), 1);
     let installed = &installed_troves[0];
     assert_eq!(installed.version, "9.1.0");
-    assert_eq!(installed.source_distro.as_deref(), Some("arch"));
+    assert_eq!(installed.source_profile.as_deref(), Some("fedora-44"));
     assert_eq!(
         installed.version_scheme,
         conary_core::repository::versioning::VersionScheme::Rpm
     );
-    assert_eq!(installed.installed_from_repository_id, Some(arch_repo_id));
+    assert_eq!(installed.installed_from_repository_id, Some(fedora_repo_id));
     assert_eq!(
         InstalledNativeLifecycleBundle::find_by_trove(
             &conn,
@@ -408,9 +448,13 @@ strength = "strict"
 
 #[tokio::test]
 async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatform() {
+    const TEST_NAME: &str = "commands::model::apply::tests::test_model_apply_rolls_back_or_reports_partial_failure_during_replatform";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     use conary_core::db::models::{
-        InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, Repository,
-        RepositoryPackage, ResolutionStrategy, Trove, TroveType,
+        InstallSource, LabelEntry, Repository, RepositoryPackage, Trove, TroveType,
     };
 
     let (_temp_file, db_path) = create_test_db();
@@ -418,7 +462,13 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
     let install_root = temp_dir.path().join("root");
     std::fs::create_dir_all(&install_root).unwrap();
 
-    let package_path = build_test_ccs_package(temp_dir.path(), "vim", "9.1.0");
+    let package_path = build_test_ccs_package(
+        temp_dir.path(),
+        "vim",
+        "9.1.0",
+        conary_core::repository::versioning::VersionScheme::Arch,
+        None,
+    );
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
@@ -428,15 +478,11 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
     );
-    fedora_repo.default_strategy_distro = Some("fedora-44".to_string());
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     let fedora_repo_id = fedora_repo.insert(&conn).unwrap();
 
-    let mut arch_repo = Repository::new(
-        "arch-core".to_string(),
-        "https://example.test/arch".to_string(),
-    );
-    arch_repo.default_strategy_distro = Some("arch".to_string());
-    let arch_repo_id = arch_repo.insert(&conn).unwrap();
+    let arch_repo_id =
+        insert_test_static_ccs_repository(&conn, "arch-core", "https://example.test/arch", "arch");
 
     let mut fedora_label = LabelEntry::new(
         "fedora".to_string(),
@@ -455,7 +501,7 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
     );
     installed.label_id = Some(fedora_label_id);
     installed.architecture = Some("x86_64".to_string());
-    installed.source_distro = Some("fedora-44".to_string());
+    installed.source_profile = Some("fedora-44".to_string());
     installed.installed_from_repository_id = Some(fedora_repo_id);
     installed.insert(&conn).unwrap();
 
@@ -473,21 +519,9 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
         package_url.clone(),
     );
     arch_pkg.architecture = Some("x86_64".to_string());
-    arch_pkg.distro = Some("arch".to_string());
-    arch_pkg.insert(&conn).unwrap();
-
-    let mut exact_resolution = PackageResolution::new(
-        arch_repo_id,
-        "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
-        }],
-    );
-    exact_resolution.version = Some("9.1.0".to_string());
-    exact_resolution.primary_strategy = PrimaryStrategy::Binary;
-    exact_resolution.insert(&conn).unwrap();
+    arch_pkg.source_profile = Some("arch".to_string());
+    let arch_package_id = arch_pkg.insert(&conn).unwrap();
+    insert_test_repository_package_resolution(&conn, arch_repo_id, arch_package_id, "vim", "9.1.0");
 
     let model: SystemModel = toml::from_str(
         r#"
@@ -535,7 +569,7 @@ strength = "strict"
     assert_eq!(installed_troves.len(), 1);
     let installed = &installed_troves[0];
     assert_eq!(installed.version, "9.1.0");
-    assert_eq!(installed.source_distro.as_deref(), Some("arch"));
+    assert_eq!(installed.source_profile.as_deref(), Some("arch"));
     assert_eq!(
         installed.version_scheme,
         conary_core::repository::versioning::VersionScheme::Arch

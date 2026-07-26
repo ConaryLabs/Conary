@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::dependency_model::RepositoryRequirementGroup;
+use super::dependency_model::{DebianMultiArch, RepositoryRequirementGroup};
 use super::versioning::VersionScheme;
 
 /// Repository metadata format (simple JSON index)
@@ -46,6 +46,9 @@ pub struct PackageMetadata {
     /// Exact native version ordering contract for this package.
     pub version_scheme: VersionScheme,
     pub architecture: Option<String>,
+    /// Exact Debian `Multi-Arch` behavior; absent for non-Debian packages.
+    #[serde(default)]
+    pub debian_multi_arch: Option<DebianMultiArch>,
     pub description: Option<String>,
     pub checksum: String,
     pub size: i64,

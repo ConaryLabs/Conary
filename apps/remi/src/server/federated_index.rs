@@ -294,11 +294,14 @@ fn build_local_sparse_entry(
     distro: &str,
     name: &str,
 ) -> Result<Option<SparseIndexEntry>> {
-    use crate::server::handlers::find_repositories_for_distro;
+    use crate::server::handlers::find_repositories_for_profile;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
     // Use plural lookup so multi-repo distros (e.g. arch-core + arch-extra)
     // are all queried, matching the non-federated sparse path. (fix 10.7)
-    let repositories = find_repositories_for_distro(conn, distro)?;
+    let repositories = find_repositories_for_profile(conn, source_profile.id())?;
     let repo_ids = repositories
         .iter()
         .map(crate::server::handlers::require_persisted_repository_id)
@@ -340,13 +343,15 @@ fn build_local_sparse_entry(
     }
 
     let mut converted_map = HashMap::new();
-    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(name))? {
+    for converted in
+        ConvertedPackage::find_current_conversions(conn, source_profile.id(), Some(name))?
+    {
         converted.scriptlet_summary()?;
         let artifact = converted.repository_artifact()?;
         converted_map.insert(
             (
                 artifact.package_version.to_string(),
-                artifact.package_architecture.map(str::to_string),
+                Some(artifact.package_architecture.to_string()),
             ),
             artifact.content_hash.to_string(),
         );
@@ -426,7 +431,7 @@ mod tests {
         let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
         let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
-        repo.default_strategy_distro = Some(profile.id().to_string());
+        repo.source_profile = Some(profile.id().to_string());
         repo.insert(conn).unwrap()
     }
 
@@ -436,7 +441,7 @@ mod tests {
             .expect("test repository");
         let profile = conary_core::repository::supported_profiles::profile_by_public_id(
             repository
-                .default_strategy_distro
+                .source_profile
                 .as_deref()
                 .expect("test repository profile"),
         )
@@ -460,10 +465,15 @@ mod tests {
         package: &str,
         version: &str,
     ) {
+        let source_profile =
+            conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+                .unwrap_or_else(|| panic!("test route '{distro}' must be supported"))
+                .id();
         let mut converted = ConvertedPackage::new_repository(
-            distro.to_string(),
+            source_profile.to_string(),
             package.to_string(),
             version.to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{package}-{version}-source"),
             &[format!("sha256:{package}-{version}-chunk")],
@@ -471,7 +481,6 @@ mod tests {
             format!("sha256:{package}-{version}-content"),
             format!("/tmp/{package}-{version}.ccs"),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }

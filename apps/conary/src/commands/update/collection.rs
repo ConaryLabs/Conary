@@ -65,7 +65,6 @@ pub async fn cmd_update_group(
     let effective_source_policy =
         conary_core::repository::load_effective_policy(&conn, RequestScope::Any)?;
     let policy = effective_source_policy.resolution;
-    let primary_flavor = effective_source_policy.primary_flavor;
 
     let troves = Trove::find_by_name(&conn, name)?;
     let collection = troves
@@ -142,13 +141,7 @@ pub async fn cmd_update_group(
                     adopted_decision,
                     Some(AdoptedUpdateDecision::SkipNativeAuthority)
                 );
-            match select_update_candidate(
-                &conn,
-                trove,
-                enforce_security_metadata,
-                &policy,
-                primary_flavor,
-            )? {
+            match select_update_candidate(&conn, trove, enforce_security_metadata, &policy)? {
                 UpdateCandidateSelection::Selected(_) => {
                     updates_to_apply.push(CollectionUpdateTarget::from_trove(trove));
                 }
@@ -265,7 +258,7 @@ mod tests {
             "variant-repo".to_string(),
             "https://example.test/variant".to_string(),
         );
-        repo.default_strategy_distro = Some("fedora-44".to_string());
+        repo.source_profile = Some("fedora-44".to_string());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut collection = Trove::new(
@@ -288,7 +281,7 @@ mod tests {
                 conary_core::repository::versioning::VersionScheme::Rpm,
             );
             installed.architecture = Some(arch.to_string());
-            installed.source_distro = Some("fedora-44".to_string());
+            installed.source_profile = Some("fedora-44".to_string());
             installed.installed_from_repository_id = Some(repo_id);
             installed.insert(&conn).unwrap();
 
@@ -302,7 +295,7 @@ mod tests {
                 format!("https://example.test/variant/demo-1.0.1-{arch}.ccs"),
             );
             candidate.architecture = Some(arch.to_string());
-            candidate.distro = Some("fedora-44".to_string());
+            candidate.source_profile = Some("fedora-44".to_string());
             candidate.insert(&conn).unwrap();
         }
         drop(conn);

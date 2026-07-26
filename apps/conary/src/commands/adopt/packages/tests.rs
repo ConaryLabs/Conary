@@ -151,7 +151,7 @@ fn seed_adopted_native_file(db_path: &str, package: &str, path: &Path) {
         "1.2.3-4".to_string(),
         TroveType::Package,
         InstallSource::AdoptedTrack,
-        conary_core::repository::versioning::VersionScheme::Conary,
+        conary_core::repository::versioning::VersionScheme::Rpm,
     );
     trove.architecture = Some("x86_64".to_string());
     trove.native_package_identity = Some(
@@ -555,7 +555,7 @@ fn same_name_multiarch_variants_remain_two_actionable_packages() {
 }
 
 #[test]
-fn shared_directories_preserve_existing_recorded_owner() {
+fn shared_directories_are_retained_as_package_claims() {
     let (temp, db_path) = temp_db();
     let shared_dir = temp.path().join("native-root/usr/share");
     let package_file = shared_dir.join("fixture");
@@ -578,8 +578,8 @@ fn shared_directories_preserve_existing_recorded_owner() {
     .unwrap();
     let package = ready_package(&plan);
 
-    assert!(package.files.is_empty());
-    assert_eq!(package.shared_directories_skipped, 1);
+    assert_eq!(package.files.len(), 1);
+    assert_eq!(package.files[0].0, shared_dir.to_string_lossy());
 }
 
 #[test]
@@ -621,8 +621,8 @@ fn planned_packages_resolve_shared_directories_and_file_conflicts_before_apply()
     let PackagePlanOutcome::Ready(second) = &plan.outcomes[1] else {
         panic!("second package should remain ready");
     };
-    assert!(second.files.is_empty());
-    assert_eq!(second.shared_directories_skipped, 1);
+    assert_eq!(second.files.len(), 1);
+    assert_eq!(second.files[0].0, shared_dir.to_string_lossy());
     assert!(matches!(plan.outcomes[2], PackagePlanOutcome::Ready(_)));
     assert!(matches!(
         plan.outcomes[3],

@@ -1,4 +1,4 @@
-// tests/workflow.rs
+// apps/conary/tests/workflow.rs
 
 //! Package install, remove, and rollback workflow tests.
 
@@ -94,8 +94,10 @@ fn test_install_and_rollback() {
 
     // Rollback the installation
     db::transaction(&mut conn, |tx| {
-        let mut rollback_changeset =
-            Changeset::new(format!("Rollback of changeset {}", changeset_id));
+        let mut rollback_changeset = Changeset::new_rollback(
+            format!("Rollback of changeset {}", changeset_id),
+            changeset_id,
+        );
         let rollback_id = rollback_changeset.insert(tx)?;
 
         // Delete the trove
@@ -138,7 +140,8 @@ fn test_rollback_tracking() {
     // Roll back the install
     db::transaction(&mut conn, |tx| {
         // Create rollback changeset
-        let mut rollback_cs = Changeset::new("Rollback nginx install".to_string());
+        let mut rollback_cs =
+            Changeset::new_rollback("Rollback nginx install".to_string(), nginx_cs_id);
         let rollback_id = rollback_cs.insert(tx)?;
 
         // Delete the package
@@ -225,7 +228,9 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     use conary_core::derived::{build_from_definition, persist_build_artifact};
     use conary_core::filesystem::CasStore;
     use conary_core::hash;
-    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+    use conary_core::payload::{
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind,
+    };
     use std::collections::HashMap;
     use std::process::Command;
 
@@ -258,10 +263,35 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
     let binary_hash = hash::sha256(&binary_content);
     let config_content = b"worker_processes 4;\n".to_vec();
     let config_hash = hash::sha256(&config_content);
+    let test_node = |mut node: PayloadNode| {
+        node.user = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::geteuid() }),
+        };
+        node.group = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::getegid() }),
+        };
+        node
+    };
+    let directory = |path: &str| {
+        let mut node = test_node(PayloadNode::regular(0o755));
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        CcsFileEntry {
+            path: path.to_string(),
+            node,
+            content: None,
+            component: "runtime".to_string(),
+            chunks: None,
+        }
+    };
     let files = vec![
+        directory("/usr"),
+        directory("/usr/sbin"),
+        directory("/etc"),
+        directory("/etc/nginx"),
         CcsFileEntry {
             path: "/usr/sbin/nginx".to_string(),
-            node: PayloadNode::regular(0o755),
+            node: test_node(PayloadNode::regular(0o755)),
             content: Some(PayloadContentAuthority {
                 sha256: binary_hash.clone(),
                 size: binary_content.len() as u64,
@@ -271,7 +301,7 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
         },
         CcsFileEntry {
             path: "/etc/nginx/nginx.conf".to_string(),
-            node: PayloadNode::regular(0o644),
+            node: test_node(PayloadNode::regular(0o644)),
             content: Some(PayloadContentAuthority {
                 sha256: config_hash.clone(),
                 size: config_content.len() as u64,
@@ -366,13 +396,16 @@ fn test_capability_run_uses_installed_package_declaration() {
 
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/adversarial/malicious/cap-net-raw/output/cap-net-raw.ccs");
+    let policy_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ccs-test-authority/trust-policy.toml");
 
     let install_output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .arg("ccs")
         .arg("install")
         .arg(fixture_path)
-        .arg("--allow-unsigned")
+        .arg("--policy")
+        .arg(policy_path)
         .arg("--sandbox")
         .arg("always")
         .arg("--reinstall")
@@ -400,10 +433,21 @@ fn test_capability_run_uses_installed_package_declaration() {
         .output()
         .unwrap();
 
-    assert!(show_output.status.success());
+    assert!(
+        show_output.status.success(),
+        "capability show failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&show_output.stdout),
+        String::from_utf8_lossy(&show_output.stderr)
+    );
     let show_stdout = String::from_utf8_lossy(&show_output.stdout);
-    assert!(show_stdout.contains("Capability Declaration for: cap-net-raw"));
-    assert!(show_stdout.contains("Schema Version: 1"));
+    assert!(
+        show_stdout.contains("Capability Declaration for: cap-net-raw"),
+        "capability declaration was not displayed:\n{show_stdout}"
+    );
+    assert!(
+        show_stdout.contains("Schema Version: 1"),
+        "capability schema version was not displayed:\n{show_stdout}"
+    );
 
     let run_output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .arg("capability")

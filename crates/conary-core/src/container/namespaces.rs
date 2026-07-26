@@ -74,6 +74,16 @@ pub(super) fn set_rlimit_syscall(
     }
 }
 
+pub(super) fn set_parent_death_signal(signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: PR_SET_PDEATHSIG accepts the signal number as its second
+    // argument and does not dereference any caller-owned memory.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 pub(super) fn sandbox_namespace_flags(flags: CloneFlags) -> CloneFlags {
     if flags.is_empty() {
         flags

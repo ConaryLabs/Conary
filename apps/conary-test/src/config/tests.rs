@@ -365,12 +365,14 @@ remove_default_repos = ["fedora", "updates"]
 [distros.fedora44]
 remi_distro = "fedora-44"
 repo_name = "remi-fedora-44"
+build_context = "binary"
 containerfile = "Containerfile.fedora44"
 test_packages = [{ package = "tree", binary = "/usr/bin/tree" }]
 
 [distros."ubuntu-26.04"]
 remi_distro = "ubuntu-26.04"
 repo_name = "remi-ubuntu-26.04"
+build_context = "workspace-source"
 test_packages = [{ package = "tree", binary = "/usr/bin/tree" }]
 
 [fixtures]
@@ -390,12 +392,17 @@ ccs_file = "conary-test-fixture-1.0.0-1.ccs"
     let fedora = &config.distros["fedora44"];
     assert_eq!(fedora.remi_distro, "fedora-44");
     assert_eq!(fedora.repo_name, "remi-fedora-44");
+    assert_eq!(fedora.build_context, DistroBuildContext::Binary);
     assert_eq!(fedora.test_packages.len(), 1);
     assert_eq!(fedora.test_packages[0].package, "tree");
     assert_eq!(fedora.test_packages[0].binary, "/usr/bin/tree");
     assert_eq!(
         fedora.containerfile.as_deref(),
         Some("Containerfile.fedora44")
+    );
+    assert_eq!(
+        config.distros["ubuntu-26.04"].build_context,
+        DistroBuildContext::WorkspaceSource
     );
 
     let fixtures = config.fixtures.as_ref().unwrap();
@@ -430,6 +437,7 @@ results_dir = "/tmp/results"
 [distros.fedora44]
 remi_distro = "fedora-44"
 repo_name = "remi-fedora-44"
+build_context = "binary"
 {field} = {value}
 "#
         );
@@ -446,6 +454,39 @@ repo_name = "remi-fedora-44"
             "strict schema rejection should direct callers to test_packages: {message}"
         );
     }
+}
+
+#[test]
+fn distro_config_requires_a_typed_build_context() {
+    let missing = r#"
+[remi]
+endpoint = "https://remi.conary.io"
+
+[paths]
+db = "/tmp/conary-test.db"
+conary_bin = "/usr/bin/conary"
+results_dir = "/tmp/results"
+
+[distros.custom]
+remi_distro = "custom"
+repo_name = "custom"
+"#;
+    let missing_error = toml::from_str::<GlobalConfig>(missing)
+        .expect_err("build context must be explicit")
+        .to_string();
+    assert!(
+        missing_error.contains("build_context"),
+        "missing capability should identify build_context: {missing_error}"
+    );
+
+    let invalid = format!("{missing}\nbuild_context = \"ubuntu-name-heuristic\"\n");
+    let invalid_error = toml::from_str::<GlobalConfig>(&invalid)
+        .expect_err("build context must use the typed contract")
+        .to_string();
+    assert!(
+        invalid_error.contains("binary") && invalid_error.contains("workspace-source"),
+        "invalid capability should list typed values: {invalid_error}"
+    );
 }
 
 #[test]
@@ -563,17 +604,79 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         .expect("Phase 4 native PM parity must include the cross-source-format matrix");
     let cross_source_rendered = format!("{cross_source:?}");
     for required in [
-        "for source_format in rpm deb arch",
-        "forbid-native-pm",
-        "rpmdb",
-        "dpkg",
-        "pacman",
-        "--purge",
+        "run-cross-source-lifecycle-matrix.sh",
+        "install",
+        "rollback",
+        "remove",
     ] {
         assert!(
             cross_source_rendered.contains(required),
             "cross-source-format matrix should enforce {required}"
         );
+    }
+    let matrix_script = std::fs::read_to_string(conary_fixture_path(
+        "native/run-cross-source-lifecycle-matrix.sh",
+    ))
+    .expect("read cross-source lifecycle helper");
+    for required in [
+        "all_source_formats=(rpm deb arch)",
+        "for source_format in \"${source_formats[@]}\"",
+        "capture-native-lifecycle-oracle.sh",
+        "native-lifecycle-parity",
+        "expected_trace_digest",
+        "assert_trace",
+        "forbid-native-pm",
+        "native-manager-backups",
+        "restore_native_managers",
+        "rpmdb",
+        "dpkg",
+        "pacman",
+        "system state rollback",
+        "--purge",
+        "assert-selected-generation.py",
+    ] {
+        assert!(
+            matrix_script.contains(required),
+            "cross-source lifecycle helper should enforce {required}"
+        );
+    }
+    let oracle_script = std::fs::read_to_string(conary_fixture_path(
+        "native/capture-native-lifecycle-oracle.sh",
+    ))
+    .expect("read native lifecycle oracle helper");
+    for required in [
+        "rpm --install",
+        "rpm --upgrade",
+        "dpkg --install",
+        "pacman --upgrade",
+        "capture_and_compare install",
+        "capture_and_compare upgrade",
+        "capture_and_compare remove",
+        "cmp --silent",
+        "diff --unified",
+    ] {
+        assert!(
+            oracle_script.contains(required),
+            "native lifecycle oracle should enforce {required}"
+        );
+    }
+    for source_format in ["rpm", "deb", "arch"] {
+        for operation in ["install", "upgrade", "remove"] {
+            let trace_path =
+                format!("native-lifecycle-parity/expected/{source_format}/{operation}.trace");
+            let trace = std::fs::read_to_string(conary_fixture_path(&trace_path))
+                .unwrap_or_else(|error| panic!("read {trace_path}: {error}"));
+            assert!(!trace.is_empty(), "{trace_path} must not be empty");
+            assert!(
+                trace.lines().all(|line| {
+                    line.contains("|argc=")
+                        && line.contains("|argv=")
+                        && line.contains("|stdin=")
+                        && line.contains("|payload=")
+                }),
+                "{trace_path} must contain only normalized lifecycle records"
+            );
+        }
     }
 
     let corpus_tests: Vec<_> = manifest
@@ -628,13 +731,63 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             "native_corpus_fixture_version",
             "native_corpus_dependency_count",
             "native_corpus_dependency_probe",
-            "native_corpus_scriptlet_count",
+            "native_corpus_lifecycle_fidelity",
         ] {
             assert!(
                 overrides.contains_key(key),
                 "{distro} overrides should define {key}"
             );
         }
+    }
+}
+
+#[test]
+fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
+    let path = remi_manifest_path("native-cross-source-lifecycle.toml");
+    if !path.exists() {
+        return;
+    }
+
+    let manifest = load_manifest(&path).expect("load focused native lifecycle manifest");
+    assert_eq!(manifest.suite.phase, 4);
+    assert_eq!(manifest.test.len(), 1);
+    let test = &manifest.test[0];
+    assert_eq!(test.id, "TNPMX01");
+    assert_eq!(test.fatal, Some(true));
+    assert_eq!(test.skip, None);
+    assert_eq!(test.flaky, None);
+
+    let rendered = format!("{test:?}");
+    assert!(
+        rendered.contains("run-cross-source-lifecycle-matrix.sh"),
+        "focused manifest must execute the shared lifecycle contract"
+    );
+    assert!(
+        rendered.contains("${native_lifecycle_oracle_format}"),
+        "focused manifest must pass an explicit typed native-oracle format"
+    );
+    for (distro, expected_format) in [
+        ("fedora44", "rpm"),
+        ("ubuntu-26.04", "deb"),
+        ("arch", "arch"),
+    ] {
+        let overrides = manifest
+            .distro_overrides
+            .get(distro)
+            .unwrap_or_else(|| panic!("missing {distro} overrides"));
+        assert_eq!(
+            overrides
+                .get("native_lifecycle_oracle_format")
+                .map(String::as_str),
+            Some(expected_format),
+            "{distro} must select its native lifecycle oracle explicitly"
+        );
+    }
+    for operation in ["install", "update", "rollback", "remove"] {
+        assert!(
+            test.description.contains(operation),
+            "focused manifest should name {operation} in its contract"
+        );
     }
 }
 
@@ -729,3 +882,4 @@ fn active_manifest_live_mutation_commands_acknowledge_mutation_and_protect_lifec
 }
 
 mod manifests;
+mod workflow;

@@ -18,7 +18,13 @@ exit_code = 0
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[suite.setup]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --remi-distro ${REMI_DISTRO}"
+conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile ${REMI_DISTRO}"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-selected-root.sh ${DB_PATH} /conary"
 
 [suite.setup.assert]
 exit_code = 0
@@ -28,25 +34,20 @@ native_target = "rpm"
 native_glob = "*.rpm"
 native_arch = "x86_64"
 native_scheme = "rpm"
-native_distro = "fedora"
+native_profile = "fedora-44"
 native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 native_dependency_count = "0"
 native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "rpm"
-native_scriptlet_count = "2"
-native_scriptlet_probe_a = "post-install|/bin/sh|rpm"
-native_scriptlet_probe_b = "post-remove|/bin/sh|rpm"
+native_lifecycle_fidelity = "native-free"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "bash"
 native_corpus_config_count = "1"
 native_corpus_config_source = "rpm"
-native_corpus_scriptlet_count = "4"
-native_corpus_scriptlet_probe_a = "pre-install|/bin/sh|rpm"
-native_corpus_scriptlet_probe_b = "post-install|/bin/sh|rpm"
-native_corpus_scriptlet_probe_c = "pre-remove|/bin/sh|rpm"
+native_corpus_lifecycle_fidelity = "native-lifecycle"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -56,25 +57,20 @@ native_target = "deb"
 native_glob = "*.deb"
 native_arch = "amd64"
 native_scheme = "debian"
-native_distro = "ubuntu"
-native_fixture_version = "1.0.0"
-native_update_version = "1.0.1"
+native_profile = "ubuntu-26.04"
+native_fixture_version = "1.0.0-1"
+native_update_version = "1.0.1-1"
 native_dependency_count = "0"
 native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "deb"
-native_scriptlet_count = "2"
-native_scriptlet_probe_a = "post-install|/bin/sh|deb"
-native_scriptlet_probe_b = "post-remove|/bin/sh|deb"
-native_corpus_fixture_version = "1.0.0"
+native_lifecycle_fidelity = "native-free"
+native_corpus_fixture_version = "1.0.0-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "bash"
 native_corpus_config_count = "1"
 native_corpus_config_source = "deb"
-native_corpus_scriptlet_count = "4"
-native_corpus_scriptlet_probe_a = "pre-install|/bin/sh|deb"
-native_corpus_scriptlet_probe_b = "post-install|/bin/sh|deb"
-native_corpus_scriptlet_probe_c = "pre-remove|/bin/sh|deb"
+native_corpus_lifecycle_fidelity = "native-lifecycle"
 repo_install_pkg = "nano"
 repo_install_path = "/usr/bin/nano"
 repo_seed_security_version = "9999.0"
@@ -84,25 +80,20 @@ native_target = "arch"
 native_glob = "*.pkg.tar.zst"
 native_arch = "x86_64"
 native_scheme = "arch"
-native_distro = "arch"
+native_profile = "arch"
 native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
 native_dependency_count = "0"
 native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "arch"
-native_scriptlet_count = "0"
-native_scriptlet_probe_a = "no-scriptlets"
-native_scriptlet_probe_b = "no-scriptlets"
+native_lifecycle_fidelity = "native-free"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "bash"
 native_corpus_config_count = "1"
 native_corpus_config_source = "arch"
-native_corpus_scriptlet_count = "5"
-native_corpus_scriptlet_probe_a = "pre-install|/bin/sh|arch"
-native_corpus_scriptlet_probe_b = "post-install|/bin/sh|arch"
-native_corpus_scriptlet_probe_c = "pre-remove|/bin/sh|arch"
+native_corpus_lifecycle_fidelity = "native-lifecycle"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -157,48 +148,42 @@ exit_code = 0
 
 [[test]]
 id = "TNPM02X"
-name = "cross_source_format_install_matrix"
-description = "RPM, DEB, and Arch artifacts install and purge without delegating to a source package manager"
-timeout = 600
+name = "cross_source_format_lifecycle_matrix"
+description = "RPM, DEB, and Arch install, update, rollback, and remove traces match native package-manager authority through selected-generation execution without runtime delegation"
+timeout = 1200
 fatal = true
 depends_on = ["TNPM02"]
 
 [[test.step]]
-run = "set -eu; work=/tmp/conary-cross-source-matrix; rm -rf \"$work\"; mkdir -p \"$work/forbid-native-pm\"; for pm in rpm rpmdb rpmbuild dpkg dpkg-query dpkg-deb apt apt-get pacman makepkg; do printf '%s\n' '#!/bin/sh' 'echo \"$0\" >> /tmp/conary-cross-source-matrix/native-pm-called' 'exit 97' > \"$work/forbid-native-pm/$pm\"; chmod +x \"$work/forbid-native-pm/$pm\"; done; for source_format in rpm deb arch; do output=\"$work/$source_format\"; db=\"$work/$source_format.db\"; mkdir -p \"$output\"; CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh \"$source_format\" \"$output\" /opt/remi-tests/fixtures/phase4-runtime-fixture; ${CONARY_BIN} system init --db-path \"$db\"; . \"$output/native-fixture.env\"; PATH=\"$work/forbid-native-pm:$PATH\" ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path \"$db\" --root / --no-deps --yes --sandbox always; test -x /usr/bin/phase4-runtime-fixture; test -f /etc/phase4-runtime-fixture/app.conf; PATH=\"$work/forbid-native-pm:$PATH\" ${CONARY_BIN} remove phase4-runtime-fixture --db-path \"$db\" --root / --purge --yes --sandbox always; test ! -e /usr/bin/phase4-runtime-fixture; test ! -e /etc/phase4-runtime-fixture/app.conf; done; test ! -e \"$work/native-pm-called\""
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_target}"
 
 [test.step.assert]
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# TNPM03: local native install to a no-generation live root
+# TNPM03: local native install to the selected generation
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "TNPM03"
 name = "local_native_install"
-description = "Install a local native package on a no-generation live root"
+description = "Convert and install a local native package into the selected generation and exact CAS"
 timeout = 180
 fatal = true
 depends_on = ["TNPM02X"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox always"
+run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-runtime-fixture"]
 
 [[test.step]]
-file_exists = "/usr/bin/phase4-runtime-fixture"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-runtime-fixture/app.conf=1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c --expect-sha256 /usr/bin/phase4-runtime-fixture=517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f --expect-sha256 /usr/include/phase4-runtime-fixture/api.h=88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88"
 
-[[test.step]]
-file_exists = "/etc/phase4-runtime-fixture/app.conf"
-
-[[test.step]]
-file_checksum = { path = "/etc/phase4-runtime-fixture/app.conf", sha256 = "1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c" }
-
-[[test.step]]
-file_checksum = { path = "/usr/bin/phase4-runtime-fixture", sha256 = "517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f" }
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # TNPM04: exact local native metadata
@@ -207,13 +192,13 @@ file_checksum = { path = "/usr/bin/phase4-runtime-fixture", sha256 = "517631de24
 [[test]]
 id = "TNPM04"
 name = "local_native_exact_metadata"
-description = "Installed native fixture has exact package, file, provider, dependency, config, and scriptlet metadata"
+description = "Installed native fixture has exact package, file, provider, dependency, config, and native lifecycle metadata"
 timeout = 60
 fatal = true
 depends_on = ["TNPM03"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-runtime-fixture'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_distro, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-runtime-fixture'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_profile, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
 
 [test.step.assert]
 exit_code = 0
@@ -224,14 +209,14 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' files' FROM files WHERE trove_i
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["2 files", "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|61|33188", "/usr/bin/phase4-runtime-fixture|517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f|44|33188"]
+stdout_contains_all = ["3 files", "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|61|33188", "/usr/bin/phase4-runtime-fixture|517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f|44|33188", "/usr/include/phase4-runtime-fixture/api.h|88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88|130|33188"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT capability || '|' || COALESCE(version, '') || '|' || COALESCE(kind, '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY capability\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["3 provides", "/etc/phase4-runtime-fixture/app.conf||file", "/usr/bin/phase4-runtime-fixture||file", "phase4-runtime-fixture|${native_fixture_version}|package"]
+stdout_contains_all = ["4 provides", "/etc/phase4-runtime-fixture/app.conf||file", "/usr/bin/phase4-runtime-fixture||file", "/usr/include/phase4-runtime-fixture/api.h||file", "phase4-runtime-fixture|${native_fixture_version}|package"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
@@ -262,11 +247,11 @@ exit_code = 0
 stdout_contains = "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|1|pristine|${native_config_source}"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' scriptlets' FROM scriptlets WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT COALESCE((SELECT group_concat(phase || '|' || COALESCE(interpreter, '') || '|' || COALESCE(package_format, ''), char(10)) FROM scriptlets WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY phase), 'no-scriptlets')\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' lifecycle bundles' FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT source_format || '|' || source_package || '|' || source_version || '|' || scriptlet_fidelity || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_scriptlet_count} scriptlets", "${native_scriptlet_probe_a}", "${native_scriptlet_probe_b}"]
+stdout_contains_all = ["1 lifecycle bundles", "${native_target}|phase4-runtime-fixture|${native_fixture_version}|${native_lifecycle_fidelity}|installed"]
 
 # --------------------------------------------------------------------------
 # TNPM05: daily query surface
@@ -334,14 +319,17 @@ exit_code = 0
 stdout_contains = "Pinned package 'phase4-runtime-fixture'"
 
 [[test.step]]
-run = "${CONARY_BIN} remove phase4-runtime-fixture --db-path ${DB_PATH} --sandbox always --yes 2>&1"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-runtime-fixture --db-path ${DB_PATH} --root /conary --sandbox always --yes 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
 stdout_contains = "pinned and cannot be removed"
 
 [[test.step]]
-file_exists = "/usr/bin/phase4-runtime-fixture"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-runtime-fixture=517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-runtime-fixture'\""
@@ -364,7 +352,7 @@ stdout_contains = "remove would be refused before mutation"
 [[test]]
 id = "TNPM07"
 name = "unpin_and_update_local_native"
-description = "Unpin restores mutation, then conary update applies a newer native package from repository metadata"
+description = "Unpin restores mutation, then conary update applies an exactly typed signed CCS package from synchronized repository metadata"
 timeout = 240
 fatal = true
 depends_on = ["TNPM06"]
@@ -377,30 +365,37 @@ exit_code = 0
 stdout_contains = "Unpinned package 'phase4-runtime-fixture'"
 
 [[test.step]]
-run = "rm -rf /tmp/native-pm-parity-v2 /tmp/native-pm-parity-v2-src && cp -a /opt/remi-tests/fixtures/phase4-runtime-fixture /tmp/native-pm-parity-v2-src && sed -i 's/version = \"1.0.0\"/version = \"1.0.1\"/' /tmp/native-pm-parity-v2-src/ccs.toml && mkdir -p /tmp/native-pm-parity-v2 && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-parity-v2 /tmp/native-pm-parity-v2-src && . /tmp/native-pm-parity-v2/native-fixture.env && test -f \"$NATIVE_PKG_FILE\" && test \"$NATIVE_TARGET\" = \"${native_target}\""
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-signed-update-repository.sh ${native_target} ${native_profile} ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "if test -f /tmp/native-pm-http.pid; then kill \"$(cat /tmp/native-pm-http.pid)\" 2>/dev/null || true; fi; PYTHON=$(command -v python3 || command -v python); \"$PYTHON\" -m http.server 18087 --bind 127.0.0.1 --directory /tmp/native-pm-parity-v2 >/tmp/native-pm-http.log 2>&1 & echo $! > /tmp/native-pm-http.pid; sleep 1; . /tmp/native-pm-parity-v2/native-fixture.env; PKG_BASENAME=$(basename \"$NATIVE_PKG_FILE\"); PKG_SIZE=$(wc -c < \"$NATIVE_PKG_FILE\"); sqlite3 ${DB_PATH} \"DELETE FROM repositories WHERE name = 'slice-d-local-update'; INSERT INTO repositories (name, url, enabled, priority, metadata_expire, default_strategy, default_strategy_distro, security_advisory_support) VALUES ('slice-d-local-update', 'http://127.0.0.1:18087', 1, 500, 3600, 'binary', '${native_distro}', 'supported');\"; REPO_ID=$(sqlite3 ${DB_PATH} \"SELECT id FROM repositories WHERE name = 'slice-d-local-update'\"); sqlite3 ${DB_PATH} \"DELETE FROM repository_packages WHERE repository_id = $REPO_ID AND name = 'phase4-runtime-fixture' AND version = '${native_update_version}'; INSERT INTO repository_packages (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata, is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme, canonical_id) VALUES ($REPO_ID, 'phase4-runtime-fixture', '${native_update_version}', '${native_arch}', 'Slice D native update fixture', '$NATIVE_PKG_SHA256', $PKG_SIZE, 'http://127.0.0.1:18087/$PKG_BASENAME', NULL, NULL, 0, NULL, NULL, NULL, NULL, '${native_distro}', '${native_scheme}', NULL);\""
+run = "sqlite3 ${DB_PATH} \"SELECT r.default_strategy || '|' || r.source_profile || '|' || rp.name || '|' || rp.version || '|' || rp.version_scheme || '|' || rp.architecture || '|' || k.status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = 'slice-d-local-update'\""
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "static|${native_profile}|phase4-runtime-fixture|${native_update_version}|${native_scheme}|${native_arch}|active"
 
 [[test.step]]
-run = "${CONARY_BIN} update phase4-runtime-fixture --db-path ${DB_PATH} --yes --sandbox always"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} update phase4-runtime-fixture --db-path ${DB_PATH} --root /conary --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains = "phase4-runtime-fixture"
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_distro, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-runtime-fixture/app.conf=2c76059e3429b1a8429d7026acabffefe3bc738c7344b3f345c2e4d502b1e8dc --expect-sha256 /usr/bin/phase4-runtime-fixture=67366d905b9464bec8c4ff41021bd536292488fc1777cbf6a1fb41a438b2a283"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "phase4-runtime-fixture|${native_update_version}|${native_arch}|${native_scheme}|${native_distro}"
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_profile, '') FROM troves WHERE name = 'phase4-runtime-fixture'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-runtime-fixture|${native_update_version}|${native_arch}|${native_scheme}|${native_profile}"
 
 [[test.step]]
 conary = "list phase4-runtime-fixture --info"
@@ -422,14 +417,17 @@ fatal = true
 depends_on = ["TNPM07"]
 
 [[test.step]]
-conary = "remove phase4-runtime-fixture --sandbox always --yes"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-runtime-fixture --db-path ${DB_PATH} --root /conary --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains = "Removed package: phase4-runtime-fixture version ${native_update_version}"
 
 [[test.step]]
-file_not_exists = "/usr/bin/phase4-runtime-fixture"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent /usr/bin/phase4-runtime-fixture --absent /etc/phase4-runtime-fixture/app.conf --absent /usr/include/phase4-runtime-fixture/api.h"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-runtime-fixture'\""
@@ -458,7 +456,7 @@ fatal = true
 depends_on = ["TNPM08"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox always 2>&1"
+run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=slice-d-forced ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always 2>&1"
 
 [test.step.assert]
 exit_code = 0
@@ -491,21 +489,24 @@ fatal = true
 depends_on = ["TNPM09"]
 
 [[test.step]]
-conary = "install ${repo_install_pkg} --repo ${REPO_NAME} --no-deps --yes --sandbox always"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install ${repo_install_pkg} --repo ${REPO_NAME} --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains = "${repo_install_pkg}"
 
 [[test.step]]
-file_exists = "${repo_install_path}"
-
-[[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' repo troves' FROM troves WHERE name = '${repo_install_pkg}'; SELECT t.name || '|' || COALESCE(r.name, '') || '|' || COALESCE(t.source_distro, '') || '|' || COALESCE(t.version_scheme, '') || '|' || COALESCE(t.install_source, '') || '|' || COALESCE(t.install_reason, '') FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = '${repo_install_pkg}'\""
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --present ${repo_install_path} --expect-sha256 /usr/bin/phase4-runtime-fixture=517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 repo troves", "${repo_install_pkg}|${REPO_NAME}|${native_distro}|${native_scheme}|repository|explicit"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' repo troves' FROM troves WHERE name = '${repo_install_pkg}'; SELECT t.name || '|' || COALESCE(r.name, '') || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(t.version_scheme, '') || '|' || COALESCE(t.install_source, '') || '|' || COALESCE(t.install_reason, '') FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = '${repo_install_pkg}'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["1 repo troves", "${repo_install_pkg}|${REPO_NAME}|${native_profile}|${native_scheme}|repository|explicit"]
 
 [[test.step]]
 conary = "list ${repo_install_pkg} --info"
@@ -541,13 +542,13 @@ fatal = true
 depends_on = ["TNPM10"]
 
 [[test.step]]
-run = "REPO_ID=$(sqlite3 ${DB_PATH} \"SELECT id FROM repositories WHERE name = '${REPO_NAME}'\"); BEFORE=$(sqlite3 ${DB_PATH} \"SELECT version FROM troves WHERE name = '${repo_install_pkg}'\"); sqlite3 ${DB_PATH} \"UPDATE repositories SET security_advisory_support = 'unknown' WHERE id = $REPO_ID; DELETE FROM repository_packages WHERE repository_id = $REPO_ID AND name = '${repo_install_pkg}' AND version = '${repo_seed_security_version}'; INSERT INTO repository_packages (repository_id, name, version, architecture, description, checksum, size, download_url, dependencies, metadata, is_security_update, severity, cve_ids, advisory_id, advisory_url, distro, version_scheme, canonical_id) VALUES ($REPO_ID, '${repo_install_pkg}', '${repo_seed_security_version}', '${native_arch}', 'Slice D security metadata probe', '0000000000000000000000000000000000000000000000000000000000000000', 1, 'http://127.0.0.1:9/slice-d-security-probe.pkg', NULL, NULL, 1, 'critical', 'CVE-2026-0001', 'SLICE-D-2026-0001', NULL, '${native_distro}', '${native_scheme}', NULL);\"; echo \"$BEFORE\" > /tmp/native-pm-security-before"
+run = "BEFORE=$(sqlite3 ${DB_PATH} \"SELECT version FROM troves WHERE name = '${repo_install_pkg}'\"); echo \"$BEFORE\" > /tmp/native-pm-security-before; CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-unknown-security-repository.sh ${repo_install_pkg} ${repo_seed_security_version} ${native_scheme} ${native_arch} ${native_profile} ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} update --security ${repo_install_pkg} --db-path ${DB_PATH} --yes --sandbox always 2>&1"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} update --security ${repo_install_pkg} --db-path ${DB_PATH} --root /conary --yes --sandbox always 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
@@ -578,21 +579,24 @@ run = "sqlite3 ${DB_PATH} \"UPDATE troves SET install_reason = 'dependency', sel
 exit_code = 0
 
 [[test.step]]
-conary = "autoremove --dry-run"
+run = "${CONARY_BIN} autoremove --db-path ${DB_PATH} --root /conary --dry-run"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains_all = ["Found", "${repo_install_pkg}", "Dry run"]
 
 [[test.step]]
-conary = "autoremove --sandbox always --yes"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} autoremove --db-path ${DB_PATH} --root /conary --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains_all = ["Autoremove complete", "Removed: 1"]
 
 [[test.step]]
-file_not_exists = "${repo_install_path}"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent ${repo_install_path} --expect-sha256 /usr/bin/phase4-runtime-fixture=517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = '${repo_install_pkg}'\""
@@ -621,7 +625,7 @@ run = "rm -rf /tmp/native-pm-corpus /tmp/native-pm-corpus-src /tmp/native-pm-cor
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# TNPM14: daily-driver corpus install and live root surface
+# TNPM14: daily-driver corpus install and selected-root surface
 # --------------------------------------------------------------------------
 
 [[test]]
@@ -641,39 +645,17 @@ exit_code = 0
 stdout_contains = "Created trigger: phase4-corpus-trigger"
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox always"
+run = ". /tmp/native-pm-corpus/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-daily-driver-corpus"]
 
 [[test.step]]
-file_exists = "/usr/bin/phase4-corpus"
-
-[[test.step]]
-file_exists = "/usr/bin/phase4-corpus-alt"
-
-[[test.step]]
-file_exists = "/etc/phase4-corpus/app.conf"
-
-[[test.step]]
-file_exists = "/usr/lib/systemd/system/phase4-corpus.service"
-
-[[test.step]]
-file_exists = "/usr/lib/kernel/install.d/95-phase4-corpus.install"
-
-[[test.step]]
-file_exists = "/usr/share/phase4-corpus/large-payload.bin"
-
-[[test.step]]
-file_exists = "/var/lib/phase4-corpus/scriptlet.marker"
-
-[[test.step]]
-run = "getent passwd phase4-corpus-user && getent group phase4-corpus-group"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["phase4-corpus-user", "phase4-corpus-group"]
 
 # --------------------------------------------------------------------------
 # TNPM15: daily-driver corpus exact metadata
@@ -682,14 +664,14 @@ stdout_contains_all = ["phase4-corpus-user", "phase4-corpus-group"]
 [[test]]
 id = "TNPM15"
 name = "daily_driver_corpus_exact_metadata"
-description = "Installed corpus metadata records package identity, files, dependencies, config rows, scriptlets, and triggers"
+description = "Installed corpus metadata records package identity, files, dependencies, config rows, native lifecycle authority, and triggers"
 group = "daily-driver-corpus"
 timeout = 90
 fatal = true
 depends_on = ["TNPM14"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_distro, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-daily-driver-corpus'\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') || '|' || COALESCE(source_profile, '') || '|' || COALESCE(install_source, '') || '|' || COALESCE(install_reason, '') FROM troves WHERE name = 'phase4-daily-driver-corpus'\""
 
 [test.step.assert]
 exit_code = 0
@@ -717,11 +699,11 @@ exit_code = 0
 stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' scriptlets' FROM scriptlets WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(phase || '|' || COALESCE(interpreter, '') || '|' || COALESCE(package_format, ''), char(10)) FROM scriptlets WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY phase), 'no-scriptlets')\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' lifecycle bundles' FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT source_format || '|' || source_package || '|' || source_version || '|' || scriptlet_fidelity || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_scriptlet_count} scriptlets", "${native_corpus_scriptlet_probe_a}", "${native_corpus_scriptlet_probe_b}", "${native_corpus_scriptlet_probe_c}"]
+stdout_contains_all = ["1 lifecycle bundles", "${native_target}|phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_corpus_lifecycle_fidelity}|installed"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || ct.status || '|' || ct.matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
@@ -784,27 +766,30 @@ stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:"
 [[test]]
 id = "TNPM17"
 name = "daily_driver_corpus_file_conflict_refuses_before_mutation"
-description = "A second native package with overlapping files is refused before it can mutate the live root"
+description = "A second native package with overlapping files is refused before it can mutate the selected generation"
 group = "daily-driver-corpus"
 timeout = 240
 fatal = true
 depends_on = ["TNPM16"]
 
 [[test.step]]
-run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && cp -a /tmp/native-pm-corpus-src /tmp/native-pm-corpus-conflict-src && sed -i 's/name = \"phase4-daily-driver-corpus\"/name = \"phase4-corpus-conflict\"/' /tmp/native-pm-corpus-conflict-src/ccs.toml && mkdir -p /tmp/native-pm-corpus-conflict && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && . /tmp/native-pm-corpus-conflict/native-fixture.env && test -f \"$NATIVE_PKG_FILE\""
+run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && mkdir -p /tmp/native-pm-corpus-conflict-src /tmp/native-pm-corpus-conflict && cp /opt/remi-tests/fixtures/phase4-daily-driver-corpus-conflict/ccs.toml /tmp/native-pm-corpus-conflict-src/ccs.toml && cp -a /tmp/native-pm-corpus-src/stage /tmp/native-pm-corpus-conflict-src/stage && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && . /tmp/native-pm-corpus-conflict/native-fixture.env && test -f \"$NATIVE_PKG_FILE\""
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --db-path ${DB_PATH} --no-deps --yes --sandbox always 2>&1"
+run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always 2>&1"
 
 [test.step.assert]
 exit_code_not = 0
 stdout_contains = "already tracked by package phase4-daily-driver-corpus"
 
 [[test.step]]
-file_exists = "/usr/bin/phase4-corpus"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c"
+
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name IN ('phase4-daily-driver-corpus', 'phase4-corpus-conflict'); SELECT COUNT(*) || ' conflicts' FROM troves WHERE name = 'phase4-corpus-conflict'\""
@@ -827,26 +812,17 @@ fatal = true
 depends_on = ["TNPM17"]
 
 [[test.step]]
-conary = "remove phase4-daily-driver-corpus --sandbox always --yes"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-daily-driver-corpus --db-path ${DB_PATH} --root /conary --sandbox always --yes"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_fixture_version}"
 
 [[test.step]]
-file_exists = "/var/lib/phase4-corpus/remove.marker"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /etc/phase4-corpus/app.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
 
-[[test.step]]
-file_not_exists = "/usr/bin/phase4-corpus"
-
-[[test.step]]
-file_not_exists = "/etc/phase4-corpus/app.conf"
-
-[[test.step]]
-file_not_exists = "/usr/lib/systemd/system/phase4-corpus.service"
-
-[[test.step]]
-file_not_exists = "/usr/share/phase4-corpus/large-payload.bin"
+[test.step.assert]
+exit_code = 0
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'\""

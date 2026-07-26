@@ -33,6 +33,7 @@ mod converted;
 mod debian_debconf_state;
 mod delta;
 mod derived;
+mod directory_claim;
 mod distro_pin;
 mod download_stats;
 mod file_entry;
@@ -48,6 +49,7 @@ mod label;
 mod metadata;
 mod native_lifecycle_residual_state;
 mod native_publication;
+mod package_payload_ownership;
 mod provenance;
 mod provide_entry;
 mod redirect;
@@ -71,8 +73,8 @@ pub mod federation_peer;
 pub mod settings;
 
 pub use appstream_cache::AppstreamCacheEntry;
-pub use canonical::{CanonicalPackage, PackageImplementation};
-pub use changeset::{Changeset, ChangesetStatus};
+pub use canonical::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
+pub use changeset::{Changeset, ChangesetKind, ChangesetStatus};
 pub use chunk_access::{ChunkAccess, ChunkStats};
 pub use collection::CollectionMember;
 pub use component::Component;
@@ -85,9 +87,10 @@ pub use converted::{
 pub use debian_debconf_state::DebianDebconfState;
 pub use delta::{DeltaStats, PackageDelta};
 pub use derived::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
-pub use distro_pin::{DistroPin, PackageOverride, SystemAffinity};
+pub use directory_claim::{DirectoryClaim, DirectoryClaimAnchorPolicy};
+pub use distro_pin::{DistroPin, SystemAffinity};
 pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
-pub use file_entry::FileEntry;
+pub use file_entry::{ExistingDirectoryMaterialization, FileEntry};
 pub use flavor::Flavor;
 pub use generation_activation::{
     ActivationRequest, ActivationRequestSourceKind, GenerationActivationIntent,
@@ -107,6 +110,7 @@ pub use native_lifecycle_residual_state::NativeLifecycleResidualState;
 pub use native_publication::{
     NATIVE_NOARCH, NativePackagePublication, NativePublicationStatus, normalize_native_architecture,
 };
+pub use package_payload_ownership::{PackagePayloadEntry, PackagePayloadOwnership};
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};

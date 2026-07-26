@@ -4,6 +4,7 @@ use super::schema::*;
 use crate::ccs::builder::BuildResult;
 use crate::ccs::v2::PackageKindTagV2;
 use crate::repository::dependency_model::RepositoryRequirementGroup;
+use crate::repository::versioning::VersionScheme;
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -83,6 +84,20 @@ pub struct ProjectedV2Package {
 }
 
 pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<ProjectedV2Package> {
+    let payloads_by_path = payloads_by_path(input.build)?;
+    let debug_toml = input.debug_toml.clone();
+    let authority = project_build_result_authority_to_v2(input)?;
+    Ok(ProjectedV2Package {
+        authority,
+        payloads_by_path,
+        debug_toml,
+    })
+}
+
+/// Project signed metadata without reassembling whole-file payload bytes.
+pub fn project_build_result_authority_to_v2(
+    input: V2AuthoringInput<'_>,
+) -> Result<AuthorityDocumentV2> {
     let package = &input.build.manifest.package;
     let release = package.release.as_str();
     let kind = package.kind;
@@ -90,8 +105,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
         bail!("M4b only supports package authoring for v2 build");
     }
 
-    let payloads_by_path = payloads_by_path(input.build)?;
-    let config_policies = config_policies_for_manifest(&input.build.manifest, input.build)?;
+    let config_authority = config_authority_for_manifest(&input.build.manifest, input.build)?;
     let files = input
         .build
         .files
@@ -101,15 +115,15 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
             node: file.node.clone(),
             content: file.content.clone(),
             component: file.component.clone(),
-            config: config_policies.get(&file.path).copied(),
+            config: config_authority.get(&file.path).copied(),
             conflict: ConflictPolicyV2::Error,
         })
         .collect::<Vec<_>>();
-    let config = config_policies
+    let config = config_authority
         .iter()
-        .map(|(path, policy)| ConfigAuthorityV2 {
+        .map(|(path, semantics)| ConfigAuthorityV2 {
             path: path.clone(),
-            policy: *policy,
+            semantics: *semantics,
         })
         .collect::<Vec<_>>();
 
@@ -186,6 +200,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
                 .platform
                 .as_ref()
                 .and_then(|platform| platform.arch.clone()),
+            debian_multi_arch: package.debian_multi_arch,
             platform: package
                 .platform
                 .as_ref()
@@ -200,6 +215,7 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
         provides: project_provides(&input.build.manifest),
         requirements: project_requirements(&input.build.manifest),
         relations: input.build.manifest.relations.clone(),
+        capabilities: input.build.manifest.capabilities.clone(),
         components,
         lifecycle,
         provenance: ProvenanceAuthorityV2 {
@@ -221,44 +237,46 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
 
     super::validation::validate_authority(&authority)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
-    Ok(ProjectedV2Package {
-        authority,
-        payloads_by_path,
-        debug_toml: input.debug_toml,
-    })
+    Ok(authority)
 }
 
-fn project_provides(manifest: &crate::ccs::manifest::CcsManifest) -> Vec<DependencyEntryV2> {
-    let mut entries = Vec::new();
+fn project_provides(manifest: &crate::ccs::manifest::CcsManifest) -> Vec<ProvidedCapabilityV2> {
+    let scheme = manifest.package.version_scheme;
+    let mut entries = vec![provided_capability(
+        DependencyKindV2::Package,
+        &manifest.package.name,
+        Some(&manifest.package.version),
+        scheme,
+    )];
     entries.extend(
         manifest
             .provides
             .capabilities
             .iter()
-            .map(|name| dependency_entry(DependencyKindV2::Capability, name, None)),
+            .map(|name| provided_capability(DependencyKindV2::Capability, name, None, scheme)),
     );
     entries.extend(
         manifest
             .provides
             .sonames
             .iter()
-            .map(|name| dependency_entry(DependencyKindV2::Soname, name, None)),
+            .map(|name| provided_capability(DependencyKindV2::Soname, name, None, scheme)),
     );
     entries.extend(
         manifest
             .provides
             .binaries
             .iter()
-            .map(|name| dependency_entry(DependencyKindV2::Binary, name, None)),
+            .map(|name| provided_capability(DependencyKindV2::Binary, name, None, scheme)),
     );
     entries.extend(
         manifest
             .provides
             .pkgconfig
             .iter()
-            .map(|name| dependency_entry(DependencyKindV2::PkgConfig, name, None)),
+            .map(|name| provided_capability(DependencyKindV2::PkgConfig, name, None, scheme)),
     );
-    sort_and_deduplicate_dependencies(entries)
+    sort_and_deduplicate_provides(entries)
 }
 
 pub(super) fn project_requirements(
@@ -273,27 +291,36 @@ pub(super) fn project_requirements(
     keyed.into_values().collect()
 }
 
-fn dependency_entry(
+fn provided_capability(
     kind: DependencyKindV2,
     name: &str,
-    version_constraint: Option<&str>,
-) -> DependencyEntryV2 {
-    DependencyEntryV2 {
+    provider_version: Option<&str>,
+    version_scheme: VersionScheme,
+) -> ProvidedCapabilityV2 {
+    ProvidedCapabilityV2 {
         kind,
         name: name.to_string(),
-        version_constraint: version_constraint.map(str::to_string),
+        provider_version: provider_version.map(str::to_string),
+        version_relation: provider_version
+            .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
+        version_scheme,
+        architecture_qualifier: Default::default(),
         target: None,
         component: None,
     }
 }
 
-fn sort_and_deduplicate_dependencies(entries: Vec<DependencyEntryV2>) -> Vec<DependencyEntryV2> {
+fn sort_and_deduplicate_provides(entries: Vec<ProvidedCapabilityV2>) -> Vec<ProvidedCapabilityV2> {
     let mut keyed = BTreeMap::new();
     for entry in entries {
         let key = (
             dependency_kind_order(entry.kind),
             entry.name.clone(),
-            entry.version_constraint.clone(),
+            entry.provider_version.clone(),
+            entry.version_relation,
+            entry.version_scheme.as_str(),
+            serde_json::to_string(&entry.architecture_qualifier)
+                .expect("provider architecture qualifier is JSON serializable"),
             entry.target.clone(),
             entry.component.clone(),
         );
@@ -314,34 +341,44 @@ fn dependency_kind_order(kind: DependencyKindV2) -> u8 {
     }
 }
 
-fn config_policies_for_manifest(
+fn config_authority_for_manifest(
     manifest: &crate::ccs::manifest::CcsManifest,
     build: &BuildResult,
-) -> Result<BTreeMap<String, ConfigPolicyV2>> {
-    let policy = config_policy_for_manifest(manifest);
+) -> Result<BTreeMap<String, ConfigSemanticsV2>> {
     let build_paths = build
         .files
         .iter()
         .map(|file| file.path.as_str())
         .collect::<BTreeSet<_>>();
-    let mut policies = BTreeMap::new();
+    let mut authority = BTreeMap::new();
 
-    for path in &manifest.config.files {
-        if !path.starts_with('/') || !build_paths.contains(path.as_str()) {
-            bail!("config path {path} must be absolute and present in build output");
+    for config in &manifest.config.files {
+        let absent_from_payload = config.ghost || config.remove_on_upgrade;
+        if !config.path.starts_with('/') {
+            bail!("config path {} must be absolute", config.path);
         }
-        policies.insert(path.clone(), policy);
+        if absent_from_payload == build_paths.contains(config.path.as_str()) {
+            let expected = if absent_from_payload {
+                "absent from"
+            } else {
+                "present in"
+            };
+            bail!(
+                "config path {} must be {expected} build output for its exact semantics",
+                config.path
+            );
+        }
+        let semantics = ConfigSemanticsV2 {
+            noreplace: config.noreplace,
+            ghost: config.ghost,
+            remove_on_upgrade: config.remove_on_upgrade,
+        };
+        if authority.insert(config.path.clone(), semantics).is_some() {
+            bail!("config path {} is declared more than once", config.path);
+        }
     }
 
-    Ok(policies)
-}
-
-fn config_policy_for_manifest(manifest: &crate::ccs::manifest::CcsManifest) -> ConfigPolicyV2 {
-    if manifest.config.noreplace {
-        ConfigPolicyV2::NoReplace
-    } else {
-        ConfigPolicyV2::Replace
-    }
+    Ok(authority)
 }
 
 fn select_default_component(build: &BuildResult) -> Result<String> {

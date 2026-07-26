@@ -5,8 +5,8 @@ use crate::ccs::native_lifecycle::{
     RpmCriticality, RpmHeaderContext, RpmMacroContext, RpmMacroDefinition,
     RpmMacroDefinitionSource, RpmProgram, RpmRuntimeMetadata,
 };
+use crate::scriptlet::test_support::materialized_root;
 use crate::scriptlet::{PackageFormat, SandboxMode, ScriptletExecutor};
-use std::path::Path;
 
 fn engine(definitions: &[(&str, &str)]) -> RpmMacroEngine {
     RpmMacroEngine::from_context(&RpmMacroContext {
@@ -292,7 +292,13 @@ fn evaluates_integer_string_and_version_expressions() {
 
 #[test]
 fn shell_expansion_uses_target_runtime_environment_and_rpm_newline_rules() {
-    let executor = ScriptletExecutor::new(Path::new("/"), "demo", "1", PackageFormat::Rpm)
+    let Some(root) = materialized_root(
+        "scriptlet::rpm_runtime::macro_expand::tests::shell_expansion_uses_target_runtime_environment_and_rpm_newline_rules",
+        &["/bin/sh"],
+    ) else {
+        return;
+    };
+    let executor = ScriptletExecutor::new(root.path(), "demo", "1", PackageFormat::Rpm)
         .with_sandbox_mode(SandboxMode::Always);
     let runtime = runtime();
     let engine = RpmMacroEngine::from_runtime(

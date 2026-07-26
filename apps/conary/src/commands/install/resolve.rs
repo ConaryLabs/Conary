@@ -1,4 +1,4 @@
-// src/commands/install/resolve.rs
+// apps/conary/src/commands/install/resolve.rs
 //! Package path resolution - downloading from repository if needed
 //!
 //! This module handles resolving package names to local file paths, using
@@ -21,7 +21,6 @@ use anyhow::Result;
 use conary_core::db::models::ProvideEntry;
 use conary_core::db::models::Redirect;
 use conary_core::db::paths::keyring_dir;
-use conary_core::repository::dependency_model::RepositoryDependencyFlavor;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::repository::{
     PackageSource, RepositorySourceMetadata, ResolutionOptions, resolve_package,
@@ -59,8 +58,8 @@ pub enum ResolvedSourceType {
     LocalFile,
     /// Downloaded binary from repository
     Binary,
-    /// Converted via Remi
-    Remi,
+    /// Verified CCS artifact from a repository
+    Ccs,
 }
 
 /// Options that control policy-aware resolution at the install layer.
@@ -70,25 +69,34 @@ pub struct PolicyOptions {
     pub policy: Option<ResolutionPolicy>,
     /// Whether this is a root (user-typed) request.
     pub is_root: bool,
-    /// The primary distro flavor for mixing policy checks.
-    pub primary_flavor: Option<RepositoryDependencyFlavor>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PackageResolutionRequest<'a> {
+    pub package: &'a str,
+    pub db_path: &'a str,
+    pub version: Option<&'a str>,
+    pub package_release: Option<&'a str>,
+    pub repository: Option<&'a str>,
+    pub architecture: Option<&'a str>,
 }
 
 fn build_resolution_options(
     version: Option<&str>,
+    package_release: Option<&str>,
     repo: Option<&str>,
     architecture: Option<&str>,
     policy_opts: &PolicyOptions,
 ) -> ResolutionOptions {
     ResolutionOptions {
         version: version.map(String::from),
+        package_release: package_release.map(String::from),
         repository: repo.map(String::from),
         architecture: architecture.map(String::from),
         output_dir: None,
         skip_installed: false,
         policy: policy_opts.policy.clone(),
         is_root: policy_opts.is_root,
-        primary_flavor: policy_opts.primary_flavor,
     }
 }
 
@@ -97,14 +105,18 @@ fn build_resolution_options(
 /// Like `resolve_package_path` but accepts a `PolicyOptions` to constrain
 /// candidate selection via `ResolutionPolicy`.
 pub async fn resolve_package_path_with_policy(
-    package: &str,
-    db_path: &str,
-    version: Option<&str>,
-    repo: Option<&str>,
-    architecture: Option<&str>,
+    request: PackageResolutionRequest<'_>,
     progress: &InstallProgress,
     policy_opts: &PolicyOptions,
 ) -> Result<ResolutionOutcome> {
+    let PackageResolutionRequest {
+        package,
+        db_path,
+        version,
+        package_release,
+        repository,
+        architecture,
+    } = request;
     // Check if package is a local file
     if Path::new(package).exists() {
         info!("Installing from local file: {}", package);
@@ -128,7 +140,13 @@ pub async fn resolve_package_path_with_policy(
     // Build resolution options
     // Note: keyring_dir will be used when GPG options are integrated into resolution
     let _keyring_dir = keyring_dir(db_path);
-    let options = build_resolution_options(version, repo, architecture, policy_opts);
+    let options = build_resolution_options(
+        version,
+        package_release,
+        repository,
+        architecture,
+        policy_opts,
+    );
 
     // Use unified resolver
     progress.set_status("Resolving package source...");
@@ -207,12 +225,16 @@ fn convert_source_to_resolved(
             _temp_dir,
             repository_provenance,
         } => {
-            info!("Resolved {} from Remi: {}", package, path.display());
+            info!(
+                "Resolved {} as a repository CCS artifact: {}",
+                package,
+                path.display()
+            );
             progress.set_phase(package, InstallPhase::Downloading);
             Ok(ResolutionOutcome::Resolved(ResolvedPackage {
                 path,
                 _temp_dir,
-                source_type: ResolvedSourceType::Remi,
+                source_type: ResolvedSourceType::Ccs,
                 repository_provenance,
             }))
         }
@@ -312,6 +334,7 @@ mod tests {
     fn test_build_resolution_options_preserves_architecture() {
         let options = build_resolution_options(
             Some("1.2.3"),
+            Some("4"),
             Some("stable"),
             Some("x86_64"),
             &PolicyOptions {
@@ -321,6 +344,7 @@ mod tests {
         );
 
         assert_eq!(options.version.as_deref(), Some("1.2.3"));
+        assert_eq!(options.package_release.as_deref(), Some("4"));
         assert_eq!(options.repository.as_deref(), Some("stable"));
         assert_eq!(options.architecture.as_deref(), Some("x86_64"));
         assert!(options.is_root);
@@ -336,9 +360,14 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        ProvideEntry::new(trove_id, "glibc".to_string(), Some("2.42".to_string()))
-            .insert(&conn)
-            .unwrap();
+        ProvideEntry::new(
+            trove_id,
+            "glibc".to_string(),
+            Some("2.42".to_string()),
+            conary_core::repository::versioning::VersionScheme::Conary,
+        )
+        .insert(&conn)
+        .unwrap();
 
         let missing = vec![MissingDependency {
             name: "libc.so.6".to_string(),
@@ -362,9 +391,16 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        ProvideEntry::new_typed(trove_id, "soname", "libssl.so.3".to_string(), None)
-            .insert(&conn)
-            .unwrap();
+        ProvideEntry::new_typed(
+            trove_id,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::Soname,
+            "libssl.so.3".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Conary,
+            Default::default(),
+        )
+        .insert(&conn)
+        .unwrap();
 
         let missing = vec![MissingDependency {
             name: "libssl.so.3".to_string(),
@@ -394,10 +430,19 @@ mod tests {
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Debian,
         );
+        trove.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
         let trove_id = trove.insert(&conn).unwrap();
-        ProvideEntry::new_typed(trove_id, "package", "virtual-abi".to_string(), None)
-            .insert(&conn)
-            .unwrap();
+        ProvideEntry::new_typed(
+            trove_id,
+            conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
+            "virtual-abi".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Debian,
+            Default::default(),
+        )
+        .insert(&conn)
+        .unwrap();
 
         let missing = vec![MissingDependency {
             name: "virtual-abi".to_string(),
@@ -426,9 +471,11 @@ mod tests {
             let trove_id = trove.insert(&conn).unwrap();
             ProvideEntry::new_typed(
                 trove_id,
-                "package",
+                conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
                 "virtual-abi".to_string(),
                 Some(capability_version.to_string()),
+                conary_core::repository::versioning::VersionScheme::Rpm,
+                Default::default(),
             )
             .insert(&conn)
             .unwrap();
@@ -465,7 +512,7 @@ mod tests {
                 _temp_dir: None,
                 repository_provenance: Some(RepositorySourceMetadata {
                     repository_id: 42,
-                    source_distro: Some("fedora".to_string()),
+                    source_profile: Some("fedora-44".to_string()),
                     version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
                     source_kind: RepositorySourceKind::Remi,
                 }),
@@ -482,8 +529,9 @@ mod tests {
         let provenance = resolved
             .repository_provenance
             .expect("Remi CCS resolution should keep repository provenance");
+        assert_eq!(resolved.source_type, ResolvedSourceType::Ccs);
         assert_eq!(provenance.repository_id, 42);
-        assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(provenance.source_profile.as_deref(), Some("fedora-44"));
         assert_eq!(
             provenance.version_scheme,
             conary_core::repository::versioning::VersionScheme::Rpm

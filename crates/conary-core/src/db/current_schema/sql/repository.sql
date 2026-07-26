@@ -14,9 +14,13 @@ CREATE TABLE repositories (
         , content_url TEXT,
             default_strategy TEXT
                 CHECK(default_strategy IS NULL OR default_strategy IN ('binary', 'remi', 'static')),
-            default_strategy_endpoint TEXT, default_strategy_distro TEXT,
+            default_strategy_endpoint TEXT,
+            source_profile TEXT
+                CHECK(source_profile IS NULL OR source_profile IN (
+                    'fedora-44', 'ubuntu-26.04', 'arch'
+                )),
             tuf_enabled INTEGER NOT NULL DEFAULT 0, tuf_root_version INTEGER, tuf_root_url TEXT,
-            distro TEXT, security_advisory_support TEXT NOT NULL DEFAULT 'unknown'
+            security_advisory_support TEXT NOT NULL DEFAULT 'unknown'
             CHECK(security_advisory_support IN ('unknown', 'unsupported', 'supported')),
             package_format TEXT NOT NULL DEFAULT 'unspecified'
                 CHECK(package_format IN ('arch', 'deb', 'rpm', 'json', 'unspecified')),
@@ -35,20 +39,36 @@ CREATE TABLE repository_packages (
             repository_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             version TEXT NOT NULL,
-            architecture TEXT,
+            architecture TEXT CHECK(architecture IS NULL OR length(architecture) > 0),
+            debian_multi_arch TEXT
+                CHECK(debian_multi_arch IS NULL OR debian_multi_arch IN ('no', 'same', 'allowed', 'foreign')),
             description TEXT,
             checksum TEXT NOT NULL,
             size INTEGER NOT NULL,
             download_url TEXT NOT NULL,
             metadata TEXT,
-            synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_security_update INTEGER NOT NULL DEFAULT 0, severity TEXT, cve_ids TEXT, advisory_id TEXT, advisory_url TEXT, distro TEXT, version_scheme TEXT NOT NULL
+            synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_security_update INTEGER NOT NULL DEFAULT 0, severity TEXT, cve_ids TEXT, advisory_id TEXT, advisory_url TEXT,
+            source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+            version_scheme TEXT NOT NULL
                 CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')), canonical_id INTEGER
             REFERENCES canonical_packages(id) ON DELETE SET NULL, package_release TEXT NOT NULL DEFAULT '',
+            CHECK(
+                (version_scheme = 'debian' AND debian_multi_arch IS NOT NULL)
+                OR (version_scheme != 'debian' AND debian_multi_arch IS NULL)
+            ),
             FOREIGN KEY (repository_id) REFERENCES repositories(id) ON DELETE CASCADE
         );
 CREATE INDEX idx_repo_packages_name ON repository_packages(name);
 CREATE INDEX idx_repo_packages_repo ON repository_packages(repository_id);
 CREATE INDEX idx_repo_packages_checksum ON repository_packages(checksum);
+CREATE UNIQUE INDEX idx_repo_packages_exact_identity
+ON repository_packages(
+    repository_id,
+    name,
+    version,
+    package_release,
+    COALESCE(architecture, '')
+);
 CREATE TABLE package_deltas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             package_name TEXT NOT NULL,
@@ -183,10 +203,10 @@ CREATE TABLE package_resolution (
             -- Resolution strategies as JSON array of ResolutionStrategy
             -- Tried in order until one succeeds
             strategies TEXT NOT NULL,
-            -- Primary strategy for indexing: binary, remi, recipe, delegate, repository_package
+            -- Primary strategy for indexing: remi, delegate, repository_package
             primary_strategy TEXT NOT NULL
                 CHECK(primary_strategy IN (
-                    'binary', 'remi', 'recipe', 'delegate', 'repository_package'
+                    'remi', 'delegate', 'repository_package'
                 )),
 
             -- Caching policy
@@ -230,7 +250,8 @@ CREATE TABLE federation_stats (
 CREATE INDEX idx_federation_stats_date ON federation_stats(date DESC);
 CREATE TABLE download_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            distro TEXT NOT NULL,
+            source_profile TEXT NOT NULL
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
             package_name TEXT NOT NULL,
             package_version TEXT,
             downloaded_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -238,20 +259,21 @@ CREATE TABLE download_stats (
             user_agent TEXT
         );
 CREATE INDEX idx_download_stats_package
-            ON download_stats(distro, package_name);
+            ON download_stats(source_profile, package_name);
 CREATE INDEX idx_download_stats_time
             ON download_stats(downloaded_at);
 CREATE TABLE download_counts (
-            distro TEXT NOT NULL,
+            source_profile TEXT NOT NULL
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
             package_name TEXT NOT NULL,
             total_count INTEGER NOT NULL DEFAULT 0,
             count_30d INTEGER NOT NULL DEFAULT 0,
             count_7d INTEGER NOT NULL DEFAULT 0,
             last_updated TEXT,
-            PRIMARY KEY (distro, package_name)
+            PRIMARY KEY (source_profile, package_name)
         );
 CREATE INDEX idx_download_counts_popular
-            ON download_counts(distro, total_count DESC);
+            ON download_counts(source_profile, total_count DESC);
 CREATE TABLE remote_collections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -328,7 +350,8 @@ CREATE TABLE mirror_health (
 CREATE INDEX idx_mirror_health_repo ON mirror_health(repository_id);
 CREATE TABLE delta_manifests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            distro TEXT NOT NULL,
+            source_profile TEXT NOT NULL
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
             package_name TEXT NOT NULL,
             from_version TEXT NOT NULL,
             to_version TEXT NOT NULL,
@@ -337,28 +360,27 @@ CREATE TABLE delta_manifests (
             download_size INTEGER NOT NULL DEFAULT 0,
             full_size INTEGER NOT NULL DEFAULT 0,
             computed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(distro, package_name, from_version, to_version)
+            UNIQUE(source_profile, package_name, from_version, to_version)
         );
 CREATE TABLE canonical_packages (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
-            appstream_id TEXT,
+            appstream_id TEXT UNIQUE,
             description TEXT,
             kind TEXT NOT NULL DEFAULT 'package',
             category TEXT
         );
 CREATE INDEX idx_canonical_packages_name
             ON canonical_packages(name);
-CREATE INDEX idx_canonical_packages_appstream
-            ON canonical_packages(appstream_id);
 CREATE TABLE package_implementations (
             id INTEGER PRIMARY KEY,
-            canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id),
-            distro TEXT NOT NULL,
+            canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id) ON DELETE CASCADE,
+            distro TEXT NOT NULL
+                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
             distro_name TEXT NOT NULL,
-            repo_id INTEGER REFERENCES repositories(id),
-            source TEXT NOT NULL DEFAULT 'auto',
-            UNIQUE(canonical_id, distro, distro_name)
+            source TEXT NOT NULL
+                CHECK(source IN ('contract', 'remi')),
+            UNIQUE(canonical_id, distro)
         );
 CREATE INDEX idx_pkg_impl_distro
             ON package_implementations(distro, distro_name);
@@ -366,25 +388,39 @@ CREATE INDEX idx_pkg_impl_canonical
             ON package_implementations(canonical_id);
 CREATE TABLE distro_pin (
             id INTEGER PRIMARY KEY,
-            distro TEXT NOT NULL,
-            mixing_policy TEXT NOT NULL DEFAULT 'guarded',
+            distro TEXT NOT NULL
+                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+            mixing_policy TEXT NOT NULL DEFAULT 'guarded'
+                CHECK(mixing_policy IN ('strict', 'guarded', 'permissive')),
             created_at TEXT NOT NULL
-        );
-CREATE TABLE package_overrides (
-            id INTEGER PRIMARY KEY,
-            canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id),
-            from_distro TEXT NOT NULL,
-            reason TEXT
         );
 CREATE TABLE repository_provides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_package_id INTEGER NOT NULL,
             capability TEXT NOT NULL,
             version TEXT,
+            version_relation TEXT
+                CHECK(version_relation IN ('lt', 'le', 'eq', 'ge', 'gt')),
             kind TEXT NOT NULL DEFAULT 'package',
             raw TEXT,
             version_scheme TEXT NOT NULL
                 CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+            architecture_qualifier_kind TEXT NOT NULL
+                CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
+            architecture TEXT,
+            CHECK(
+                (version IS NULL AND version_relation IS NULL)
+                OR
+                (version IS NOT NULL AND version_relation IS NOT NULL)
+            ),
+            CHECK(
+                (architecture_qualifier_kind = 'exact'
+                    AND architecture IS NOT NULL
+                    AND architecture <> '')
+                OR
+                (architecture_qualifier_kind IN ('implicit', 'any')
+                    AND architecture IS NULL)
+            ),
             FOREIGN KEY (repository_package_id) REFERENCES repository_packages(id) ON DELETE CASCADE
         );
 CREATE INDEX idx_repository_provides_pkg
@@ -513,7 +549,8 @@ CREATE TABLE native_package_publications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
             repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
-            distro TEXT NOT NULL,
+            source_profile TEXT NOT NULL
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
             name TEXT NOT NULL,
             version TEXT NOT NULL,
             package_release TEXT NOT NULL,
@@ -543,7 +580,7 @@ CREATE TABLE native_package_publications (
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
         );
 CREATE UNIQUE INDEX idx_native_publications_active_identity
-            ON native_package_publications(distro, name, version, package_release, architecture)
+            ON native_package_publications(source_profile, name, version, package_release, architecture)
             WHERE status = 'public';
 CREATE INDEX idx_native_publications_repo_package
             ON native_package_publications(repository_package_id);

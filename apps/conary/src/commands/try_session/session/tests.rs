@@ -154,7 +154,9 @@ fn try_generation_build_leaves_current_link_and_writes_live_runtime_artifacts() 
     assert!(
         !outcome.work_dir.join("objects").exists()
             && !outcome.work_dir.join("generations").exists(),
-        "throwaway work dir must not become the runtime artifact root"
+        "throwaway work dir must not become the runtime artifact root: objects={}, generations={}",
+        outcome.work_dir.join("objects").exists(),
+        outcome.work_dir.join("generations").exists()
     );
     Ok(())
 }

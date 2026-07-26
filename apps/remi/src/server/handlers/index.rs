@@ -104,7 +104,7 @@ fn build_metadata(
 
     // Public HTTP routes are stable family slugs; persisted repository
     // authority is always the exact release profile.
-    let repositories = find_repositories_for_distro(&conn, profile.id())?;
+    let repositories = find_repositories_for_profile(&conn, profile.id())?;
 
     if repositories.is_empty() {
         return Ok(RepositoryMetadata {
@@ -134,7 +134,7 @@ fn build_metadata(
 
     // Query converted packages once so we can both mark repo-backed entries as
     // converted and surface packages that exist only in Remi's CCS store.
-    let converted_packages = load_converted_metadata_rows(&conn, route_slug)?;
+    let converted_packages = load_converted_metadata_rows(&conn, profile.id())?;
     let converted_set: HashSet<PackageKey> = converted_packages
         .iter()
         .map(|pkg| package_key(&pkg.name, &pkg.version, None, pkg.architecture.as_deref()))
@@ -244,7 +244,7 @@ fn build_metadata(
 }
 
 /// Alias to shared implementation in handlers/mod.rs
-use super::find_repositories_for_distro;
+use super::find_repositories_for_profile;
 
 type PackageKey = (String, String, Option<String>, Option<String>);
 
@@ -278,9 +278,9 @@ struct ConvertedMetadataRow {
 #[cfg(test)]
 fn build_converted_packages(
     conn: &Connection,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<Vec<PackageEntry>, anyhow::Error> {
-    load_converted_metadata_rows(conn, distro)?
+    load_converted_metadata_rows(conn, source_profile)?
         .into_iter()
         .map(|row| {
             Ok(PackageEntry {
@@ -299,14 +299,14 @@ fn build_converted_packages(
 
 fn load_converted_metadata_rows(
     conn: &Connection,
-    distro: &str,
+    source_profile: &str,
 ) -> Result<Vec<ConvertedMetadataRow>, anyhow::Error> {
     let mut packages = Vec::new();
-    for converted in ConvertedPackage::find_current_conversions(conn, distro, None)? {
+    for converted in ConvertedPackage::find_current_conversions(conn, source_profile, None)? {
         let artifact = converted.repository_artifact()?;
         let name = artifact.package_name.to_string();
         let version = artifact.package_version.to_string();
-        let architecture = artifact.package_architecture.map(str::to_string);
+        let architecture = Some(artifact.package_architecture.to_string());
 
         // Pre-architecture Remi conversion records cannot be addressed safely
         // once native metadata has multilib packages and epoch-aware versions.

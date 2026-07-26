@@ -8,8 +8,6 @@ use crate::commands::TroveSnapshot;
 pub(crate) struct RemoveInnerResult {
     pub(crate) snapshot: TroveSnapshot,
     pub(super) trove: Trove,
-    pub(super) removed_count: usize,
-    pub(super) dirs_removed: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

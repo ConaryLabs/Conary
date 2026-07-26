@@ -160,15 +160,16 @@ fn parse_force(mode: DpkgForceMode, value: &[u8]) -> Result<DpkgOption, DpkgLife
     let values = split_nonempty("--force", value, b',')?;
     let mut things = Vec::with_capacity(values.len());
     for value in values {
-        things.push(DpkgForceThing::parse(&value).ok_or_else(|| {
-            DpkgLifecycleGrammarError::InvalidOperand {
+        let Some(thing) = DpkgForceThing::parse(&value) else {
+            return Err(DpkgLifecycleGrammarError::InvalidOperand {
                 tool: DPKG,
                 action: "--force",
                 operand: "force thing",
                 value,
                 reason: "is not documented by dpkg 1.23.7",
-            }
-        })?);
+            });
+        };
+        things.push(thing);
     }
     Ok(DpkgOption::Force { mode, things })
 }

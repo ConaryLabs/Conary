@@ -1,7 +1,12 @@
 // conary-core/src/ccs/v2/validation.rs
 
+mod config;
+mod identity;
+
 use super::diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 use super::schema::*;
+use config::{validate_config_authority, validate_package_policy};
+use identity::{validate_identity, validate_provides};
 
 pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
     validate_authority_common(authority)
@@ -27,40 +32,7 @@ fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2Va
             "rebuild or regenerate the package as CCS v2",
         ));
     }
-    if authority.identity.name.trim().is_empty() {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::MissingAuthority,
-            "v2 package identity name is required",
-            Some("identity.name".to_string()),
-            "set identity.name in signed v2 authority",
-        ));
-    }
-    if authority.identity.version.trim().is_empty() {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::MissingAuthority,
-            "v2 package identity version is required",
-            Some("identity.version".to_string()),
-            "set identity.version in signed v2 authority",
-        ));
-    } else if let Err(error) = crate::repository::versioning::validate_repo_version(
-        authority.identity.version_scheme,
-        &authority.identity.version,
-    ) {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::KindContractViolation,
-            format!("invalid v2 package identity version: {error}"),
-            Some("identity.version".to_string()),
-            "encode a version valid under identity.version_scheme",
-        ));
-    }
-    if authority.identity.release.trim().is_empty() {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::MissingAuthority,
-            "v2 package identity release is required",
-            Some("identity.release".to_string()),
-            "set identity.release in signed v2 authority",
-        ));
-    }
+    validate_identity(authority, &mut diagnostics);
     validate_provenance(&authority.provenance, &mut diagnostics);
     for (index, requirement) in authority.requirements.iter().enumerate() {
         if requirement.kind.is_negative_relation() {
@@ -84,7 +56,7 @@ fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2Va
             ));
         }
     }
-    validate_dependencies("provides", &authority.provides, &mut diagnostics);
+    validate_provides(authority, &mut diagnostics);
     for (index, relation) in authority.relations.iter().enumerate() {
         if let Err(error) = crate::repository::package_relation::validate_native_relation(
             relation,
@@ -98,16 +70,32 @@ fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2Va
             ));
         }
     }
+    if let Some(capabilities) = &authority.capabilities
+        && let Err(error) = capabilities.validate_for_target_arch(
+            authority.identity.version_scheme,
+            authority.identity.architecture.as_deref(),
+        )
+    {
+        diagnostics.push(V2Diagnostic::error(
+            V2DiagnosticCode::KindContractViolation,
+            format!("invalid package capability authority: {error}"),
+            Some("capabilities".to_string()),
+            "encode a complete capability declaration for the package target architecture",
+        ));
+    }
 
     match (&authority.identity.kind, &authority.kind) {
         (PackageKindTagV2::Package, PackageKindV2::Package(data)) => {
             validate_component_defaults(authority, &mut diagnostics);
+            validate_package_policy(&data.policy, "kind.package.policy", &mut diagnostics);
             validate_files(data, authority, &mut diagnostics);
+            validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
             validate_lifecycle(&authority.lifecycle, &mut diagnostics);
         }
         (PackageKindTagV2::Group, PackageKindV2::Group(data)) => {
             reject_group_redirect_payload_authority(authority, &mut diagnostics);
+            validate_package_policy(&data.policy, "kind.group.policy", &mut diagnostics);
             if data.members.is_empty() {
                 diagnostics.push(V2Diagnostic::error(
                     V2DiagnosticCode::KindContractViolation,
@@ -192,23 +180,6 @@ fn validate_component_defaults(
     }
 }
 
-fn validate_dependencies(
-    prefix: &str,
-    entries: &[DependencyEntryV2],
-    diagnostics: &mut Vec<V2Diagnostic>,
-) {
-    for entry in entries {
-        if entry.name.trim().is_empty() {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::MissingAuthority,
-                format!("{prefix} entry requires a name"),
-                Some(format!("{prefix}.name")),
-                "write typed dependency/provide name into signed v2 authority",
-            ));
-        }
-    }
-}
-
 fn validate_files(
     data: &PackageDataV2,
     authority: &AuthorityDocumentV2,
@@ -251,6 +222,17 @@ fn validate_files(
                 ),
                 Some("kind.package.files.component".to_string()),
                 "add matching component authority for every file component",
+            ));
+        }
+        if file.conflict != ConflictPolicyV2::Error {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!(
+                    "file {} requests conflict replacement that the installer does not implement",
+                    file.path
+                ),
+                Some("kind.package.files.conflict".to_string()),
+                "use error conflict policy until typed replacement is implemented end to end",
             ));
         }
     }
@@ -573,6 +555,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_package_capability_authority() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("invalid-capabilities");
+        authority.capabilities = Some(crate::capability::CapabilityDeclaration {
+            version: crate::capability::CAPABILITY_SCHEMA_VERSION + 1,
+            ..Default::default()
+        });
+
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == V2DiagnosticCode::KindContractViolation
+                && diagnostic.field.as_deref() == Some("capabilities")
+        }));
+    }
+
+    #[test]
     fn rejects_group_without_members() {
         let mut authority = AuthorityDocumentV2::empty_package_for_tests("empty-group");
         authority.identity.kind = PackageKindTagV2::Group;
@@ -681,6 +679,92 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|d| d.field.as_deref() == Some("kind.package.files.node"))
+        );
+    }
+
+    #[test]
+    fn rejects_unimplemented_signed_file_conflict_replacement() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("replace-conflict");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        data.files[0].conflict = ConflictPolicyV2::Replace;
+
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("kind.package.files.conflict")
+        }));
+    }
+
+    #[test]
+    fn rejects_unimplemented_signed_host_mutation_policy() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("host-mutation");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        data.policy.allow_host_mutation = true;
+
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("kind.package.policy.allow_host_mutation")
+        }));
+    }
+
+    #[test]
+    fn config_package_and_file_authority_must_match_exactly() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("config-mirror");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        let semantics = ConfigSemanticsV2 {
+            noreplace: true,
+            ghost: false,
+            remove_on_upgrade: false,
+        };
+        data.files[0].config = Some(semantics);
+        data.config.push(ConfigAuthorityV2 {
+            path: data.files[0].path.clone(),
+            semantics,
+        });
+        validate_authority(&authority).unwrap();
+
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            unreachable!();
+        };
+        data.files[0].config.as_mut().unwrap().noreplace = false;
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(error.diagnostics.iter().any(|diagnostic| {
+            diagnostic.field.as_deref() == Some("kind.package.files.config")
+        }));
+    }
+
+    #[test]
+    fn rejects_noncanonical_signed_config_path() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("config-path");
+        let PackageKindV2::Package(data) = &mut authority.kind else {
+            panic!("fixture should be package");
+        };
+        let semantics = ConfigSemanticsV2 {
+            noreplace: true,
+            ghost: false,
+            remove_on_upgrade: false,
+        };
+        data.files[0].path = "/usr//bin/hello".to_string();
+        data.files[0].config = Some(semantics);
+        data.config.push(ConfigAuthorityV2 {
+            path: data.files[0].path.clone(),
+            semantics,
+        });
+
+        let error = validate_authority(&authority).unwrap_err();
+
+        assert!(
+            error.diagnostics.iter().any(|diagnostic| {
+                diagnostic.field.as_deref() == Some("kind.package.config.path")
+            })
         );
     }
 

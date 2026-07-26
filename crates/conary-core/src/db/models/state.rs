@@ -235,6 +235,7 @@ pub struct StateMember {
     pub state_id: i64,
     pub trove_name: String,
     pub trove_version: String,
+    pub package_release: Option<String>,
     pub architecture: Option<String>,
     pub install_reason: String,
     pub selection_reason: Option<String>,
@@ -248,6 +249,7 @@ impl StateMember {
             state_id,
             trove_name,
             trove_version,
+            package_release: None,
             architecture: None,
             install_reason: "explicit".to_string(),
             selection_reason: None,
@@ -257,12 +259,13 @@ impl StateMember {
     /// Insert this member into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         conn.execute(
-            "INSERT INTO state_members (state_id, trove_name, trove_version, architecture, install_reason, selection_reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO state_members (state_id, trove_name, trove_version, package_release, architecture, install_reason, selection_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 self.state_id,
                 &self.trove_name,
                 &self.trove_version,
+                &self.package_release,
                 &self.architecture,
                 &self.install_reason,
                 &self.selection_reason
@@ -277,7 +280,7 @@ impl StateMember {
     /// Find all members of a state
     pub fn find_by_state(conn: &Connection, state_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, state_id, trove_name, trove_version, architecture, \
+            "SELECT id, state_id, trove_name, trove_version, package_release, architecture, \
              install_reason, selection_reason \
              FROM state_members WHERE state_id = ?1 ORDER BY trove_name",
         )?;
@@ -294,9 +297,10 @@ impl StateMember {
             state_id: row.get(1)?,
             trove_name: row.get(2)?,
             trove_version: row.get(3)?,
-            architecture: row.get(4)?,
-            install_reason: row.get(5)?,
-            selection_reason: row.get(6)?,
+            package_release: row.get(4)?,
+            architecture: row.get(5)?,
+            install_reason: row.get(6)?,
+            selection_reason: row.get(7)?,
         })
     }
 }
@@ -346,7 +350,9 @@ impl StateDiff {
         // Find added and upgraded packages
         for member in &to_members {
             if let Some(old_member) = from_map.get(&key(member)) {
-                if old_member.trove_version != member.trove_version {
+                if old_member.trove_version != member.trove_version
+                    || old_member.package_release != member.package_release
+                {
                     upgraded.push(((*old_member).clone(), member.clone()));
                 }
             } else {
@@ -469,22 +475,10 @@ impl<'a> StateEngine<'a> {
 
         // Populate with current packages
         tx.execute(
-            "INSERT INTO state_members (state_id, trove_name, trove_version, architecture, install_reason, selection_reason)
-             SELECT ?1, name, version, architecture, install_reason, selection_reason
+            "INSERT INTO state_members (state_id, trove_name, trove_version, package_release, architecture, install_reason, selection_reason)
+             SELECT ?1, name, version, package_release, architecture, install_reason, selection_reason
              FROM troves WHERE type = 'package'",
             [state_id],
-        )?;
-
-        // Snapshot all CAS hashes for GC liveness tracking.
-        // This captures the complete file set at snapshot time, decoupled from
-        // the mutable troves/files tables that may change during future upgrades.
-        tx.execute(
-            "INSERT OR IGNORE INTO state_cas_hashes (state_id, sha256_hash)
-             SELECT ?1, f.content_sha256 FROM files f
-             JOIN troves t ON f.trove_id = t.id
-             WHERE t.type = 'package'
-               AND f.content_sha256 IS NOT NULL",
-            params![state_id],
         )?;
 
         if activate {
@@ -634,6 +628,47 @@ mod tests {
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].trove_name, "nginx");
         assert_eq!(members[0].trove_version, "1.24.0");
+    }
+
+    #[test]
+    fn state_member_identity_treats_absent_architecture_as_exact() {
+        let (_temp, conn) = create_test_db();
+        conn.execute("DELETE FROM system_states", []).unwrap();
+
+        let mut state = SystemState::new(1, "Identity state".to_string());
+        let state_id = state.insert(&conn).unwrap();
+
+        let mut architecture_independent =
+            StateMember::new(state_id, "glibc".to_string(), "2.40".to_string());
+        architecture_independent.insert(&conn).unwrap();
+
+        let mut duplicate_absent_architecture =
+            StateMember::new(state_id, "glibc".to_string(), "2.40".to_string());
+        assert!(
+            duplicate_absent_architecture.insert(&conn).is_err(),
+            "NULL architecture must participate in state-member uniqueness"
+        );
+
+        let mut concrete_architecture =
+            StateMember::new(state_id, "glibc".to_string(), "2.40".to_string());
+        concrete_architecture.architecture = Some("x86_64".to_string());
+        concrete_architecture.insert(&conn).unwrap();
+
+        let mut duplicate_concrete_architecture =
+            StateMember::new(state_id, "glibc".to_string(), "2.40".to_string());
+        duplicate_concrete_architecture.architecture = Some("x86_64".to_string());
+        assert!(
+            duplicate_concrete_architecture.insert(&conn).is_err(),
+            "concrete architecture must participate in state-member uniqueness"
+        );
+
+        let mut empty_architecture =
+            StateMember::new(state_id, "openssl".to_string(), "3.4".to_string());
+        empty_architecture.architecture = Some(String::new());
+        assert!(
+            empty_architecture.insert(&conn).is_err(),
+            "empty architecture must not collide with absent architecture"
+        );
     }
 
     #[test]

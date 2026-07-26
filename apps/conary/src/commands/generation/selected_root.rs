@@ -1,8 +1,8 @@
-// src/commands/generation/selected_root.rs
+// apps/conary/src/commands/generation/selected_root.rs
 
 //! Rollback-safe writable roots for generation-aware transaction execution.
 
-use crate::commands::{LiveRootFile, LiveRootTransaction};
+use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::GenerationPublication;
 use conary_core::filesystem::CasStore;
@@ -11,6 +11,7 @@ use conary_core::generation::root_manifest::{
     materialize_captured_selected_root, scan_selected_root,
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
+use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,7 @@ pub(crate) struct SelectedRootSession {
     session_dir: PathBuf,
     selected_root: PathBuf,
     transaction: Option<LiveRootTransaction>,
+    transaction_engine: TransactionEngine,
 }
 
 impl SelectedRootSession {
@@ -72,6 +74,13 @@ impl SelectedRootSession {
         session_id: String,
         operation: impl Into<String>,
     ) -> Result<Self> {
+        // The runtime transaction lock is acquired before reading either
+        // SQLite package authority or the selected generation. Holding it
+        // through candidate persistence and the caller-owned DB commit makes
+        // the materialized root a serializable mutation base.
+        let mut transaction_engine =
+            TransactionEngine::new(TransactionConfig::for_runtime_root(runtime_root))?;
+        transaction_engine.begin()?;
         let selected_root = session_dir.join("root");
         fs::create_dir_all(&selected_root).with_context(|| {
             format!(
@@ -89,6 +98,7 @@ impl SelectedRootSession {
             session_dir,
             selected_root,
             transaction: Some(transaction),
+            transaction_engine,
         })
     }
 
@@ -96,14 +106,25 @@ impl SelectedRootSession {
         &self.selected_root
     }
 
+    pub(crate) fn cas(&self) -> &CasStore {
+        self.transaction_engine.cas()
+    }
+
+    /// Capture the complete selected-root authority before a transaction mutates it.
+    ///
+    /// Rollback persists this manifest with the changeset. Rebuilding from package
+    /// rows alone would lose exact parent-directory and lifecycle-created state.
+    pub(crate) fn capture_rollback_authority(&self) -> Result<CapturedSelectedRoot> {
+        scan_selected_root(&self.selected_root, self.transaction_engine.cas()).map_err(Into::into)
+    }
+
     pub(crate) fn apply_install_files(&mut self, files: &[LiveRootFile]) -> Result<()> {
         self.transaction_mut()?.apply_install_files(files)?;
         Ok(())
     }
 
-    pub(crate) fn apply_remove_paths(&mut self, paths: &[String]) -> Result<()> {
-        self.transaction_mut()?.apply_remove_paths(paths)?;
-        Ok(())
+    pub(crate) fn apply_remove_paths(&mut self, paths: &[String]) -> Result<LiveRootStats> {
+        self.transaction_mut()?.apply_remove_paths(paths)
     }
 
     /// Commit and capture the exact selected root while retaining its writable
@@ -251,6 +272,41 @@ pub(crate) fn remove_publication_candidate(
     }
 }
 
+/// Persist an already-captured selected root as retryable publication input.
+///
+/// Rollback carries this authority in changeset metadata, so it has no live
+/// selected-root session directory to transfer into the candidate.
+pub(crate) fn persist_captured_publication_candidate(
+    runtime_root: &ConaryRuntimeRoot,
+    debt: &GenerationPublication,
+    captured: &CapturedSelectedRoot,
+) -> Result<()> {
+    let candidate = publication_candidate_dir(runtime_root, debt)?;
+    remove_uncommitted_candidate_collision(&candidate)?;
+    let candidates_root = candidate
+        .parent()
+        .context("publication candidate has no parent")?;
+    fs::create_dir_all(candidates_root)?;
+    let temporary = candidates_root.join(format!(".candidate-{}.tmp", uuid::Uuid::new_v4()));
+    fs::create_dir(&temporary)?;
+    let result = (|| -> Result<()> {
+        captured.generation.write_to(&temporary)?;
+        captured.state.write_to(&temporary)?;
+        let candidate_root = temporary.join("root");
+        let cas = CasStore::new(runtime_root.objects_dir())?;
+        materialize_captured_selected_root(captured, &cas, &candidate_root)?;
+        fs::rename(&temporary, &candidate)?;
+        conary_core::filesystem::durable::sync_parent_directory(&candidate)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&temporary);
+        let _ = fs::remove_dir_all(&candidate);
+    }
+    result
+}
+
+#[cfg(test)]
 pub(crate) fn remove_terminal_publication_candidates(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
@@ -266,6 +322,25 @@ pub(crate) fn remove_terminal_publication_candidates(
             continue;
         }
         remove_publication_candidate(runtime_root, &current)?;
+    }
+    Ok(())
+}
+
+/// Remove publication inputs after the aggregate generation backup is durable.
+///
+/// A debt in `DatabaseBackedUp` replays from the generation artifact and
+/// verified backup, so it no longer depends on its selected-root candidate.
+/// Deleting candidates before the terminal DB update makes the crash tail
+/// idempotent: retry can repeat deletion and only then complete the debt.
+pub(crate) fn remove_backed_up_publication_candidates(
+    runtime_root: &ConaryRuntimeRoot,
+    candidates: &[GenerationPublication],
+) -> Result<()> {
+    for candidate in candidates {
+        candidate
+            .id
+            .context("backed-up publication candidate requires a persisted debt id")?;
+        remove_publication_candidate(runtime_root, candidate)?;
     }
     Ok(())
 }
@@ -288,12 +363,7 @@ fn persist_publication_candidate(
     captured: &CapturedSelectedRoot,
 ) -> Result<()> {
     let candidate = publication_candidate_dir(runtime_root, debt)?;
-    if fs::symlink_metadata(&candidate).is_ok() {
-        bail!(
-            "selected-root publication candidate already exists: {}",
-            candidate.display()
-        );
-    }
+    remove_uncommitted_candidate_collision(&candidate)?;
     let candidates_root = candidate
         .parent()
         .context("publication candidate has no parent")?;
@@ -313,6 +383,30 @@ fn persist_publication_candidate(
         let _ = fs::remove_dir_all(&temporary);
     }
     result
+}
+
+/// Remove a candidate left by a process that died before its SQLite insert
+/// committed.
+///
+/// Candidate IDs come from an uncommitted AUTOINCREMENT row and are therefore
+/// reusable after SQLite rolls that transaction back. Every caller reaches
+/// this boundary while holding the single runtime mutation lock and immediately
+/// after creating a new debt row, so an existing directory at the same ID
+/// cannot belong to another live or committed transaction.
+fn remove_uncommitted_candidate_collision(candidate: &Path) -> Result<()> {
+    match fs::symlink_metadata(candidate) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            fs::remove_dir_all(candidate)?;
+            conary_core::filesystem::durable::sync_parent_directory(candidate)?;
+            Ok(())
+        }
+        Ok(_) => bail!(
+            "selected-root publication candidate has an unexpected file type: {}",
+            candidate.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn remove_session_dir(path: &Path) -> Result<()> {
@@ -391,7 +485,7 @@ mod tests {
     fn live_regular(path: &str, content: &[u8], mode: u32) -> LiveRootFile {
         LiveRootFile {
             path: path.to_string(),
-            content: content.to_vec(),
+            content: crate::commands::LiveRootContent::from_in_memory_bytes(content),
             node: resolved_regular(mode),
         }
     }
@@ -507,7 +601,15 @@ mod tests {
         remove_terminal_publication_candidates(&conn, &runtime_root, std::slice::from_ref(&debt))
             .unwrap();
         assert!(candidate.exists());
-        GenerationPublication::mark_complete_through(&conn, None, 1, 1).unwrap();
+        debt.set_phase(
+            &conn,
+            conary_core::db::models::GenerationPublicationPhase::DatabaseBackedUp,
+            GenerationPublicationStatus::Running,
+            Some(1),
+            Some(1),
+        )
+        .unwrap();
+        debt.mark_complete_through(&conn, None, 1, 1).unwrap();
         remove_terminal_publication_candidates(&conn, &runtime_root, &[debt]).unwrap();
         assert!(!candidate.exists());
     }
@@ -541,6 +643,7 @@ mod tests {
         first_debt
             .mark_failed(&conn, "forced first publication failure")
             .unwrap();
+        drop(first);
 
         let mut second =
             SelectedRootSession::begin(&conn, db_path.to_str().unwrap(), "second").unwrap();
@@ -596,6 +699,95 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert!(retry_paths.contains("/opt/first-effect"));
         assert!(retry_paths.contains("/opt/second-effect"));
+    }
+
+    #[test]
+    fn mutation_lock_prevents_stale_root_and_preserves_root_db_parity() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let runtime_root = ConaryRuntimeRoot::from_db_path(&db_path);
+        let mut first =
+            SelectedRootSession::begin(&conn, db_path.to_str().unwrap(), "first writer").unwrap();
+        first
+            .apply_install_files(&[live_regular("/opt/serialized-effect", b"serialized", 0o644)])
+            .unwrap();
+
+        let (attempt_tx, attempt_rx) = std::sync::mpsc::sync_channel(0);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+        let thread_db_path = db_path.clone();
+        let waiter = std::thread::spawn(move || {
+            let waiter_conn = conary_core::db::open(&thread_db_path).unwrap();
+            attempt_tx.send(()).unwrap();
+            let session = SelectedRootSession::begin(
+                &waiter_conn,
+                thread_db_path.to_str().unwrap(),
+                "second writer",
+            );
+            let result = session
+                .and_then(|session| {
+                    let root_bytes =
+                        fs::read(session.selected_root().join("opt/serialized-effect"))?;
+                    let db_entry = FileEntry::find_by_path(&waiter_conn, "/opt/serialized-effect")?
+                        .context("serialized root effect has no committed DB authority")?;
+                    Ok((root_bytes, db_entry.content))
+                })
+                .map_err(|error| error.to_string());
+            result_tx.send(result).unwrap();
+        });
+        attempt_rx.recv().unwrap();
+        assert!(
+            matches!(
+                result_rx.recv_timeout(std::time::Duration::from_millis(250)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "second writer materialized a root before the first writer committed"
+        );
+
+        let cas_hash = first.cas().store(b"serialized").unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        let mut trove = Trove::new(
+            "serialized-fixture".to_string(),
+            "1".to_string(),
+            TroveType::Package,
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        let trove_id = trove.insert(&tx).unwrap();
+        FileEntry::new(
+            "/opt/serialized-effect".to_string(),
+            resolved_regular(0o644),
+            Some(PayloadContentAuthority {
+                sha256: cas_hash,
+                size: 10,
+            }),
+            trove_id,
+        )
+        .insert(&tx)
+        .unwrap();
+        let debt = GenerationPublication::create_pending(
+            &tx,
+            None,
+            None,
+            db_path.to_str().unwrap(),
+            &runtime_root.root().display().to_string(),
+            "first writer",
+            &Default::default(),
+        )
+        .unwrap();
+        first.persist_for_publication(&runtime_root, &debt).unwrap();
+        tx.commit().unwrap();
+        drop(first);
+
+        let (root_bytes, db_content) = result_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        waiter.join().unwrap();
+        assert_eq!(root_bytes, b"serialized");
+        let db_content = db_content.expect("serialized DB file has no content authority");
+        assert_eq!(db_content.size, root_bytes.len() as u64);
+        assert_eq!(db_content.sha256, CasStore::compute_sha256(&root_bytes));
     }
 
     #[test]

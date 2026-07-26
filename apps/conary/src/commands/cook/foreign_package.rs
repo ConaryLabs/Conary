@@ -28,12 +28,19 @@ pub(super) fn cook_foreign_package(
             package_path.display()
         )
     })?;
-    let package_bytes = std::fs::read(package_path)
-        .with_context(|| format!("Failed to read foreign package: {}", package_path.display()))?;
-    let checksum = conary_core::hash::sha256_prefixed(&package_bytes);
-    let extracted = package.extract_file_contents().with_context(|| {
+    let mut package_file = std::fs::File::open(package_path)
+        .with_context(|| format!("Failed to open foreign package: {}", package_path.display()))?;
+    let checksum = format!(
+        "sha256:{}",
+        conary_core::hash::hash_reader(
+            conary_core::hash::HashAlgorithm::Sha256,
+            &mut package_file,
+        )?
+        .value
+    );
+    let payload = package.package_payload().with_context(|| {
         format!(
-            "Failed to extract files for foreign package: {}",
+            "Failed to open payload for foreign package: {}",
             package_path.display()
         )
     })?;
@@ -43,6 +50,7 @@ pub(super) fn cook_foreign_package(
         version: package.version().to_string(),
         version_scheme: package.version_scheme(),
         architecture: package.architecture().map(str::to_string),
+        debian_multi_arch: package.debian_multi_arch(),
         description: package.description().map(str::to_string),
         files: package.files().to_vec(),
         requirements: package.requirements().to_vec(),
@@ -50,17 +58,16 @@ pub(super) fn cook_foreign_package(
         relations: package.relations().to_vec(),
         diagnostic_scriptlet_evidence: Vec::new(),
         native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
-        config_files: Vec::new(),
+        config_files: package.config_files().to_vec(),
     };
     let converter = NativePackageConverter::new(ConversionOptions {
-        enable_chunking: true,
         output_dir: output_dir.to_path_buf(),
     })
     .with_signing_key(std::sync::Arc::new(
         crate::commands::ccs::load_or_create_local_dev_key()?,
     ));
     let result = converter
-        .convert(&metadata, &extracted, format.name(), &checksum)
+        .convert_payload(&metadata, payload.files(), format.name(), &checksum)
         .with_context(|| {
             format!(
                 "Failed to convert foreign package {}",

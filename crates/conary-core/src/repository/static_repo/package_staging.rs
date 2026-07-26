@@ -9,18 +9,27 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::ccs::package::CcsPackage;
 use crate::ccs::signing::SigningKeyPair;
-use crate::ccs::v2::schema::{DependencyEntryV2, DependencyKindV2};
+use crate::ccs::v2::schema::{DependencyKindV2, ProvidedCapabilityV2};
 use crate::ccs::verify::{TrustPolicy, verify_package};
 use crate::hash;
 use crate::packages::traits::PackageFormat;
 use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryProvide, RepositoryRequirementGroup,
+    ProvideArchitectureQualifier, RepositoryCapabilityKind, RepositoryProvide,
+    RepositoryRequirementGroup,
 };
 use crate::repository::static_repo::publish_gate::AcceptedStaticSignerSet;
 use crate::repository::static_repo::{StaticPackageEntry, validate_repo_relative_path};
 
 const ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 1024;
 static ATOMIC_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+type ProvideIdentity = (
+    RepositoryCapabilityKind,
+    String,
+    Option<String>,
+    Option<crate::repository::dependency_model::ProvideVersionRelation>,
+    ProvideArchitectureQualifier,
+);
 
 #[derive(Default)]
 pub(crate) struct PendingPackageWrites {
@@ -162,49 +171,25 @@ fn resign_current_package_bytes(
     publish_key: &SigningKeyPair,
 ) -> Result<Vec<u8>> {
     use crate::ccs::v2::schema::PackageKindV2;
-    use crate::payload::PayloadNodeKind;
-    use std::collections::BTreeMap;
 
-    let PackageKindV2::Package(data) = &verified.authority().kind else {
+    let PackageKindV2::Package(_) = &verified.authority().kind else {
         bail!("static repository publication only stages CCS package payloads");
     };
-    let blobs = package.extract_all_content().map_err(anyhow::Error::from)?;
-    let mut payloads_by_path = BTreeMap::new();
-    for file in &data.files {
-        if !matches!(&file.node.kind, PayloadNodeKind::Regular { .. }) {
-            continue;
-        }
-        let content = file.content.as_ref().with_context(|| {
-            format!(
-                "verified regular payload {} has no content authority",
-                file.path
-            )
-        })?;
-        let payload = blobs.get(&content.sha256).with_context(|| {
-            format!(
-                "verified package is missing payload {} for {}",
-                content.sha256, file.path
-            )
-        })?;
-        payloads_by_path.insert(file.path.clone(), payload.clone());
-    }
 
     let output = tempfile::NamedTempFile::new()?;
     let debug_toml = verified
-        .archive()
-        .toml_raw
-        .as_deref()
+        .debug_toml()
         .map(std::str::from_utf8)
         .transpose()
         .context("decode verified CCS debug projection as UTF-8")?;
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_sources(
         verified.authority(),
-        &payloads_by_path,
+        package.payload().files(),
         output.path(),
         publish_key,
         debug_toml,
-        verified.archive().v2_build_attestation.as_ref(),
-        verified.archive().v2_foreign_conversion_boundary.as_ref(),
+        verified.build_attestation(),
+        verified.foreign_conversion_boundary(),
     )?;
     verify_package(
         output.path(),
@@ -300,12 +285,20 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
         RepositoryCapabilityKind::PackageName,
         package.name().to_string(),
         Some(package.version().to_string()),
+        Some(crate::repository::dependency_model::ProvideVersionRelation::Equal),
+        ProvideArchitectureQualifier::Implicit,
     )]);
 
     if let Some(authority) = package.v2_authority() {
         for provide in &authority.provides {
             let provide = project_v2_provide(provide)?;
-            let key = (provide.kind, provide.name.clone(), provide.version.clone());
+            let key = (
+                provide.kind,
+                provide.name.clone(),
+                provide.version.clone(),
+                provide.version_relation,
+                provide.architecture_qualifier.clone(),
+            );
             if seen.insert(key) {
                 provides.push(provide);
             }
@@ -323,6 +316,8 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
                     name: capability.clone(),
                     kind: RepositoryCapabilityKind::Generic,
                     version: None,
+                    version_relation: None,
+                    architecture_qualifier: ProvideArchitectureQualifier::Implicit,
                     native_text: Some(capability.clone()),
                 },
             );
@@ -336,6 +331,8 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
                 name: format!("soname({soname})"),
                 kind: RepositoryCapabilityKind::Soname,
                 version: None,
+                version_relation: None,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
                 native_text: Some(soname.clone()),
             },
         );
@@ -348,6 +345,8 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
                 name: format!("binary({binary})"),
                 kind: RepositoryCapabilityKind::Generic,
                 version: None,
+                version_relation: None,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
                 native_text: Some(binary.clone()),
             },
         );
@@ -360,6 +359,8 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
                 name: format!("pkgconfig({pkgconfig})"),
                 kind: RepositoryCapabilityKind::Generic,
                 version: None,
+                version_relation: None,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
                 native_text: Some(pkgconfig.clone()),
             },
         );
@@ -369,27 +370,35 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
 
 fn push_provide(
     provides: &mut Vec<RepositoryProvide>,
-    seen: &mut std::collections::HashSet<(RepositoryCapabilityKind, String, Option<String>)>,
+    seen: &mut std::collections::HashSet<ProvideIdentity>,
     provide: RepositoryProvide,
 ) {
-    let key = (provide.kind, provide.name.clone(), provide.version.clone());
+    let key = (
+        provide.kind,
+        provide.name.clone(),
+        provide.version.clone(),
+        provide.version_relation,
+        provide.architecture_qualifier.clone(),
+    );
     if seen.insert(key) {
         provides.push(provide);
     }
 }
 
-fn project_v2_provide(entry: &DependencyEntryV2) -> Result<RepositoryProvide> {
+fn project_v2_provide(entry: &ProvidedCapabilityV2) -> Result<RepositoryProvide> {
     if entry.target.is_some() || entry.component.is_some() {
         bail!(
             "CCS v2 provide '{}' has target/component selectors that the static index contract cannot represent",
             entry.name
         );
     }
-    let (name, kind) = project_v2_capability(entry.kind, &entry.name);
+    let kind = project_v2_capability(entry.kind);
     Ok(RepositoryProvide {
-        name,
+        name: entry.name.clone(),
         kind,
-        version: entry.version_constraint.clone(),
+        version: entry.provider_version.clone(),
+        version_relation: entry.version_relation,
+        architecture_qualifier: entry.architecture_qualifier.clone(),
         native_text: Some(entry.name.clone()),
     })
 }
@@ -406,19 +415,15 @@ fn static_requirements(package: &CcsPackage) -> Result<Vec<RepositoryRequirement
     Ok(requirements)
 }
 
-fn project_v2_capability(kind: DependencyKindV2, name: &str) -> (String, RepositoryCapabilityKind) {
+const fn project_v2_capability(kind: DependencyKindV2) -> RepositoryCapabilityKind {
     match kind {
-        DependencyKindV2::Package => (name.to_string(), RepositoryCapabilityKind::PackageName),
-        DependencyKindV2::Capability => (name.to_string(), RepositoryCapabilityKind::Virtual),
-        DependencyKindV2::File | DependencyKindV2::Path => {
-            (name.to_string(), RepositoryCapabilityKind::File)
-        }
-        DependencyKindV2::Binary => (format!("binary({name})"), RepositoryCapabilityKind::Generic),
-        DependencyKindV2::Soname => (format!("soname({name})"), RepositoryCapabilityKind::Soname),
-        DependencyKindV2::PkgConfig => (
-            format!("pkgconfig({name})"),
-            RepositoryCapabilityKind::Generic,
-        ),
+        DependencyKindV2::Package => RepositoryCapabilityKind::PackageName,
+        DependencyKindV2::Capability => RepositoryCapabilityKind::Virtual,
+        DependencyKindV2::File => RepositoryCapabilityKind::File,
+        DependencyKindV2::Path => RepositoryCapabilityKind::Path,
+        DependencyKindV2::Binary => RepositoryCapabilityKind::Binary,
+        DependencyKindV2::Soname => RepositoryCapabilityKind::Soname,
+        DependencyKindV2::PkgConfig => RepositoryCapabilityKind::PkgConfig,
     }
 }
 
@@ -471,11 +476,14 @@ fn write_atomic_temp_file(path: &Path, file: &mut File, bytes: &[u8]) -> Result<
 mod tests {
     use super::*;
 
-    fn dependency(kind: DependencyKindV2, name: &str) -> DependencyEntryV2 {
-        DependencyEntryV2 {
+    fn dependency(kind: DependencyKindV2, name: &str) -> ProvidedCapabilityV2 {
+        ProvidedCapabilityV2 {
             kind,
             name: name.to_string(),
-            version_constraint: None,
+            provider_version: None,
+            version_relation: None,
+            version_scheme: crate::repository::versioning::VersionScheme::Conary,
+            architecture_qualifier: Default::default(),
             target: None,
             component: None,
         }
@@ -491,6 +499,7 @@ mod tests {
                 name: name.to_string(),
                 capability_kind: Some(capability_kind),
                 version_constraint: None,
+                architecture_qualifier: Default::default(),
                 native_text: None,
             },
         )
@@ -520,8 +529,7 @@ mod tests {
                 && provide.kind == RepositoryCapabilityKind::Virtual
         }));
         assert!(provides.iter().any(|provide| {
-            provide.name == "soname(libtyped.so.1)"
-                && provide.kind == RepositoryCapabilityKind::Soname
+            provide.name == "libtyped.so.1" && provide.kind == RepositoryCapabilityKind::Soname
         }));
         assert!(provides.iter().any(|provide| {
             provide.name == "/usr/lib/libtyped.so" && provide.kind == RepositoryCapabilityKind::File

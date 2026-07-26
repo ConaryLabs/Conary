@@ -1,8 +1,8 @@
-// src/commands/install/transaction/selected_root.rs
+// apps/conary/src/commands/install/transaction/selected_root.rs
 
 //! Single-package graph execution in an isolated selected root.
 
-use super::{InstallTransactionResult, TransactionContext, persist_ccs_manifest_provides};
+use super::{InstallTransactionResult, TransactionContext};
 use crate::commands::generation::selected_root::SelectedRootSession;
 use crate::commands::install::inner;
 use crate::commands::install::native_events::PreparedNativeTransaction;
@@ -17,9 +17,7 @@ use conary_core::db::models::{ActivationRequest, NewActivationRequest};
 use conary_core::db::models::{Changeset, ChangesetStatus, InstalledNativeLifecycleBundle};
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::ExecutionMode;
-use conary_core::transaction::{
-    TransactionConfig, TransactionEngine, validate_package_relation_transitions,
-};
+use conary_core::transaction::validate_package_relation_transitions;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -30,7 +28,6 @@ pub(crate) fn execute_install_transaction_in_selected_root(
     extraction: &ExtractionResult,
     ctx: &TransactionContext<'_>,
     _progress: &InstallProgress,
-    transaction_config: TransactionConfig,
     selected_root: &mut SelectedRootSession,
     native_transaction: &PreparedNativeTransaction,
     native_execution_mode: &ExecutionMode,
@@ -41,7 +38,6 @@ pub(crate) fn execute_install_transaction_in_selected_root(
         extraction,
         ctx,
         _progress,
-        transaction_config,
         selected_root,
         native_transaction,
         native_execution_mode,
@@ -62,7 +58,6 @@ pub(crate) fn execute_install_transaction_in_selected_root_with_post_graph<F>(
     extraction: &ExtractionResult,
     ctx: &TransactionContext<'_>,
     _progress: &InstallProgress,
-    transaction_config: TransactionConfig,
     selected_root: &mut SelectedRootSession,
     native_transaction: &PreparedNativeTransaction,
     native_execution_mode: &ExecutionMode,
@@ -95,22 +90,20 @@ where
         pkg.name(),
         ctx.relation_removals,
     )?;
-
-    let mut engine = TransactionEngine::new(transaction_config)
-        .context("Failed to create transaction engine")?;
-    engine.begin().context("Failed to begin transaction")?;
+    let rollback_root = selected_root.capture_rollback_authority()?;
+    let cas = selected_root.cas().clone();
     let result = execute_selected_root_inner(
         conn,
         pkg,
         extraction,
         ctx,
-        &mut engine,
+        &cas,
         selected_root,
         native_transaction,
         native_execution_mode,
+        rollback_root,
         post_graph,
     );
-    engine.release_lock();
     if result.is_err() {
         selected_root
             .rollback()
@@ -125,16 +118,17 @@ fn execute_selected_root_inner<F>(
     pkg: &dyn PackageFormat,
     extraction: &ExtractionResult,
     ctx: &TransactionContext<'_>,
-    engine: &mut TransactionEngine,
+    cas: &conary_core::filesystem::CasStore,
     selected_root: &mut SelectedRootSession,
     native_transaction: &PreparedNativeTransaction,
     native_execution_mode: &ExecutionMode,
+    rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
     post_graph: F,
 ) -> Result<InstallTransactionResult>
 where
     F: FnOnce() -> Result<Vec<NewActivationRequest>>,
 {
-    let stored_files = inner::store_install_files_in_cas(engine, extraction)?;
+    let stored_files = inner::store_install_files_in_cas(cas, extraction)?;
     let final_incoming_paths = extraction
         .extracted_files
         .iter()
@@ -168,10 +162,23 @@ where
             )
         },
     );
+    let selected_path = selected_root.selected_root().to_path_buf();
     let mut changeset = Changeset::new(tx_description.clone());
     let tx = conn.unchecked_transaction()?;
     let changeset_id = changeset.insert(&tx)?;
-    let selected_path = selected_root.selected_root().to_path_buf();
+    let materialized_directories =
+        super::super::shared_directory::capture_existing_directory_materializations(
+            &tx,
+            &selected_path,
+        )?;
+    super::super::rollback_snapshot::record_install_rollback_snapshots(
+        &tx,
+        changeset_id,
+        ctx.old_trove_to_upgrade,
+        ctx.relation_removals,
+        rollback_root,
+        materialized_directories,
+    )?;
     let installing_identity =
         NativePackageIdentity::new(pkg.name(), pkg.version(), pkg.architecture());
     let mut payload = SelectedRootPayload {
@@ -181,7 +188,7 @@ where
         ctx,
         changeset_id,
         stored_files: &stored_files,
-        cas: engine.cas(),
+        cas,
         selected_root,
         native_transaction,
         installing_identity,
@@ -310,16 +317,31 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             self.selected_root.selected_root(),
             self.stored_files,
         )?;
+        let directory_plan = inner::preflight_resolved_file_ownership(
+            self.tx,
+            self.selected_root.selected_root(),
+            &resolved_files,
+            self.pkg.name(),
+            self.ctx.relation_removals,
+            self.ctx.semantics,
+        )?;
         let package_files =
-            super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?;
+            super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?
+                .into_iter()
+                .filter(|file| !directory_plan.preserves_leaf(&file.path))
+                .collect::<Vec<_>>();
+        let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
         let config_transaction = crate::commands::generation::config_transaction::capture_install(
             self.tx,
             self.selected_root.selected_root(),
-            super::super::config_files::source_for_semantics(self.ctx.semantics),
-            self.pkg.config_files(),
-            &package_files,
-            self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
-            &[],
+            self.cas,
+            crate::commands::generation::config_transaction::ConfigInstallCapture {
+                source: super::super::config_files::source_for_semantics(self.ctx.semantics),
+                declared: self.pkg.config_files(),
+                incoming: &package_files,
+                replacing_trove_id: self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
+                replaced_trove_ids: &[],
+            },
         )?;
         let config_plan = super::super::config_files::prepare_config_install(
             self.tx,
@@ -330,6 +352,8 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             package_files,
         )?;
         self.selected_root.apply_install_files(&config_plan.files)?;
+        self.selected_root
+            .apply_install_files(&through_symlink_files)?;
         self.selected_root
             .apply_remove_paths(&config_plan.remove_paths)?;
         if let Some(file_capabilities) = self.ctx.ccs_file_capabilities {
@@ -346,10 +370,8 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             self.extraction,
             self.ctx,
             &resolved_files,
+            &directory_plan,
         )?;
-        if let Some(provides) = self.ctx.ccs_manifest_provides {
-            persist_ccs_manifest_provides(self.tx, installed.trove_id, self.pkg.name(), provides)?;
-        }
         if let Some(capabilities) = self.ctx.ccs_capabilities {
             conary_core::capability::store_capabilities(self.tx, installed.trove_id, capabilities)?;
         }

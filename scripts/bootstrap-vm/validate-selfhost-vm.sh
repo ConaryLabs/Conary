@@ -13,7 +13,7 @@ Options:
   --repo-name NAME       Repository name to configure inside the guest
   --repo-url URL         Repository metadata URL
   --remi-endpoint URL    Remi conversion endpoint URL
-  --remi-distro DISTRO   Exact public profile ID (for example: fedora-44)
+  --source-profile ID    Exact public source profile ID (for example: fedora-44)
   --root-json PATH       Optional TUF root metadata to copy into the guest
   --ssh-port PORT        Host port forwarded to guest SSH (default: 2222)
   --memory MB            QEMU guest memory in MiB (default: 4096)
@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
             REMI_ENDPOINT="$2"
             shift 2
             ;;
-        --remi-distro)
+        --source-profile)
             REMI_DISTRO="$2"
             shift 2
             ;;
@@ -91,7 +91,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$REPO_NAME" || -z "$REPO_URL" || -z "$REMI_ENDPOINT" || -z "$REMI_DISTRO" ]]; then
-    echo "--repo-name, --repo-url, --remi-endpoint, and --remi-distro are required." >&2
+    echo "--repo-name, --repo-url, --remi-endpoint, and --source-profile are required." >&2
     usage >&2
     exit 1
 fi
@@ -315,7 +315,7 @@ run_guest_validation() {
             --repo-name '$REPO_NAME' \
             --repo-url '$REPO_URL' \
             --remi-endpoint '$REMI_ENDPOINT' \
-            --remi-distro '$REMI_DISTRO'" | tee "$GUEST_VALIDATE_LOG"
+            --source-profile '$REMI_DISTRO'" | tee "$GUEST_VALIDATE_LOG"
 }
 
 main() {

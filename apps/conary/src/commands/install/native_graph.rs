@@ -5,14 +5,14 @@
 use super::native_events::PreparedNativeTransaction;
 use anyhow::Result;
 use conary_core::ccs::native_transaction::{NativeEventStage, NativeTransactionStep};
-use conary_core::db::models::{FileEntry, Trove};
+use conary_core::db::models::Trove;
 use conary_core::scriptlet::ExecutionMode;
 use std::collections::BTreeSet;
 use std::path::Path;
 
 pub(crate) trait TransactionRootMutation {
     fn apply_install_files(&mut self, files: &[crate::commands::LiveRootFile]) -> Result<()>;
-    fn apply_remove_paths(&mut self, paths: &[String]) -> Result<()>;
+    fn apply_remove_paths(&mut self, paths: &[String]) -> Result<crate::commands::LiveRootStats>;
 }
 
 impl TransactionRootMutation for crate::commands::LiveRootTransaction {
@@ -21,9 +21,8 @@ impl TransactionRootMutation for crate::commands::LiveRootTransaction {
         Ok(())
     }
 
-    fn apply_remove_paths(&mut self, paths: &[String]) -> Result<()> {
-        crate::commands::LiveRootTransaction::apply_remove_paths(self, paths)?;
-        Ok(())
+    fn apply_remove_paths(&mut self, paths: &[String]) -> Result<crate::commands::LiveRootStats> {
+        crate::commands::LiveRootTransaction::apply_remove_paths(self, paths)
     }
 }
 
@@ -32,7 +31,7 @@ impl TransactionRootMutation for crate::commands::generation::selected_root::Sel
         Self::apply_install_files(self, files)
     }
 
-    fn apply_remove_paths(&mut self, paths: &[String]) -> Result<()> {
+    fn apply_remove_paths(&mut self, paths: &[String]) -> Result<crate::commands::LiveRootStats> {
         Self::apply_remove_paths(self, paths)
     }
 }
@@ -165,10 +164,11 @@ pub(crate) fn finalize_owned_trove(
     trove_id: i64,
     final_incoming_paths: &BTreeSet<String>,
 ) -> Result<()> {
-    let removable_paths = FileEntry::find_by_trove(tx, trove_id)?
-        .into_iter()
-        .map(|file| file.path)
+    let removable_paths = crate::commands::remove::PackagePayloadOwnership::load(tx, trove_id)?
+        .materialized_removal_paths()
+        .iter()
         .filter(|path| !final_incoming_paths.contains(&normalize_archive_path(path)))
+        .cloned()
         .collect::<Vec<_>>();
     let mut config_plan =
         super::config_files::prepare_config_removal(tx, root, trove_id, removable_paths, false)?;

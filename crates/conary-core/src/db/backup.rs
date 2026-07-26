@@ -781,16 +781,15 @@ fn verify_generation_publication_state(
         if state_number != Some(manifest.state_number) {
             continue;
         }
-        let complete = phase == "active_marked" && status == "complete" && recoverable == 0;
-        let current_published =
-            phase == "current_published" && status == "running" && recoverable == 1;
-        if complete || current_published {
+        let complete = phase == "database_backed_up" && status == "complete" && recoverable == 0;
+        let backup_snapshot = phase == "active_marked" && status == "running" && recoverable == 1;
+        if complete || backup_snapshot {
             return Ok(());
         }
     }
 
     Err(Error::RecoveryFailed(format!(
-        "generation DB backup has no complete or current_published/running publication state for generation {} state {}",
+        "generation DB backup has no complete or active_marked/running publication state for generation {} state {}",
         manifest.generation_number, manifest.state_number
     )))
 }

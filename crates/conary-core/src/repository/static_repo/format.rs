@@ -136,7 +136,8 @@ impl StaticPackageEntry {
         validate_non_empty(&self.version, "package.version")?;
         crate::repository::versioning::validate_repo_version(self.version_scheme, &self.version)
             .context("package.version does not satisfy package.version_scheme")?;
-        validate_non_empty(&self.release, "package.release")?;
+        crate::repository::versioning::validate_package_release(&self.release)
+            .context("package.release is not a positive CCS release number")?;
         validate_non_empty(&self.arch, "package.arch")?;
         validate_non_empty(&self.path, "package.path")?;
         validate_lower_hex(&self.sha256, SHA256_HEX_LEN, "package.sha256")?;
@@ -527,6 +528,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
         "name": "acme-widget",
         "kind": "PackageName",
         "version": "1.4.2",
+        "architecture_qualifier": {{ "kind": "implicit" }},
         "native_text": null
       }}],
       "requirements": [],
@@ -546,6 +548,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
         "name": "acme-widget",
         "kind": "PackageName",
         "version": "1.4.2",
+        "architecture_qualifier": {{ "kind": "implicit" }},
         "native_text": null
       }}],
       "requirements": [],
@@ -727,6 +730,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
         "name": "acme-widget",
         "kind": "PackageName",
         "version": "1.4.2",
+        "architecture_qualifier": {{ "kind": "implicit" }},
         "native_text": null
       }}],
       "requirements": [],

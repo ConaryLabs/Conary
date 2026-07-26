@@ -17,8 +17,8 @@ mod tests {
     fn create_test_package(conn: &Connection, repo_id: i64, name: &str, version: &str) -> i64 {
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, checksum, size, download_url, version_scheme)
-             VALUES (?1, ?2, ?3, 'sha256:abc123', 1024, 'https://example.com/pkg.rpm', 'rpm')",
+             (repository_id, name, version, architecture, checksum, size, download_url, version_scheme)
+             VALUES (?1, ?2, ?3, 'x86_64', 'sha256:abc123', 1024, 'https://example.com/pkg.rpm', 'rpm')",
             rusqlite::params![repo_id, name, version],
         )
         .unwrap();
@@ -95,17 +95,18 @@ mod tests {
     fn test_resolution_options_to_selection_options() {
         let res_options = ResolutionOptions {
             version: Some("1.0.0".to_string()),
+            package_release: Some("3".to_string()),
             repository: Some("test-repo".to_string()),
             architecture: Some("x86_64".to_string()),
             output_dir: None,
             skip_installed: false,
             policy: None,
             is_root: false,
-            primary_flavor: None,
         };
 
         let sel_options = res_options.to_selection_options();
         assert_eq!(sel_options.version, Some("1.0.0".to_string()));
+        assert_eq!(sel_options.package_release, Some("3".to_string()));
         assert_eq!(sel_options.repository, Some("test-repo".to_string()));
         assert_eq!(sel_options.architecture, Some("x86_64".to_string()));
     }
@@ -144,7 +145,7 @@ mod tests {
             repo_id,
             "nginx".to_string(),
             "https://remi.example.com".to_string(),
-            "fedora".to_string(),
+            "fedora-44".to_string(),
         );
         resolution.insert(&conn).unwrap();
 
@@ -163,51 +164,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn binary_routing_does_not_bypass_native_repository_trust() {
+    async fn repository_package_routing_rejects_selected_row_identity_drift() {
         let (_db_temp, conn) = create_test_db();
         let repo_id = create_test_repo(&conn);
-        conn.execute(
-            "UPDATE repositories SET default_strategy = 'static' WHERE id = ?1",
-            [repo_id],
-        )
-        .unwrap();
-        let pkg_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
+        let selected_id = create_test_package(&conn, repo_id, "nginx", "1.24.0");
+        let other_id = create_test_package(&conn, repo_id, "other", "1.0.0");
+        assert_ne!(selected_id, other_id);
 
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("routed-local.ccs");
-        let output = temp.path().join("downloads");
-        let content = b"local route table payload is not TUF-pinned";
-        std::fs::write(&source, content).unwrap();
-        conn.execute(
-            "UPDATE repository_packages SET size = ?1 WHERE id = ?2",
-            rusqlite::params![i64::try_from(content.len()).unwrap(), pkg_id],
-        )
-        .unwrap();
-
-        let mut resolution = PackageResolution::binary(
+        let mut resolution = PackageResolution::repository_package(
             repo_id,
             "nginx".to_string(),
-            source.to_str().unwrap().to_string(),
-            crate::hash::sha256(content),
+            other_id,
         );
         resolution.insert(&conn).unwrap();
 
         let error = resolve_package(
             &conn,
             "nginx",
-            &ResolutionOptions {
-                output_dir: Some(output),
-                ..ResolutionOptions::default()
-            },
+            &ResolutionOptions::default(),
         )
         .await
         .unwrap_err();
 
         assert!(
-            error
-                .to_string()
-                .contains("has no ecosystem-native trust policy"),
-            "expected authority-less binary routing to fail before download, got: {error}"
+            error.to_string().contains(&format!(
+                "selected package row {selected_id}, but strategy references row {other_id}"
+            )),
+            "expected exact repository row drift to fail before download, got: {error}"
         );
     }
 
@@ -254,13 +237,13 @@ mod tests {
         let repo_id = create_test_repo(&conn);
         let _pkg_id = create_test_package(&conn, repo_id, "tree", "2.2.1-4.fc44");
         conn.execute(
-            "UPDATE repositories SET default_strategy_distro = 'fedora' WHERE id = ?1",
+            "UPDATE repositories SET source_profile = 'fedora-44' WHERE id = ?1",
             [repo_id],
         )
         .unwrap();
         conn.execute(
             "UPDATE repository_packages
-                SET architecture = 'x86_64', distro = 'fedora', version_scheme = 'rpm'
+                SET architecture = 'x86_64', source_profile = 'fedora-44', version_scheme = 'rpm'
               WHERE repository_id = ?1 AND name = 'tree'",
             [repo_id],
         )
@@ -269,10 +252,10 @@ mod tests {
         let pkg_with_repo =
             PackageSelector::find_best_package(&conn, "tree", &SelectionOptions::default())
                 .unwrap();
-        let metadata = repository_source_metadata(&pkg_with_repo);
+        let metadata = repository_source_metadata(&pkg_with_repo).unwrap();
 
         assert_eq!(metadata.repository_id, repo_id);
-        assert_eq!(metadata.source_distro.as_deref(), Some("fedora"));
+        assert_eq!(metadata.source_profile.as_deref(), Some("fedora-44"));
         assert_eq!(metadata.version_scheme, VersionScheme::Rpm);
         assert_eq!(metadata.source_kind, RepositorySourceKind::Native);
     }
@@ -283,7 +266,7 @@ mod tests {
         let repo_id = create_test_repo(&conn);
         let _pkg_id = create_test_package(&conn, repo_id, "tree", "2.2.1-4");
         conn.execute(
-            "UPDATE repositories SET default_strategy_distro = 'arch' WHERE id = ?1",
+            "UPDATE repositories SET source_profile = 'arch' WHERE id = ?1",
             [repo_id],
         )
         .unwrap();
@@ -296,9 +279,9 @@ mod tests {
         let pkg_with_repo =
             PackageSelector::find_best_package(&conn, "tree", &SelectionOptions::default())
                 .unwrap();
-        let metadata = repository_source_metadata(&pkg_with_repo);
+        let metadata = repository_source_metadata(&pkg_with_repo).unwrap();
 
-        assert_eq!(metadata.source_distro.as_deref(), Some("arch"));
+        assert_eq!(metadata.source_profile.as_deref(), Some("arch"));
         assert_eq!(metadata.version_scheme, VersionScheme::Arch);
         assert_eq!(metadata.source_kind, RepositorySourceKind::Native);
     }
@@ -307,15 +290,15 @@ mod tests {
     fn repository_source_metadata_tags_static_and_remi_sources() {
         let (_temp, conn) = create_test_db();
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy)
-             VALUES ('static-repo', 'https://static.example.invalid', 1, 10, 'static')",
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy, source_profile)
+             VALUES ('static-repo', 'https://static.example.invalid', 1, 10, 'static', 'fedora-44')",
             [],
         )
         .unwrap();
         let static_repo_id = conn.last_insert_rowid();
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy)
-             VALUES ('remi-repo', 'https://remi.example.invalid', 1, 10, 'remi')",
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy, source_profile)
+             VALUES ('remi-repo', 'https://remi.example.invalid', 1, 10, 'remi', 'fedora-44')",
             [],
         )
         .unwrap();
@@ -331,11 +314,11 @@ mod tests {
                 .unwrap();
 
         assert_eq!(
-            repository_source_metadata(&static_pkg).source_kind,
+            repository_source_metadata(&static_pkg).unwrap().source_kind,
             RepositorySourceKind::Static
         );
         assert_eq!(
-            repository_source_metadata(&remi_pkg).source_kind,
+            repository_source_metadata(&remi_pkg).unwrap().source_kind,
             RepositorySourceKind::Remi
         );
     }

@@ -1,4 +1,4 @@
-// src/commands/adopt/system.rs
+// apps/conary/src/commands/adopt/system.rs
 
 //! Bulk system package adoption
 //!
@@ -9,22 +9,19 @@ use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
 use super::cas_capture::{CapturedAdoptionFile, capture_package_files};
 use super::checkpoint::write_db_checkpoint;
-use super::outcome::{
-    BulkAdoptionFailure, BulkAdoptionFailureStage, BulkAdoptionOutcome, metadata_insert_succeeded,
-    write_warning_metadata,
-};
-use crate::commands::AdoptionWarning;
+use super::outcome::{BulkAdoptionFailure, BulkAdoptionFailureStage, BulkAdoptionOutcome};
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, InstallReason, InstallSource, ProvideEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallReason, InstallSource,
+    ProvideEntry, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
 use conary_core::repository::dependency_model::RepositoryRequirementGroup;
 use std::collections::HashSet;
-use tracing::{debug, warn};
+use tracing::warn;
 
 mod live_root;
 use live_root::adopt_live_root_as_full_package;
@@ -56,6 +53,45 @@ pub type FileInfoTuple = (
 struct InstalledSystemPackage {
     identity: InstalledPackageIdentity,
     description: Option<String>,
+}
+
+struct PackageData {
+    identity: InstalledPackageIdentity,
+    description: Option<String>,
+    files: Vec<CapturedAdoptionFile>,
+    requirements: Vec<RepositoryRequirementGroup>,
+    provides: Vec<String>,
+    is_dependency: bool,
+}
+
+struct PackagePersistenceFailure {
+    stage: BulkAdoptionFailureStage,
+    message: String,
+}
+
+enum PackageSavepointOutcome<T, E> {
+    Committed(T),
+    RolledBack(E),
+}
+
+fn execute_package_savepoint<T, E>(
+    conn: &rusqlite::Connection,
+    operation: impl FnOnce() -> std::result::Result<T, E>,
+) -> conary_core::Result<PackageSavepointOutcome<T, E>> {
+    conn.execute_batch("SAVEPOINT conary_bulk_adopt_package")?;
+    match operation() {
+        Ok(value) => {
+            conn.execute_batch("RELEASE SAVEPOINT conary_bulk_adopt_package")?;
+            Ok(PackageSavepointOutcome::Committed(value))
+        }
+        Err(error) => {
+            conn.execute_batch(
+                "ROLLBACK TO SAVEPOINT conary_bulk_adopt_package;
+                 RELEASE SAVEPOINT conary_bulk_adopt_package",
+            )?;
+            Ok(PackageSavepointOutcome::RolledBack(error))
+        }
+    }
 }
 
 /// Adopt all installed system packages.
@@ -258,11 +294,9 @@ pub async fn cmd_adopt_system(
 
     let mut adopted_count = 0;
     let mut skipped_count = 0;
-    let mut degraded_count = 0;
     let mut error_count = 0;
     let mut adopted_packages = Vec::new();
     let mut already_tracked_packages = Vec::new();
-    let mut degraded_packages = Vec::new();
     let mut failures = Vec::new();
 
     let mode_label = if full { "Adopting (full)" } else { "Adopting" };
@@ -273,15 +307,6 @@ pub async fn cmd_adopt_system(
     // CAS-vs-DB inconsistency: if the DB transaction later rolls back, any CAS
     // objects that were already written become unreachable orphans that the GC
     // will clean up -- the same trade-off the install pipeline makes.
-    struct PackageData {
-        identity: InstalledPackageIdentity,
-        description: Option<String>,
-        files: Vec<CapturedAdoptionFile>,
-        requirements: Vec<RepositoryRequirementGroup>,
-        provides: Vec<String>,
-        is_dependency: bool,
-    }
-
     let mut pre_collected: Vec<PackageData> = Vec::new();
 
     for package in &installed {
@@ -384,125 +409,97 @@ pub async fn cmd_adopt_system(
     write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
-        let mut adoption_warnings = Vec::new();
 
         for pkg in &pre_collected {
             let selector = pkg.identity.selector();
-            let mut trove = Trove::new_with_source(
-                pkg.identity.name().to_string(),
-                pkg.identity.version(),
-                TroveType::Package,
-                install_source.clone(),
-                version_scheme,
-            );
-            trove.architecture = Some(pkg.identity.architecture().to_string());
-            trove.description = pkg.description.clone();
-            trove.installed_by_changeset_id = Some(changeset_id);
-            trove.native_package_identity = Some(pkg.identity.clone());
-            if pkg.is_dependency {
-                trove.install_reason = InstallReason::Dependency;
-                trove.selection_reason =
-                    Some("Auto-installed dependency (from system package manager)".to_string());
-            } else {
-                trove.selection_reason = Some("Adopted from system".to_string());
-            }
+            let persisted = execute_package_savepoint(tx, || {
+                let mut trove = Trove::new_with_source(
+                    pkg.identity.name().to_string(),
+                    pkg.identity.version(),
+                    TroveType::Package,
+                    install_source.clone(),
+                    version_scheme,
+                );
+                trove.architecture = Some(pkg.identity.architecture().to_string());
+                trove.description = pkg.description.clone();
+                trove.installed_by_changeset_id = Some(changeset_id);
+                trove.native_package_identity = Some(pkg.identity.clone());
+                if pkg.is_dependency {
+                    trove.install_reason = InstallReason::Dependency;
+                    trove.selection_reason =
+                        Some("Auto-installed dependency (from system package manager)".to_string());
+                } else {
+                    trove.selection_reason = Some("Adopted from system".to_string());
+                }
 
-            let trove_id = match trove.insert(tx) {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!("Failed to insert trove for {}: {}", selector, e);
+                let trove_id = trove
+                    .insert(tx)
+                    .map_err(|error| PackagePersistenceFailure {
+                        stage: BulkAdoptionFailureStage::TroveInsert,
+                        message: error.to_string(),
+                    })?;
+
+                for captured in &pkg.files {
+                    let file_path = &captured.source.0;
+                    let mut file_entry = captured.file_entry(trove_id);
+                    file_entry
+                        .insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)
+                        .map_err(|error| PackagePersistenceFailure {
+                            stage: BulkAdoptionFailureStage::MetadataInsert,
+                            message: format!("file {file_path}: {error}"),
+                        })?;
+                }
+
+                super::requirements::insert_package_requirements(
+                    tx,
+                    trove_id,
+                    version_scheme,
+                    pkg.identity.name(),
+                    &pkg.requirements,
+                )
+                .map_err(|error| PackagePersistenceFailure {
+                    stage: BulkAdoptionFailureStage::MetadataInsert,
+                    message: format!("requirements: {error}"),
+                })?;
+
+                for provide in &pkg.provides {
+                    if provide.is_empty() {
+                        continue;
+                    }
+                    let mut provide_entry =
+                        ProvideEntry::new(trove_id, provide.clone(), None, version_scheme);
+                    provide_entry.insert_or_ignore(tx).map_err(|error| {
+                        PackagePersistenceFailure {
+                            stage: BulkAdoptionFailureStage::MetadataInsert,
+                            message: format!("provide {provide}: {error}"),
+                        }
+                    })?;
+                }
+                Ok::<i64, PackagePersistenceFailure>(trove_id)
+            })?;
+
+            match persisted {
+                PackageSavepointOutcome::Committed(_) => {
+                    adopted_count += 1;
+                    adopted_packages.push(selector.to_string());
+                    progress.complete_package(selector);
+                }
+                PackageSavepointOutcome::RolledBack(error) => {
+                    warn!(
+                        "Adoption of {} rolled back atomically at {}: {}",
+                        selector, error.stage, error.message
+                    );
                     error_count += 1;
                     failures.push(BulkAdoptionFailure::new(
                         selector,
-                        BulkAdoptionFailureStage::TroveInsert,
-                        e.to_string(),
+                        error.stage,
+                        error.message,
                     ));
-                    continue;
-                }
-            };
-
-            // Track insert successes/failures for files, deps, and provides.
-            // If every insert for this package fails, the trove record is
-            // effectively empty — skip it so we don't pollute the DB with
-            // ghost entries.
-            let total_inserts = pkg.files.len() + pkg.requirements.len() + pkg.provides.len();
-            let mut insert_failures: usize = 0;
-            let mut metadata_errors = Vec::new();
-
-            for captured in &pkg.files {
-                let file_path = &captured.source.0;
-                let mut file_entry = captured.file_entry(trove_id);
-                if let Err(e) = file_entry.insert_or_replace(tx) {
-                    debug!("Failed to insert file {}: {}", file_path, e);
-                    insert_failures += 1;
-                    metadata_errors.push(format!("file {file_path}: {e}"));
+                    progress.fail_package(selector, "package metadata persistence rolled back");
                 }
             }
-
-            if let Err(error) = super::requirements::insert_package_requirements(
-                tx,
-                trove_id,
-                version_scheme,
-                pkg.identity.name(),
-                &pkg.requirements,
-            ) {
-                debug!("Failed to insert exact requirements: {error}");
-                insert_failures += pkg.requirements.len().max(1);
-                metadata_errors.push(format!("requirements: {error}"));
-            }
-
-            for provide in &pkg.provides {
-                if provide.is_empty() {
-                    continue;
-                }
-                let mut provide_entry = ProvideEntry::new(trove_id, provide.clone(), None);
-                if let Err(e) = provide_entry.insert_or_ignore(tx) {
-                    debug!("Failed to insert provide: {}", e);
-                    insert_failures += 1;
-                    metadata_errors.push(format!("provide {provide}: {e}"));
-                }
-            }
-
-            let has_partial_failure = total_inserts > 0 && insert_failures > 0;
-            if !finalize_bulk_metadata_insert_outcome(
-                tx,
-                trove_id,
-                selector,
-                total_inserts,
-                insert_failures,
-                &mut adoption_warnings,
-            )? {
-                error_count += 1;
-                failures.push(BulkAdoptionFailure::new(
-                    selector,
-                    BulkAdoptionFailureStage::MetadataInsert,
-                    format!(
-                        "all {total_inserts} metadata insert(s) failed: {}",
-                        metadata_errors.join("; ")
-                    ),
-                ));
-                continue;
-            }
-
-            if has_partial_failure {
-                degraded_count += 1;
-                degraded_packages.push(selector.to_string());
-                failures.push(BulkAdoptionFailure::new(
-                    selector,
-                    BulkAdoptionFailureStage::MetadataInsert,
-                    format!(
-                        "{insert_failures} of {total_inserts} metadata insert(s) failed: {}",
-                        metadata_errors.join("; ")
-                    ),
-                ));
-            }
-            adopted_count += 1;
-            adopted_packages.push(selector.to_string());
-            progress.complete_package(selector);
         }
 
-        write_warning_metadata(tx, changeset_id, adoption_warnings)
-            .map_err(|e| conary_core::Error::Io(std::io::Error::other(e.to_string())))?;
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
@@ -529,50 +526,12 @@ pub async fn cmd_adopt_system(
             adopted_count, skipped_count, mode_desc
         ));
     }
-    if degraded_count > 0 {
-        println!(
-            "Adopted with warnings: {degraded_count} package(s). Run `conary system history` to inspect adoption warning metadata."
-        );
-    }
-
     Ok(BulkAdoptionOutcome {
         considered_packages,
         adopted_packages,
         already_tracked_packages,
-        degraded_packages,
         failures,
     })
-}
-
-fn finalize_bulk_metadata_insert_outcome(
-    tx: &rusqlite::Connection,
-    trove_id: i64,
-    package_name: &str,
-    total_inserts: usize,
-    insert_failures: usize,
-    adoption_warnings: &mut Vec<AdoptionWarning>,
-) -> conary_core::Result<bool> {
-    if metadata_insert_succeeded(total_inserts, insert_failures) {
-        if total_inserts > 0 && insert_failures > 0 {
-            adoption_warnings.push(AdoptionWarning::partial_insert_failure(
-                package_name.to_string(),
-                total_inserts,
-                insert_failures,
-            ));
-        }
-        return Ok(true);
-    }
-
-    warn!(
-        "All {} insert(s) failed for '{}'; removing empty adopted trove",
-        total_inserts, package_name
-    );
-    Trove::delete(tx, trove_id)?;
-    adoption_warnings.push(AdoptionWarning::all_insert_failure(
-        package_name.to_string(),
-        total_inserts,
-    ));
-    Ok(false)
 }
 
 const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
@@ -642,39 +601,54 @@ mod tests {
     }
 
     #[test]
-    fn all_failed_bulk_outcome_helper_deletes_seeded_trove() {
-        use conary_core::db;
-        use conary_core::db::models::{Trove, TroveType};
+    fn bulk_package_savepoint_rolls_back_the_entire_package() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE package_rows (value TEXT NOT NULL)")
+            .unwrap();
 
-        let tmp = tempfile::tempdir().unwrap();
-        let db_path = tmp.path().join("test.db").to_string_lossy().into_owned();
-        db::init(&db_path).unwrap();
-        let mut conn = db::open(&db_path).unwrap();
-
-        db::transaction(&mut conn, |tx| {
-            let mut trove = Trove::new(
-                "ghost".to_string(),
-                "1.0".to_string(),
-                TroveType::Package,
-                conary_core::repository::versioning::VersionScheme::Conary,
-            );
-            let trove_id = trove.insert(tx)?;
-
-            let mut warnings = Vec::new();
-            let keep_trove =
-                finalize_bulk_metadata_insert_outcome(tx, trove_id, "ghost", 3, 3, &mut warnings)?;
-            assert!(!keep_trove);
-            assert_eq!(warnings.len(), 1);
-
-            let count: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM troves WHERE id = ?1",
-                [trove_id],
-                |row| row.get(0),
-            )?;
-            assert_eq!(count, 0);
-            Ok(())
+        let outcome = execute_package_savepoint(&conn, || {
+            conn.execute("INSERT INTO package_rows (value) VALUES ('trove')", [])
+                .unwrap();
+            conn.execute("INSERT INTO package_rows (value) VALUES ('file')", [])
+                .unwrap();
+            Err::<(), _>("exact requirement persistence failed")
         })
         .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PackageSavepointOutcome::RolledBack("exact requirement persistence failed")
+        ));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM package_rows", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn bulk_package_savepoint_commits_complete_package() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE package_rows (value TEXT NOT NULL)")
+            .unwrap();
+
+        let outcome = execute_package_savepoint(&conn, || {
+            conn.execute("INSERT INTO package_rows (value) VALUES ('trove')", [])
+                .unwrap();
+            conn.execute("INSERT INTO package_rows (value) VALUES ('file')", [])
+                .unwrap();
+            Ok::<_, &str>(2)
+        })
+        .unwrap();
+
+        assert!(matches!(outcome, PackageSavepointOutcome::Committed(2)));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM package_rows", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -691,7 +665,7 @@ mod tests {
             "/conary/objects/aa/bb",
         ] {
             assert!(
-                !should_visit_live_root_path(Path::new(path)),
+                !should_visit_live_root_path(Path::new(path)).unwrap(),
                 "{path} should be excluded"
             );
         }
@@ -703,7 +677,7 @@ mod tests {
             "/boot/EFI/BOOT/BOOTX64.EFI",
         ] {
             assert!(
-                should_visit_live_root_path(Path::new(path)),
+                should_visit_live_root_path(Path::new(path)).unwrap(),
                 "{path} should be included"
             );
         }

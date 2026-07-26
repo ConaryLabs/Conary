@@ -12,7 +12,7 @@ use conary_core::ccs::verify::verify_package;
 use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry};
 use conary_core::ccs::{CcsPackage, SigningKeyPair, TrustPolicy};
 use conary_core::db::models::{TrySession, TrySessionStatus};
-use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+use conary_core::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode};
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
 const PACKAGE_NAME: &str = "hello-m1b";
@@ -55,7 +55,7 @@ fn try_package_creates_session() {
     let fixture = try_fixture_package();
     let (_db_temp, db_path) = common::setup_command_test_db();
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
-    create_current_generation_link(&runtime_root, 7);
+    create_current_generation(&db_path);
     let before_current = fs::read_link(runtime_root.current_link()).unwrap();
 
     let output = try_package(
@@ -109,7 +109,7 @@ fn try_rollback_clears_session() {
     let fixture = try_fixture_package();
     let (_db_temp, db_path) = common::setup_command_test_db();
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
-    create_current_generation_link(&runtime_root, 7);
+    create_current_generation(&db_path);
     let before_current = fs::read_link(runtime_root.current_link()).unwrap();
 
     let output = try_package(&fixture.package_path(), &db_path, None);
@@ -137,7 +137,7 @@ fn try_keep_promotes_generation() {
     let fixture = try_fixture_package();
     let (_db_temp, db_path) = common::setup_command_test_db();
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(&db_path));
-    create_current_generation_link(&runtime_root, 7);
+    create_current_generation(&db_path);
 
     let output = try_package(&fixture.package_path(), &db_path, None);
     assert_success(&output);
@@ -252,9 +252,16 @@ fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
     fs::create_dir_all(package_path.parent().expect("package parent")).unwrap();
     let total_size = content.len() as u64;
     let hash = conary_core::hash::sha256(&content);
+    let mut node = PayloadNode::regular(0o755);
+    node.user = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::geteuid() }),
+    };
+    node.group = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::getegid() }),
+    };
     let file = CcsFileEntry {
         path: format!("/usr/bin/{PACKAGE_NAME}"),
-        node: PayloadNode::regular(0o755),
+        node,
         content: Some(PayloadContentAuthority {
             sha256: hash.clone(),
             size: total_size,
@@ -281,6 +288,14 @@ fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
     };
     let signer = SigningKeyPair::generate().with_key_id("packaging-m1b");
     write_signed_current_ccs_package(&result, package_path, &signer, false).unwrap();
+    fs::write(
+        package_path.with_extension("policy.toml"),
+        format!(
+            "trusted_keys = [\"{}\"]\nrequire_timestamp = false\n",
+            signer.public_key_base64()
+        ),
+    )
+    .unwrap();
     let verified = verify_package(
         package_path,
         &TrustPolicy::strict(vec![signer.public_key_base64()]),
@@ -297,7 +312,9 @@ fn try_package(package_path: &Path, db_path: &str, command: Option<&str>) -> Out
         .arg("try")
         .arg(package_path)
         .arg("--db-path")
-        .arg(db_path);
+        .arg(db_path)
+        .arg("--policy")
+        .arg(package_path.with_extension("policy.toml"));
     if let Some(command) = command {
         conary.arg("--").arg(command);
     }
@@ -323,8 +340,31 @@ fn try_session_by_id(db_path: &str, session_id: &str) -> Option<TrySession> {
     TrySession::find_by_id(&conn, session_id).unwrap()
 }
 
-fn create_current_generation_link(runtime_root: &ConaryRuntimeRoot, generation: i64) {
-    fs::create_dir_all(runtime_root.generation_path(generation)).unwrap();
+fn create_current_generation(db_path: &str) {
+    let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
+    let conn = conary_core::db::open(db_path).unwrap();
+    let selected_root = tempfile::tempdir().unwrap();
+    conary_core::generation::builder::materialize_selected_root_from_db(
+        &conn,
+        &runtime_root.objects_dir(),
+        selected_root.path(),
+    )
+    .unwrap();
+    let captured = conary_core::generation::root_manifest::scan_selected_root(
+        selected_root.path(),
+        &conary_core::filesystem::CasStore::new(runtime_root.objects_dir()).unwrap(),
+    )
+    .unwrap();
+    let (generation, _) =
+        conary_core::generation::builder::build_generation_from_captured_root_with_boot_root_and_activation(
+        &conn,
+        &runtime_root.generations_dir(),
+        "packaging-m1b try-session base",
+        &runtime_root.root().join("boot"),
+        conary_core::generation::builder::GenerationActivation::Active,
+        captured,
+    )
+    .unwrap();
     conary_core::generation::mount::update_current_symlink(runtime_root.root(), generation)
         .unwrap();
 }

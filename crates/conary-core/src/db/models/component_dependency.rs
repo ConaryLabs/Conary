@@ -9,11 +9,13 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use serde::{Deserialize, Serialize};
 use strum_macros::{AsRefStr, EnumString};
 
 /// Dependency type for component dependencies
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, EnumString, Serialize, Deserialize)]
 #[strum(serialize_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum ComponentDepType {
     /// Required at runtime
     Runtime,
@@ -162,8 +164,17 @@ impl ComponentDependency {
     /// Convert a database row to a ComponentDependency
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let dep_type_str: String = row.get(4)?;
-        let dependency_type =
-            ComponentDepType::parse(&dep_type_str).unwrap_or(ComponentDepType::Runtime);
+        let dependency_type = ComponentDepType::parse(&dep_type_str).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid component dependency type '{dep_type_str}'"),
+                )
+                .into(),
+            )
+        })?;
 
         Ok(Self {
             id: Some(row.get(0)?),

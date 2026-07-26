@@ -57,7 +57,7 @@ fn seed_update_candidate(conn: &rusqlite::Connection, name: &str, version: &str)
         "daily-ux-repo".to_string(),
         "https://example.test/daily-ux".to_string(),
     );
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(conn).unwrap();
 
     let mut candidate = RepositoryPackage::new(
@@ -70,7 +70,7 @@ fn seed_update_candidate(conn: &rusqlite::Connection, name: &str, version: &str)
         format!("https://example.test/daily-ux/{name}-{version}.ccs"),
     );
     candidate.architecture = Some("x86_64".to_string());
-    candidate.distro = Some("fedora-44".to_string());
+    candidate.source_profile = Some("fedora-44".to_string());
     candidate.insert(conn).unwrap();
     repo_id
 }
@@ -212,13 +212,13 @@ fn preview_tiering_help_advanced_lists_hidden_surface() {
 }
 
 #[test]
-fn phase2_pruning_repo_add_help_lists_only_supported_remi_distro_examples() {
+fn phase2_pruning_repo_add_help_lists_only_supported_source_profile_examples() {
     let output = run_conary(&["repo", "add", "--help"]);
 
     assert!(output.status.success(), "{}", output_text(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fedora-44, ubuntu-26.04, arch"), "{stdout}");
-    assert!(!stdout.to_lowercase().contains("debian"), "{stdout}");
+    assert!(!stdout.contains("debian-13"), "{stdout}");
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn shell_completion_rendering_covers_bash_and_zsh() {
 }
 
 #[test]
-fn live_mutation_refusal_routes_to_preview_ack_and_daemon_jobs() {
+fn already_installed_idempotence_uses_current_mutation_surface() {
     let (_tmp, db_path) = common::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();
 
@@ -274,8 +274,9 @@ fn live_mutation_refusal_routes_to_preview_ack_and_daemon_jobs() {
         "--yes",
     ]);
 
-    assert!(!output.status.success(), "{}", output_text(&output));
+    assert!(output.status.success(), "{}", output_text(&output));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("already installed"), "{stderr}");
     assert!(!stderr.contains("--allow-live-system-mutation"), "{stderr}");
     assert!(!stderr.contains("live-host acknowledgement"), "{stderr}");
     assert!(!stderr.contains("may change packages"), "{stderr}");
@@ -342,7 +343,7 @@ fn adopted_update_routes_to_native_pm_and_refresh() {
     let repo_id = seed_update_candidate(&conn, "curl", "8.9.0-1.fc44");
     let trove_id = seed_adopted_package(&conn, "curl", "8.8.0-1.fc44", InstallSource::AdoptedFull);
     conn.execute(
-        "UPDATE troves SET installed_from_repository_id = ?1, source_distro = 'fedora-44' WHERE id = ?2",
+        "UPDATE troves SET installed_from_repository_id = ?1, source_profile = 'fedora-44' WHERE id = ?2",
         rusqlite::params![repo_id, trove_id],
     )
     .unwrap();

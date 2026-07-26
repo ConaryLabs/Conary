@@ -17,7 +17,7 @@ export const previewRelease = {
 	releaseUrl,
 	downloadBaseUrl,
 	testerGuideUrl: `https://github.com/ConaryLabs/Conary/blob/${tag}/docs/guides/agent-assisted-tester-loop.md`,
-	feedbackUrl: 'https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md',
+	feedbackUrl: 'https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md',
 	workDirectory: `$HOME/conary-preview-${tag}`,
 	targets: [
 		{

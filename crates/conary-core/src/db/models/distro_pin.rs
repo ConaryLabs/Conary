@@ -1,13 +1,13 @@
 // conary-core/src/db/models/distro_pin.rs
 
-//! Distro pin, package override, and system affinity models
+//! Distro pin and system affinity models
 //!
 //! These models track which distribution the system is pinned to,
-//! per-package overrides for sourcing from alternate distros, and
 //! computed affinity statistics showing the distribution mix.
 
 use crate::error::Result;
 use crate::model::parser::SourcePinConfig;
+use crate::repository::resolution_policy::DependencyMixingPolicy;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// System-level distro pin with mixing policy
@@ -15,19 +15,28 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 pub struct DistroPin {
     pub id: Option<i64>,
     pub distro: String,
-    pub mixing_policy: String,
+    pub mixing_policy: DependencyMixingPolicy,
     pub created_at: String,
 }
 
 impl DistroPin {
     /// Set the system distro pin (replaces any existing pin)
-    pub fn set(conn: &Connection, distro: &str, mixing_policy: &str) -> Result<()> {
+    pub fn set(
+        conn: &Connection,
+        distro: &str,
+        mixing_policy: DependencyMixingPolicy,
+    ) -> Result<()> {
+        if crate::repository::supported_profiles::profile_by_public_id(distro).is_none() {
+            return Err(crate::Error::ConfigError(format!(
+                "unsupported public distro profile '{distro}'"
+            )));
+        }
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM distro_pin", [])?;
         tx.execute(
             "INSERT INTO distro_pin (distro, mixing_policy, created_at)
              VALUES (?1, ?2, datetime('now'))",
-            params![distro, mixing_policy],
+            params![distro, mixing_policy.as_str()],
         )?;
         tx.commit()?;
         Ok(())
@@ -53,22 +62,24 @@ impl DistroPin {
     }
 
     /// Update the mixing policy on the existing pin
-    pub fn set_mixing_policy(conn: &Connection, policy: &str) -> Result<()> {
-        conn.execute("UPDATE distro_pin SET mixing_policy = ?1", [policy])?;
+    pub fn set_mixing_policy(conn: &Connection, policy: DependencyMixingPolicy) -> Result<()> {
+        conn.execute(
+            "UPDATE distro_pin SET mixing_policy = ?1",
+            [policy.as_str()],
+        )?;
         Ok(())
     }
 
     /// Persist a source pin.
     pub fn set_from_source_pin(conn: &Connection, pin: &SourcePinConfig) -> Result<()> {
-        let strength = pin.strength.as_deref().unwrap_or("guarded");
-        Self::set(conn, &pin.distro, strength)
+        Self::set(conn, &pin.distro, pin.strength)
     }
 
     /// Read the persisted pin as the model source-pin shape.
     pub fn as_source_pin(&self) -> SourcePinConfig {
         SourcePinConfig {
             distro: self.distro.clone(),
-            strength: Some(self.mixing_policy.clone()),
+            strength: self.mixing_policy,
         }
     }
 
@@ -77,82 +88,14 @@ impl DistroPin {
         Ok(Self {
             id: Some(row.get(0)?),
             distro: row.get(1)?,
-            mixing_policy: row.get(2)?,
+            mixing_policy: row.get::<_, String>(2)?.parse().map_err(|error: String| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, error).into(),
+                )
+            })?,
             created_at: row.get(3)?,
-        })
-    }
-}
-
-/// Per-package override to source from a specific distro
-#[derive(Debug, Clone)]
-pub struct PackageOverride {
-    pub id: Option<i64>,
-    pub canonical_id: i64,
-    pub from_distro: String,
-    pub reason: Option<String>,
-}
-
-impl PackageOverride {
-    /// Set (or replace) an override for a canonical package
-    pub fn set(
-        conn: &Connection,
-        canonical_id: i64,
-        from_distro: &str,
-        reason: Option<&str>,
-    ) -> Result<()> {
-        conn.execute(
-            "DELETE FROM package_overrides WHERE canonical_id = ?1",
-            [canonical_id],
-        )?;
-        conn.execute(
-            "INSERT INTO package_overrides (canonical_id, from_distro, reason)
-             VALUES (?1, ?2, ?3)",
-            params![canonical_id, from_distro, reason],
-        )?;
-        Ok(())
-    }
-
-    /// Get the override for a canonical package
-    pub fn get(conn: &Connection, canonical_id: i64) -> Result<Option<Self>> {
-        let result = conn
-            .query_row(
-                "SELECT id, canonical_id, from_distro, reason
-                 FROM package_overrides WHERE canonical_id = ?1",
-                [canonical_id],
-                Self::from_row,
-            )
-            .optional()?;
-        Ok(result)
-    }
-
-    /// Remove the override for a canonical package
-    pub fn remove(conn: &Connection, canonical_id: i64) -> Result<()> {
-        conn.execute(
-            "DELETE FROM package_overrides WHERE canonical_id = ?1",
-            [canonical_id],
-        )?;
-        Ok(())
-    }
-
-    /// List all overrides
-    pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, canonical_id, from_distro, reason
-             FROM package_overrides ORDER BY canonical_id",
-        )?;
-        let rows = stmt
-            .query_map([], Self::from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    /// Map a database row to a `PackageOverride`
-    fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        Ok(Self {
-            id: Some(row.get(0)?),
-            canonical_id: row.get(1)?,
-            from_distro: row.get(2)?,
-            reason: row.get(3)?,
         })
     }
 }
@@ -173,8 +116,8 @@ impl SystemAffinity {
     pub fn recompute(conn: &Connection) -> Result<()> {
         conn.execute("DELETE FROM system_affinity", [])?;
         // Each installed trove counts toward exactly one distro:
-        //   1. Use troves.source_distro if populated (adopted/taken packages).
-        //   2. Use installed_from_repository_id -> repositories.default_strategy_distro
+        //   1. Use troves.source_profile if populated (adopted/taken packages).
+        //   2. Use installed_from_repository_id -> repositories.source_profile
         //      (set at install time with deterministic repo selection).
         conn.execute(
             "INSERT INTO system_affinity (distro, package_count, percentage, updated_at)
@@ -185,17 +128,17 @@ impl SystemAffinity {
                      / MAX(1, (SELECT COUNT(*) FROM troves)) AS percentage,
                  datetime('now')
              FROM (
-                 -- 1. Prefer source_distro (adopted/taken packages)
-                 SELECT source_distro AS distro FROM troves
-                 WHERE source_distro IS NOT NULL
+                 -- 1. Prefer source_profile (adopted/taken packages)
+                 SELECT source_profile AS distro FROM troves
+                 WHERE source_profile IS NOT NULL
                  UNION ALL
                  -- 2. Use stored install provenance
-                 SELECT r.default_strategy_distro AS distro
+                 SELECT r.source_profile AS distro
                  FROM troves t
                  JOIN repositories r ON t.installed_from_repository_id = r.id
-                 WHERE t.source_distro IS NULL
+                 WHERE t.source_profile IS NULL
                    AND t.installed_from_repository_id IS NOT NULL
-                   AND r.default_strategy_distro IS NOT NULL
+                   AND r.source_profile IS NOT NULL
              )
              WHERE distro IS NOT NULL
              GROUP BY distro",
@@ -249,24 +192,68 @@ mod tests {
     fn test_set_and_get_pin() {
         let (_temp, conn) = create_test_db();
 
-        DistroPin::set(&conn, "fedora", "guarded").unwrap();
+        DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
 
         let pin = DistroPin::get_current(&conn).unwrap().unwrap();
-        assert_eq!(pin.distro, "fedora");
-        assert_eq!(pin.mixing_policy, "guarded");
+        assert_eq!(pin.distro, "fedora-44");
+        assert_eq!(pin.mixing_policy, DependencyMixingPolicy::Guarded);
         assert!(!pin.created_at.is_empty());
+    }
+
+    #[test]
+    fn set_rejects_non_catalog_profile_identity() {
+        let (_temp, conn) = create_test_db();
+
+        let error = DistroPin::set(&conn, "fedora", DependencyMixingPolicy::Guarded).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported public distro profile")
+        );
+        assert!(DistroPin::get_current(&conn).unwrap().is_none());
+    }
+
+    #[test]
+    fn schema_rejects_untyped_mixing_policy_values() {
+        let (_temp, conn) = create_test_db();
+
+        let error = conn
+            .execute(
+                "INSERT INTO distro_pin (distro, mixing_policy, created_at)
+                 VALUES ('arch', 'hard', datetime('now'))",
+                [],
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("CHECK constraint failed"));
+    }
+
+    #[test]
+    fn schema_rejects_non_catalog_profile_identity() {
+        let (_temp, conn) = create_test_db();
+
+        let error = conn
+            .execute(
+                "INSERT INTO distro_pin (distro, mixing_policy, created_at)
+                 VALUES ('fedora', 'guarded', datetime('now'))",
+                [],
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("CHECK constraint failed"));
     }
 
     #[test]
     fn test_set_replaces_existing_pin() {
         let (_temp, conn) = create_test_db();
 
-        DistroPin::set(&conn, "fedora", "guarded").unwrap();
-        DistroPin::set(&conn, "debian", "strict").unwrap();
+        DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
+        DistroPin::set(&conn, "ubuntu-26.04", DependencyMixingPolicy::Strict).unwrap();
 
         let pin = DistroPin::get_current(&conn).unwrap().unwrap();
-        assert_eq!(pin.distro, "debian");
-        assert_eq!(pin.mixing_policy, "strict");
+        assert_eq!(pin.distro, "ubuntu-26.04");
+        assert_eq!(pin.mixing_policy, DependencyMixingPolicy::Strict);
 
         // Only one row exists
         let count: i64 = conn
@@ -279,7 +266,7 @@ mod tests {
     fn test_remove_pin() {
         let (_temp, conn) = create_test_db();
 
-        DistroPin::set(&conn, "fedora", "guarded").unwrap();
+        DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
         DistroPin::remove(&conn).unwrap();
 
         let pin = DistroPin::get_current(&conn).unwrap();
@@ -290,12 +277,12 @@ mod tests {
     fn test_update_mixing_policy() {
         let (_temp, conn) = create_test_db();
 
-        DistroPin::set(&conn, "fedora", "guarded").unwrap();
-        DistroPin::set_mixing_policy(&conn, "permissive").unwrap();
+        DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
+        DistroPin::set_mixing_policy(&conn, DependencyMixingPolicy::Permissive).unwrap();
 
         let pin = DistroPin::get_current(&conn).unwrap().unwrap();
-        assert_eq!(pin.distro, "fedora");
-        assert_eq!(pin.mixing_policy, "permissive");
+        assert_eq!(pin.distro, "fedora-44");
+        assert_eq!(pin.mixing_policy, DependencyMixingPolicy::Permissive);
     }
 
     #[test]
@@ -303,67 +290,26 @@ mod tests {
         let (_temp, conn) = create_test_db();
         let pin = SourcePinConfig {
             distro: "arch".to_string(),
-            strength: None,
+            ..SourcePinConfig::default()
         };
 
         DistroPin::set_from_source_pin(&conn, &pin).unwrap();
 
         let stored = DistroPin::get_current(&conn).unwrap().unwrap();
         assert_eq!(stored.distro, "arch");
-        assert_eq!(stored.mixing_policy, "guarded");
+        assert_eq!(stored.mixing_policy, DependencyMixingPolicy::Guarded);
     }
 
     #[test]
     fn test_as_source_pin_preserves_strength() {
         let (_temp, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-noble", "strict").unwrap();
+        DistroPin::set(&conn, "ubuntu-26.04", DependencyMixingPolicy::Strict).unwrap();
 
         let stored = DistroPin::get_current(&conn).unwrap().unwrap();
         let pin = stored.as_source_pin();
 
-        assert_eq!(pin.distro, "ubuntu-noble");
-        assert_eq!(pin.strength.as_deref(), Some("strict"));
-    }
-
-    #[test]
-    fn test_package_override() {
-        let (_temp, conn) = create_test_db();
-
-        // Insert a canonical package first (FK constraint)
-        conn.execute(
-            "INSERT INTO canonical_packages (name, kind) VALUES ('firefox', 'package')",
-            [],
-        )
-        .unwrap();
-        let can_id: i64 = conn
-            .query_row(
-                "SELECT id FROM canonical_packages WHERE name = 'firefox'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        // Set override
-        PackageOverride::set(&conn, can_id, "debian", Some("newer ESR")).unwrap();
-
-        let ovr = PackageOverride::get(&conn, can_id).unwrap().unwrap();
-        assert_eq!(ovr.from_distro, "debian");
-        assert_eq!(ovr.reason, Some("newer ESR".to_string()));
-
-        // Replace override
-        PackageOverride::set(&conn, can_id, "arch", None).unwrap();
-        let ovr = PackageOverride::get(&conn, can_id).unwrap().unwrap();
-        assert_eq!(ovr.from_distro, "arch");
-        assert!(ovr.reason.is_none());
-
-        // List
-        let all = PackageOverride::list_all(&conn).unwrap();
-        assert_eq!(all.len(), 1);
-
-        // Remove
-        PackageOverride::remove(&conn, can_id).unwrap();
-        let gone = PackageOverride::get(&conn, can_id).unwrap();
-        assert!(gone.is_none());
+        assert_eq!(pin.distro, "ubuntu-26.04");
+        assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
     }
 
     #[test]
@@ -391,8 +337,8 @@ mod tests {
         trove.insert(&conn).unwrap();
 
         conn.execute(
-            "INSERT INTO repositories (name, url, default_strategy_distro)
-             VALUES ('fedora', 'https://example.invalid', 'fedora')",
+            "INSERT INTO repositories (name, url, source_profile)
+             VALUES ('fedora', 'https://example.invalid', 'fedora-44')",
             [],
         )
         .unwrap();

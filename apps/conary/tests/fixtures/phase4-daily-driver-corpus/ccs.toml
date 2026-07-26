@@ -23,9 +23,11 @@ binaries = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt"]
 [components]
 default = ["runtime", "config"]
 
-[config]
-files = ["/etc/phase4-corpus/app.conf"]
+[[config.files]]
+path = "/etc/phase4-corpus/app.conf"
 noreplace = true
+ghost = false
+remove_on_upgrade = false
 
 [hooks]
 

@@ -140,12 +140,14 @@ impl PreparedNativeTransaction {
                 runtime::preflight_entry(
                     owner,
                     &executor,
-                    entry_id,
-                    mode,
-                    &event.args,
-                    &event.stdin,
+                    runtime::EntryInvocation::new(
+                        entry_id,
+                        mode,
+                        &event.args,
+                        &event.stdin,
+                        event.deb_package_refcount,
+                    ),
                     interpreter_availability,
-                    event.deb_package_refcount,
                 )
             }
             NativeEventProgram::Command { argv } => executor

@@ -58,7 +58,8 @@ fn solve_rpm_roots(conn: &Connection, native: &[&str]) -> SatResolution {
         conn,
         &groups,
         VersionScheme::Rpm,
-        &ResolutionPolicy::new(),
+        &ResolutionPolicy::new()
+            .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
     )
     .unwrap()
 }

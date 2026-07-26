@@ -68,7 +68,14 @@ mod tests {
         write_generation_artifact,
     };
     use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+    use conary_core::generation::root_manifest::{
+        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+        MutableStateManifest,
+    };
     use conary_core::hash::sha256;
+    use conary_core::payload::{
+        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -88,6 +95,38 @@ mod tests {
         }
     }
 
+    fn write_root_manifests(generation_dir: &Path, object: &CasObjectRef) {
+        let mut root = PayloadNode::regular(0o755);
+        root.kind = PayloadNodeKind::Directory;
+        root.mode = libc::S_IFDIR | 0o755;
+        let root = ResolvedPayloadNode::from_numeric_source(root).unwrap();
+        GenerationRootManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            root: root.clone(),
+            entries: vec![
+                GenerationRootEntry {
+                    path: "/objects".to_string(),
+                    node: root,
+                    content: None,
+                },
+                GenerationRootEntry {
+                    path: format!("/objects/{}", object.sha256),
+                    node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644))
+                        .unwrap(),
+                    content: Some(PayloadContentAuthority {
+                        sha256: object.sha256.clone(),
+                        size: object.size,
+                    }),
+                },
+            ],
+        }
+        .write_to(generation_dir)
+        .unwrap();
+        MutableStateManifest::empty()
+            .write_to(generation_dir)
+            .unwrap();
+    }
+
     impl ExportFixture {
         fn new() -> Self {
             let tmp = TempDir::new().unwrap();
@@ -102,7 +141,8 @@ mod tests {
             std::fs::write(boot_assets_dir.join("initramfs.img"), b"initramfs").unwrap();
             std::fs::write(boot_assets_dir.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
 
-            let _cas_object = write_cas_object(&objects_dir, b"hello");
+            let cas_object = write_cas_object(&objects_dir, b"hello");
+            write_root_manifests(&generation_dir, &cas_object);
             let boot_assets = BootAssetsManifest {
                 version: 1,
                 generation: 7,

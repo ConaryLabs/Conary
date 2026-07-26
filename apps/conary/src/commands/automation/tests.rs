@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::commands::composefs_ops::test_mount_skip_guard;
-use crate::commands::test_helpers::setup_command_test_db;
-use conary_core::db::models::{InstalledRequirementGroup, Repository, RepositoryPackage, Trove};
+use crate::commands::test_helpers::{create_active_test_generation, setup_command_test_db};
+use conary_core::db::models::{InstalledRequirementGroup, RepositoryPackage, Trove};
 use tempfile::tempdir;
 
 #[test]
@@ -44,13 +44,8 @@ async fn cmd_automation_apply_yes_removes_orphans_and_records_history() {
     let root = tempdir().unwrap();
     let _guard = test_mount_skip_guard();
 
+    create_active_test_generation(std::path::Path::new(&db_path), 1);
     let conn = crate::commands::open_db(&db_path).unwrap();
-    crate::commands::composefs_ops::rebuild_and_mount_from_installed_state(
-        &conn,
-        &db_path,
-        "Initial automation cleanup generation",
-    )
-    .unwrap();
     conn.execute(
         "UPDATE troves
          SET name = 'orphan-cleanup-fixture',
@@ -122,11 +117,11 @@ async fn cmd_automation_apply_records_failed_history_for_unreachable_update() {
     let root = tempdir().unwrap();
 
     let conn = crate::commands::open_db(&db_path).unwrap();
-    let mut repo = Repository::new(
-        "test-updates".to_string(),
-        "http://127.0.0.1:9/repo".to_string(),
+    let repo_id = crate::commands::test_helpers::insert_test_static_ccs_repository(
+        &conn,
+        "test-updates",
+        "http://127.0.0.1:9/repo",
     );
-    let repo_id = repo.insert(&conn).unwrap();
 
     let mut pkg = RepositoryPackage::new(
         repo_id,

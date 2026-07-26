@@ -2,9 +2,8 @@
 
 use super::*;
 use crate::db::models::{
-    InstallSource, LabelEntry, PackageResolution, PrimaryStrategy, ProvideEntry, Repository,
-    RepositoryPackage, RepositoryProvide, RepositoryRequirement, ResolutionStrategy,
-    SystemAffinity, Trove, TroveType,
+    InstallSource, LabelEntry, PackageResolution, ProvideEntry, Repository, RepositoryPackage,
+    RepositoryProvide, RepositoryRequirement, ResolutionStrategy, SystemAffinity, Trove, TroveType,
 };
 use crate::db::testing::create_test_db;
 use crate::model::state::{InstalledPackage, SystemState};

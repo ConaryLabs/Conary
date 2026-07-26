@@ -20,6 +20,16 @@ fn insert_native_trove(
         TroveType::Package,
         version_scheme,
     );
+    trove.architecture = Some(
+        if version_scheme == VersionScheme::Debian {
+            "amd64"
+        } else {
+            "x86_64"
+        }
+        .to_string(),
+    );
+    trove.debian_multi_arch = (version_scheme == VersionScheme::Debian)
+        .then_some(crate::repository::dependency_model::DebianMultiArch::No);
     let trove_id = trove.insert(conn).unwrap();
 
     let requirements = deps
@@ -64,6 +74,14 @@ pub(super) fn insert_repo_pkg_with_reqs(
         format!("sha256:{name}"),
         1,
         url.to_string(),
+    );
+    pkg.architecture = Some(
+        if version_scheme == VersionScheme::Debian {
+            "amd64"
+        } else {
+            "x86_64"
+        }
+        .to_string(),
     );
     pkg.insert(conn).unwrap();
     let pkg_id = pkg.id.unwrap();
@@ -187,6 +205,7 @@ fn debian_or_plus_versioned_virtual_dep() {
         1,
         "https://archive.ubuntu.com/ubuntu/pool/bsd-mailx.deb".to_string(),
     );
+    mailx.architecture = Some("amd64".to_string());
     mailx.insert(&conn).unwrap();
     let mailx_id = mailx.id.unwrap();
 
@@ -592,6 +611,7 @@ fn default_conary_installed_package_is_explicitly_typed_for_sat() {
         TroveType::Package,
         crate::repository::versioning::VersionScheme::Conary,
     );
+    trove.architecture = Some("x86_64".to_string());
     trove.insert(&conn).unwrap();
 
     let resolution = solve_install(&conn, &[("bash".to_string(), VersionConstraint::Any)]).unwrap();

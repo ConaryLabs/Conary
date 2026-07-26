@@ -92,7 +92,7 @@ impl ConversionService {
                      FROM repository_packages rp
                      JOIN repositories r ON rp.repository_id = r.id
                      WHERE rp.name = ?1
-                     AND r.default_strategy_distro = ?2
+                     AND r.source_profile = ?2
                      AND rp.version = ?3
                      AND rp.architecture = ?4
                      AND rp.size > 0
@@ -123,7 +123,7 @@ impl ConversionService {
                  FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.name = ?1
-                 AND r.default_strategy_distro = ?2
+                 AND r.source_profile = ?2
                  AND rp.version = ?3
                  AND rp.size > 0
                  LIMIT 1",
@@ -154,7 +154,7 @@ impl ConversionService {
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.name = ?1
-             AND r.default_strategy_distro = ?2
+             AND r.source_profile = ?2
              AND (?3 IS NULL OR rp.architecture = ?3)
              AND rp.size > 0",
             RepositoryPackage::COLUMNS_PREFIXED

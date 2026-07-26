@@ -1,0 +1,54 @@
+[package]
+name = "conary-native-lifecycle-parity"
+version = "1.0.1"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "Native package-manager lifecycle trace oracle fixture v2"
+license = "MIT"
+homepage = "https://conary.io/fixtures/native-lifecycle-parity"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
+
+[provides]
+capabilities = ["conary-native-lifecycle-parity"]
+binaries = ["/usr/bin/conary-native-lifecycle-parity"]
+
+[components]
+default = ["runtime"]
+
+[hooks]
+
+[hooks.post_install]
+script = '''
+trace_dir=/var/lib/conary-native-lifecycle-parity
+mkdir -p "$trace_dir"
+payload=missing
+if IFS= read -r payload < /usr/share/conary-native-lifecycle-parity/payload-version; then :
+fi
+argv=
+for argument in "$@"; do
+    argv="${argv}[${argument}]"
+done
+printf '%s\n' "v2-post|argc=$#|argv=${argv}|stdin=none|payload=${payload}" >> "$trace_dir/trace"
+'''
+
+[hooks.pre_remove]
+script = '''
+trace_dir=/var/lib/conary-native-lifecycle-parity
+mkdir -p "$trace_dir"
+payload=missing
+if IFS= read -r payload < /usr/share/conary-native-lifecycle-parity/payload-version; then :
+fi
+argv=
+for argument in "$@"; do
+    argv="${argv}[${argument}]"
+done
+printf '%s\n' "v2-pre-remove|argc=$#|argv=${argv}|stdin=none|payload=${payload}" >> "$trace_dir/trace"
+'''

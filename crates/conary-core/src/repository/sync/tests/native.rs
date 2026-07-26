@@ -120,16 +120,26 @@ fn test_remi_package_entry_builds_normalized_capabilities() {
             RemiProvide {
                 capability: "kernel-core".to_string(),
                 version: Some("6.19.6-200.fc44".to_string()),
+                version_relation: Some(
+                    crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                ),
                 kind: "package".to_string(),
                 raw: Some("kernel-core = 6.19.6-200.fc44".to_string()),
                 version_scheme: VersionScheme::Rpm,
+                architecture_qualifier:
+                    crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
             },
             RemiProvide {
                 capability: "kernel-core-uname-r".to_string(),
                 version: Some("6.19.6-200.fc44.x86_64".to_string()),
+                version_relation: Some(
+                    crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                ),
                 kind: "package".to_string(),
                 raw: Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
                 version_scheme: VersionScheme::Rpm,
+                architecture_qualifier:
+                    crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
             },
         ],
         requirement_groups: vec![
@@ -220,9 +230,14 @@ fn test_remi_package_entry_marks_trusted_security_advisory() {
         provides: vec![RemiProvide {
             capability: "openssl".to_string(),
             version: Some("3.2.1-1.fc44".to_string()),
+            version_relation: Some(
+                crate::repository::dependency_model::ProvideVersionRelation::Equal,
+            ),
             kind: "package".to_string(),
             raw: Some("openssl".to_string()),
             version_scheme: VersionScheme::Rpm,
+            architecture_qualifier:
+                crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
         }],
         requirement_groups: Vec::new(),
         metadata: Some(json!({
@@ -396,6 +411,7 @@ fn test_sync_persists_distro_and_version_scheme() {
         "fedora-updates".to_string(),
         "https://example.com/fedora".to_string(),
     );
+    repo.source_profile = Some("fedora-44".to_string());
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -421,7 +437,7 @@ fn test_sync_persists_distro_and_version_scheme() {
                 pkg_meta.size as i64,
                 pkg_meta.download_url.clone(),
             );
-            p.distro = Some(distro_flavor_to_db(pkg_meta.source_distro));
+            p.source_profile = Some("fedora-44".to_string());
             p
         },
         provides,
@@ -435,7 +451,7 @@ fn test_sync_persists_distro_and_version_scheme() {
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].distro.as_deref(), Some("rpm"));
+    assert_eq!(stored[0].source_profile.as_deref(), Some("fedora-44"));
     assert_eq!(stored[0].version_scheme, VersionScheme::Rpm);
 }
 
@@ -448,6 +464,7 @@ fn test_sync_persists_debian_origin_metadata() {
         "debian-main".to_string(),
         "https://example.com/debian".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -473,7 +490,7 @@ fn test_sync_persists_debian_origin_metadata() {
                 pkg_meta.size as i64,
                 pkg_meta.download_url.clone(),
             );
-            p.distro = Some(distro_flavor_to_db(pkg_meta.source_distro));
+            p.source_profile = Some("ubuntu-26.04".to_string());
             p
         },
         provides,
@@ -487,7 +504,10 @@ fn test_sync_persists_debian_origin_metadata() {
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].distro.as_deref(), Some("deb"));
+    assert_eq!(
+        stored[0].source_profile.as_deref(),
+        Some("ubuntu-26.04")
+    );
     assert_eq!(stored[0].version_scheme, VersionScheme::Debian);
 }
 
@@ -500,6 +520,7 @@ fn test_sync_persists_arch_origin_metadata() {
         "arch-core".to_string(),
         "https://example.com/arch".to_string(),
     );
+    repo.source_profile = Some("arch".to_string());
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -525,7 +546,7 @@ fn test_sync_persists_arch_origin_metadata() {
                 pkg_meta.size as i64,
                 pkg_meta.download_url.clone(),
             );
-            p.distro = Some(distro_flavor_to_db(pkg_meta.source_distro));
+            p.source_profile = Some("arch".to_string());
             p
         },
         provides,
@@ -539,7 +560,7 @@ fn test_sync_persists_arch_origin_metadata() {
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].distro.as_deref(), Some("arch"));
+    assert_eq!(stored[0].source_profile.as_deref(), Some("arch"));
     assert_eq!(stored[0].version_scheme, VersionScheme::Arch);
 }
 
@@ -552,6 +573,7 @@ fn test_sync_persists_requirement_groups_with_alternatives() {
         "debian-main".to_string(),
         "https://example.com/debian".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -598,7 +620,7 @@ fn test_sync_persists_requirement_groups_with_alternatives() {
                 pkg_meta.size as i64,
                 pkg_meta.download_url.clone(),
             );
-            p.distro = Some(distro_flavor_to_db(pkg_meta.source_distro));
+            p.source_profile = Some("ubuntu-26.04".to_string());
             p
         },
         provides,
@@ -659,6 +681,7 @@ fn test_sync_persists_conditional_requirement_behavior() {
         "fedora".to_string(),
         "https://example.com/fedora".to_string(),
     );
+    repo.source_profile = Some("fedora-44".to_string());
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -698,7 +721,7 @@ fn test_sync_persists_conditional_requirement_behavior() {
                 pkg_meta.size as i64,
                 pkg_meta.download_url.clone(),
             );
-            p.distro = Some(distro_flavor_to_db(pkg_meta.source_distro));
+            p.source_profile = Some("fedora-44".to_string());
             p
         },
         provides,
@@ -730,61 +753,41 @@ fn test_sync_persists_conditional_requirement_behavior() {
 
 #[test]
 fn test_canonical_map_deserialization_and_persist() {
-    use crate::db::models::{CanonicalPackage, PackageImplementation};
+    use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
 
     let conn = Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
 
     // Simulate the JSON response from GET /v1/canonical/map
     let json = json!({
-        "version": 1,
+        "schema_version": 1,
+        "revision": 1,
         "generated_at": "2026-03-16T00:00:00Z",
         "entries": [
             {
                 "canonical": "firefox",
+                "kind": "package",
                 "implementations": {
-                    "fedora": "firefox",
-                    "debian": "firefox-esr",
+                    "fedora-44": "firefox",
+                    "ubuntu-26.04": "firefox-esr",
                     "arch": "firefox"
                 }
             },
             {
                 "canonical": "openssl",
+                "kind": "package",
                 "implementations": {
-                    "fedora": "openssl",
-                    "ubuntu": "libssl3"
+                    "fedora-44": "openssl",
+                    "ubuntu-26.04": "libssl3"
                 }
             }
         ]
     });
 
-    let map: CanonicalMapSnapshot = serde_json::from_value(json).unwrap();
+    let map = crate::canonical::exchange::parse_snapshot(json.to_string().as_bytes()).unwrap();
     assert_eq!(map.entries.len(), 2);
 
-    // Persist the map entries using the same logic as fetch_and_persist_canonical_map
-    let tx = conn.unchecked_transaction().unwrap();
-    let mut count = 0u64;
-
-    for entry in &map.entries {
-        let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
-        let Some(canonical_id) = canonical.insert_or_ignore(&tx).unwrap() else {
-            continue;
-        };
-
-        for (distro, distro_name) in &entry.implementations {
-            let mut imp = PackageImplementation::new(
-                canonical_id,
-                distro.clone(),
-                distro_name.clone(),
-                "remi".to_string(),
-            );
-            imp.insert_or_ignore(&tx).unwrap();
-            count += 1;
-        }
-    }
-    tx.commit().unwrap();
-
-    assert_eq!(count, 5);
+    assert_eq!(persist_canonical_map(&conn, &map).unwrap(), 2);
 
     // Verify canonical packages were persisted
     let firefox = CanonicalPackage::find_by_name(&conn, "firefox")
@@ -800,34 +803,23 @@ fn test_canonical_map_deserialization_and_persist() {
     // Verify implementations
     let ff_impls = PackageImplementation::find_by_canonical(&conn, firefox.id.unwrap()).unwrap();
     assert_eq!(ff_impls.len(), 3);
-    let debian_impl = ff_impls.iter().find(|i| i.distro == "debian").unwrap();
+    let debian_impl = ff_impls
+        .iter()
+        .find(|i| i.distro == "ubuntu-26.04")
+        .unwrap();
     assert_eq!(debian_impl.distro_name, "firefox-esr");
-    assert_eq!(debian_impl.source, "remi");
+    assert_eq!(debian_impl.source, CanonicalMappingAuthority::Remi);
 
     let ssl_impls = PackageImplementation::find_by_canonical(&conn, openssl.id.unwrap()).unwrap();
     assert_eq!(ssl_impls.len(), 2);
-    let ubuntu_impl = ssl_impls.iter().find(|i| i.distro == "ubuntu").unwrap();
+    let ubuntu_impl = ssl_impls
+        .iter()
+        .find(|i| i.distro == "ubuntu-26.04")
+        .unwrap();
     assert_eq!(ubuntu_impl.distro_name, "libssl3");
 
     // Second ingest is idempotent -- no duplicate rows
-    let tx2 = conn.unchecked_transaction().unwrap();
-    for entry in &map.entries {
-        let mut canonical = CanonicalPackage::new(entry.canonical.clone(), "package".to_string());
-        let Some(canonical_id) = canonical.insert_or_ignore(&tx2).unwrap() else {
-            continue;
-        };
-
-        for (distro, distro_name) in &entry.implementations {
-            let mut imp = PackageImplementation::new(
-                canonical_id,
-                distro.clone(),
-                distro_name.clone(),
-                "remi".to_string(),
-            );
-            imp.insert_or_ignore(&tx2).unwrap();
-        }
-    }
-    tx2.commit().unwrap();
+    persist_canonical_map(&conn, &map).unwrap();
 
     let ff_impls2 = PackageImplementation::find_by_canonical(&conn, firefox.id.unwrap()).unwrap();
     assert_eq!(
@@ -850,14 +842,14 @@ fn test_link_canonical_ids_populates_from_implementations() {
     let canonical_id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
-             VALUES (?1, 'fedora-41', 'firefox', 'curated')",
+             VALUES (?1, 'fedora-44', 'firefox', 'contract')",
         [canonical_id],
     )
     .unwrap();
 
     conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, default_strategy_distro)
-             VALUES ('fedora-41', 'https://example.com', 1, 10, 'fedora-41')",
+        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
+            VALUES ('fedora-44', 'https://example.com', 1, 10, 'fedora-44')",
         [],
     )
     .unwrap();
@@ -913,4 +905,49 @@ fn test_link_canonical_ids_skips_already_linked() {
 
     let count = link_canonical_ids(&conn, repo_id).unwrap();
     assert_eq!(count, 0);
+}
+
+#[test]
+fn repository_name_never_substitutes_for_source_profile_authority() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+
+    conn.execute(
+        "INSERT INTO canonical_packages (name, kind) VALUES ('firefox-web', 'package')",
+        [],
+    )
+    .unwrap();
+    let canonical_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
+         VALUES (?1, 'fedora-44', 'firefox', 'contract')",
+        [canonical_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repositories (name, url, enabled, priority)
+         VALUES ('fedora-44', 'https://example.com', 1, 10)",
+        [],
+    )
+    .unwrap();
+    let repo_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO repository_packages
+         (repository_id, name, version, checksum, size, download_url, version_scheme)
+         VALUES (?1, 'firefox', '125.0', 'sha256:abc', 1024,
+                 'https://example.com/firefox.rpm', 'rpm')",
+        [repo_id],
+    )
+    .unwrap();
+    let package_id = conn.last_insert_rowid();
+
+    assert_eq!(link_canonical_ids(&conn, repo_id).unwrap(), 0);
+    let linked: Option<i64> = conn
+        .query_row(
+            "SELECT canonical_id FROM repository_packages WHERE id = ?1",
+            [package_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(linked, None);
 }

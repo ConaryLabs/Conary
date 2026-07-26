@@ -14,7 +14,7 @@ pub mod fedora;
 
 use crate::error::Result;
 use crate::repository::dependency_model::{
-    RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
+    DebianMultiArch, RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
 };
 use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,9 @@ pub struct PackageMetadata {
     /// Architecture (x86_64, aarch64, noarch, all, any, etc.)
     pub architecture: Option<String>,
 
+    /// Exact Debian `Multi-Arch` behavior; absent for non-Debian metadata.
+    pub debian_multi_arch: Option<DebianMultiArch>,
+
     /// Short package description
     pub description: Option<String>,
 
@@ -61,8 +64,8 @@ pub struct PackageMetadata {
     /// Additional format-specific metadata (stored as JSON)
     pub extra_metadata: serde_json::Value,
 
-    /// Which distro ecosystem this metadata came from.
-    pub source_distro: RepositoryDependencyFlavor,
+    /// Which native dependency grammar this metadata uses.
+    pub dependency_flavor: RepositoryDependencyFlavor,
 
     /// The version comparison scheme that applies to `version`.
     pub version_scheme: VersionScheme,
@@ -101,20 +104,22 @@ impl PackageMetadata {
         checksum: String,
         size: u64,
         download_url: String,
-        source_distro: RepositoryDependencyFlavor,
+        dependency_flavor: RepositoryDependencyFlavor,
         version_scheme: VersionScheme,
     ) -> Self {
         Self {
             name,
             version,
             architecture: None,
+            debian_multi_arch: (version_scheme == VersionScheme::Debian)
+                .then_some(DebianMultiArch::No),
             description: None,
             checksum,
             checksum_type: ChecksumType::Sha256,
             size,
             download_url,
             extra_metadata: serde_json::Value::Null,
-            source_distro,
+            dependency_flavor,
             version_scheme,
             requirements: Vec::new(),
             provides: Vec::new(),

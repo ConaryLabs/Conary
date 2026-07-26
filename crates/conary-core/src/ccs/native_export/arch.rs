@@ -257,8 +257,16 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             .config
             .files
             .iter()
-            .map(|f| f.trim_start_matches('/'))
-            .collect();
+            .map(|config| {
+                if !config.noreplace || config.ghost || config.remove_on_upgrade {
+                    anyhow::bail!(
+                        "Arch export cannot represent config semantics for {}",
+                        config.path
+                    );
+                }
+                Ok(config.path.trim_start_matches('/'))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Append backup entries to .PKGINFO
         let mut pkginfo_file = fs::OpenOptions::new()

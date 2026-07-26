@@ -18,9 +18,11 @@ pub(super) fn build_provider_for_install<'conn>(
     policy: &ResolutionPolicy,
 ) -> Result<ConaryProvider<'conn>> {
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone());
+    provider.set_root_request_names(requests.iter().map(|(name, _)| name.clone()));
     provider.load_installed_packages()?;
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
+    provider.expand_root_request_names_with_canonical_equivalents();
     load_transitive_repo_packages(
         &mut provider,
         requests.iter().map(|(name, _)| name.clone()).collect(),
@@ -35,9 +37,11 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     policy: &ResolutionPolicy,
 ) -> Result<ConaryProvider<'conn>> {
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone());
+    provider.set_root_request_names(requirement_names(expressions));
     provider.load_installed_packages()?;
     provider.build_provides_index()?;
     provider.load_canonical_index()?;
+    provider.expand_root_request_names_with_canonical_equivalents();
     load_transitive_repo_packages(&mut provider, requirement_names(expressions))?;
     provider.intern_all_dependency_version_sets()?;
     Ok(provider)
@@ -83,6 +87,7 @@ fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
                 ConaryConstraint::ProviderExpression { expression } => {
                     expression.collect_names(&known, &mut names);
                 }
+                ConaryConstraint::RpmRuntime(_) => {}
                 ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {
                     names.insert(atom.name.clone());
                 }
@@ -125,6 +130,14 @@ pub(super) fn collect_install_order(
             SatPackage {
                 name: pkg.name.clone(),
                 version: pkg.version.clone(),
+                package_release: pkg.package_release.clone(),
+                architecture: pkg.architecture.clone(),
+                version_scheme: pkg.version_scheme,
+                repo_package_id: pkg.repo_package_id,
+                repository_id: pkg.repository_id,
+                repository_name: (!pkg.repository_name.is_empty())
+                    .then(|| pkg.repository_name.clone()),
+                installed_trove_id: pkg.installed_trove_id,
                 source: if pkg.installed_trove_id.is_some() {
                     SatSource::Installed
                 } else {

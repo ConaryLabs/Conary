@@ -11,17 +11,13 @@
 //! - `ResolutionPolicy` filters candidates by request scope and mixing policy
 //! - Canonical expansion surfaces all cross-distro implementations for root requests
 
-use crate::db::models::{RepologyCacheEntry, Repository, RepositoryPackage};
+use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
-use crate::repository::LatestSignal;
-use crate::repository::dependency_model::RepositoryDependencyFlavor;
-use crate::repository::resolution_policy::{ResolutionPolicy, SelectionMode};
+use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
 use crate::repository::versioning::{
-    compare_repo_package_versions, resolve_package_version_scheme,
+    VersionScheme, compare_repo_package_versions, resolve_package_version_scheme,
 };
-use chrono::Utc;
 use rusqlite::Connection;
-use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
 
 /// Options for package selection
@@ -29,18 +25,30 @@ use tracing::{debug, info};
 pub struct SelectionOptions {
     /// Specific version to select (if None, select latest)
     pub version: Option<String>,
+    /// Exact signed CCS build release to select.
+    pub package_release: Option<String>,
     /// Specific repository to search (if None, search all enabled)
     pub repository: Option<String>,
     /// Specific architecture to filter (if None, use system architecture)
     pub architecture: Option<String>,
+    /// Whether discovery is target-native or intentionally all-architecture.
+    pub architecture_scope: ArchitectureScope,
     /// Resolution policy to apply when filtering candidates.
     /// When `None`, all candidates from enabled repositories are accepted.
     pub policy: Option<ResolutionPolicy>,
     /// Whether this selection is for a root (user-typed) request.
     /// Policy request-scope constraints only apply to root requests.
     pub is_root: bool,
-    /// The primary distro flavor of the system (for mixing policy checks).
-    pub primary_flavor: Option<RepositoryDependencyFlavor>,
+}
+
+/// Architecture discovery scope.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ArchitectureScope {
+    /// Return only candidates compatible with the target-native architecture.
+    #[default]
+    Native,
+    /// Return every explicitly declared architecture for typed solver filtering.
+    All,
 }
 
 /// Information about a package with its repository
@@ -59,21 +67,27 @@ impl PackageSelector {
         super::registry::detect_system_arch()
     }
 
-    /// Check if a package architecture is compatible with the system.
+    /// Check whether one exact source-native package architecture targets the
+    /// current machine.
     ///
     /// Handles the arch-independent markers from all three ecosystems:
     /// - RPM: `noarch`
     /// - Debian: `all`
     /// - Arch Linux / ALPM: `any`
     ///
-    /// Also handles cross-ecosystem arch name aliases (e.g. Debian `amd64`
-    /// matches RPM `x86_64`) via [`normalize_arch`].
-    pub fn is_architecture_compatible(pkg_arch: Option<&str>, system_arch: &str) -> bool {
-        match pkg_arch {
-            None => true,
-            Some("noarch" | "all" | "any") => true,
-            Some(arch) => normalize_arch(arch) == normalize_arch(system_arch),
-        }
+    /// Architecture-independent markers are interpreted only under the
+    /// package ecosystem that owns them. For example, Debian `all`, Arch
+    /// `any`, and RPM `noarch` are distinct signed tokens rather than generic
+    /// aliases.
+    pub fn is_architecture_compatible(
+        scheme: VersionScheme,
+        pkg_arch: Option<&str>,
+        system_arch: &str,
+    ) -> bool {
+        pkg_arch.is_some_and(|architecture| {
+            effective_machine_architecture(scheme, architecture, system_arch)
+                == native_machine_architecture(system_arch)
+        })
     }
 
     /// Search for packages by name with selection options
@@ -85,6 +99,9 @@ impl PackageSelector {
         package_name: &str,
         options: &SelectionOptions,
     ) -> Result<Vec<PackageWithRepo>> {
+        if let Some(policy) = &options.policy {
+            policy.validate_profile_ids().map_err(Error::ConfigError)?;
+        }
         let detected_arch = Self::detect_architecture();
         let system_arch = options.architecture.as_deref().unwrap_or(&detected_arch);
 
@@ -103,15 +120,33 @@ impl PackageSelector {
         // Get repository information for each package
         let mut results = Vec::new();
         for pkg in packages {
+            let scheme = resolve_package_version_scheme(&pkg);
+            let package_architecture = pkg.architecture.as_deref().ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "repository package '{}-{}' has no architecture authority",
+                    pkg.name, pkg.version
+                ))
+            })?;
             // Filter by version if specified
             if let Some(ref version) = options.version
                 && &pkg.version != version
             {
                 continue;
             }
+            if let Some(ref release) = options.package_release
+                && &pkg.package_release != release
+            {
+                continue;
+            }
 
             // Filter by architecture
-            if !Self::is_architecture_compatible(pkg.architecture.as_deref(), system_arch) {
+            if options.architecture_scope == ArchitectureScope::Native
+                && !Self::is_architecture_compatible(
+                    scheme,
+                    Some(package_architecture),
+                    system_arch,
+                )
+            {
                 debug!(
                     "Skipping package {} {} with incompatible arch {:?}",
                     pkg.name, pkg.version, pkg.architecture
@@ -143,9 +178,14 @@ impl PackageSelector {
                 continue;
             }
 
+            // Repository and package profile claims are one exact authority.
+            // Validate them even when no source policy was supplied so an
+            // unscoped request cannot admit contradictory metadata.
+            let candidate_profile = candidate_source_profile(&pkg, &repo)?;
+
             // Apply resolution policy filter
             if let Some(ref policy) = options.policy {
-                if !candidate_matches_allowed_distros(policy, &pkg, &repo) {
+                if !candidate_matches_allowed_distros(policy, &pkg, &repo)? {
                     debug!(
                         "Policy rejected package {} {} from repository {} due to allowlist mismatch",
                         pkg.name, pkg.version, repo.name
@@ -155,13 +195,10 @@ impl PackageSelector {
 
                 let mut policy_without_allowlist = policy.clone();
                 policy_without_allowlist.allowed_distros.clear();
-                let scheme = resolve_package_version_scheme(&pkg);
                 if !policy_without_allowlist.accepts_candidate(
                     &repo.name,
-                    scheme,
-                    package_name,
+                    candidate_profile,
                     options.is_root,
-                    options.primary_flavor,
                 ) {
                     debug!(
                         "Policy rejected package {} {} from repository {} (scheme {:?})",
@@ -181,7 +218,7 @@ impl PackageSelector {
     }
 
     pub fn select_best_with_options(
-        conn: &Connection,
+        _conn: &Connection,
         mut candidates: Vec<PackageWithRepo>,
         options: &SelectionOptions,
     ) -> Result<PackageWithRepo> {
@@ -189,11 +226,15 @@ impl PackageSelector {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        let latest_positive_keys = latest_positive_keys(conn, &candidates, options)?;
+        let guarded_profile = options.policy.as_ref().and_then(|policy| {
+            (policy.mixing == DependencyMixingPolicy::Guarded)
+                .then(|| policy.primary_profile())
+                .flatten()
+        });
         let selected_index = exact_winner_index(&candidates, |candidate| {
-            candidate_latest_key(candidate)
-                .as_ref()
-                .is_some_and(|key| latest_positive_keys.contains(key))
+            let candidate_profile =
+                candidate_source_profile(&candidate.package, &candidate.repository)?;
+            Ok(guarded_profile.is_some_and(|profile| candidate_profile == Some(profile)))
         })?;
         let selected = candidates.swap_remove(selected_index);
         info!(
@@ -220,7 +261,7 @@ impl PackageSelector {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        let selected_index = exact_winner_index(&candidates, |_| false)?;
+        let selected_index = exact_winner_index(&candidates, |_| Ok(false))?;
         let selected = candidates.swap_remove(selected_index);
         info!(
             "Selected package {} {} from repository {} (priority {})",
@@ -263,22 +304,26 @@ impl PackageSelector {
 
 fn exact_winner_index(
     candidates: &[PackageWithRepo],
-    is_preferred: impl Fn(&PackageWithRepo) -> bool,
+    is_preferred: impl Fn(&PackageWithRepo) -> Result<bool>,
 ) -> Result<usize> {
-    let preferred_exists = candidates.iter().any(&is_preferred);
+    let preferences = candidates
+        .iter()
+        .map(&is_preferred)
+        .collect::<Result<Vec<_>>>()?;
+    let preferred_exists = preferences.iter().any(|preferred| *preferred);
     let top_priority = candidates
         .iter()
-        .filter(|candidate| is_preferred(candidate) == preferred_exists)
-        .map(|candidate| candidate.repository.priority)
+        .zip(&preferences)
+        .filter(|(_, preferred)| **preferred == preferred_exists)
+        .map(|(candidate, _)| candidate.repository.priority)
         .max()
         .expect("selection rejects an empty candidate set before ranking");
 
     let contenders = candidates
         .iter()
         .enumerate()
-        .filter(|(_, candidate)| {
-            is_preferred(candidate) == preferred_exists
-                && candidate.repository.priority == top_priority
+        .filter(|(index, candidate)| {
+            preferences[*index] == preferred_exists && candidate.repository.priority == top_priority
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
@@ -351,108 +396,146 @@ fn ambiguous_selection(
     }
 }
 
-fn candidate_distro_identifier<'a>(
+/// Return the one exact public source profile jointly declared by a package
+/// row and its repository.
+///
+/// Package-level metadata may repeat repository authority, but it may never
+/// contradict it. This is the shared projection used by selection,
+/// resolution, and transaction provenance.
+pub fn candidate_source_profile<'a>(
     pkg: &'a RepositoryPackage,
     repo: &'a Repository,
-) -> Option<&'a str> {
-    pkg.distro
-        .as_deref()
-        .or(repo.default_strategy_distro.as_deref())
+) -> Result<Option<&'a str>> {
+    let profile = match (
+        pkg.source_profile.as_deref(),
+        repo.source_profile.as_deref(),
+    ) {
+        (Some(package_profile), Some(repository_profile))
+            if package_profile != repository_profile =>
+        {
+            return Err(Error::ConfigError(format!(
+                "repository package '{}-{}' declares source profile '{}' but repository '{}' declares '{}'",
+                pkg.name, pkg.version, package_profile, repo.name, repository_profile
+            )));
+        }
+        (Some(package_profile), _) => Some(package_profile),
+        (None, repository_profile) => repository_profile,
+    };
+    if let Some(profile) = profile
+        && crate::repository::supported_profiles::profile_by_public_id(profile).is_none()
+    {
+        return Err(Error::ConfigError(format!(
+            "repository package '{}-{}' resolves to unsupported source profile '{}'",
+            pkg.name, pkg.version, profile
+        )));
+    }
+    Ok(profile)
 }
 
-fn candidate_matches_allowed_distros(
+pub(crate) fn candidate_matches_allowed_distros(
     policy: &ResolutionPolicy,
     pkg: &RepositoryPackage,
     repo: &Repository,
-) -> bool {
+) -> Result<bool> {
     if policy.allowed_distros.is_empty() {
-        return true;
+        return candidate_source_profile(pkg, repo).map(|_| true);
     }
 
-    policy.allowed_distros.iter().any(|allowed| {
-        allowed == &repo.name
-            || candidate_distro_identifier(pkg, repo).is_some_and(|distro| {
-                allowed == distro
-                    || crate::repository::supported_profiles::profile_for_remi_target(distro)
-                        .is_some_and(|profile| allowed == profile.id())
-            })
-    })
+    let candidate_profile = candidate_source_profile(pkg, repo)?;
+    Ok(policy
+        .allowed_distros
+        .iter()
+        .any(|allowed| candidate_profile.is_some_and(|profile| allowed == profile)))
 }
 
-fn candidate_latest_key(candidate: &PackageWithRepo) -> Option<(i64, String)> {
-    Some((
-        candidate.package.canonical_id?,
-        candidate_distro_identifier(&candidate.package, &candidate.repository)?.to_string(),
-    ))
+/// Compare two exact package architecture tokens under their owning package
+/// schemes. Architecture-independent tokens resolve to the native machine for
+/// this comparison; they are never rewritten in stored package identity.
+pub fn package_architectures_match(
+    left_scheme: VersionScheme,
+    left_architecture: &str,
+    right_scheme: VersionScheme,
+    right_architecture: &str,
+    native_architecture: &str,
+) -> bool {
+    effective_machine_architecture(left_scheme, left_architecture, native_architecture)
+        == effective_machine_architecture(right_scheme, right_architecture, native_architecture)
 }
 
-fn latest_positive_keys(
-    conn: &Connection,
-    candidates: &[PackageWithRepo],
-    options: &SelectionOptions,
-) -> Result<HashSet<(i64, String)>> {
-    if options
-        .policy
-        .as_ref()
-        .is_none_or(|policy| policy.selection_mode != SelectionMode::Latest)
-    {
-        return Ok(HashSet::new());
-    }
+/// Typed machine identity shared only by architecture compatibility checks.
+///
+/// The parser below encodes the source-owned tokens from dpkg's `cputable`,
+/// RPM's `rpmrc` architecture tables, and makepkg's `CARCH` contract. Unknown
+/// tokens retain exact identity and therefore only compare equal literally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MachineArchitecture {
+    X86_64,
+    X86_32,
+    Aarch64,
+    ArmV7HardFloat,
+    PowerPc64Le,
+    S390x,
+    RiscV64,
+    Exact(String),
+}
 
-    let mut distros_by_canonical: HashMap<i64, HashSet<String>> = HashMap::new();
-    for candidate in candidates {
-        let Some((canonical_id, distro)) = candidate_latest_key(candidate) else {
-            continue;
-        };
-        distros_by_canonical
-            .entry(canonical_id)
-            .or_default()
-            .insert(distro);
+fn effective_machine_architecture(
+    scheme: VersionScheme,
+    architecture: &str,
+    native_architecture: &str,
+) -> MachineArchitecture {
+    if is_architecture_independent(scheme, architecture) {
+        return native_machine_architecture(native_architecture);
     }
+    package_machine_architecture(scheme, architecture)
+}
 
-    let now = Utc::now();
-    let mut positive = HashSet::new();
-    for (canonical_id, distros) in distros_by_canonical {
-        let distro_list = distros.into_iter().collect::<Vec<_>>();
-        let rows =
-            RepologyCacheEntry::find_for_canonical_and_distros(conn, canonical_id, &distro_list)?;
-        for row in rows {
-            let status = row.status.as_deref().unwrap_or("");
-            let signal =
-                LatestSignal::from_repology(status, row.version.as_deref(), &row.fetched_at, now)?;
-            if signal.is_positive() {
-                positive.insert((canonical_id, row.distro));
-            }
+fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> bool {
+    matches!(
+        (scheme, architecture),
+        (VersionScheme::Conary | VersionScheme::Rpm, "noarch")
+            | (VersionScheme::Debian, "all")
+            | (VersionScheme::Arch, "any")
+    )
+}
+
+fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> MachineArchitecture {
+    match (scheme, architecture) {
+        (VersionScheme::Debian, "amd64")
+        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "x86_64") => {
+            MachineArchitecture::X86_64
         }
+        (VersionScheme::Debian, "i386")
+        | (VersionScheme::Rpm, "i386" | "i486" | "i586" | "i686")
+        | (VersionScheme::Arch | VersionScheme::Conary, "i686") => MachineArchitecture::X86_32,
+        (VersionScheme::Debian, "arm64")
+        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "aarch64") => {
+            MachineArchitecture::Aarch64
+        }
+        (VersionScheme::Debian, "armhf")
+        | (VersionScheme::Rpm, "armv7hl")
+        | (VersionScheme::Arch, "armv7h")
+        | (VersionScheme::Conary, "armv7") => MachineArchitecture::ArmV7HardFloat,
+        (VersionScheme::Debian, "ppc64el")
+        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "ppc64le") => {
+            MachineArchitecture::PowerPc64Le
+        }
+        (_, "s390x") => MachineArchitecture::S390x,
+        (_, "riscv64") => MachineArchitecture::RiscV64,
+        (_, exact) => MachineArchitecture::Exact(exact.to_string()),
     }
-
-    Ok(positive)
 }
 
-/// Normalize an architecture name to a canonical form.
-///
-/// Different package ecosystems use different names for the same CPU
-/// architecture.  This function maps all known aliases to a single
-/// canonical string so that comparisons work across ecosystems:
-///
-/// | Canonical  | Aliases                     |
-/// |------------|-----------------------------|
-/// | `x86_64`   | `amd64`                     |
-/// | `aarch64`  | `arm64`                     |
-/// | `i686`     | `i386`, `i486`, `i586`      |
-///
-/// Unknown names are returned as-is (lowercase).
-pub fn normalize_arch(arch: &str) -> &str {
-    match arch {
-        "amd64" => "x86_64",
-        "arm64" => "aarch64",
-        "i386" | "i486" | "i586" => "i686",
-        // ARM 32-bit: Debian armhf, RPM armv7hl, and raw arm/armv7 all
-        // map to armv7l (the kernel's name for 32-bit ARM with hard-float)
-        "arm" | "armhf" | "armv7" | "armv7hl" => "armv7l",
-        // ppc64le aliases
-        "ppc64el" => "ppc64le",
-        other => other,
+fn native_machine_architecture(architecture: &str) -> MachineArchitecture {
+    match architecture {
+        "x86_64" | "amd64" => MachineArchitecture::X86_64,
+        "x86" | "i386" | "i686" => MachineArchitecture::X86_32,
+        "aarch64" | "arm64" => MachineArchitecture::Aarch64,
+        "arm" | "armv7" | "armhf" => MachineArchitecture::ArmV7HardFloat,
+        "powerpc64le" | "ppc64le" | "ppc64el" => MachineArchitecture::PowerPc64Le,
+        "s390x" => MachineArchitecture::S390x,
+        "riscv64" => MachineArchitecture::RiscV64,
+        exact => MachineArchitecture::Exact(exact.to_string()),
     }
 }
 

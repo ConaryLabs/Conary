@@ -1,7 +1,7 @@
 // src/commands/install/prepare.rs
 //! Package parsing and pre-installation validation
 
-use super::InstallSemantics;
+use super::{InstallIntent, InstallSemantics};
 use crate::commands::PackageFormatType;
 use anyhow::{Context, Result};
 use conary_core::components::ComponentType;
@@ -10,8 +10,8 @@ use conary_core::packages::PackageFormat;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::rpm::RpmPackage;
-use conary_core::repository::selector::normalize_arch;
-use conary_core::repository::versioning::{VersionScheme, compare_mixed_repo_versions};
+use conary_core::repository::selector::package_architectures_match;
+use conary_core::repository::versioning::{VersionScheme, compare_package_identities};
 use rusqlite::Connection;
 use std::cmp::Ordering;
 use std::path::Path;
@@ -59,6 +59,8 @@ pub enum UpgradeCheck {
     Upgrade(Box<conary_core::db::models::Trove>),
     /// Downgrade to an older version (when --allow-downgrade is used)
     Downgrade(Box<conary_core::db::models::Trove>),
+    /// Explicit replacement across package-manager version schemes.
+    Replatform(Box<conary_core::db::models::Trove>),
 }
 
 /// Check if package is already installed and determine upgrade status
@@ -67,16 +69,49 @@ pub fn check_upgrade_status(
     pkg: &dyn PackageFormat,
     semantics: &InstallSemantics,
     allow_downgrade: bool,
+    intent: InstallIntent,
 ) -> Result<UpgradeCheck> {
     let existing = conary_core::db::models::Trove::find_by_name(conn, pkg.name())?;
 
     for trove in &existing {
-        if architectures_share_install_slot(trove.architecture.as_deref(), pkg.architecture()) {
-            if trove.version == pkg.version() {
+        if architectures_share_install_slot(
+            trove.version_scheme,
+            trove.architecture.as_deref(),
+            pkg.version_scheme(),
+            pkg.architecture(),
+        ) {
+            if trove.version == pkg.version()
+                && trove.package_release.as_deref() == pkg.package_release()
+            {
                 return Ok(UpgradeCheck::AlreadyInstalled(Box::new(trove.clone())));
             }
 
-            match compare_installed_and_incoming_versions(trove, pkg.version(), semantics)? {
+            if trove.version_scheme != semantics.version_scheme {
+                if intent == InstallIntent::Replatform {
+                    info!(
+                        "Replatforming {} from {} version scheme {} to {} version scheme {}",
+                        pkg.name(),
+                        trove.version_scheme.as_str(),
+                        trove.version,
+                        semantics.version_scheme.as_str(),
+                        pkg.version()
+                    );
+                    return Ok(UpgradeCheck::Replatform(Box::new(trove.clone())));
+                }
+                return Err(anyhow::anyhow!(
+                    "Cannot replace package {} across {} and {} version schemes without an explicit replatform operation",
+                    pkg.name(),
+                    trove.version_scheme.as_str(),
+                    semantics.version_scheme.as_str()
+                ));
+            }
+
+            match compare_installed_and_incoming_versions(
+                trove,
+                pkg.version(),
+                pkg.package_release(),
+                semantics,
+            )? {
                 Ordering::Less => {
                     info!(
                         "Upgrading {} from version {} to {}",
@@ -111,33 +146,37 @@ pub fn check_upgrade_status(
     Ok(UpgradeCheck::FreshInstall)
 }
 
-fn architectures_share_install_slot(installed: Option<&str>, incoming: Option<&str>) -> bool {
+fn architectures_share_install_slot(
+    installed_scheme: VersionScheme,
+    installed: Option<&str>,
+    incoming_scheme: VersionScheme,
+    incoming: Option<&str>,
+) -> bool {
     match (installed, incoming) {
-        (None, None) => true,
-        (Some(installed), Some(incoming))
-            if is_architecture_independent(installed) && is_architecture_independent(incoming) =>
-        {
-            true
-        }
-        (Some(installed), Some(incoming)) => normalize_arch(installed) == normalize_arch(incoming),
+        (Some(installed), Some(incoming)) => package_architectures_match(
+            installed_scheme,
+            installed,
+            incoming_scheme,
+            incoming,
+            &conary_core::repository::registry::detect_system_arch(),
+        ),
         _ => false,
     }
-}
-
-fn is_architecture_independent(architecture: &str) -> bool {
-    matches!(architecture, "noarch" | "all" | "any")
 }
 
 fn compare_installed_and_incoming_versions(
     trove: &Trove,
     incoming_version: &str,
+    incoming_release: Option<&str>,
     semantics: &InstallSemantics,
 ) -> Result<Ordering> {
-    Ok(compare_mixed_repo_versions(
+    Ok(compare_package_identities(
         trove.version_scheme,
         &trove.version,
+        trove.package_release.as_deref(),
         semantics.version_scheme,
         incoming_version,
+        incoming_release,
     )?)
 }
 
@@ -180,11 +219,12 @@ mod tests {
     use super::*;
     use conary_core::db::models::{InstallSource, Trove, TroveType};
     use conary_core::db::schema;
-    use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile};
+    use conary_core::packages::traits::{ConfigFileInfo, PackageFile};
 
     struct TestPackage {
         name: String,
         version: String,
+        version_scheme: VersionScheme,
         architecture: Option<String>,
     }
 
@@ -205,11 +245,18 @@ mod tests {
         }
 
         fn version_scheme(&self) -> conary_core::repository::versioning::VersionScheme {
-            conary_core::repository::versioning::VersionScheme::Conary
+            self.version_scheme
         }
 
         fn architecture(&self) -> Option<&str> {
             self.architecture.as_deref()
+        }
+
+        fn debian_multi_arch(
+            &self,
+        ) -> Option<conary_core::repository::dependency_model::DebianMultiArch> {
+            (self.version_scheme == VersionScheme::Debian)
+                .then_some(conary_core::repository::dependency_model::DebianMultiArch::No)
         }
 
         fn description(&self) -> Option<&str> {
@@ -226,8 +273,8 @@ mod tests {
             &[]
         }
 
-        fn extract_file_contents(&self) -> conary_core::Result<Vec<ExtractedFile>> {
-            Ok(Vec::new())
+        fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
+            Ok(conary_core::packages::PackagePayload::default())
         }
 
         fn config_files(&self) -> &[ConfigFileInfo] {
@@ -264,11 +311,14 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Debian,
         );
         trove.architecture = Some("amd64".to_string());
+        trove.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::No);
         trove.insert(&conn).unwrap();
 
         let pkg = TestPackage {
             name: "demo".to_string(),
             version: "1.0".to_string(),
+            version_scheme: VersionScheme::Debian,
             architecture: Some("amd64".to_string()),
         };
 
@@ -277,6 +327,7 @@ mod tests {
             &pkg,
             &InstallSemantics::native_package(PackageFormatType::Deb),
             false,
+            InstallIntent::PackageChange,
         )
         .unwrap();
         assert!(matches!(result, UpgradeCheck::Upgrade(_)));
@@ -298,6 +349,7 @@ mod tests {
         let pkg = TestPackage {
             name: "demo".to_string(),
             version: "1.0-2".to_string(),
+            version_scheme: VersionScheme::Arch,
             architecture: Some("x86_64".to_string()),
         };
 
@@ -306,6 +358,7 @@ mod tests {
             &pkg,
             &InstallSemantics::native_package(PackageFormatType::Arch),
             false,
+            InstallIntent::PackageChange,
         )
         .unwrap();
         assert!(matches!(result, UpgradeCheck::Upgrade(_)));
@@ -327,6 +380,7 @@ mod tests {
         let pkg = TestPackage {
             name: "demo".to_string(),
             version: "1.0-1".to_string(),
+            version_scheme: VersionScheme::Arch,
             architecture: Some("x86_64".to_string()),
         };
 
@@ -335,6 +389,7 @@ mod tests {
             &pkg,
             &InstallSemantics::native_package(PackageFormatType::Arch),
             false,
+            InstallIntent::PackageChange,
         )
         .unwrap();
         assert!(matches!(result, UpgradeCheck::AlreadyInstalled(_)));
@@ -356,14 +411,16 @@ mod tests {
         let pkg = TestPackage {
             name: "demo".to_string(),
             version: "1.0-1".to_string(),
+            version_scheme: VersionScheme::Debian,
             architecture: Some("amd64".to_string()),
         };
 
         let result = check_upgrade_status(
             &conn,
             &pkg,
-            &InstallSemantics::native_package(PackageFormatType::Arch),
+            &InstallSemantics::native_package(PackageFormatType::Deb),
             false,
+            InstallIntent::PackageChange,
         )
         .unwrap();
         assert!(matches!(result, UpgradeCheck::AlreadyInstalled(_)));
@@ -385,6 +442,7 @@ mod tests {
         let pkg = TestPackage {
             name: "demo".to_string(),
             version: "1.0-1".to_string(),
+            version_scheme: VersionScheme::Debian,
             architecture: Some("all".to_string()),
         };
 
@@ -393,6 +451,7 @@ mod tests {
             &pkg,
             &InstallSemantics::native_package(PackageFormatType::Deb),
             false,
+            InstallIntent::PackageChange,
         )
         .unwrap();
         assert!(matches!(result, UpgradeCheck::AlreadyInstalled(_)));

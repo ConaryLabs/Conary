@@ -625,6 +625,14 @@ impl AlternativeSelection {
             );
         }
         let content = &line[..line.len() - 1];
+        if content.contains(&b'\n') || content.contains(&0) {
+            return invalid(
+                "set-selections",
+                "selection line",
+                line,
+                "must contain exactly one NUL-free newline-terminated record",
+            );
+        }
         let first = content
             .iter()
             .position(|byte| matches!(byte, b' ' | b'\t'))

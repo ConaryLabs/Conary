@@ -25,35 +25,41 @@ fn payload_node(kind: PayloadNodeKind, mode: u32) -> PayloadNode {
     }
 }
 
-fn extracted_regular(path: &str, content: &[u8], permissions: u32) -> ExtractedFile {
-    ExtractedFile {
-        path: path.to_string(),
-        node: payload_node(
+fn extracted_regular(path: &str, content: &[u8], permissions: u32) -> PackagePayloadFile {
+    PackagePayloadFile::new(
+        path.to_string(),
+        payload_node(
             PayloadNodeKind::Regular {
                 hardlink_identity: None,
             },
             libc::S_IFREG | permissions,
         ),
-        content: content.to_vec(),
-        content_authority: Some(PayloadContentAuthority {
+        Some(PayloadContentAuthority {
             sha256: conary_core::hash::sha256(content),
             size: content.len() as u64,
         }),
-    }
+        Some(
+            conary_core::packages::payload::ReopenablePayload::from_in_memory_bytes(
+                std::sync::Arc::<[u8]>::from(content),
+            ),
+        ),
+    )
+    .unwrap()
 }
 
-fn extracted_symlink(path: &str, target: &str) -> ExtractedFile {
-    ExtractedFile {
-        path: path.to_string(),
-        node: payload_node(
+fn extracted_symlink(path: &str, target: &str) -> PackagePayloadFile {
+    PackagePayloadFile::new(
+        path.to_string(),
+        payload_node(
             PayloadNodeKind::Symlink {
                 target: target.to_string(),
             },
             libc::S_IFLNK | 0o777,
         ),
-        content: Vec::new(),
-        content_authority: None,
-    }
+        None,
+        None,
+    )
+    .unwrap()
 }
 
 fn installed_regular_file(
@@ -115,12 +121,12 @@ fn test_batch_plan_detects_cross_package_conflict() {
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
         config_files: Vec::new(),
-        install_reason: "Test".to_string(),
+        install_reason: InstallReason::Explicit,
+        selection_reason: "Test".to_string(),
         is_upgrade: false,
         old_trove: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::new(),
-        language_provides: Vec::new(),
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
     };
@@ -142,12 +148,12 @@ fn test_batch_plan_detects_cross_package_conflict() {
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
         config_files: Vec::new(),
-        install_reason: "Test".to_string(),
+        install_reason: InstallReason::Explicit,
+        selection_reason: "Test".to_string(),
         is_upgrade: false,
         old_trove: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::new(),
-        language_provides: Vec::new(),
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
     };
@@ -187,12 +193,12 @@ fn test_prepared_package_to_trove() {
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
         config_files: Vec::new(),
-        install_reason: "Required by nginx".to_string(),
+        install_reason: InstallReason::Dependency,
+        selection_reason: "selected from the exact nginx dependency closure".to_string(),
         is_upgrade: false,
         old_trove: None,
         installed_components: Vec::new(),
         classified_files: HashMap::new(),
-        language_provides: Vec::new(),
         repository_provenance: None,
         native_lifecycle_state: super::super::NativeLifecycleInstallState::default(),
     };
@@ -208,6 +214,10 @@ fn test_prepared_package_to_trove() {
     assert_eq!(
         trove.install_reason,
         conary_core::db::models::InstallReason::Dependency
+    );
+    assert_eq!(
+        trove.selection_reason.as_deref(),
+        Some("selected from the exact nginx dependency closure")
     );
 }
 
@@ -226,15 +236,15 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
         config_files: Vec::new(),
-        install_reason: "Required by parent".to_string(),
+        install_reason: InstallReason::Dependency,
+        selection_reason: "selected from the exact parent closure".to_string(),
         is_upgrade: false,
         old_trove: None,
         installed_components: Vec::new(),
         classified_files: HashMap::new(),
-        language_provides: Vec::new(),
         repository_provenance: Some(RepositoryInstallProvenance {
             repository_id: 9,
-            source_distro: Some("arch".to_string()),
+            source_profile: Some("arch".to_string()),
             version_scheme: conary_core::repository::versioning::VersionScheme::Arch,
             source_kind: conary_core::repository::RepositorySourceKind::Native,
         }),
@@ -248,7 +258,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         conary_core::db::models::InstallSource::Repository
     );
     assert_eq!(trove.installed_from_repository_id, Some(9));
-    assert_eq!(trove.source_distro.as_deref(), Some("arch"));
+    assert_eq!(trove.source_profile.as_deref(), Some("arch"));
     assert_eq!(
         trove.version_scheme,
         conary_core::repository::versioning::VersionScheme::Arch
@@ -270,17 +280,21 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         description: None,
         extracted_files: vec![extracted_regular(path, content, 0o755)],
         requirements: Vec::new(),
-        provides: Vec::new(),
+        provides: vec![crate::commands::test_helpers::exact_package_self_provider(
+            name,
+            "1.0.0",
+            conary_core::repository::versioning::VersionScheme::Rpm,
+        )],
         relations: Vec::new(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
         config_files: Vec::new(),
-        install_reason: "Test".to_string(),
+        install_reason: InstallReason::Explicit,
+        selection_reason: "Required by wording that must not control ownership".to_string(),
         is_upgrade: false,
         old_trove: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::from([(ComponentType::Runtime, vec![path.to_string()])]),
-        language_provides: Vec::new(),
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
     }
@@ -300,6 +314,7 @@ fn no_current_generation_batch_materializes_db_state_and_publishes_selected_root
     let db_path = temp.path().join("conary.db");
     std::fs::create_dir_all(&root).unwrap();
     conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let mut package =
@@ -318,6 +333,11 @@ fn no_current_generation_batch_materializes_db_state_and_publishes_selected_root
         .unwrap()
         .expect("batch file owner should exist");
     assert_eq!(owner.name, "batch-fixture");
+    assert_eq!(owner.install_reason, InstallReason::Explicit);
+    assert_eq!(
+        owner.selection_reason.as_deref(),
+        Some("Required by wording that must not control ownership")
+    );
     let requirements = InstalledRequirementGroup::find_by_trove(&conn, owner.id.unwrap()).unwrap();
     assert_eq!(requirements.len(), 1);
     assert_eq!(
@@ -353,6 +373,7 @@ fn generation_batch_executes_graph_in_selected_root_and_publishes_final_state() 
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&boot).unwrap();
     conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let package =
@@ -399,6 +420,7 @@ fn selected_root_batch_records_declared_config_metadata() {
     let db_path = temp.path().join("conary.db");
     std::fs::create_dir_all(&root).unwrap();
     conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let mut package = prepared_test_package(
@@ -428,7 +450,10 @@ fn selected_root_batch_records_declared_config_metadata() {
         config.original_hash.as_deref(),
         Some(file.content.as_ref().unwrap().sha256.as_str())
     );
-    assert_eq!(config.current_hash, None);
+    assert_eq!(
+        config.current_hash.as_deref(),
+        Some(file.content.as_ref().unwrap().sha256.as_str())
+    );
     assert_eq!(config.source, ConfigSource::Rpm);
     assert!(config.noreplace);
 }
@@ -441,6 +466,7 @@ fn selected_root_batch_publishes_symlink_from_cas() {
     let db_path = temp.path().join("conary.db");
     std::fs::create_dir_all(&root).unwrap();
     conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let package =

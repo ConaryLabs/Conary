@@ -11,7 +11,7 @@ Options:
   --repo-name NAME       Repository name to configure for validation
   --repo-url URL         Repository metadata URL
   --remi-endpoint URL    Remi conversion endpoint URL
-  --remi-distro DISTRO   Exact public profile ID
+  --source-profile ID    Exact public source profile ID
   --help                 Show this help text
 EOF
 }
@@ -36,7 +36,7 @@ while [[ $# -gt 0 ]]; do
             REMI_ENDPOINT="$2"
             shift 2
             ;;
-        --remi-distro)
+        --source-profile)
             REMI_DISTRO="$2"
             shift 2
             ;;
@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$REPO_NAME" || -z "$REPO_URL" || -z "$REMI_ENDPOINT" || -z "$REMI_DISTRO" ]]; then
-    echo "--repo-name, --repo-url, --remi-endpoint, and --remi-distro are required." >&2
+    echo "--repo-name, --repo-url, --remi-endpoint, and --source-profile are required." >&2
     usage >&2
     exit 1
 fi
@@ -138,7 +138,7 @@ main() {
             --package-format json \
             --default-strategy remi \
             --remi-endpoint "$REMI_ENDPOINT" \
-            --remi-distro "$REMI_DISTRO"
+            --source-profile "$REMI_DISTRO"
     fi
 
     repo_output="$(conary repo list --all)"

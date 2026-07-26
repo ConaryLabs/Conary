@@ -78,6 +78,27 @@ impl Sandbox {
             }
         }
 
+        if self.config.isolate_pid {
+            match fork_process()
+                .map_err(|error| sandbox_error(format!("PID namespace fork failed: {error}")))?
+            {
+                ForkResult::Parent { child } => return wait_for_pid_namespace_init(child),
+                ForkResult::Child => {
+                    let parent = unsafe { libc::getppid() };
+                    set_parent_death_signal(libc::SIGKILL).map_err(|error| {
+                        sandbox_error(format!(
+                            "failed to bind PID namespace init lifetime to its monitor: {error}"
+                        ))
+                    })?;
+                    if unsafe { libc::getppid() } != parent {
+                        return Err(sandbox_error(
+                            "PID namespace monitor exited during init setup",
+                        ));
+                    }
+                }
+            }
+        }
+
         if self.config.isolate_network
             && let Ok(status) = std::process::Command::new("ip")
                 .args(["link", "set", "lo", "up"])
@@ -344,5 +365,21 @@ impl Sandbox {
         );
         set_rlimit(libc::RLIMIT_NPROC, self.config.nproc_limit, "RLIMIT_NPROC");
         Ok(())
+    }
+}
+
+fn wait_for_pid_namespace_init(child: Pid) -> Result<i32> {
+    loop {
+        match waitpid(child, None) {
+            Ok(WaitStatus::Exited(_, code)) => return Ok(code),
+            Ok(WaitStatus::Signaled(_, signal, _)) => return Ok(128 + signal as i32),
+            Ok(_) => {}
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(error) => {
+                return Err(sandbox_error(format!(
+                    "failed to wait for PID namespace init: {error}"
+                )));
+            }
+        }
     }
 }

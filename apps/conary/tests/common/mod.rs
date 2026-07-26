@@ -1,4 +1,4 @@
-// tests/common/mod.rs
+// apps/conary/tests/common/mod.rs
 
 //! Shared test utilities and helpers for integration tests.
 
@@ -7,7 +7,9 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, Component, FileEntry, InstalledRequirementGroup, ProvideEntry,
     Trove, TroveType,
 };
-use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+};
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use conary_core::repository::requirement::parse_native_requirement;
 use conary_core::repository::versioning::VersionScheme;
@@ -28,13 +30,28 @@ pub fn regular_file_entry(
 ) -> FileEntry {
     FileEntry::new(
         path.into(),
-        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(permissions)).unwrap(),
+        resolved_test_node(PayloadNode::regular(permissions)),
         Some(PayloadContentAuthority {
             sha256: conary_core::hash::sha256(content),
             size: content.len() as u64,
         }),
         trove_id,
     )
+}
+
+fn directory_file_entry(path: impl Into<String>, trove_id: i64) -> FileEntry {
+    let mut node = PayloadNode::regular(0o755);
+    node.kind = PayloadNodeKind::Directory;
+    node.mode = libc::S_IFDIR | 0o755;
+    FileEntry::new(path.into(), resolved_test_node(node), None, trove_id)
+}
+
+fn resolved_test_node(mut node: PayloadNode) -> ResolvedPayloadNode {
+    let uid = u64::from(unsafe { libc::geteuid() });
+    let gid = u64::from(unsafe { libc::getegid() });
+    node.user = PayloadIdentity::Numeric { id: uid };
+    node.group = PayloadIdentity::Numeric { id: gid };
+    ResolvedPayloadNode::from_numeric_source(node).unwrap()
 }
 
 /// Capture every user-visible SQLite schema entry and table cell.
@@ -187,6 +204,11 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let mut nginx_config_component = Component::new(nginx_id, "config".to_string());
         let config_id = nginx_config_component.insert(tx)?;
 
+        // Add exact directory authority before package-owned descendants.
+        for path in ["/usr", "/usr/sbin", "/etc", "/etc/nginx"] {
+            directory_file_entry(path, nginx_id).insert(tx)?;
+        }
+
         // Add nginx files
         let mut f1 = regular_file_entry("/usr/sbin/nginx", &nginx_binary, 0o755, nginx_id);
         f1.component_id = Some(runtime_id);
@@ -197,9 +219,19 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         f2.insert(tx)?;
 
         // Add nginx provides
-        let mut p1 = ProvideEntry::new(nginx_id, "nginx".to_string(), Some("1.24.0".to_string()));
+        let mut p1 = ProvideEntry::new(
+            nginx_id,
+            "nginx".to_string(),
+            Some("1.24.0".to_string()),
+            VersionScheme::Conary,
+        );
         p1.insert(tx)?;
-        let mut p2 = ProvideEntry::new(nginx_id, "webserver".to_string(), None);
+        let mut p2 = ProvideEntry::new(
+            nginx_id,
+            "webserver".to_string(),
+            None,
+            VersionScheme::Conary,
+        );
         p2.insert(tx)?;
 
         // Add nginx dependency
@@ -236,14 +268,24 @@ pub fn setup_command_test_db() -> (TempDir, String) {
         let mut openssl_runtime = Component::new(openssl_id, "runtime".to_string());
         let openssl_runtime_id = openssl_runtime.insert(tx)?;
 
-        let mut init = regular_file_entry("/usr/sbin/init", init_binary, 0o755, openssl_id);
+        directory_file_entry("/sbin", openssl_id).insert(tx)?;
+        let mut init = regular_file_entry("/sbin/init", init_binary, 0o755, openssl_id);
         init.component_id = Some(openssl_runtime_id);
         init.insert(tx)?;
 
-        let mut p3 =
-            ProvideEntry::new(openssl_id, "openssl".to_string(), Some("3.0.0".to_string()));
+        let mut p3 = ProvideEntry::new(
+            openssl_id,
+            "openssl".to_string(),
+            Some("3.0.0".to_string()),
+            VersionScheme::Conary,
+        );
         p3.insert(tx)?;
-        let mut p4 = ProvideEntry::new(openssl_id, "soname(libssl.so.3)".to_string(), None);
+        let mut p4 = ProvideEntry::new(
+            openssl_id,
+            "soname(libssl.so.3)".to_string(),
+            None,
+            VersionScheme::Conary,
+        );
         p4.insert(tx)?;
 
         changeset2.update_status(tx, ChangesetStatus::Applied)?;

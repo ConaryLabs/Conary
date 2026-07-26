@@ -181,9 +181,12 @@ fn build_sparse_entry(
     name: &str,
 ) -> Result<Option<SparseIndexEntry>, anyhow::Error> {
     let conn = Connection::open(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
     // Find all repositories for this distro
-    let repositories = find_repositories_for_distro(&conn, distro)?;
+    let repositories = find_repositories_for_profile(&conn, source_profile.id())?;
     let repo_ids = repositories
         .iter()
         .map(super::require_persisted_repository_id)
@@ -226,20 +229,23 @@ fn build_sparse_entry(
     }
 
     let mut converted_map = std::collections::HashMap::new();
-    for converted in ConvertedPackage::find_current_conversions(&conn, distro, Some(name))? {
+    for converted in
+        ConvertedPackage::find_current_conversions(&conn, source_profile.id(), Some(name))?
+    {
         converted.scriptlet_summary()?;
         let artifact = converted.repository_artifact()?;
         converted_map.insert(
             (
                 artifact.package_version.to_string(),
                 None::<String>,
-                artifact.package_architecture.map(str::to_string),
+                Some(artifact.package_architecture.to_string()),
             ),
             artifact.content_hash.to_string(),
         );
     }
     let mut native_content_by_package_id = HashMap::new();
-    for publication in NativePackagePublication::find_active(&conn, distro, name, None, None, None)?
+    for publication in
+        NativePackagePublication::find_active(&conn, source_profile.id(), name, None, None, None)?
     {
         if native_content_by_package_id
             .insert(
@@ -315,9 +321,12 @@ fn build_package_list(
     per_page: usize,
 ) -> Result<PackageListResponse, anyhow::Error> {
     let conn = Connection::open(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
     // Find all repositories for this distro
-    let repositories = find_repositories_for_distro(&conn, distro)?;
+    let repositories = find_repositories_for_profile(&conn, source_profile.id())?;
     let repo_ids = repositories
         .iter()
         .map(super::require_persisted_repository_id)
@@ -380,9 +389,9 @@ fn build_package_list(
 }
 
 /// Alias to shared implementations in handlers/mod.rs
-use super::find_repositories_for_distro;
+use super::find_repositories_for_profile;
 #[cfg(test)]
-use super::find_repository_for_distro;
+use super::find_repository_for_profile;
 
 #[cfg(test)]
 mod tests {
@@ -465,7 +474,7 @@ mod tests {
         let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
         let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
-        repo.default_strategy_distro = Some(profile.id().to_string());
+        repo.source_profile = Some(profile.id().to_string());
         repo.insert(conn).unwrap()
     }
 
@@ -513,10 +522,13 @@ mod tests {
         version: &str,
         content_hash: &str,
     ) {
+        let source_profile =
+            conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
         let mut converted = ConvertedPackage::new_repository(
-            distro.to_string(),
+            source_profile.id().to_string(),
             package.to_string(),
             version.to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{package}-{version}-source"),
             &[format!("sha256:{package}-{version}-chunk")],
@@ -524,7 +536,6 @@ mod tests {
             content_hash.to_string(),
             format!("/tmp/{package}-{version}.ccs"),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
     }
@@ -645,9 +656,10 @@ mod tests {
 
         // Mark one version as converted
         let mut converted = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "nginx".to_string(),
             "1.24.0-1.fc44".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:nginx-1.24.0-1.fc44".to_string(),
             &["chunk1".to_string(), "chunk2".to_string()],
@@ -655,7 +667,6 @@ mod tests {
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.insert(&conn).unwrap();
 
         let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
@@ -686,9 +697,10 @@ mod tests {
         insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
 
         let mut converted = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "nginx".to_string(),
             "1.24.0-1.fc44".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:nginx-1.24.0-1.fc44".to_string(),
             &["chunk1".to_string()],
@@ -696,7 +708,6 @@ mod tests {
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
         );
-        converted.package_architecture = Some("x86_64".to_string());
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(&conn).unwrap();
 
@@ -716,9 +727,10 @@ mod tests {
         insert_package(&conn, repo_id, "libffi", "3.5.1-2.fc44", 1024);
 
         let mut converted = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             "libffi".to_string(),
             "3.5.1-2.fc44".to_string(),
+            "i686".to_string(),
             "rpm".to_string(),
             "sha256:libffi-i686".to_string(),
             &["chunk1".to_string()],
@@ -726,7 +738,6 @@ mod tests {
             "sha256:i686-content".to_string(),
             "/data/libffi-i686.ccs".to_string(),
         );
-        converted.package_architecture = Some("i686".to_string());
         converted.insert(&conn).unwrap();
 
         let entry = build_sparse_entry(temp_file.path(), "fedora", "libffi")
@@ -841,13 +852,13 @@ mod tests {
     }
 
     #[test]
-    fn test_find_repository_for_distro_by_strategy() {
+    fn test_find_repository_for_profile_by_strategy() {
         let (_temp_file, conn) = create_test_db();
         let mut repo = Repository::new("my-repo".to_string(), "https://example.com".to_string());
-        repo.default_strategy_distro = Some("fedora-44".to_string());
+        repo.source_profile = Some("fedora-44".to_string());
         repo.insert(&conn).unwrap();
 
-        let found = find_repository_for_distro(&conn, "fedora").unwrap();
+        let found = find_repository_for_profile(&conn, "fedora-44").unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "my-repo");
     }
@@ -858,18 +869,18 @@ mod tests {
         let mut repo = Repository::new("arch-linux".to_string(), "https://example.com".to_string());
         repo.insert(&conn).unwrap();
 
-        let found = find_repository_for_distro(&conn, "arch").unwrap();
+        let found = find_repository_for_profile(&conn, "arch").unwrap();
         assert!(found.is_none());
     }
 
     #[test]
-    fn test_find_repository_for_distro_not_found() {
+    fn test_find_repository_for_profile_not_found() {
         let (_temp_file, conn) = create_test_db();
-        let error = find_repository_for_distro(&conn, "gentoo").unwrap_err();
+        let error = find_repository_for_profile(&conn, "gentoo").unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("unsupported public profile or route 'gentoo'")
+                .contains("unsupported public source profile 'gentoo'")
         );
     }
 }

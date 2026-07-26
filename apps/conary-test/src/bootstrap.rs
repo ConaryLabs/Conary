@@ -569,13 +569,6 @@ fn selected_smoke_candidate(
     let container_runtime_api_ready = data_bool(&inspect.data, "/container_runtime/api_accessible");
     let qemu_ready = data_bool(&inspect.data, "/optional_toolchain/qemu_system_x86_64")
         && data_bool(&inspect.data, "/optional_toolchain/dev_kvm");
-    let legacy_default_ready = inspect
-        .data
-        .pointer("/default_smoke_candidate/ready")
-        .and_then(serde_json::Value::as_bool);
-    let default_options =
-        options.suite == "phase1-core" && options.distro == "fedora44" && options.phase == 1;
-
     let mut warnings = Vec::new();
     if !cargo_ready {
         warnings.push("cargo is required for bootstrap smoke".to_string());
@@ -619,10 +612,6 @@ fn selected_smoke_candidate(
     if requires_qemu && !qemu_ready {
         warnings.push("QEMU/KVM is required for selected bootstrap smoke suite".to_string());
     }
-    if default_options && legacy_default_ready == Some(false) {
-        warnings.push("default bootstrap smoke candidate is not ready".to_string());
-    }
-
     let ready = warnings.is_empty();
     (
         serde_json::json!({

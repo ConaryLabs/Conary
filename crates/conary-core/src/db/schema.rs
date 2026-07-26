@@ -12,12 +12,15 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 10 of the current-only schema epoch.
+/// Revision 21 of the current-only schema epoch.
 ///
-/// Revision 10 adds normalized, byte-exact Debian debconf state. Pre-alpha
-/// databases from revision 9 must be rebuilt; no compatibility migration is
-/// provided.
-pub const SCHEMA_VERSION: i32 = 10;
+/// Revision 21 hard-cuts installed and native-lifecycle provenance from its
+/// ambiguous former name to one exact public `source_profile`. It
+/// retains revision 20's exact package release, source-native architecture,
+/// Debian Multi-Arch behavior, typed provider range boundaries, and identity
+/// indexes. Pre-alpha databases from revision 20 must be rebuilt; no
+/// compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 21;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -245,36 +248,52 @@ mod tests {
     }
 
     #[test]
-    fn current_schema_seeds_required_runtime_records() {
+    fn current_schema_seeds_no_heuristic_package_triggers() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
 
-        let trigger_count: i64 = conn
+        let retired_builtin_columns: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM triggers WHERE builtin = 1",
+                "SELECT COUNT(*) FROM pragma_table_info('triggers') WHERE name = 'builtin'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(trigger_count, 10);
         assert_eq!(
-            conn.query_row(
-                "SELECT handler FROM triggers WHERE name = 'ldconfig'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
+            conn.query_row("SELECT COUNT(*) FROM triggers", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .unwrap(),
-            "/sbin/ldconfig"
+            0
         );
+        assert_eq!(retired_builtin_columns, 0);
         assert_eq!(
             conn.query_row(
-                "SELECT value FROM server_metadata WHERE key = 'canonical_map_version'",
+                "SELECT value FROM server_metadata WHERE key = 'canonical_map_revision'",
                 [],
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
             "0"
         );
+    }
+
+    #[test]
+    fn current_schema_has_only_exact_canonical_mapping_authority() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        let retired_repo_id: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM pragma_table_info('package_implementations')
+                 WHERE name = 'repo_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retired_repo_id, 0);
+        assert!(!table_exists(&conn, "package_overrides").unwrap());
     }
 
     #[test]
@@ -341,6 +360,69 @@ mod tests {
             error.to_string().contains("state_members.install_reason"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn current_schema_enforces_exact_null_architecture_trove_identity() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let insert = |name: &str, architecture: Option<&str>| {
+            conn.execute(
+                "INSERT INTO troves (
+                     name, version, type, architecture, install_source,
+                     install_reason, version_scheme
+                 ) VALUES (?1, '1', 'package', ?2, 'file', 'explicit', 'conary')",
+                params![name, architecture],
+            )
+        };
+
+        insert("null-architecture", None).unwrap();
+        let duplicate = insert("null-architecture", None).unwrap_err().to_string();
+        assert!(
+            duplicate.contains("UNIQUE constraint failed")
+                && duplicate.contains("idx_troves_exact_identity"),
+            "{duplicate}"
+        );
+        insert("null-architecture", Some("x86_64")).unwrap();
+
+        let empty = insert("empty-architecture", Some(""))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            empty.contains("CHECK constraint failed")
+                && empty.contains("architecture IS NULL OR length(architecture) > 0"),
+            "{empty}"
+        );
+    }
+
+    #[test]
+    fn current_schema_requires_exact_repository_artifact_architecture() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let insert = |checksum: &str, architecture: Option<&str>| {
+            conn.execute(
+                "INSERT INTO converted_packages (
+                     artifact_kind, original_format, original_checksum,
+                     package_name, package_version, source_profile, package_architecture,
+                     chunk_hashes_json, total_size, content_hash, ccs_path
+                 ) VALUES (
+                     'repository', 'rpm', ?1, 'fixture', '1.0-1', 'fedora-44',
+                     ?2, '[\"sha256:chunk\"]', 42, 'sha256:content',
+                     '/tmp/fixture.ccs'
+                 )",
+                params![checksum, architecture],
+            )
+        };
+
+        for (checksum, architecture) in [
+            ("sha256:missing-architecture", None),
+            ("sha256:empty-architecture", Some("")),
+        ] {
+            let error = insert(checksum, architecture).unwrap_err().to_string();
+            assert!(error.contains("CHECK constraint failed"), "{error}");
+        }
+
+        insert("sha256:exact-architecture", Some("x86_64")).unwrap();
     }
 
     #[test]
@@ -462,42 +544,42 @@ mod tests {
              ) VALUES ('installed', 1, 'rpm', 'sha256:installed-with-repo-field', 11, 'pkg')",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_version, distro, chunk_hashes_json, total_size, content_hash, ccs_path
+                 package_version, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-name', 11,
                  '1', 'fedora', '[]', 0, 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, distro, chunk_hashes_json, total_size, content_hash, ccs_path
+                 package_name, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-version', 11,
                  'pkg', 'fedora', '[]', 0, 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, distro, total_size, content_hash, ccs_path
+                 package_name, package_version, source_profile, total_size, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-chunks', 11,
                  'pkg', '1', 'fedora', 0, 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, distro, chunk_hashes_json, content_hash, ccs_path
+                 package_name, package_version, source_profile, chunk_hashes_json, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-size', 11,
                  'pkg', '1', 'fedora', '[]', 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, distro, chunk_hashes_json, total_size, ccs_path
+                 package_name, package_version, source_profile, chunk_hashes_json, total_size, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-hash', 11,
                  'pkg', '1', 'fedora', '[]', 0, '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, distro, chunk_hashes_json, total_size, content_hash
+                 package_name, package_version, source_profile, chunk_hashes_json, total_size, content_hash
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-path', 11,
                  'pkg', '1', 'fedora', '[]', 0, 'sha256:content'
@@ -640,5 +722,66 @@ mod tests {
             .unwrap();
         assert!(!converted_columns.contains(&"conversion_fidelity".to_string()));
         assert!(!converted_columns.contains(&"detected_hooks".to_string()));
+    }
+
+    #[test]
+    fn current_schema_uses_exact_source_profile_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        for table in [
+            "repository_packages",
+            "converted_packages",
+            "native_package_publications",
+            "download_stats",
+            "download_counts",
+            "delta_manifests",
+        ] {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info('{table}')"))
+                .unwrap();
+            let columns = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert!(
+                columns.contains(&"source_profile".to_string()),
+                "{table} must persist exact source_profile authority"
+            );
+            assert!(
+                !columns.contains(&"distro".to_string()),
+                "{table} retains the ambiguous distro column"
+            );
+        }
+    }
+
+    #[test]
+    fn current_schema_enforces_typed_unique_rollback_lineage() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        let mut mutation = crate::db::models::Changeset::new("forward mutation".to_string());
+        let mutation_id = mutation.insert(&conn).unwrap();
+        let mut rollback =
+            crate::db::models::Changeset::new_rollback("compensation".to_string(), mutation_id);
+        let rollback_id = rollback.insert(&conn).unwrap();
+        let stored = crate::db::models::Changeset::find_by_id(&conn, rollback_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.kind, crate::db::models::ChangesetKind::Rollback);
+        assert_eq!(stored.reverts_changeset_id, Some(mutation_id));
+
+        let mut duplicate =
+            crate::db::models::Changeset::new_rollback("duplicate".to_string(), mutation_id);
+        assert!(duplicate.insert(&conn).is_err());
+        assert!(
+            conn.execute(
+                "INSERT INTO changesets (description, kind, status)
+                 VALUES ('unbound rollback', 'rollback', 'pending')",
+                [],
+            )
+            .is_err()
+        );
     }
 }

@@ -9,7 +9,7 @@ use crate::ccs::native_lifecycle::{
     ScriptletFidelity, SourceFormat, VersionScheme,
 };
 use crate::packages::common::PackageMetadata;
-use crate::packages::traits::{ExtractedFile, PackageFormat};
+use crate::packages::traits::PackageFormat;
 use std::path::PathBuf;
 
 pub fn build_native_lifecycle_bundle(
@@ -32,7 +32,7 @@ pub fn build_native_lifecycle_bundle(
         schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format,
         source_family: source_family(source_format).to_string(),
-        source_distro: input.source_distro.map(str::to_string),
+        source_profile: input.source_profile.map(str::to_string),
         source_release: input.source_release.map(str::to_string),
         source_arch: input
             .source_arch
@@ -69,8 +69,8 @@ pub fn build_native_lifecycle_bundle(
 /// hook they report. There is deliberately no flattened-scriptlet fallback.
 pub fn build_direct_native_lifecycle_bundle(
     package: &dyn PackageFormat,
-    files: &[ExtractedFile],
     source_format: &str,
+    source_profile_id: Option<&str>,
 ) -> anyhow::Result<Option<NativeLifecycleBundle>> {
     let native_entries = package.native_scriptlet_abi();
     if native_entries.is_empty() {
@@ -83,6 +83,7 @@ pub fn build_direct_native_lifecycle_bundle(
         version: package.version().to_string(),
         version_scheme: package.version_scheme(),
         architecture: package.architecture().map(str::to_string),
+        debian_multi_arch: package.debian_multi_arch(),
         description: package.description().map(str::to_string),
         files: package.files().to_vec(),
         requirements: package.requirements().to_vec(),
@@ -95,10 +96,8 @@ pub fn build_direct_native_lifecycle_bundle(
     let build = build_native_lifecycle_bundle(ScriptletBundleInput {
         source_metadata: &metadata,
         final_metadata: &metadata,
-        source_files: files,
-        final_files: files,
         source_format,
-        source_distro: None,
+        source_profile: source_profile_id,
         source_release: None,
         source_arch: package.architecture(),
         source_checksum: None,

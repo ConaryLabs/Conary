@@ -1,8 +1,8 @@
 // conary-core/src/ccs/convert/converter.rs
 //! Native package to CCS format converter
 //!
-//! Takes exact native package metadata plus extracted payloads and builds a
-//! `CcsManifest`, invoking `CcsBuilder` with optional CDC chunking.
+//! Takes exact native package metadata plus extracted payloads and emits a
+//! signed CCS v2 archive.
 
 mod evidence;
 
@@ -13,7 +13,9 @@ use crate::ccs::attestation::{
     FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary, canonical_json_hash,
     compute_build_output_identity_from_v2,
 };
-use crate::ccs::builder::{BuildResult, CcsBuilder, write_v2_ccs_package};
+use crate::ccs::builder::{
+    BuildResult, ComponentData, FileEntry, write_v2_ccs_package_from_sources,
+};
 use crate::ccs::convert::native_provenance::NativeProvenance;
 use crate::ccs::convert::scriptlet_bundle::{
     ScriptletBundleInput, ScriptletBundleSummary, build_native_lifecycle_bundle,
@@ -26,8 +28,7 @@ use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::signing::SigningKeyPair;
 use crate::ccs::v2::PackageKindTagV2;
 use crate::packages::common::PackageMetadata;
-use crate::packages::traits::{DependencyType, ExtractedFile};
-use crate::payload::PayloadNodeKind;
+use crate::packages::payload::PackagePayloadFile;
 use crate::recipe::hermetic::{
     BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
     BuilderEnvironmentKind, DependencyLock, DivergenceReport, HERMETIC_EVIDENCE_SCHEMA,
@@ -37,15 +38,13 @@ use crate::repository::versioning::VersionScheme;
 use crate::security::command_risk::{
     COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskReport, CommandRiskSeverity, classify_shell_text,
 };
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tempfile::TempDir;
 
 /// Options for native package conversion
 #[derive(Debug, Clone)]
 pub struct ConversionOptions {
-    /// Enable CDC chunking for file content (better dedup, slower)
-    pub enable_chunking: bool,
     /// Output directory for the converted package
     pub output_dir: PathBuf,
 }
@@ -53,7 +52,6 @@ pub struct ConversionOptions {
 impl Default for ConversionOptions {
     fn default() -> Self {
         Self {
-            enable_chunking: true,
             output_dir: PathBuf::from("./target/ccs"),
         }
     }
@@ -83,7 +81,7 @@ pub struct ConversionResult {
 /// Converts native packages (RPM/DEB/Arch) to CCS format.
 pub struct NativePackageConverter {
     options: ConversionOptions,
-    source_distro: Option<String>,
+    source_profile: Option<String>,
     source_release: Option<String>,
     conversion_tool: String,
     signing_key: Option<Arc<SigningKeyPair>>,
@@ -94,7 +92,7 @@ impl NativePackageConverter {
     pub fn new(options: ConversionOptions) -> Self {
         Self {
             options,
-            source_distro: None,
+            source_profile: None,
             source_release: None,
             conversion_tool: "conary".to_string(),
             signing_key: None,
@@ -106,9 +104,9 @@ impl NativePackageConverter {
         Self::new(ConversionOptions::default())
     }
 
-    /// Attach source distro context for passive scriptlet bundle metadata.
-    pub fn with_source_distro(mut self, distro: impl Into<String>) -> Self {
-        self.source_distro = Some(distro.into());
+    /// Attach exact source-profile context for native lifecycle metadata.
+    pub fn with_source_profile(mut self, profile: impl Into<String>) -> Self {
+        self.source_profile = Some(profile.into());
         self
     }
 
@@ -130,28 +128,17 @@ impl NativePackageConverter {
         self
     }
 
-    /// Convert a native package to CCS format
-    ///
-    /// # Arguments
-    /// * `metadata` - Package metadata from the native parser
-    /// * `files` - Extracted file contents
-    /// * `format` - Original format ("rpm", "deb", "arch")
-    /// * `checksum` - Original package file checksum
-    ///
-    /// # Returns
-    /// A `ConversionResult` containing the CCS build result and typed lifecycle evidence
-    pub fn convert(
+    /// Convert from exact reopenable payload descriptors without whole-file
+    /// buffering in the conversion or CCS object-writing path.
+    pub fn convert_payload(
         &self,
         metadata: &PackageMetadata,
-        files: &[ExtractedFile],
+        files: &[PackagePayloadFile],
         format: &str,
         checksum: &str,
     ) -> Result<ConversionResult, ConversionError> {
         let final_metadata = metadata.clone();
-        let final_files = files.to_vec();
-
-        let mut manifest = self.build_manifest(&final_metadata, &Hooks::default())?;
-        manifest.package.version_scheme = match format {
+        let expected_version_scheme = match format {
             "rpm" => VersionScheme::Rpm,
             "deb" => VersionScheme::Debian,
             "arch" => VersionScheme::Arch,
@@ -161,6 +148,15 @@ impl NativePackageConverter {
                 )));
             }
         };
+        if metadata.version_scheme != expected_version_scheme {
+            return Err(ConversionError::ManifestError(format!(
+                "source package format '{format}' requires '{}' version authority, got '{}'",
+                expected_version_scheme.as_str(),
+                metadata.version_scheme.as_str()
+            )));
+        }
+
+        let mut manifest = self.build_manifest(&final_metadata, &Hooks::default())?;
         let build_risk_report = classify_foreign_build_body_risk(format, files);
         let scriptlet_risk_report = classify_foreign_scriptlet_risk(metadata);
         let conversion_evidence =
@@ -185,10 +181,8 @@ impl NativePackageConverter {
         let scriptlet_bundle = build_native_lifecycle_bundle(ScriptletBundleInput {
             source_metadata: metadata,
             final_metadata: &final_metadata,
-            source_files: files,
-            final_files: &final_files,
             source_format: format,
-            source_distro: self.source_distro.as_deref(),
+            source_profile: self.source_profile.as_deref(),
             source_release: self.source_release.as_deref(),
             source_arch: metadata.architecture.as_deref(),
             source_checksum: Some(checksum),
@@ -204,32 +198,10 @@ impl NativePackageConverter {
 
         manifest.native_lifecycle = Some(scriptlet_bundle.bundle.clone());
 
-        // Step 3: Create temporary directory with file structure.
-        let temp_dir = TempDir::new()
-            .map_err(|e| ConversionError::IoError(format!("Failed to create temp dir: {}", e)))?;
-
-        // Write files to temp directory
-        self.write_files_to_temp(&final_files, temp_dir.path())?;
-
-        // Write manifest
-        let manifest_path = temp_dir.path().join("ccs.toml");
-        let manifest_toml = toml::to_string_pretty(&manifest).map_err(|e| {
-            ConversionError::ManifestError(format!("Failed to serialize manifest: {}", e))
-        })?;
-        std::fs::write(&manifest_path, manifest_toml)
-            .map_err(|e| ConversionError::IoError(format!("Failed to write manifest: {}", e)))?;
-
-        // Step 4: Build CCS package using CcsBuilder.
-        let mut builder =
-            CcsBuilder::new(manifest.clone(), temp_dir.path()).with_package_entries(&final_files);
-
-        if self.options.enable_chunking {
-            builder = builder.with_chunking();
-        }
-
-        let mut build_result = builder
-            .build()
-            .map_err(|e| ConversionError::BuildError(format!("CCS build failed: {}", e)))?;
+        // Foreign conversion preserves exact package payload authority. It
+        // does not run content-rewriting build policy or materialize a second
+        // source tree.
+        let mut build_result = build_streaming_result(manifest.clone(), files)?;
 
         // Step 5: Write the package file.
         std::fs::create_dir_all(&self.options.output_dir)
@@ -246,29 +218,36 @@ impl NativePackageConverter {
                 "Foreign conversion requires an explicit CCS authority signing key".to_string(),
             )
         })?;
-        let mut projected =
-            crate::ccs::v2::project_build_result_to_v2(crate::ccs::v2::V2AuthoringInput {
+        let mut authority = crate::ccs::v2::project_build_result_authority_to_v2(
+            crate::ccs::v2::V2AuthoringInput {
                 build: &build_result,
                 local_dev: false,
                 debug_toml: None,
-            })
-            .map_err(|error| {
-                ConversionError::BuildError(format!(
-                    "Failed to project foreign conversion into CCS v2 authority: {error}"
-                ))
-            })?;
-        projected.authority.provenance.origin_class = Some("foreign-converted".to_string());
-        projected.authority.provenance.hardening_level = Some("hermetic".to_string());
-        projected.authority.provenance.build_input_identity = Some(build_input_identity);
-        projected.authority.provenance.hermetic_evidence_hash = Some(conversion_evidence_hash);
+            },
+        )
+        .map_err(|error| {
+            ConversionError::BuildError(format!(
+                "Failed to project foreign conversion into CCS v2 authority: {error}"
+            ))
+        })?;
+        authority.provenance.origin_class = Some("foreign-converted".to_string());
+        authority.provenance.hardening_level = Some("hermetic".to_string());
+        authority.provenance.build_input_identity = Some(build_input_identity);
+        authority.provenance.hermetic_evidence_hash = Some(conversion_evidence_hash);
+        authority.identity.debian_multi_arch = metadata.debian_multi_arch;
+        authority.provides = signed_native_provides(metadata);
+        crate::ccs::v2::validate_authority(&authority).map_err(|error| {
+            ConversionError::BuildError(format!(
+                "Foreign conversion produced invalid typed provider authority: {error}"
+            ))
+        })?;
 
-        let output_identity =
-            compute_build_output_identity_from_v2(&projected.authority).map_err(|e| {
-                ConversionError::BuildError(format!(
-                    "Failed to compute foreign conversion output identity: {}",
-                    e
-                ))
-            })?;
+        let output_identity = compute_build_output_identity_from_v2(&authority).map_err(|e| {
+            ConversionError::BuildError(format!(
+                "Failed to compute foreign conversion output identity: {}",
+                e
+            ))
+        })?;
         let provenance = build_result
             .manifest
             .provenance
@@ -304,24 +283,21 @@ impl NativePackageConverter {
             ))
         })?;
         provenance.foreign_conversion_boundary = Some(boundary.clone());
-        projected
-            .authority
-            .provenance
-            .foreign_conversion_boundary_hash = Some(boundary_hash);
+        authority.provenance.foreign_conversion_boundary_hash = Some(boundary_hash);
         let debug_toml = toml::to_string_pretty(&build_result.manifest).map_err(|error| {
             ConversionError::ManifestError(format!(
                 "Failed to serialize CCS v2 diagnostic projection: {error}"
             ))
         })?;
-        projected.authority.debug_toml_sha256 = Some(crate::hash::sha256(debug_toml.as_bytes()));
-        crate::ccs::v2::validate_authority(&projected.authority).map_err(|error| {
+        authority.debug_toml_sha256 = Some(crate::hash::sha256(debug_toml.as_bytes()));
+        crate::ccs::v2::validate_authority(&authority).map_err(|error| {
             ConversionError::BuildError(format!(
                 "Foreign conversion produced invalid CCS v2 authority: {error}"
             ))
         })?;
-        write_v2_ccs_package(
-            &projected.authority,
-            &projected.payloads_by_path,
+        write_v2_ccs_package_from_sources(
+            &authority,
+            files,
             &package_path,
             signing_key,
             Some(&debug_toml),
@@ -403,16 +379,6 @@ impl NativePackageConverter {
             abi: None,
         });
 
-        // Build config file list
-        let config_files: Vec<String> = metadata
-            .config_files
-            .iter()
-            .map(|c| c.path.clone())
-            .collect();
-
-        let mut provides = Provides::default();
-        merge_native_provides(&mut provides, &metadata.provides);
-
         let manifest = CcsManifest {
             package: Package {
                 name: metadata.name.clone(),
@@ -423,13 +389,14 @@ impl NativePackageConverter {
                 }),
                 release: "1".to_string(),
                 kind: PackageKindTagV2::Package,
+                debian_multi_arch: metadata.debian_multi_arch,
                 license: None,
                 homepage: None,
                 repository: None,
                 platform,
                 authors: None,
             },
-            provides,
+            provides: Provides::default(),
             requirements: metadata.requirements.clone(),
             relations: metadata.relations.clone(),
             suggests: Suggests::default(),
@@ -438,8 +405,7 @@ impl NativePackageConverter {
             scriptlets: Default::default(),
             native_lifecycle: None,
             config: Config {
-                files: config_files,
-                noreplace: true,
+                files: metadata.config_files.clone(),
             },
             build: None,
             native_export: None,
@@ -452,91 +418,102 @@ impl NativePackageConverter {
 
         Ok(manifest)
     }
+}
 
-    /// Write extracted files to a temporary directory
-    fn write_files_to_temp(
-        &self,
-        files: &[ExtractedFile],
-        temp_dir: &Path,
-    ) -> Result<(), ConversionError> {
-        for file in files {
-            // Use safe_join to prevent path traversal from untrusted package paths
-            let full_path = crate::filesystem::safe_join(temp_dir, &file.path).map_err(|e| {
-                ConversionError::IoError(format!("Unsafe path '{}': {}", file.path, e))
+fn build_streaming_result(
+    manifest: CcsManifest,
+    payloads: &[PackagePayloadFile],
+) -> Result<BuildResult, ConversionError> {
+    let mut files = Vec::with_capacity(payloads.len());
+    let mut total_size = 0_u64;
+    for payload in payloads {
+        payload
+            .node
+            .validate_content(payload.content_authority.as_ref())
+            .map_err(|error| ConversionError::BuildError(error.to_string()))?;
+        if let Some(content) = &payload.content_authority {
+            total_size = total_size.checked_add(content.size).ok_or_else(|| {
+                ConversionError::BuildError("CCS payload size arithmetic overflow".to_string())
             })?;
-
-            // Create parent directories
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    ConversionError::IoError(format!("Failed to create directory: {}", e))
-                })?;
-            }
-
-            match &file.node.kind {
-                PayloadNodeKind::Symlink { target } => {
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(target, &full_path).map_err(|e| {
-                        ConversionError::IoError(format!(
-                            "Failed to create symlink {} -> {}: {}",
-                            file.path, target, e
-                        ))
-                    })?;
-
-                    #[cfg(not(unix))]
-                    {
-                        let _ = target;
-                        return Err(ConversionError::IoError(format!(
-                            "Symlink file {} is not supported on this platform",
-                            file.path
-                        )));
-                    }
-                }
-                PayloadNodeKind::Directory => {
-                    std::fs::create_dir_all(&full_path).map_err(|e| {
-                        ConversionError::IoError(format!(
-                            "Failed to create directory {}: {}",
-                            file.path, e
-                        ))
-                    })?;
-                }
-                PayloadNodeKind::Regular { .. } => {
-                    std::fs::write(&full_path, &file.content).map_err(|e| {
-                        ConversionError::IoError(format!(
-                            "Failed to write file {}: {}",
-                            file.path, e
-                        ))
-                    })?;
-                }
-                PayloadNodeKind::Hardlink { .. }
-                | PayloadNodeKind::BlockDevice { .. }
-                | PayloadNodeKind::CharacterDevice { .. }
-                | PayloadNodeKind::Fifo
-                | PayloadNodeKind::Socket => {}
-            }
-
-            if matches!(
-                file.node.kind,
-                PayloadNodeKind::Regular { .. } | PayloadNodeKind::Directory
-            ) {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &full_path,
-                        std::fs::Permissions::from_mode(file.node.mode),
-                    )
-                    .map_err(|error| {
-                        ConversionError::IoError(format!(
-                            "Failed to set exact mode on {}: {error}",
-                            file.path
-                        ))
-                    })?;
-                }
-            }
         }
-
-        Ok(())
+        files.push(FileEntry {
+            path: payload.path.clone(),
+            node: payload.node.clone(),
+            content: payload.content_authority.clone(),
+            component: "runtime".to_string(),
+            chunks: None,
+        });
     }
+    let component_hash = crate::hash::sha256_prefixed(
+        &crate::ccs::attestation::canonical_json_bytes(&files)
+            .map_err(|error| ConversionError::BuildError(error.to_string()))?,
+    );
+    let components = if files.is_empty() {
+        HashMap::new()
+    } else {
+        HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: files.clone(),
+                hash: component_hash,
+                size: total_size,
+            },
+        )])
+    };
+    Ok(BuildResult {
+        manifest,
+        components,
+        files,
+        blobs: HashMap::new(),
+        total_size,
+        chunked: false,
+        chunk_stats: None,
+    })
+}
+
+fn signed_native_provides(metadata: &PackageMetadata) -> Vec<crate::ccs::v2::ProvidedCapabilityV2> {
+    use crate::ccs::v2::schema::DependencyKindV2;
+    use crate::repository::dependency_model::{
+        ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+    };
+
+    let mut signed = vec![crate::ccs::v2::ProvidedCapabilityV2 {
+        kind: DependencyKindV2::Package,
+        name: metadata.name.clone(),
+        provider_version: Some(metadata.version.clone()),
+        version_relation: Some(ProvideVersionRelation::Equal),
+        version_scheme: metadata.version_scheme,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        target: None,
+        component: None,
+    }];
+    for provide in &metadata.provides {
+        let projected = crate::ccs::v2::ProvidedCapabilityV2 {
+            kind: match provide.kind {
+                RepositoryCapabilityKind::PackageName => DependencyKindV2::Package,
+                RepositoryCapabilityKind::Generic | RepositoryCapabilityKind::Virtual => {
+                    DependencyKindV2::Capability
+                }
+                RepositoryCapabilityKind::File => DependencyKindV2::File,
+                RepositoryCapabilityKind::Path => DependencyKindV2::Path,
+                RepositoryCapabilityKind::Binary => DependencyKindV2::Binary,
+                RepositoryCapabilityKind::Soname => DependencyKindV2::Soname,
+                RepositoryCapabilityKind::PkgConfig => DependencyKindV2::PkgConfig,
+            },
+            name: provide.name.clone(),
+            provider_version: provide.version.clone(),
+            version_relation: provide.version_relation,
+            version_scheme: provide.version_scheme,
+            architecture_qualifier: provide.architecture_qualifier.clone(),
+            target: None,
+            component: None,
+        };
+        if !signed.contains(&projected) {
+            signed.push(projected);
+        }
+    }
+    signed
 }
 
 #[cfg(test)]

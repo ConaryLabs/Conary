@@ -202,7 +202,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 install_repository: Some("arch-core".to_string()),
                 install_repository_package_id: Some(22),
-                install_route: Some("resolution:binary".to_string()),
+                install_route: Some("resolution:repository_package".to_string()),
                 unresolved_dependencies: Vec::new(),
                 remove_leg: ready_leg(),
                 install_leg: ready_leg(),
@@ -218,7 +218,9 @@ mod tests {
         assert!(
             rendered.contains("[executable] remove vim 9.0.1 from fedora-44, install arch 9.1.0")
         );
-        assert!(rendered.contains("via arch-core [repo-pkg:22] [route:resolution:binary]"));
+        assert!(
+            rendered.contains("via arch-core [repo-pkg:22] [route:resolution:repository_package]")
+        );
         assert!(!rendered.contains("missing install route"));
     }
 
@@ -235,7 +237,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 install_repository: Some("arch-core".to_string()),
                 install_repository_package_id: Some(22),
-                install_route: Some("resolution:binary".to_string()),
+                install_route: Some("resolution:repository_package".to_string()),
                 unresolved_dependencies: vec!["libmagic (>= 1.0)".to_string()],
                 remove_leg: ready_leg(),
                 install_leg: blocked_leg(),

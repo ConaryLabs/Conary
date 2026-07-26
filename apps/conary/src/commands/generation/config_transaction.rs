@@ -4,7 +4,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ use conary_core::config_transaction::{
     is_config_artifact_kind, is_etc_config_payload,
 };
 use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus, FileEntry};
+use conary_core::filesystem::CasStore;
 use conary_core::filesystem::durable::sync_parent_directory;
 use conary_core::generation::mount::current_generation;
 use conary_core::packages::traits::ConfigFileInfo;
@@ -27,19 +28,35 @@ use rusqlite::Connection;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OverlayMutation {
     Remove(String),
-    Write(String, ConfigArtifact),
+    Write(String, Box<ConfigArtifact>),
     Whiteout(String),
+}
+
+fn overlay_write(path: String, artifact: ConfigArtifact) -> OverlayMutation {
+    OverlayMutation::Write(path, Box::new(artifact))
+}
+
+pub(crate) struct ConfigInstallCapture<'a> {
+    pub(crate) source: ConfigSource,
+    pub(crate) declared: &'a [ConfigFileInfo],
+    pub(crate) incoming: &'a [crate::commands::LiveRootFile],
+    pub(crate) replacing_trove_id: Option<i64>,
+    pub(crate) replaced_trove_ids: &'a [i64],
 }
 
 pub(crate) fn capture_install(
     conn: &Connection,
     root: &Path,
-    source: ConfigSource,
-    declared: &[ConfigFileInfo],
-    incoming: &[crate::commands::LiveRootFile],
-    replacing_trove_id: Option<i64>,
-    replaced_trove_ids: &[i64],
+    cas: &CasStore,
+    capture: ConfigInstallCapture<'_>,
 ) -> Result<GenerationConfigTransaction> {
+    let ConfigInstallCapture {
+        source,
+        declared,
+        incoming,
+        replacing_trove_id,
+        replaced_trove_ids,
+    } = capture;
     let mut declarations = HashMap::new();
     for declaration in declared {
         if declarations
@@ -86,7 +103,7 @@ pub(crate) fn capture_install(
     let mut entries = Vec::with_capacity(paths.len());
     for path in paths {
         let before = package_state_before(conn, &path)?;
-        let current = read_artifact(root, &path)?;
+        let current = read_artifact(root, cas, &path)?;
         let declaration = declarations.get(path.as_str()).copied();
         let incoming_file = incoming_files.get(path.as_str()).copied();
         if let Some(declaration) = declaration.filter(|declaration| declaration.remove_on_upgrade) {
@@ -133,7 +150,7 @@ pub(crate) fn capture_install(
                         file.path
                     );
                 }
-                let artifact = artifact_from_extracted(file)?;
+                let artifact = artifact_from_live_root(file, cas)?;
                 Some(ConfigPackageState {
                     source: declaration.map_or(ConfigSource::Auto, |_| source),
                     noreplace: declaration.is_some_and(|config| config.noreplace),
@@ -172,7 +189,7 @@ pub(crate) fn capture_install(
             before,
             current,
             after,
-            auxiliaries: capture_auxiliaries(root, &path)?,
+            auxiliaries: capture_auxiliaries(root, cas, &path)?,
         });
     }
 
@@ -187,6 +204,7 @@ pub(crate) fn capture_install(
 pub(crate) fn capture_removal(
     conn: &Connection,
     root: &Path,
+    cas: &CasStore,
     trove_id: i64,
     purge: bool,
 ) -> Result<GenerationConfigTransaction> {
@@ -212,9 +230,9 @@ pub(crate) fn capture_removal(
         .map(|path| {
             Ok(ConfigPathTransaction {
                 before: package_state_before(conn, &path)?,
-                current: read_artifact(root, &path)?,
+                current: read_artifact(root, cas, &path)?,
                 after: None,
-                auxiliaries: capture_auxiliaries(root, &path)?,
+                auxiliaries: capture_auxiliaries(root, cas, &path)?,
                 path,
                 operation,
             })
@@ -254,13 +272,23 @@ fn package_state_before(conn: &Connection, path: &str) -> Result<Option<ConfigPa
     )
 }
 
-fn artifact_from_extracted(file: &crate::commands::LiveRootFile) -> Result<ConfigArtifact> {
+fn artifact_from_live_root(
+    file: &crate::commands::LiveRootFile,
+    cas: &CasStore,
+) -> Result<ConfigArtifact> {
     let artifact = match &file.node.source.kind {
         PayloadNodeKind::Symlink { target } => {
             ConfigArtifact::symlink(target.clone(), file.node.clone())?
         }
         PayloadNodeKind::Regular { .. } => {
-            ConfigArtifact::regular(&file.content, file.node.clone())?
+            let authority = file
+                .content
+                .authority()
+                .context("regular generation config has no content authority")?
+                .clone();
+            let mut reader = file.content.open()?;
+            cas.store_reader_expected(&mut reader, authority.size, &authority.sha256)?;
+            ConfigArtifact::regular(authority, file.node.clone())?
         }
         _ => bail!(
             "generation config {} is not a regular file or symlink",
@@ -280,7 +308,11 @@ fn config_hash_for_file_entry(file: &FileEntry) -> Option<String> {
     }
 }
 
-fn read_artifact(root: &Path, package_path: &str) -> Result<Option<ConfigArtifact>> {
+fn read_artifact(
+    root: &Path,
+    cas: &CasStore,
+    package_path: &str,
+) -> Result<Option<ConfigArtifact>> {
     let path = crate::commands::live_root::target_path(root, package_path)?;
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
@@ -300,11 +332,14 @@ fn read_artifact(root: &Path, package_path: &str) -> Result<Option<ConfigArtifac
         return Ok(Some(ConfigArtifact::symlink(target, node)?));
     }
     if metadata.is_file() {
-        return Ok(Some(ConfigArtifact::regular(
-            &fs::read(&path)
-                .with_context(|| format!("failed to read config {}", path.display()))?,
-            node,
-        )?));
+        let content = crate::commands::LiveRootContent::capture_file(&path)?;
+        let authority = content
+            .authority()
+            .context("captured regular config has no content authority")?
+            .clone();
+        let mut reader = content.open()?;
+        cas.store_reader_expected(&mut reader, authority.size, &authority.sha256)?;
+        return Ok(Some(ConfigArtifact::regular(authority, node)?));
     }
     bail!(
         "generation config {} is neither a regular file nor a symlink",
@@ -312,7 +347,11 @@ fn read_artifact(root: &Path, package_path: &str) -> Result<Option<ConfigArtifac
     )
 }
 
-fn capture_auxiliaries(root: &Path, package_path: &str) -> Result<Vec<(String, ConfigArtifact)>> {
+fn capture_auxiliaries(
+    root: &Path,
+    cas: &CasStore,
+    package_path: &str,
+) -> Result<Vec<(String, ConfigArtifact)>> {
     let mut paths = ConfigSuffix::ALL
         .into_iter()
         .map(|suffix| format!("{package_path}{}", suffix.as_str()))
@@ -333,7 +372,8 @@ fn capture_auxiliaries(root: &Path, package_path: &str) -> Result<Vec<(String, C
                     };
                     if name
                         .strip_prefix(&numbered_prefix)
-                        .is_some_and(|number| number.parse::<u64>().is_ok())
+                        .and_then(conary_core::config_transaction::parse_canonical_positive_decimal)
+                        .is_some()
                     {
                         paths.insert(format!(
                             "{package_path}.pacsave.{}",
@@ -349,7 +389,7 @@ fn capture_auxiliaries(root: &Path, package_path: &str) -> Result<Vec<(String, C
 
     paths
         .into_iter()
-        .filter_map(|path| match read_artifact(root, &path) {
+        .filter_map(|path| match read_artifact(root, cas, &path) {
             Ok(Some(artifact)) => Some(Ok((path, artifact))),
             Ok(None) => None,
             Err(error) => Some(Err(error)),
@@ -365,6 +405,7 @@ pub(crate) fn materialize(
     for transaction in transactions {
         transaction.validate()?;
     }
+    let cas = CasStore::new(runtime_root.objects_dir())?;
     let etc_state = runtime_root.etc_state_dir();
     fs::create_dir_all(&etc_state)?;
     let stage = etc_state.join(format!(
@@ -395,7 +436,7 @@ pub(crate) fn materialize(
             for entry in &transaction.entries {
                 let mutations = plan_entry(entry)?;
                 for mutation in mutations {
-                    apply_mutation(&stage, mutation)?;
+                    apply_mutation(&stage, &cas, mutation)?;
                 }
             }
         }
@@ -474,14 +515,14 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                 ConfigInstallDecision::Keep => preserve_primary(entry, new, &mut mutations),
                 ConfigInstallDecision::InstallAlternative(suffix) => {
                     preserve_primary(entry, new, &mut mutations);
-                    mutations.push(OverlayMutation::Write(
+                    mutations.push(overlay_write(
                         format!("{}{}", entry.path, suffix.as_str()),
                         new.clone(),
                     ));
                 }
                 ConfigInstallDecision::SaveCurrentAndInstall(suffix) => {
                     if let Some(current) = &entry.current {
-                        mutations.push(OverlayMutation::Write(
+                        mutations.push(overlay_write(
                             format!("{}{}", entry.path, suffix.as_str()),
                             current.clone(),
                         ));
@@ -506,7 +547,7 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                 )
                 && let Some(current) = &entry.current
             {
-                mutations.push(OverlayMutation::Write(
+                mutations.push(overlay_write(
                     format!("{}{}", entry.path, ConfigSuffix::DpkgOld.as_str()),
                     current.clone(),
                 ));
@@ -517,14 +558,7 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
             let before = entry
                 .before
                 .as_ref()
-                .cloned()
-                .unwrap_or(ConfigPackageState {
-                    source: ConfigSource::Auto,
-                    noreplace: false,
-                    ghost: false,
-                    original_sha256: None,
-                    artifact: None,
-                });
+                .context("remove/purge config transaction has no exact prior package state")?;
             let decision = decide_config_removal(
                 before.source,
                 before.ghost,
@@ -546,7 +580,7 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
             match decision {
                 ConfigRemovalDecision::KeepResidual => {
                     if let Some(current) = &entry.current {
-                        mutations.push(OverlayMutation::Write(entry.path.clone(), current.clone()));
+                        mutations.push(overlay_write(entry.path.clone(), current.clone()));
                     } else {
                         mutations.push(OverlayMutation::Remove(entry.path.clone()));
                     }
@@ -556,7 +590,7 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                 }
                 ConfigRemovalDecision::SaveCurrent(suffix) => {
                     if let Some(current) = &entry.current {
-                        mutations.push(OverlayMutation::Write(
+                        mutations.push(overlay_write(
                             format!("{}{}", entry.path, suffix.as_str()),
                             current.clone(),
                         ));
@@ -564,9 +598,9 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                     mutations.push(OverlayMutation::Remove(entry.path.clone()));
                 }
                 ConfigRemovalDecision::RotatePacsaveAndSaveCurrent => {
-                    rotate_pacsaves(entry, &mut mutations);
+                    rotate_pacsaves(entry, &mut mutations)?;
                     if let Some(current) = &entry.current {
-                        mutations.push(OverlayMutation::Write(
+                        mutations.push(overlay_write(
                             format!("{}{}", entry.path, ConfigSuffix::PacSave.as_str()),
                             current.clone(),
                         ));
@@ -580,13 +614,11 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                 mutations.push(OverlayMutation::Remove(path));
             }
             match &entry.current {
-                Some(current) => {
-                    mutations.push(OverlayMutation::Write(entry.path.clone(), current.clone()))
-                }
+                Some(current) => mutations.push(overlay_write(entry.path.clone(), current.clone())),
                 None => mutations.push(OverlayMutation::Whiteout(entry.path.clone())),
             }
             for (path, artifact) in &entry.auxiliaries {
-                mutations.push(OverlayMutation::Write(path.clone(), artifact.clone()));
+                mutations.push(overlay_write(path.clone(), artifact.clone()));
             }
         }
     }
@@ -599,9 +631,7 @@ fn preserve_primary(
     mutations: &mut Vec<OverlayMutation>,
 ) {
     match &entry.current {
-        Some(current) => {
-            mutations.push(OverlayMutation::Write(entry.path.clone(), current.clone()))
-        }
+        Some(current) => mutations.push(overlay_write(entry.path.clone(), current.clone())),
         None => {
             let _ = new;
             mutations.push(OverlayMutation::Whiteout(entry.path.clone()));
@@ -617,7 +647,10 @@ fn auxiliary(entry: &ConfigPathTransaction, suffix: ConfigSuffix) -> Option<&Con
         .find_map(|(candidate, artifact)| (candidate == &path).then_some(artifact))
 }
 
-fn rotate_pacsaves(entry: &ConfigPathTransaction, mutations: &mut Vec<OverlayMutation>) {
+fn rotate_pacsaves(
+    entry: &ConfigPathTransaction,
+    mutations: &mut Vec<OverlayMutation>,
+) -> Result<()> {
     let base = format!("{}{}", entry.path, ConfigSuffix::PacSave.as_str());
     let mut numbered = entry
         .auxiliaries
@@ -627,19 +660,26 @@ fn rotate_pacsaves(entry: &ConfigPathTransaction, mutations: &mut Vec<OverlayMut
                 Some((0_u64, path, artifact))
             } else {
                 path.strip_prefix(&(base.clone() + "."))
-                    .and_then(|number| number.parse::<u64>().ok())
+                    .and_then(conary_core::config_transaction::parse_canonical_positive_decimal)
                     .map(|number| (number, path, artifact))
             }
         })
         .collect::<Vec<_>>();
     numbered.sort_by_key(|(number, _, _)| std::cmp::Reverse(*number));
     for (number, old_path, artifact) in numbered {
+        let successor = number.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot rotate {} because its canonical pacsave sequence is exhausted",
+                old_path
+            )
+        })?;
         mutations.push(OverlayMutation::Remove(old_path.clone()));
-        mutations.push(OverlayMutation::Write(
-            format!("{base}.{}", number + 1),
+        mutations.push(overlay_write(
+            format!("{base}.{successor}"),
             artifact.clone(),
         ));
     }
+    Ok(())
 }
 
 fn project_persisted_status(conn: &Connection, entry: &ConfigPathTransaction) -> Result<()> {
@@ -696,11 +736,11 @@ fn overlay_path(upper: &Path, package_path: &str) -> Result<PathBuf> {
     crate::commands::live_root::target_path(upper, relative)
 }
 
-fn apply_mutation(upper: &Path, mutation: OverlayMutation) -> Result<()> {
+fn apply_mutation(upper: &Path, cas: &CasStore, mutation: OverlayMutation) -> Result<()> {
     match mutation {
         OverlayMutation::Remove(path) => remove_overlay_entry(&overlay_path(upper, &path)?),
         OverlayMutation::Write(path, artifact) => {
-            write_artifact(&overlay_path(upper, &path)?, &artifact)
+            write_artifact(&overlay_path(upper, &path)?, cas, &artifact)
         }
         OverlayMutation::Whiteout(path) => create_whiteout(&overlay_path(upper, &path)?),
     }
@@ -716,22 +756,20 @@ fn remove_overlay_entry(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_artifact(path: &Path, artifact: &ConfigArtifact) -> Result<()> {
+fn write_artifact(path: &Path, cas: &CasStore, artifact: &ConfigArtifact) -> Result<()> {
     remove_overlay_entry(path)?;
     let parent = path
         .parent()
         .context("generation config artifact has no parent")?;
     fs::create_dir_all(parent)?;
     match artifact {
-        ConfigArtifact::Regular { node, .. } => {
-            let content = artifact
-                .regular_content()?
-                .context("regular artifact has no regular content")?;
+        ConfigArtifact::Regular { content, node } => {
             let mut file = fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
                 .open(path)?;
-            file.write_all(&content)?;
+            crate::commands::LiveRootContent::from_cas(cas, content.clone(), &content.sha256)?
+                .copy_verified_to(&mut file)?;
             file.sync_all()?;
             conary_core::generation::root_manifest::apply_resolved_payload_metadata(path, node)?;
         }
@@ -788,7 +826,15 @@ fn copy_overlay_tree(source: &Path, destination: &Path) -> Result<()> {
         let to = destination.join(entry.file_name());
         let metadata = fs::symlink_metadata(&from)?;
         if metadata.is_dir() {
-            fs::create_dir(&to)?;
+            match fs::symlink_metadata(&to) {
+                Ok(existing) if existing.is_dir() => {}
+                Ok(_) => {
+                    remove_overlay_entry(&to)?;
+                    fs::create_dir(&to)?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&to)?,
+                Err(error) => return Err(error.into()),
+            }
             copy_overlay_tree(&from, &to)?;
             fs::set_permissions(
                 &to,
@@ -796,9 +842,11 @@ fn copy_overlay_tree(source: &Path, destination: &Path) -> Result<()> {
             )?;
             copy_xattrs(&from, &to)?;
         } else if metadata.file_type().is_symlink() {
+            remove_overlay_entry(&to)?;
             std::os::unix::fs::symlink(fs::read_link(&from)?, &to)?;
             copy_xattrs(&from, &to)?;
         } else if metadata.is_file() {
+            remove_overlay_entry(&to)?;
             fs::copy(&from, &to)?;
             fs::set_permissions(
                 &to,
@@ -806,6 +854,7 @@ fn copy_overlay_tree(source: &Path, destination: &Path) -> Result<()> {
             )?;
             copy_xattrs(&from, &to)?;
         } else if metadata.file_type().is_char_device() && metadata.rdev() == 0 {
+            remove_overlay_entry(&to)?;
             create_whiteout(&to)?;
         } else {
             bail!(

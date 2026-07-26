@@ -50,7 +50,7 @@ pub struct NativePackagePublication {
     pub id: Option<i64>,
     pub repository_id: i64,
     pub repository_package_id: i64,
-    pub distro: String,
+    pub source_profile: String,
     pub name: String,
     pub version: String,
     pub package_release: String,
@@ -67,25 +67,26 @@ pub struct NativePackagePublication {
 }
 
 impl NativePackagePublication {
-    const COLUMNS: &'static str = "id, repository_id, repository_package_id, distro, name, \
+    const COLUMNS: &'static str = "id, repository_id, repository_package_id, source_profile, name, \
          version, package_release, architecture, package_kind, authority_format_version, \
          status, content_hash, chunk_hashes_json, total_size, package_path, target_path, \
          trust_status";
 
     pub fn find_active(
         conn: &Connection,
-        distro: &str,
+        source_profile: &str,
         name: &str,
         version: Option<&str>,
         package_release: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<Vec<Self>> {
+        Self::require_public_source_profile(source_profile)?;
         let mut sql = format!(
             "SELECT {} FROM native_package_publications \
-             WHERE status = 'public' AND distro = ?1 AND name = ?2",
+             WHERE status = 'public' AND source_profile = ?1 AND name = ?2",
             Self::COLUMNS
         );
-        let mut values: Vec<String> = vec![distro.to_string(), name.to_string()];
+        let mut values: Vec<String> = vec![source_profile.to_string(), name.to_string()];
         if let Some(version) = version {
             values.push(version.to_string());
             sql.push_str(&format!(" AND version = ?{}", values.len()));
@@ -117,16 +118,17 @@ impl NativePackagePublication {
     }
 
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        Self::require_public_source_profile(&self.source_profile)?;
         conn.execute(
             "INSERT INTO native_package_publications (
-                repository_id, repository_package_id, distro, name, version, package_release,
+                repository_id, repository_package_id, source_profile, name, version, package_release,
                 architecture, package_kind, authority_format_version, status, content_hash,
                 chunk_hashes_json, total_size, package_path, target_path, trust_status
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 self.repository_id,
                 self.repository_package_id,
-                &self.distro,
+                &self.source_profile,
                 &self.name,
                 &self.version,
                 &self.package_release,
@@ -147,13 +149,22 @@ impl NativePackagePublication {
         Ok(id)
     }
 
+    fn require_public_source_profile(source_profile: &str) -> Result<()> {
+        if crate::repository::supported_profiles::profile_by_public_id(source_profile).is_none() {
+            return Err(crate::Error::ConfigError(format!(
+                "unsupported public source profile '{source_profile}' for native publication"
+            )));
+        }
+        Ok(())
+    }
+
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         let raw_status: String = row.get(10)?;
         Ok(Self {
             id: row.get(0)?,
             repository_id: row.get(1)?,
             repository_package_id: row.get(2)?,
-            distro: row.get(3)?,
+            source_profile: row.get(3)?,
             name: row.get(4)?,
             version: row.get(5)?,
             package_release: row.get(6)?,

@@ -1,12 +1,12 @@
 // conary-core/src/canonical/appstream.rs
 
-//! AppStream catalog parser for canonical package identity.
+//! AppStream discovery-metadata parser.
 //!
 //! Parses both AppStream XML (used by Fedora, Arch, etc.) and DEP-11 YAML
 //! (used by Debian/Ubuntu) catalog formats, extracting component metadata
-//! that maps AppStream IDs to distro package names.
+//! for exact enrichment after a canonical mapping contract already owns the
+//! package identity. AppStream data never creates package equivalence.
 
-use crate::db::models::{CanonicalPackage, PackageImplementation};
 use crate::error::{Error, Result};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -328,61 +328,6 @@ pub fn parse_appstream_yaml(yaml: &str) -> Result<Vec<AppStreamComponent>> {
     Ok(components)
 }
 
-/// Ingest parsed AppStream components into the canonical package database.
-///
-/// For each component, creates or finds a `CanonicalPackage` (using `pkgname`
-/// as the canonical name and setting the `appstream_id`), then creates a
-/// `PackageImplementation` linking it to the specified distro.
-///
-/// Returns the number of components successfully ingested.
-pub fn ingest_appstream(
-    conn: &rusqlite::Connection,
-    components: &[AppStreamComponent],
-    distro: &str,
-) -> Result<usize> {
-    // Wrap in a transaction for atomicity and performance (avoids per-statement autocommit).
-    // On error, the transaction auto-rolls-back when dropped.
-    let tx = conn.unchecked_transaction()?;
-    let count = ingest_appstream_inner(&tx, components, distro)?;
-    tx.commit()?;
-    Ok(count)
-}
-
-fn ingest_appstream_inner(
-    conn: &rusqlite::Connection,
-    components: &[AppStreamComponent],
-    distro: &str,
-) -> Result<usize> {
-    let mut count = 0;
-
-    for comp in components {
-        let mut canonical = CanonicalPackage::new(comp.pkgname.clone(), "package".to_string());
-        canonical.appstream_id = Some(comp.id.clone());
-        canonical.description = comp.summary.clone();
-
-        let canonical_id = canonical.insert_or_ignore(conn)?;
-
-        if let Some(can_id) = canonical_id {
-            // Update appstream_id if the package already existed without one
-            conn.execute(
-                "UPDATE canonical_packages SET appstream_id = ?1 WHERE id = ?2 AND appstream_id IS NULL",
-                rusqlite::params![&comp.id, can_id],
-            )?;
-
-            let mut impl_entry = PackageImplementation::new(
-                can_id,
-                distro.to_string(),
-                comp.pkgname.clone(),
-                "appstream".to_string(),
-            );
-            impl_entry.insert_or_ignore(conn)?;
-            count += 1;
-        }
-    }
-
-    Ok(count)
-}
-
 /// Write parsed AppStream components to the appstream_cache table.
 /// `pkgname` is always present (components without it are dropped at parse time).
 pub fn cache_components_to_db(
@@ -482,55 +427,6 @@ mod tests {
         let components = parse_appstream_yaml(yaml).unwrap();
         assert_eq!(components.len(), 1);
         assert_eq!(components[0].pkgname, "haspkg");
-    }
-
-    #[test]
-    fn test_ingest_appstream() {
-        use crate::db::schema;
-        use tempfile::NamedTempFile;
-
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::ensure_current(&conn).unwrap();
-
-        let components = vec![
-            AppStreamComponent {
-                id: "org.mozilla.Firefox".to_string(),
-                pkgname: "firefox".to_string(),
-                name: "Firefox".to_string(),
-                summary: Some("Web Browser".to_string()),
-                provides: AppStreamProvides::default(),
-            },
-            AppStreamComponent {
-                id: "org.gnome.Nautilus".to_string(),
-                pkgname: "nautilus".to_string(),
-                name: "Files".to_string(),
-                summary: None,
-                provides: AppStreamProvides::default(),
-            },
-        ];
-
-        let count = ingest_appstream(&conn, &components, "fedora").unwrap();
-        assert_eq!(count, 2);
-
-        // Verify canonical packages were created
-        let pkg = CanonicalPackage::find_by_name(&conn, "firefox")
-            .unwrap()
-            .unwrap();
-        assert_eq!(pkg.appstream_id, Some("org.mozilla.Firefox".to_string()));
-
-        // Verify implementations were created
-        let impls = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap()).unwrap();
-        assert_eq!(impls.len(), 1);
-        assert_eq!(impls[0].distro, "fedora");
-        assert_eq!(impls[0].source, "appstream");
-
-        // Ingesting again should not duplicate (insert_or_ignore)
-        let count2 = ingest_appstream(&conn, &components, "fedora").unwrap();
-        assert_eq!(count2, 2);
-        let impls2 = PackageImplementation::find_by_canonical(&conn, pkg.id.unwrap()).unwrap();
-        assert_eq!(impls2.len(), 1);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 5
-summary: Route exact installed package and native lifecycle query contracts
+last_updated: 2026-07-26
+revision: 6
+summary: Route exact installed package, claim-aware payload, and native lifecycle query contracts
 ---
 
 # Query Module (apps/conary/src/commands/query/)
@@ -57,6 +57,7 @@ conary system sbom <package|all> [--format cyclonedx]
 | `DependencyEntry` | db/models/ | Typed dependency link (runtime, build, etc.) |
 | `ProvideEntry` | db/models/ | Capability declaration (soname, pkgconfig, virtual) |
 | `FileEntry` | db/models/ | Installed file (path, hash, perms, component) |
+| `PackagePayloadOwnership` | db/models/ | Exact package-facing payload, including shared-directory claims whose materialized anchor belongs to a peer |
 | `Component` | db/models/ | Logical subpackage (:runtime, :lib, :devel, :doc) |
 | `RepositoryPackage` | db/models/ | Available package from synced repo metadata |
 | `InstalledCcsRemoveHook` | db/models/ | Exact persisted CCS-authored pre-remove hook |
@@ -84,6 +85,9 @@ Primary tables hit by queries:
 - **Pattern matching**: LIKE queries with wildcards on names and paths
 - **Recursive traversal**: deptree uses HashSet-based cycle detection with configurable depth
 - **Reverse lookup**: `WHERE depends_on_name = ?` for rdepends/whatbreaks
+- **Package payload projection**: package, component, and installed SBOM views
+  use `PackagePayloadOwnership` so every package's exact directory
+  claims remain visible even when another package owns the materialized anchor
 - **Scriptlet inspection**: `conary query scripts <path>` inspects native or CCS
   package files, while `conary query scripts <package> --db-path <db>` resolves an
   installed package and separates the exact CCS `installed_ccs_remove_hooks`

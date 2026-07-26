@@ -372,9 +372,10 @@ fn build_generation_from_runtime_inputs(
 #[cfg(all(test, feature = "composefs-rs"))]
 mod tests {
     use super::super::test_support::{
-        assert_invalid_runtime_input_error, assert_missing_cas_object_error, regular_file_entry,
-        runtime_generation_db_with_invalid_regular_file,
+        assert_cas_size_mismatch_error, assert_missing_cas_object_error,
+        insert_regular_file_with_parents,
         runtime_generation_db_with_missing_regular_file_cas_object,
+        runtime_generation_db_with_wrong_sized_regular_file_cas_object,
     };
     use super::*;
     use crate::ccs::manifest::FileCapability;
@@ -410,17 +411,22 @@ mod tests {
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(
+        insert_regular_file_with_parents(
+            &conn,
             "/usr/bin/hello",
             hello_hash,
             b"hello".len(),
             0o755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
-        let mut init =
-            regular_file_entry("/usr/sbin/init", init_hash, b"init".len(), 0o755, trove_id);
-        init.insert(&conn).unwrap();
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
+            init_hash,
+            b"init".len(),
+            0o755,
+            trove_id,
+        );
 
         let (generation, _result) = build_generation_from_db_with_boot_root(
             &conn,
@@ -469,17 +475,22 @@ mod tests {
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(
+        insert_regular_file_with_parents(
+            &conn,
             "/usr/bin/hello",
             hello_hash,
             b"hello".len(),
             0o755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
-        let mut init =
-            regular_file_entry("/usr/sbin/init", init_hash, b"init".len(), 0o755, trove_id);
-        init.insert(&conn).unwrap();
+        insert_regular_file_with_parents(
+            &conn,
+            "/sbin/init",
+            init_hash,
+            b"init".len(),
+            0o755,
+            trove_id,
+        );
 
         InstalledFileCapability::replace_for_trove(
             &conn,
@@ -535,20 +546,20 @@ mod tests {
 
     #[cfg(feature = "composefs-rs")]
     #[test]
-    fn build_generation_from_db_rejects_invalid_runtime_input() {
-        let (_tmp, conn, generations_root, boot_root) =
-            runtime_generation_db_with_invalid_regular_file();
+    fn build_generation_from_db_rejects_wrong_sized_regular_file_cas_object() {
+        let (_tmp, conn, generations_root, boot_root, bad_hash) =
+            runtime_generation_db_with_wrong_sized_regular_file_cas_object();
 
         let error = build_generation_from_db_with_boot_root(
             &conn,
             &generations_root,
-            "invalid runtime input",
+            "wrong-sized runtime CAS object",
             &boot_root,
         )
         .unwrap_err()
         .to_string();
 
-        assert_invalid_runtime_input_error(&error);
+        assert_cas_size_mismatch_error(&error, &bad_hash);
         assert!(!generations_root.join("0/.conary-artifact.json").exists());
     }
 
@@ -597,14 +608,14 @@ mod tests {
         );
         trove.architecture = Some("x86_64".to_string());
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(
+        insert_regular_file_with_parents(
+            &conn,
             "/usr/bin/hello",
             hello_hash,
             b"hello".len(),
             0o755,
             trove_id,
         );
-        file.insert(&conn).unwrap();
 
         let error = build_generation_from_db_with_boot_root(
             &conn,

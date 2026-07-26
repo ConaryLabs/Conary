@@ -75,6 +75,13 @@ fn pkginfo_rejects_malformed_declared_size() {
 }
 
 #[test]
+fn pkginfo_preserves_arch_any_architecture_token() {
+    let info =
+        ArchPackage::parse_pkginfo("pkgname = portable-data\npkgver = 1-1\narch = any\n").unwrap();
+    assert_eq!(info.architecture.as_deref(), Some("any"));
+}
+
+#[test]
 fn pkginfo_relations_preserve_conflicts_and_replaces_as_typed_authority() {
     let info = ArchPackage::parse_pkginfo(
         "pkgname = newpkg\n\
@@ -122,33 +129,24 @@ fn pkginfo_relation_rejects_malformed_exact_constraint() {
 }
 
 #[test]
-fn test_dependency_parsing() {
-    let deps = vec!["glibc>=2.34".to_string(), "zlib".to_string()];
+fn arch_provides_are_exact_typed_provider_contracts() {
+    let parsed = ArchPackage::parse_provides(
+        "example",
+        "1.0-1",
+        &["virtual-abi=2".to_string(), "unversioned".to_string()],
+    )
+    .unwrap();
 
-    let parsed = ArchPackage::parse_dependencies(&deps, DependencyType::Runtime);
-    assert_eq!(parsed.len(), 2);
-    assert_eq!(parsed[0].name, "glibc");
-    assert_eq!(parsed[0].version, Some(">=2.34".to_string()));
-    assert_eq!(parsed[1].name, "zlib");
-    assert_eq!(parsed[1].version, None);
-}
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed[0].kind, RepositoryCapabilityKind::PackageName);
+    assert_eq!(parsed[0].version.as_deref(), Some("1.0-1"));
+    assert_eq!(parsed[1].kind, RepositoryCapabilityKind::Virtual);
+    assert_eq!(parsed[1].version.as_deref(), Some("2"));
+    assert_eq!(parsed[2].version, None);
 
-#[test]
-fn test_optional_dependency_parsing() {
-    let deps = vec![
-        "python: for running scripts".to_string(),
-        "ruby".to_string(),
-    ];
-
-    let parsed = ArchPackage::parse_dependencies(&deps, DependencyType::Optional);
-    assert_eq!(parsed.len(), 2);
-    assert_eq!(parsed[0].name, "python");
-    assert_eq!(
-        parsed[0].description,
-        Some("for running scripts".to_string())
-    );
-    assert_eq!(parsed[1].name, "ruby");
-    assert_eq!(parsed[1].description, None);
+    let error = ArchPackage::parse_provides("example", "1.0-1", &["virtual-abi>=2".to_string()])
+        .unwrap_err();
+    assert!(error.to_string().contains("exact '='"));
 }
 
 #[test]

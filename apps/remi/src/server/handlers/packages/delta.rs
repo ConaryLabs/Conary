@@ -30,7 +30,11 @@ pub(crate) async fn get_delta(
 
     let from = query.from;
     let to = query.to;
-    let distro_c = distro.clone();
+    let source_profile =
+        match conary_core::repository::supported_profiles::profile_for_remi_route(&distro) {
+            Some(profile) => profile.id().to_string(),
+            None => return (StatusCode::BAD_REQUEST, "Unknown distribution").into_response(),
+        };
     let name_c = name.clone();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -38,13 +42,13 @@ pub(crate) async fn get_delta(
 
         // Try cached delta first
         if let Some(cached) =
-            crate::server::delta_manifests::get_delta(&conn, &distro_c, &name_c, &from, &to)?
+            crate::server::delta_manifests::get_delta(&conn, &source_profile, &name_c, &from, &to)?
         {
             return Ok(cached);
         }
 
         // Compute on the fly
-        crate::server::delta_manifests::compute_delta(&conn, &distro_c, &name_c, &from, &to)
+        crate::server::delta_manifests::compute_delta(&conn, &source_profile, &name_c, &from, &to)
     })
     .await;
 

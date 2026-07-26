@@ -274,6 +274,7 @@ mod tests {
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "acme-widget");
         assert_eq!(packages[0].version, "1.4.2");
+        assert_eq!(packages[0].package_release, "1");
         assert!(
             packages[0]
                 .metadata

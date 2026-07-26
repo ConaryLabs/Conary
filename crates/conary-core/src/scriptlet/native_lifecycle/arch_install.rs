@@ -226,6 +226,7 @@ impl PreparedInstallSource {
 mod tests {
     use super::super::{NativeInvocationRuntime, NativeLifecycleExecution};
     use super::{shell_quote, source_and_call_command, validate_full_package_version};
+    use crate::scriptlet::test_support::materialized_root;
     use crate::scriptlet::{ExecutionMode, PackageFormat, ScriptletExecutor, ScriptletOutcome};
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
@@ -268,11 +269,16 @@ mod tests {
 
     #[test]
     fn runtime_sources_with_empty_positional_args_then_calls_exact_function() {
-        let fixture = tempfile::tempdir().expect("fixture");
-        let configured_shell = fixture.path().join("configured-arch-shell");
-        symlink("/usr/bin/bash", &configured_shell).expect("configured shell symlink");
-        let output = fixture.path().join("result");
-        let environment = vec![format!("ARCH_RUNTIME_RESULT={}", output.display())];
+        let Some(root) = materialized_root(
+            "scriptlet::native_lifecycle::arch_install::tests::runtime_sources_with_empty_positional_args_then_calls_exact_function",
+            &["/usr/bin/bash"],
+        ) else {
+            return;
+        };
+        let configured_shell = "/usr/bin/configured-arch-shell";
+        symlink("bash", root.host_path(configured_shell)).expect("configured shell symlink");
+        let output = root.host_path("/result");
+        let environment = vec!["ARCH_RUNTIME_RESULT=/result".to_string()];
         let body = r#"
 printf 'source|argc=%s|zero=%s|all=%s|file=%s\n' \
     "$#" "$0" "$*" "${BASH_SOURCE[0]}" > "$ARCH_RUNTIME_RESULT"
@@ -286,7 +292,7 @@ post_upgrade() {
         let execution = NativeLifecycleExecution {
             entry_id: "arch:post_upgrade",
             phase: "post-upgrade",
-            interpreter: configured_shell.to_str().expect("UTF-8 shell path"),
+            interpreter: configured_shell,
             interpreter_args: &[],
             body_sha256: crate::hash::sha256_prefixed(body.as_bytes()),
             body,
@@ -310,7 +316,7 @@ post_upgrade() {
             stdin: &[],
         };
         let executor = ScriptletExecutor::new(
-            Path::new("/"),
+            root.path(),
             "arch-runtime-fixture",
             &args[0],
             PackageFormat::Arch,
@@ -325,10 +331,7 @@ post_upgrade() {
         let result = std::fs::read_to_string(&output).expect("runtime output");
         let mut lines = result.lines();
         let source = lines.next().expect("source line");
-        let source_prefix = format!(
-            "source|argc=0|zero={}|all=|file=",
-            configured_shell.display()
-        );
+        let source_prefix = format!("source|argc=0|zero={}|all=|file=", configured_shell);
         assert!(
             source.starts_with(&source_prefix),
             "unexpected source context: {source}"

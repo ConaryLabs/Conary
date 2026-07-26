@@ -227,8 +227,11 @@ create_release_policy_fixture() {
     repo="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-test.XXXXXX")"
     mkdir -p \
         "$repo/scripts" \
+        "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
         "$repo/docs/operations" \
+        "$repo/site/src/lib" \
+        "$repo/site/src/routes/install" \
         "$repo/packaging/rpm" \
         "$repo/packaging/deb" \
         "$repo/packaging/arch" \
@@ -237,7 +240,10 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
+    cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
     cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
+    cp "$REPO_ROOT/site/src/lib/preview-release.ts" "$repo/site/src/lib/preview-release.ts"
+    cp "$REPO_ROOT/site/src/routes/install/+page.svelte" "$repo/site/src/routes/install/+page.svelte"
     cp "$REPO_ROOT/packaging/rpm/Containerfile.build" "$repo/packaging/rpm/Containerfile.build"
     cp "$REPO_ROOT/packaging/deb/Containerfile.build" "$repo/packaging/deb/Containerfile.build"
     cp "$REPO_ROOT/packaging/arch/Containerfile.build" "$repo/packaging/arch/Containerfile.build"
@@ -522,6 +528,19 @@ YAML
     assert_check_release_matrix_fails "$repo" "deploy-conaryd"
 }
 
+test_check_release_matrix_rejects_beta_maturity_drift() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" \
+        'name: Pre-Alpha Tester Feedback' \
+        'name: Beta Feedback'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "public maturity surfaces must identify this project as pre-alpha, not beta"
+}
+
 test_check_release_matrix_rejects_conary_test_deploy_jobs() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -760,6 +779,7 @@ main() {
         test_release_dry_run_conary_test_uses_owned_manifest_baseline
         test_release_conary_regenerates_and_stages_man_page
         test_release_conary_rejects_stale_generated_man_page
+        test_check_release_matrix_rejects_beta_maturity_drift
         test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused
         test_check_release_matrix_rejects_conary_test_deploy_jobs
         test_check_release_matrix_rejects_unpinned_rpm_builder_image

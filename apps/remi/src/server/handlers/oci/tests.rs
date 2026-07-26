@@ -19,10 +19,13 @@ fn insert_converted_package(
     version: &str,
     chunks: &[String],
 ) {
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
     let mut pkg = ConvertedPackage::new_repository(
-        distro.to_string(),
+        source_profile.id().to_string(),
         name.to_string(),
         version.to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         format!("sha256:test-{}-{}", name, version),
         chunks,
@@ -40,10 +43,13 @@ fn insert_stale_converted_package(
     version: &str,
     chunks: &[String],
 ) {
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
     let mut pkg = ConvertedPackage::new_repository(
-        distro.to_string(),
+        source_profile.id().to_string(),
         name.to_string(),
         version.to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         format!("sha256:test-{}-{}", name, version),
         chunks,
@@ -74,9 +80,10 @@ async fn oci_blob_state_with_db(
 
     for (index, stale) in stale_rows.into_iter().enumerate() {
         let mut converted = ConvertedPackage::new_repository(
-            "fedora".to_string(),
+            "fedora-44".to_string(),
             format!("pkg-{index}"),
             "1.0".to_string(),
+            "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:source-{index}"),
             &[hash.to_string()],

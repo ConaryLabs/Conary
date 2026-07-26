@@ -164,6 +164,9 @@ pub enum MaintainerScriptPhase {
         old_version: Option<Vec<u8>>,
         new_version: Vec<u8>,
     },
+    AbortInstall {
+        old_and_new_version: Option<(Vec<u8>, Vec<u8>)>,
+    },
     Configure {
         old_version: Vec<u8>,
     },
@@ -195,6 +198,14 @@ pub enum MaintainerScriptPhase {
 
 impl MaintainerScriptPhase {
     pub fn parse(argv: &[Vec<u8>]) -> Result<Self, DpkgLifecycleGrammarError> {
+        for value in argv {
+            require_no_nul(
+                MAINTSCRIPT_HELPER,
+                "maintainer phase",
+                "phase argument",
+                value,
+            )?;
+        }
         let action = required(
             MAINTSCRIPT_HELPER,
             "maintainer phase",
@@ -206,6 +217,7 @@ impl MaintainerScriptPhase {
             b"install" => Self::parse_install(rest),
             b"upgrade" => Self::parse_version_pair("upgrade", rest, false),
             b"abort-upgrade" => Self::parse_version_pair("abort-upgrade", rest, true),
+            b"abort-install" => Self::parse_abort_install(rest),
             b"configure" => {
                 exact_count("configure", rest, 1, "old version")?;
                 Ok(Self::Configure {
@@ -279,6 +291,27 @@ impl MaintainerScriptPhase {
         }
     }
 
+    fn parse_abort_install(rest: &[Vec<u8>]) -> Result<Self, DpkgLifecycleGrammarError> {
+        match rest {
+            [] => Ok(Self::AbortInstall {
+                old_and_new_version: None,
+            }),
+            [old_version, new_version] => Ok(Self::AbortInstall {
+                old_and_new_version: Some((old_version.clone(), new_version.clone())),
+            }),
+            [_] => Err(DpkgLifecycleGrammarError::MissingOperand {
+                tool: MAINTSCRIPT_HELPER,
+                action: "abort-install",
+                operand: "new version",
+            }),
+            [_, _, unexpected, ..] => Err(DpkgLifecycleGrammarError::UnexpectedOperand {
+                tool: MAINTSCRIPT_HELPER,
+                action: "abort-install",
+                operand: unexpected.clone(),
+            }),
+        }
+    }
+
     fn parse_version_pair(
         action: &'static str,
         rest: &[Vec<u8>],
@@ -345,6 +378,16 @@ impl MaintainerScriptPhase {
                     argv.push(old.clone());
                 }
                 argv.push(new_version.clone());
+                argv
+            }
+            Self::AbortInstall {
+                old_and_new_version,
+            } => {
+                let mut argv = vec![b"abort-install".to_vec()];
+                if let Some((old, new)) = old_and_new_version {
+                    argv.push(old.clone());
+                    argv.push(new.clone());
+                }
                 argv
             }
             Self::Configure { old_version } => {
@@ -648,7 +691,7 @@ impl MaintscriptHelperOperation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DpkgMaintscriptHelperInvocation {
     Supports(MaintscriptHelperAction),
-    Operation(MaintscriptHelperOperation),
+    Operation(Box<MaintscriptHelperOperation>),
     Help,
     Version,
 }
@@ -698,6 +741,7 @@ impl DpkgMaintscriptHelperInvocation {
                 };
                 let phase = MaintainerScriptPhase::parse(&argv[delimiter + 1..])?;
                 MaintscriptHelperOperation::parse(action, &argv[1..delimiter], phase)
+                    .map(Box::new)
                     .map(Self::Operation)
             }
         }

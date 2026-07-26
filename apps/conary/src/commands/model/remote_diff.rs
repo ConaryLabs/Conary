@@ -281,7 +281,6 @@ mod tests {
             explicit: HashSet::from(["nginx".to_string()]),
             pinned: HashSet::new(),
             source_pin: None,
-            selection_mode: None,
             allowed_distros: Vec::new(),
         };
 

@@ -10,6 +10,7 @@ fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
         "fedora-44".to_string(),
         "fixture".to_string(),
         "1.0-1".to_string(),
+        "x86_64".to_string(),
         "rpm".to_string(),
         checksum.to_string(),
         &[chunk.to_string()],
@@ -62,7 +63,7 @@ fn converted_package_round_trips_lifecycle_summary() {
     converted.set_scriptlet_metadata(&summary).unwrap();
     converted.insert(&conn).unwrap();
 
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:source")
+    let found = ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", "sha256:source")
         .unwrap()
         .unwrap();
     assert_eq!(found.scriptlet_summary().unwrap(), summary);
@@ -140,11 +141,23 @@ fn repository_artifact_exposes_only_complete_serving_state() {
 
     assert_eq!(artifact.package_name, "fixture");
     assert_eq!(artifact.package_version, "1.0-1");
-    assert_eq!(artifact.distro, "fedora-44");
+    assert_eq!(artifact.source_profile, "fedora-44");
+    assert_eq!(artifact.package_architecture, "x86_64");
     assert_eq!(artifact.chunk_hashes, vec!["sha256:chunk".to_string()]);
     assert_eq!(artifact.total_size, 42);
     assert_eq!(artifact.content_hash, "sha256:content");
     assert_eq!(artifact.ccs_path, "/tmp/fixture.ccs");
+}
+
+#[test]
+fn repository_artifact_rejects_missing_or_empty_architecture() {
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+
+    for architecture in [None, Some(String::new())] {
+        converted.package_architecture = architecture;
+        let error = converted.repository_artifact().unwrap_err().to_string();
+        assert!(error.contains("missing package_architecture"), "{error}");
+    }
 }
 
 #[test]
@@ -173,7 +186,7 @@ fn repository_artifact_rejects_corrupt_chunk_json() {
     )
     .unwrap();
 
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:source")
+    let found = ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", "sha256:source")
         .unwrap()
         .unwrap();
     let error = found.repository_artifact().unwrap_err().to_string();
@@ -220,7 +233,7 @@ fn chunk_conversion_state_reports_stale_only_references() {
 }
 
 #[test]
-fn chunk_conversion_state_allows_unreferenced_hashes() {
+fn chunk_conversion_state_reports_unreferenced_hashes() {
     let (_temp, conn) = create_test_db();
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
@@ -238,16 +251,16 @@ fn converted_package_crud() {
 
     let id = converted.insert(&conn).unwrap();
     assert!(id > 0);
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:abc123def456")
+    let found = ConvertedPackage::find_installed_by_checksum(&conn, "sha256:abc123def456")
         .unwrap()
         .unwrap();
     assert_eq!(found.original_format, "rpm");
     assert_eq!(found.scriptlet_fidelity, "native-free");
     assert_eq!(ConvertedPackage::list_all(&conn).unwrap().len(), 1);
 
-    ConvertedPackage::delete_by_checksum(&conn, "sha256:abc123def456").unwrap();
+    ConvertedPackage::delete_installed_by_checksum(&conn, "sha256:abc123def456").unwrap();
     assert!(
-        ConvertedPackage::find_by_checksum(&conn, "sha256:abc123def456")
+        ConvertedPackage::find_installed_by_checksum(&conn, "sha256:abc123def456")
             .unwrap()
             .is_none()
     );
@@ -293,6 +306,38 @@ fn checksum_is_unique() {
 }
 
 #[test]
+fn checksum_identity_is_scoped_by_artifact_kind_and_source_profile() {
+    let (_temp, conn) = create_test_db();
+    let checksum = "sha256:shared";
+
+    installed_package(&conn, "rpm", checksum)
+        .insert(&conn)
+        .unwrap();
+    server_package(checksum, "sha256:fedora")
+        .insert(&conn)
+        .unwrap();
+    let mut arch = server_package(checksum, "sha256:arch");
+    arch.source_profile = Some("arch".to_string());
+    arch.insert(&conn).unwrap();
+
+    assert!(
+        ConvertedPackage::find_installed_by_checksum(&conn, checksum)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", checksum)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ConvertedPackage::find_repository_by_checksum(&conn, "arch", checksum)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn enhancement_state_round_trips() {
     let (_temp, conn) = create_test_db();
     let mut converted = installed_package(&conn, "rpm", "sha256:enhance");
@@ -303,7 +348,7 @@ fn enhancement_state_round_trips() {
 
     assert!(!converted.needs_enhancement(1));
     assert!(converted.needs_enhancement(2));
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:enhance")
+    let found = ConvertedPackage::find_installed_by_checksum(&conn, "sha256:enhance")
         .unwrap()
         .unwrap();
     assert_eq!(found.enhancement_status, "complete");
@@ -319,7 +364,7 @@ fn enhancement_failure_round_trips() {
         .set_enhancement_failed(&conn, "Test error message")
         .unwrap();
 
-    let found = ConvertedPackage::find_by_checksum(&conn, "sha256:fail")
+    let found = ConvertedPackage::find_installed_by_checksum(&conn, "sha256:fail")
         .unwrap()
         .unwrap();
     assert_eq!(found.enhancement_status, "failed");

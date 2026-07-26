@@ -258,7 +258,7 @@ pub fn hash_bytes(algorithm: HashAlgorithm, data: &[u8]) -> Hash {
 }
 
 /// Compute hash of data from a reader
-pub fn hash_reader<R: Read>(algorithm: HashAlgorithm, reader: &mut R) -> io::Result<Hash> {
+pub fn hash_reader<R: Read + ?Sized>(algorithm: HashAlgorithm, reader: &mut R) -> io::Result<Hash> {
     let mut hasher = Hasher::new(algorithm);
     let mut buffer = [0u8; 8192];
 
@@ -300,7 +300,7 @@ pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 /// Compute SHA-256 of a reader, returning hex string
 ///
 /// Use for streaming verification where you feed chunks incrementally.
-pub fn sha256_reader_hex<R: Read>(reader: &mut R) -> io::Result<String> {
+pub fn sha256_reader_hex<R: Read + ?Sized>(reader: &mut R) -> io::Result<String> {
     let hash = hash_reader(HashAlgorithm::Sha256, reader)?;
     Ok(hash.value)
 }

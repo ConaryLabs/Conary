@@ -852,8 +852,16 @@ sysroot_hash = "{TEST_HASH}"
 [package]
 name = "widget"
 version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
 description = "fixture package"
 license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
 
 [provenance]
 origin_class = "native-built"
@@ -862,6 +870,7 @@ hardening_level = "hermetic"
             )
             .unwrap();
             let result = conary_core::ccs::CcsBuilder::new(manifest, &source_dir)
+                .unwrap()
                 .build()
                 .unwrap();
             let key = conary_core::ccs::SigningKeyPair::generate().with_key_id("publish");

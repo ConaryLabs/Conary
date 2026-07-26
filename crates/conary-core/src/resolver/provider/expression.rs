@@ -12,9 +12,7 @@ use crate::error::{Error, Result};
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme};
 
 use super::ConaryProvider;
-#[cfg(test)]
-use super::types::ConaryConstraint;
-use super::types::{SolverAtom, SolverExpression};
+use super::types::{ConaryConstraint, SolverAtom, SolverExpression};
 
 const FALSE_REQUIREMENT_NAME: &str = "\0conary:false";
 
@@ -73,17 +71,31 @@ impl ConaryProvider<'_> {
             let Some(clause) = normalize_clause(clause) else {
                 continue;
             };
-            requirements.push(self.compile_clause(&clause)?);
+            if let Some(requirement) = self.compile_clause(&clause)? {
+                requirements.push(requirement);
+            }
         }
 
         Ok(requirements)
     }
 
-    fn compile_clause(&mut self, clause: &[Literal]) -> Result<ConditionalRequirement> {
+    fn compile_clause(&mut self, clause: &[Literal]) -> Result<Option<ConditionalRequirement>> {
         let mut positive = Vec::new();
         let mut negative = Vec::new();
 
         for literal in clause {
+            if let ConaryConstraint::RpmRuntime(requirement) = &literal.atom.constraint {
+                requirement
+                    .ensure_supported()
+                    .map_err(|error| Error::ResolutionError(error.to_string()))?;
+                if literal.positive {
+                    // A true literal satisfies the complete disjunction.
+                    return Ok(None);
+                }
+                // A negated true literal is false and contributes nothing to
+                // the surrounding disjunction.
+                continue;
+            }
             self.intern_constraint(&literal.atom.name, &literal.atom.constraint)?;
             let version_set = self.version_set_id(&literal.atom).ok_or_else(|| {
                 Error::ResolutionError(format!(
@@ -115,10 +127,10 @@ impl ConaryProvider<'_> {
         };
 
         let condition = self.intern_conjunction(&negative)?;
-        Ok(ConditionalRequirement {
+        Ok(Some(ConditionalRequirement {
             condition,
             requirement,
-        })
+        }))
     }
 
     fn version_set_id(&self, atom: &SolverAtom) -> Option<VersionSetId> {
@@ -259,6 +271,8 @@ fn normalize_clause(clause: Vec<Literal>) -> Option<Vec<Literal>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repository::dependency_model::RepositoryRequirementClause;
+    use crate::repository::rpm_runtime::RpmRuntimeRequirement;
 
     fn atom(name: &str) -> SolverExpression {
         SolverExpression::atom(
@@ -266,9 +280,34 @@ mod tests {
             ConaryConstraint::Repository {
                 scheme: VersionScheme::Rpm,
                 constraint: RepoVersionConstraint::Any,
+                capability_kind: None,
                 raw: None,
+                architecture_qualifier: Default::default(),
+                depending_architecture: "x86_64".to_string(),
             },
         )
+    }
+
+    fn runtime_atom() -> SolverExpression {
+        let clause = RepositoryRequirementClause::versioned(
+            "rpmlib(CompressedFileNames)".to_string(),
+            "<= 3.0.4-1".to_string(),
+        );
+        let requirement = RpmRuntimeRequirement::from_clause(&clause, VersionScheme::Rpm)
+            .unwrap()
+            .unwrap();
+        SolverExpression::atom(
+            requirement.feature.capability().to_string(),
+            ConaryConstraint::RpmRuntime(requirement),
+        )
+    }
+
+    fn provider() -> (tempfile::TempDir, rusqlite::Connection) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("expression-test.db");
+        crate::db::init(&path).unwrap();
+        let connection = crate::db::open(&path).unwrap();
+        (directory, connection)
     }
 
     #[test]
@@ -289,5 +328,40 @@ mod tests {
             SolverExpression::Or(vec![atom("a"), SolverExpression::Not(Box::new(atom("a")))]);
         let cnf = to_cnf(&to_normal_form(&expression, false));
         assert!(normalize_clause(cnf[0].clone()).is_none());
+    }
+
+    #[test]
+    fn mixed_runtime_or_expression_never_interns_a_fake_package_provider() {
+        let (_directory, connection) = provider();
+        let mut provider = ConaryProvider::new(&connection);
+        let expression = SolverExpression::Or(vec![atom("missing"), runtime_atom()]);
+
+        let requirements = provider.compile_root_requirements(&[expression]).unwrap();
+
+        assert!(requirements.is_empty());
+        assert!(
+            !provider
+                .names
+                .iter()
+                .any(|name| name.starts_with("rpmlib("))
+        );
+    }
+
+    #[test]
+    fn runtime_true_is_removed_from_mixed_and_expression() {
+        let (_directory, connection) = provider();
+        let mut provider = ConaryProvider::new(&connection);
+        let expression = SolverExpression::And(vec![atom("bash"), runtime_atom()]);
+
+        let requirements = provider.compile_root_requirements(&[expression]).unwrap();
+
+        assert_eq!(requirements.len(), 1);
+        assert!(provider.names.iter().any(|name| name == "bash"));
+        assert!(
+            !provider
+                .names
+                .iter()
+                .any(|name| name.starts_with("rpmlib("))
+        );
     }
 }

@@ -300,7 +300,7 @@ mod tests {
         fs::write(
             &executable,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'systemd 257'; exit 0; fi\nif [ \"$1\" = \"--dry-run\" ]; then exit 0; fi\ncase \"$1\" in --root=*) root=${{1#--root=}} ;; *) exit 2 ;; esac\n[ \"$2\" = \"--create\" ] || exit 2\ncp \"$root$3\" '{}'\n",
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'systemd 257'; exit 0; fi\nif [ \"$1\" = \"--dry-run\" ]; then cat >/dev/null; exit 0; fi\ncase \"$1\" in --root=*) root=${{1#--root=}} ;; *) exit 2 ;; esac\n[ \"$2\" = \"--create\" ] || exit 2\ncp \"$root$3\" '{}'\n",
                 captured.display()
             ),
         )

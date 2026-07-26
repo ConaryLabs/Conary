@@ -180,25 +180,8 @@ impl ScriptletExecutor {
             );
         }
 
-        // Prepare script content (Arch needs wrapper generation)
-        let script_content = if self.package_format == PackageFormat::Arch {
-            match self.prepare_arch_wrapper(content, phase) {
-                Ok(wrapper) => wrapper,
-                Err(error) => {
-                    return self.failure_from_error(
-                        phase,
-                        requested_sandbox_mode,
-                        effective_sandbox,
-                        error,
-                    );
-                }
-            }
-        } else {
-            content.to_string()
-        };
-
         // Analyze the formal shell command evidence.
-        let analysis = analyze_script(&script_content);
+        let analysis = analyze_script(content);
 
         if !analysis.patterns.is_empty() {
             info!(
@@ -209,12 +192,7 @@ impl ScriptletExecutor {
             );
         }
 
-        // Resolve interpreter (Arch always uses bash for wrapper)
-        let interpreter_path = if self.package_format == PackageFormat::Arch {
-            "/bin/bash".to_string()
-        } else {
-            interpreter.to_string()
-        };
+        let interpreter_path = interpreter.to_string();
 
         let interpreter_check_path = self.root.join(interpreter_path.trim_start_matches('/'));
 
@@ -272,7 +250,7 @@ impl ScriptletExecutor {
                 env: &env,
                 stdin: &[],
             },
-            script_content.as_bytes(),
+            content.as_bytes(),
         );
 
         match result {
@@ -295,11 +273,7 @@ impl ScriptletExecutor {
         _mode: &ExecutionMode,
     ) -> Result<()> {
         self.require_target_root()?;
-        let interpreter_path = if self.package_format == PackageFormat::Arch {
-            "/bin/bash".to_string()
-        } else {
-            interpreter.to_string()
-        };
+        let interpreter_path = interpreter.to_string();
         let interpreter_check_path = self.root.join(interpreter_path.trim_start_matches('/'));
 
         if !interpreter_check_path.exists() {

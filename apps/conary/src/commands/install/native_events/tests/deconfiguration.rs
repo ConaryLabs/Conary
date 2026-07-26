@@ -68,7 +68,7 @@ fn deconfigured_bundle() -> NativeLifecycleBundle {
     let mut bundle = pre_remove_bundle("dependent", "1");
     bundle.source_format = SourceFormat::Deb;
     bundle.source_family = "debian".to_string();
-    bundle.source_distro = Some("debian".to_string());
+    bundle.source_profile = Some("ubuntu-26.04".to_string());
     bundle.source_release = Some("13".to_string());
     bundle.source_arch = Some("amd64".to_string());
     bundle.version_scheme = LifecycleVersionScheme::Deb;
@@ -104,6 +104,8 @@ fn relation_deconfiguration_prepares_exact_debian_operation_event_and_state() {
         conary_core::repository::versioning::VersionScheme::Debian,
     );
     dependent.architecture = Some("amd64".to_string());
+    dependent.debian_multi_arch =
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
     let dependent_id = dependent.insert(&conn).unwrap();
     FileEntry::new(
         "/usr/bin/dependent".to_string(),
@@ -141,16 +143,18 @@ fn relation_deconfiguration_prepares_exact_debian_operation_event_and_state() {
     }];
     let prepared = PreparedNativeTransaction::prepare_install(
         &conn,
-        "incoming",
-        "2",
-        Some("amd64"),
-        VersionScheme::Debian,
-        &[],
-        None,
-        None,
-        &[],
-        &deconfigurations,
-        &empty_extraction(),
+        NativeInstallInput {
+            package_name: "incoming",
+            package_version: "2",
+            package_arch: Some("amd64"),
+            version_scheme: VersionScheme::Debian,
+            provides: &[],
+            new_bundle: None,
+            old_trove: None,
+            relation_removals: &[],
+            relation_deconfigurations: &deconfigurations,
+            paths: Vec::new(),
+        },
     )
     .unwrap();
 

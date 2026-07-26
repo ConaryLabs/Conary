@@ -35,7 +35,7 @@ async fn ccs_install_persists_pre_remove_hook() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -181,27 +181,27 @@ async fn ccs_install_rolls_back_after_post_install_error() {
 }
 
 #[tokio::test]
-async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
-    use conary_core::ccs::manifest::DirectoryHook;
+async fn ccs_install_discards_pre_hook_directories_when_post_hook_fails() {
+    use conary_core::ccs::manifest::{DirectoryHook, ScriptHook};
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;
 
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp_dir = tempfile::tempdir().unwrap();
     let install_root = temp_dir.path().join("root");
-    let outside_root = temp_dir.path().join("outside");
     let package_path = temp_dir.path().join("revert-pre-hooks.ccs");
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
     std::fs::create_dir_all(&install_root).unwrap();
-    std::fs::create_dir_all(&outside_root).unwrap();
     conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
 
     let file_content = b"blocked".to_vec();
     let file_hash = hash::sha256(&file_content);
 
     let files = vec![ccs_regular_file(
-        "/usr/lib/link/cron.d/persist".to_string(),
+        "/usr/lib/revert-pre-hooks/persist".to_string(),
         file_hash.clone(),
         file_content.len() as u64,
         0o100644,
@@ -215,6 +215,10 @@ async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
         owner: "root".to_string(),
         group: "root".to_string(),
         cleanup: None,
+        reversible: None,
+    });
+    manifest.hooks.post_install = Some(ScriptHook {
+        script: "exit 23".to_string(),
         reversible: None,
     });
 
@@ -236,9 +240,6 @@ async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
         chunk_stats: None,
     };
     let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
-    std::fs::create_dir_all(install_root.join("usr/lib")).unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&outside_root, install_root.join("usr/lib/link")).unwrap();
 
     let err = cmd_ccs_install(
         package_path.to_str().unwrap(),
@@ -255,7 +256,7 @@ async fn ccs_install_reverts_pre_hook_directories_when_deploy_fails() {
     .unwrap_err();
 
     assert!(
-        err.to_string().contains("path traversal") || err.to_string().contains("symlink"),
+        format!("{err:#}").contains("post-install hooks failed"),
         "unexpected error: {err:#}"
     );
     assert!(

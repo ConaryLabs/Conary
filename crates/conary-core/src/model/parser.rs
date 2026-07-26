@@ -18,14 +18,14 @@ pub use automation::{
     SecurityAutomation, UpdateAutomation,
 };
 pub use federation::{FederationConfig, FederationTier};
-pub use source_policy::{ConvergenceIntent, PackageOverrideConfig, SourcePinConfig, SystemConfig};
-use source_policy::{selection_mode_from_profile, selection_mode_from_string};
+pub use source_policy::{ConvergenceIntent, SourcePinConfig, SystemConfig};
 
 /// Current model file version
 pub const MODEL_VERSION: u32 = 1;
 
 /// The main system model configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SystemModel {
     /// Core model configuration
     #[serde(rename = "model")]
@@ -58,10 +58,6 @@ pub struct SystemModel {
     /// System-level source selection policy
     #[serde(default)]
     pub system: SystemConfig,
-
-    /// Per-package distro overrides
-    #[serde(default)]
-    pub overrides: HashMap<String, PackageOverrideConfig>,
 }
 
 /// Core model configuration section
@@ -169,7 +165,6 @@ impl SystemModel {
             automation: AutomationConfig::default(),
             federation: FederationConfig::default(),
             system: SystemConfig::default(),
-            overrides: HashMap::new(),
         }
     }
 
@@ -295,69 +290,7 @@ impl SystemModel {
             }
         }
 
-        if let Some(profile) = self.system.profile.as_deref()
-            && selection_mode_from_profile(profile).is_none()
-        {
-            return Err(ModelError::InvalidSourcePolicy(format!(
-                "Unknown source profile '{}'",
-                profile
-            )));
-        }
-
-        if let Some(selection_mode) = self.system.selection_mode.as_deref()
-            && selection_mode_from_string(selection_mode).is_none()
-        {
-            return Err(ModelError::InvalidSourcePolicy(format!(
-                "Unknown selection mode '{}'",
-                selection_mode
-            )));
-        }
-
         Ok(())
-    }
-
-    /// Resolve which override (if any) applies to a given package name.
-    ///
-    /// Checks override scope in priority order: exact > family > class.
-    /// - "exact" (or None): override key must match `package_name` exactly
-    /// - "family": override key matches `canonical_family` (if provided)
-    /// - "class": override key matches `package_class` (if provided)
-    ///
-    /// Returns the override key and config for the first match at the
-    /// highest-priority scope level.
-    pub fn resolve_override(
-        &self,
-        package_name: &str,
-        canonical_family: Option<&str>,
-        package_class: Option<&str>,
-    ) -> Option<(&str, &PackageOverrideConfig)> {
-        // Priority 1: exact match (scope is None or "exact")
-        for (key, config) in &self.overrides {
-            let scope = config.scope.as_deref().unwrap_or("exact");
-            if scope == "exact" && key == package_name {
-                return Some((key.as_str(), config));
-            }
-        }
-
-        // Priority 2: family match
-        if let Some(family) = canonical_family {
-            for (key, config) in &self.overrides {
-                if config.scope.as_deref() == Some("family") && key == family {
-                    return Some((key.as_str(), config));
-                }
-            }
-        }
-
-        // Priority 3: class match
-        if let Some(class) = package_class {
-            for (key, config) in &self.overrides {
-                if config.scope.as_deref() == Some("class") && key == class {
-                    return Some((key.as_str(), config));
-                }
-            }
-        }
-
-        None
     }
 
     /// Serialize the model to TOML

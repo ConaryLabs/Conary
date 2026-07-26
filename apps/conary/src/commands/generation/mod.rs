@@ -12,6 +12,7 @@ pub mod commands;
 pub mod composefs;
 pub(crate) mod config_transaction;
 pub mod export;
+pub(crate) mod gc;
 pub mod metadata;
 pub(crate) mod publication;
 pub(crate) mod selected_root;

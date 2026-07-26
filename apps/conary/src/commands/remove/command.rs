@@ -50,8 +50,9 @@ pub async fn cmd_remove(
 
     if trove.install_source.is_adopted() && !purge {
         anyhow::bail!(
-            "Refusing to remove adopted package '{}': its files are not Conary-owned. \
-             Use the external owner to uninstall it, 'conary system unadopt {}' to remove Conary tracking only, \
+            "Refusing to remove adopted package '{}': its files are not Conary-owned and \
+             remain under native package manager authority. Use 'conary system unadopt {}' \
+             to remove Conary tracking only, \
              or rerun with --purge only if deleting externally owned files is intentional.",
             package_name,
             package_name
@@ -162,6 +163,7 @@ mod tests {
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let payload = root.join("usr/bin/fixture");
         std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
@@ -176,8 +178,15 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(&db_path, "/usr/bin/fixture", b"fixture", trove_id);
-        file.insert(&conn).unwrap();
+        crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/fixture",
+            b"fixture",
+            0o755,
+            trove_id,
+            None,
+        );
         drop(conn);
 
         cmd_remove(
@@ -213,6 +222,7 @@ mod tests {
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
         std::os::unix::fs::symlink("generations/7", root.join("current")).unwrap();
 
         let payload = root.join("usr/bin/fixture");
@@ -228,8 +238,15 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(&db_path, "/usr/bin/fixture", b"fixture", trove_id);
-        file.insert(&conn).unwrap();
+        crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/fixture",
+            b"fixture",
+            0o755,
+            trove_id,
+            None,
+        );
         drop(conn);
 
         let err = cmd_remove(
@@ -262,6 +279,7 @@ mod tests {
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = conary_core::db::models::Trove::new_with_source(
@@ -309,6 +327,7 @@ mod tests {
         let root = tmp.path();
         let db_path = root.join("conary.db");
         conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let payload = root.join("usr/bin/bash");
         std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
@@ -317,14 +336,21 @@ mod tests {
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = conary_core::db::models::Trove::new_with_source(
             "bash".to_string(),
-            "5.2".to_string(),
+            "5.2.0".to_string(),
             conary_core::db::models::TroveType::Package,
             conary_core::db::models::InstallSource::Repository,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(&db_path, "/usr/bin/bash", b"bash", trove_id);
-        file.insert(&conn).unwrap();
+        crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/bash",
+            b"bash",
+            0o755,
+            trove_id,
+            None,
+        );
         drop(conn);
 
         cmd_remove(

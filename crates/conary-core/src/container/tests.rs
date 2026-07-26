@@ -422,6 +422,48 @@ fi
 }
 
 #[test]
+fn test_pid_namespace_init_can_reap_multiple_child_processes() {
+    if !isolation_available() {
+        return;
+    }
+
+    let mut config = ContainerConfig::minimal(Duration::from_secs(30));
+    config.isolate_pid = true;
+    config.isolate_mount = true;
+    config.bind_mounts = default_bind_mounts();
+    let mut sandbox = Sandbox::new(config);
+
+    let (code, stdout, stderr) = match sandbox.execute(
+        "/bin/sh",
+        "id -u\nid -u\nprintf 'children-complete\\n'\n",
+        &[],
+        &[],
+    ) {
+        Ok(result) => result,
+        Err(err)
+            if err
+                .to_string()
+                .contains("mount --make-rprivate failed: EACCES")
+                || err
+                    .to_string()
+                    .contains("mount --make-rprivate failed: EPERM") =>
+        {
+            eprintln!(
+                "skipping PID namespace assertion on a host without mount namespace privileges"
+            );
+            return;
+        }
+        Err(err) => panic!("PID namespace execution should succeed: {err}"),
+    };
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["0", "0", "children-complete"]
+    );
+}
+
+#[test]
 fn test_allow_network() {
     let mut config = ContainerConfig::default();
     assert!(config.isolate_network);

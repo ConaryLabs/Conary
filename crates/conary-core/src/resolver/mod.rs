@@ -25,6 +25,6 @@ pub use plan::{MissingDependency, ResolutionPlan};
 pub use provides_index::ProvidesIndex;
 pub use requirements::{load_installed_package_identities, requirement_expression_satisfied};
 pub use sat::{
-    SatPackage, SatResolution, SatSource, solve_install, solve_install_with_policy, solve_removal,
+    SatPackage, SatResolution, SatSource, solve_install_with_policy, solve_removal,
     solve_removal_troves, solve_requirement_groups_with_policy,
 };

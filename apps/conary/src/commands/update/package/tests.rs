@@ -1,7 +1,9 @@
 // conary/src/commands/update/package/tests.rs
 
 use super::*;
-use crate::commands::test_helpers::create_test_db;
+use crate::commands::test_helpers::{
+    create_test_db, insert_test_static_ccs_repository, seed_test_bootable_runtime,
+};
 use conary_core::ccs::builder::{CcsBuilder, write_signed_current_ccs_package};
 use conary_core::ccs::manifest::{CcsManifest, Platform};
 use conary_core::ccs::native_lifecycle::{
@@ -43,7 +45,10 @@ fn build_test_ccs_package_with_bundle(
     });
     manifest.native_lifecycle = native_lifecycle;
 
-    let result = CcsBuilder::new(manifest, &source_dir).build().unwrap();
+    let result = CcsBuilder::new(manifest, &source_dir)
+        .unwrap()
+        .build()
+        .unwrap();
     let package_path = dir.join(format!("{name}-{version}.ccs"));
     let signing_key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
     write_signed_current_ccs_package(&result, &package_path, &signing_key, true).unwrap();
@@ -57,7 +62,7 @@ fn rpm_upgrade_bundle(package: &str, version: &str) -> NativeLifecycleBundle {
         schema_revision: conary_core::ccs::native_lifecycle::NATIVE_LIFECYCLE_SCHEMA_REVISION,
         source_format: SourceFormat::Rpm,
         source_family: "fedora-rhel".to_string(),
-        source_distro: Some("fedora".to_string()),
+        source_profile: Some("fedora-44".to_string()),
         source_release: Some("44".to_string()),
         source_arch: Some("x86_64".to_string()),
         source_package: package.to_string(),
@@ -198,6 +203,7 @@ fn update_selector_without_package_refuses() {
 #[tokio::test]
 async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
     let (_temp, db_path) = create_test_db();
+    seed_test_bootable_runtime(Path::new(&db_path));
     let root = tempfile::tempdir().unwrap();
     let package_dir = tempfile::tempdir().unwrap();
     let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -214,10 +220,13 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
     let (package_url, _server_handle) = serve_test_file(package_path);
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-    let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
-    let repo_id = repo.insert(&conn).unwrap();
+    DistroPin::set(
+        &conn,
+        "fedora-44",
+        conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
+    )
+    .unwrap();
+    let repo_id = insert_test_static_ccs_repository(&conn, "fedora-test", package_url.as_str());
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = Changeset::new("Install vim-1.0.0".to_string());
@@ -230,7 +239,7 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
             conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.installed_by_changeset_id = Some(changeset_id);
         installed.insert(tx)?;
@@ -249,20 +258,18 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
-    repo_pkg.distro = Some("fedora-44".to_string());
-    repo_pkg.insert(&conn).unwrap();
+    repo_pkg.source_profile = Some("fedora-44".to_string());
+    let repo_pkg_id = repo_pkg.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
         repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: repo_pkg_id,
         }],
     );
     resolution.version = Some("2.0.0".to_string());
-    resolution.primary_strategy = PrimaryStrategy::Binary;
+    resolution.primary_strategy = PrimaryStrategy::RepositoryPackage;
     resolution.insert(&conn).unwrap();
 
     let before_changesets = table_count(&conn, "changesets");
@@ -300,6 +307,7 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
 #[tokio::test]
 async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflight() {
     let (_temp, db_path) = create_test_db();
+    seed_test_bootable_runtime(Path::new(&db_path));
     let root = tempfile::tempdir().unwrap();
     let package_dir = tempfile::tempdir().unwrap();
     let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -316,10 +324,15 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
     let (package_url, _server_handle) = serve_test_file(package_path);
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", "strict").unwrap();
+    DistroPin::set(
+        &conn,
+        "fedora-44",
+        conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
+    )
+    .unwrap();
     let mut repo = Repository::new("static-test".to_string(), package_url.clone());
     repo.default_strategy = Some("static".to_string());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     conary_core::db::transaction(&mut conn, |tx| {
@@ -333,7 +346,7 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
             conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.installed_by_changeset_id = Some(changeset_id);
         installed.insert(tx)?;
@@ -352,20 +365,18 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
-    repo_pkg.distro = Some("fedora-44".to_string());
-    repo_pkg.insert(&conn).unwrap();
+    repo_pkg.source_profile = Some("fedora-44".to_string());
+    let repo_pkg_id = repo_pkg.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
         repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: repo_pkg_id,
         }],
     );
     resolution.version = Some("2.0.0".to_string());
-    resolution.primary_strategy = PrimaryStrategy::Binary;
+    resolution.primary_strategy = PrimaryStrategy::RepositoryPackage;
     resolution.insert(&conn).unwrap();
 
     let before_changesets = table_count(&conn, "changesets");
@@ -385,10 +396,9 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
     )
     .await
     .expect_err("static unsigned update must fail before CCS preflight parses scriptlets");
-    let message = format!("{err:?}");
-    assert!(
-        message.contains("Static repository package signature verification failed"),
-        "{message}"
+    assert_eq!(
+        err.to_string(),
+        format!("Repository {repo_id} has no verified package-authority keys for CCS installation")
     );
 
     let conn = crate::commands::open_db(&db_path).unwrap();
@@ -402,6 +412,7 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
 #[tokio::test]
 async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
     let (_temp, db_path) = create_test_db();
+    seed_test_bootable_runtime(Path::new(&db_path));
     let root = tempfile::tempdir().unwrap();
     let package_dir = tempfile::tempdir().unwrap();
     let _guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -418,10 +429,13 @@ async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
     let (package_url, _server_handle) = serve_test_file(package_path);
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", "strict").unwrap();
-    let mut repo = Repository::new("fedora-test".to_string(), package_url.clone());
-    repo.default_strategy_distro = Some("fedora-44".to_string());
-    let repo_id = repo.insert(&conn).unwrap();
+    DistroPin::set(
+        &conn,
+        "fedora-44",
+        conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
+    )
+    .unwrap();
+    let repo_id = insert_test_static_ccs_repository(&conn, "fedora-test", package_url.as_str());
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = Changeset::new("Install vim-1.0.0".to_string());
@@ -434,7 +448,7 @@ async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
             conary_core::repository::versioning::VersionScheme::Rpm,
         );
         installed.architecture = Some("x86_64".to_string());
-        installed.source_distro = Some("fedora-44".to_string());
+        installed.source_profile = Some("fedora-44".to_string());
         installed.installed_from_repository_id = Some(repo_id);
         installed.installed_by_changeset_id = Some(changeset_id);
         installed.insert(tx)?;
@@ -453,20 +467,18 @@ async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
         package_url.clone(),
     );
     repo_pkg.architecture = Some("x86_64".to_string());
-    repo_pkg.distro = Some("fedora-44".to_string());
-    repo_pkg.insert(&conn).unwrap();
+    repo_pkg.source_profile = Some("fedora-44".to_string());
+    let repo_pkg_id = repo_pkg.insert(&conn).unwrap();
 
     let mut resolution = PackageResolution::new(
         repo_id,
         "vim".to_string(),
-        vec![ResolutionStrategy::Binary {
-            url: package_url,
-            checksum: package_checksum,
-            delta_base: None,
+        vec![ResolutionStrategy::RepositoryPackage {
+            repository_package_id: repo_pkg_id,
         }],
     );
     resolution.version = Some("2.0.0".to_string());
-    resolution.primary_strategy = PrimaryStrategy::Binary;
+    resolution.primary_strategy = PrimaryStrategy::RepositoryPackage;
     resolution.insert(&conn).unwrap();
 
     let from_hash = conary_core::hash::sha256(b"old-package-placeholder");
@@ -530,7 +542,7 @@ fn update_repository_install_provenance_uses_selected_package_metadata() {
         "slice-d-local-update".to_string(),
         "https://example.test/slice-d".to_string(),
     );
-    repo.default_strategy_distro = Some("fedora".to_string());
+    repo.source_profile = Some("fedora-44".to_string());
     repo.id = Some(42);
 
     let mut package = RepositoryPackage::new(
@@ -543,12 +555,12 @@ fn update_repository_install_provenance_uses_selected_package_metadata() {
         "https://example.test/phase4-runtime-fixture-1.0.1.rpm".to_string(),
     );
     package.architecture = Some("x86_64".to_string());
-    package.distro = Some("fedora".to_string());
+    package.source_profile = Some("fedora-44".to_string());
 
     let provenance = repository_install_provenance_from_package(&package, &repo).unwrap();
 
     assert_eq!(provenance.repository_id, 42);
-    assert_eq!(provenance.source_distro.as_deref(), Some("fedora"));
+    assert_eq!(provenance.source_profile.as_deref(), Some("fedora-44"));
     assert_eq!(
         provenance.version_scheme,
         conary_core::repository::versioning::VersionScheme::Rpm
@@ -556,13 +568,14 @@ fn update_repository_install_provenance_uses_selected_package_metadata() {
 }
 
 #[test]
-fn selected_update_resolution_bypasses_local_cas_shortcut() {
+fn selected_update_resolution_consumes_the_exact_planned_repository_row() {
     let temp = tempfile::tempdir().unwrap();
     let keyring_dir = temp.path().join("keyrings");
-    let repo = Repository::new(
-        "slice-d-source-switch".to_string(),
+    let mut repo = Repository::new(
+        "slice-d-exact-update".to_string(),
         "https://example.test/slice-d".to_string(),
     );
+    repo.source_profile = Some("fedora-44".to_string());
     let mut package = RepositoryPackage::new(
         42,
         "phase4-runtime-fixture".to_string(),
@@ -580,12 +593,12 @@ fn selected_update_resolution_bypasses_local_cas_shortcut() {
         temp.path(),
         &keyring_dir,
         &ResolutionPolicy::new(),
-        Some(RepositoryDependencyFlavor::Rpm),
-    );
+    )
+    .unwrap();
 
     assert!(options.skip_installed);
     assert_eq!(options.version.as_deref(), Some("1.0.1-1"));
-    assert_eq!(options.repository.as_deref(), Some("slice-d-source-switch"));
+    assert_eq!(options.repository.as_deref(), Some("slice-d-exact-update"));
     assert_eq!(options.architecture.as_deref(), Some("x86_64"));
 }
 

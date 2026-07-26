@@ -30,7 +30,7 @@ https://github.com/ConaryLabs/Conary/blob/v0.12.0/docs/guides/agent-assisted-tes
 
 Goal: install, inspect, update-preview, and remove a package whose source
 format differs from this host's native package format with pinned Conary
-v0.12.0, then draft a beta feedback issue. You are testing the user-facing
+v0.12.0, then draft a pre-alpha tester feedback issue. You are testing the user-facing
 cross-distro package-manager flow, not developing Conary itself.
 
 Safety rules:
@@ -48,8 +48,8 @@ Safety rules:
   public feedback issue should summarize this transcript, not reproduce it.
 - Do not upload logs, bundles, private keys, tokens, shell history, raw
   environment dumps, or Conary databases.
-- At the end, draft a GitHub beta feedback issue using
-  https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md.
+- At the end, draft a GitHub pre-alpha tester feedback issue using
+  https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md.
 ```
 
 If the agent is running from a Conary checkout, the same guide is also at
@@ -221,10 +221,10 @@ During the run, capture:
 
 ## Report Feedback
 
-Open a beta feedback issue:
+Open a pre-alpha tester feedback issue:
 
 ```text
-https://github.com/ConaryLabs/Conary/issues/new?template=beta_feedback.md
+https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md
 ```
 
 Fill in:

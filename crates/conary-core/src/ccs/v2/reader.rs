@@ -172,9 +172,11 @@ release = "1"
 kind = "package"
 description = "demo package"
 
-[config]
-files = ["/etc/conary-example/config.toml"]
+[[config.files]]
+path = "/etc/conary-example/config.toml"
 noreplace = true
+ghost = false
+remove_on_upgrade = false
 "#;
         let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("demo");
         authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
@@ -182,12 +184,17 @@ noreplace = true
             let file = package.files.first_mut().unwrap();
             file.path = "/etc/conary-example/config.toml".to_string();
             file.node.mode = libc::S_IFREG | 0o644;
-            file.config = Some(crate::ccs::v2::schema::ConfigPolicyV2::NoReplace);
+            let semantics = crate::ccs::v2::schema::ConfigSemanticsV2 {
+                noreplace: true,
+                ghost: false,
+                remove_on_upgrade: false,
+            };
+            file.config = Some(semantics);
             package
                 .config
                 .push(crate::ccs::v2::schema::ConfigAuthorityV2 {
                     path: "/etc/conary-example/config.toml".to_string(),
-                    policy: crate::ccs::v2::schema::ConfigPolicyV2::NoReplace,
+                    semantics,
                 });
         }
         let raw = authority.to_cbor().unwrap();

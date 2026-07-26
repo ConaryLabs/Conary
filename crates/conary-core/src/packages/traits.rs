@@ -4,9 +4,13 @@
 
 use crate::db::models::Trove;
 use crate::error::Result;
+use crate::packages::payload::PackagePayload;
 use crate::payload::{PayloadContentAuthority, PayloadNode};
-use crate::repository::dependency_model::RepositoryRequirementGroup;
-use crate::repository::versioning::VersionScheme;
+use crate::repository::dependency_model::{
+    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RepositoryCapabilityKind, RepositoryRequirementGroup,
+};
+use crate::repository::versioning::{VersionScheme, validate_repo_version};
 
 pub use crate::packages::native_abi::*;
 
@@ -27,29 +31,43 @@ pub struct ExtractedFile {
     pub content_authority: Option<PayloadContentAuthority>,
 }
 
-/// Dependency information
-#[derive(Debug, Clone)]
-pub struct Dependency {
+/// Exact capability provided by one parsed package.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidedCapability {
+    pub kind: RepositoryCapabilityKind,
     pub name: String,
+    /// Provider range boundary, never a comparison expression.
     pub version: Option<String>,
-    pub dep_type: DependencyType,
-    pub description: Option<String>,
+    /// Typed relation associated with `version`.
+    pub version_relation: Option<ProvideVersionRelation>,
+    pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DependencyType {
-    Runtime,
-    Build,
-    Optional,
-}
-
-impl DependencyType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Runtime => "runtime",
-            Self::Build => "build",
-            Self::Optional => "optional",
+impl ProvidedCapability {
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(crate::error::Error::ParseError(
+                "provided capability name is empty".to_string(),
+            ));
         }
+        if self.version.is_some() != self.version_relation.is_some() {
+            return Err(crate::error::Error::ParseError(format!(
+                "provided capability '{}' must carry both a version relation and boundary, or neither",
+                self.name
+            )));
+        }
+        if let Some(version) = self.version.as_deref() {
+            validate_repo_version(self.version_scheme, version).map_err(|error| {
+                crate::error::Error::ParseError(format!(
+                    "provided capability '{}' has invalid {} provider version: {error}",
+                    self.name,
+                    self.version_scheme.as_str()
+                ))
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -108,7 +126,8 @@ pub struct DiagnosticScriptletEvidence {
 }
 
 /// Configuration file information from a package
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigFileInfo {
     /// Path to the config file
     pub path: String,
@@ -134,11 +153,22 @@ pub trait PackageFormat {
     /// Get the package version
     fn version(&self) -> &str;
 
+    /// Monotonic signed CCS build release, absent for a source-native
+    /// artifact that has not been wrapped in a CCS envelope.
+    fn package_release(&self) -> Option<&str> {
+        None
+    }
+
     /// Native version algebra for package requirements and provides.
     fn version_scheme(&self) -> VersionScheme;
 
     /// Get the package architecture (e.g., "x86_64", "aarch64")
     fn architecture(&self) -> Option<&str>;
+
+    /// Exact Debian `Multi-Arch` behavior, when the source format defines it.
+    fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
+        None
+    }
 
     /// Get the package summary/description
     fn description(&self) -> Option<&str>;
@@ -156,7 +186,7 @@ pub trait PackageFormat {
     ///
     /// Defaults to an empty slice for formats that do not expose native
     /// provide metadata.
-    fn provides(&self) -> &[Dependency] {
+    fn provides(&self) -> &[ProvidedCapability] {
         &[]
     }
 
@@ -168,11 +198,20 @@ pub trait PackageFormat {
         &[]
     }
 
-    /// Extract all file contents from the package
+    /// Open the complete package payload as independently reopenable streams.
     ///
-    /// Returns a vector of ExtractedFile containing file metadata and content.
-    /// This is used during package installation to get the actual file data.
-    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>>;
+    /// This is the sole payload authority for install, conversion, trusted
+    /// intake, and future package backends.
+    fn package_payload(&self) -> Result<PackagePayload>;
+
+    /// Explicitly materialize the complete payload in memory.
+    ///
+    /// This convenience is only for tests and tooling whose input is already
+    /// bounded. Install, conversion, and trusted intake must use
+    /// [`Self::package_payload`].
+    fn extract_file_contents(&self) -> Result<Vec<ExtractedFile>> {
+        self.package_payload()?.to_extracted_in_memory()
+    }
 
     /// Get byte-preserving native package-manager scriptlet ABI entries.
     ///

@@ -128,11 +128,11 @@ impl BatchInstaller<'_> {
                         pkg.name
                     )
                 })?;
-            config.original_md5 = super::super::config_files::debian_original_md5(
+            config.original_md5 = super::super::config_files::debian_original_md5_payload(
                 declared_source,
                 declaration.is_some(),
-                &extracted.content,
-            );
+                extracted,
+            )?;
             config.file_id = Some(*file_id);
             config.source = declaration.map_or(ConfigSource::Auto, |_| declared_source);
             config.upsert(tx)?;

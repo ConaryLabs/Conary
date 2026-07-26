@@ -3,23 +3,22 @@
 use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{DepAnalysisContext, handle_dependencies};
-use super::native_events::PreparedNativeTransaction;
+use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::check_upgrade_status;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
 use super::{
-    InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
-    TransactionContext, UpgradeCheck, build_execution_mode, build_resolution_policy,
-    execute_install_transaction_in_selected_root, extract_and_classify_files, finalize_install,
-    preflight_extracted_file_ownership, resolve_canonical_name, show_dry_run_summary,
+    InstallIntent, InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
+    TransactionContext, UpgradeCheck, bind_transaction_source_profile, build_execution_mode,
+    build_resolution_policy, execute_install_transaction_in_selected_root,
+    extract_and_classify_files, finalize_install, preflight_extracted_file_ownership,
+    resolve_canonical_name, show_dry_run_summary,
 };
 use crate::commands::open_db;
 use anyhow::{Context, Result};
 use conary_core::components::parse_component_spec;
 use conary_core::repository::resolution_policy::RequestScope;
-use conary_core::transaction::{
-    TransactionConfig, plan_package_relations, validate_package_relation_plan,
-};
-use std::path::{Path, PathBuf};
+use conary_core::transaction::{plan_package_relations, validate_package_relation_plan};
+use std::path::Path;
 
 /// Install a package
 ///
@@ -27,10 +26,23 @@ use std::path::{Path, PathBuf};
 /// Packages can be resolved from binary repos, on-demand converters, or recipes
 /// based on their routing table entries.
 pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> {
+    cmd_install_with_intent(package, opts, InstallIntent::PackageChange).await
+}
+
+pub(crate) async fn cmd_install_replatform(package: &str, opts: InstallOptions<'_>) -> Result<()> {
+    cmd_install_with_intent(package, opts, InstallIntent::Replatform).await
+}
+
+async fn cmd_install_with_intent(
+    package: &str,
+    opts: InstallOptions<'_>,
+    intent: InstallIntent,
+) -> Result<()> {
     let InstallOptions {
         db_path,
         root,
         version,
+        package_release,
         repo,
         architecture,
         dry_run,
@@ -41,7 +53,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         convert_to_ccs,
         ownership,
         yes,
-        from_distro,
+        from_profile,
         repository_provenance: requested_repository_provenance,
     } = opts;
 
@@ -68,15 +80,15 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
     let effective_source_policy =
         conary_core::repository::load_effective_policy(&conn, RequestScope::Any)?;
     let policy = build_resolution_policy(
+        &conn,
         effective_source_policy.resolution,
-        from_distro.as_deref(),
+        from_profile.as_deref(),
         repo.as_deref(),
     )?;
-    let primary_flavor = effective_source_policy.primary_flavor;
     let resolved_name = resolve_canonical_name(
         &conn,
         &base_name_for_canonical,
-        from_distro.as_deref(),
+        from_profile.as_deref(),
         &policy,
     )?;
     // If canonical resolution found a mapping, re-attach any component suffix
@@ -111,6 +123,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         sandbox_mode,
         no_deps,
         allow_downgrade,
+        intent,
         yes,
         repository_provenance: requested_repository_provenance,
     };
@@ -121,11 +134,11 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         package,
         db_path,
         version.as_deref(),
+        package_release.as_deref(),
         repo.as_deref(),
         architecture.as_deref(),
         convert_to_ccs,
         &policy,
-        primary_flavor,
         &ccs_install_opts,
     )
     .await?
@@ -133,6 +146,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         // Already installed as CCS — no further processing needed.
         return Ok(());
     };
+    let policy = bind_transaction_source_profile(policy, repository_provenance.as_ref())?;
     let semantics = InstallSemantics::native_package(format);
 
     // Promote the pre-install connection to mutable for the main install transaction
@@ -149,7 +163,6 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         db_path,
         sandbox_mode,
         policy: &policy,
-        primary_flavor,
     };
     handle_dependencies(&dep_ctx).await?;
     let relation_plan = plan_package_relations(&conn, pkg.as_ref(), semantics.version_scheme)
@@ -171,7 +184,7 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
 
     // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
-        match check_upgrade_status(&conn, pkg.as_ref(), &semantics, allow_downgrade)? {
+        match check_upgrade_status(&conn, pkg.as_ref(), &semantics, allow_downgrade, intent)? {
             UpgradeCheck::FreshInstall => None,
             UpgradeCheck::AlreadyInstalled(trove) => {
                 anyhow::bail!(
@@ -181,29 +194,37 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
                     trove.architecture.as_deref().unwrap_or("no-arch")
                 )
             }
-            UpgradeCheck::Upgrade(trove) | UpgradeCheck::Downgrade(trove) => Some(trove),
+            UpgradeCheck::Upgrade(trove)
+            | UpgradeCheck::Downgrade(trove)
+            | UpgradeCheck::Replatform(trove) => Some(trove),
         };
     let native_lifecycle_state = NativeLifecycleInstallState::from_native_package(
         pkg.as_ref(),
         format,
-        &extraction.extracted_files,
+        policy.primary_profile(),
     )?;
     let native_transaction = PreparedNativeTransaction::prepare_install(
         &conn,
-        pkg.name(),
-        pkg.version(),
-        pkg.architecture(),
-        semantics.version_scheme,
-        pkg.provides(),
-        native_lifecycle_state.bundle_to_persist.as_ref(),
-        old_trove_to_upgrade.as_deref(),
-        &relation_plan.removals,
-        &relation_plan.deconfigurations,
-        &extraction,
+        NativeInstallInput {
+            package_name: pkg.name(),
+            package_version: pkg.version(),
+            package_arch: pkg.architecture(),
+            version_scheme: semantics.version_scheme,
+            provides: pkg.provides(),
+            new_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
+            old_trove: old_trove_to_upgrade.as_deref(),
+            relation_removals: &relation_plan.removals,
+            relation_deconfigurations: &relation_plan.deconfigurations,
+            paths: extraction
+                .extracted_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect(),
+        },
     )?;
     let ccs_removal_hook_plan = CcsRemovalHookPlan::prepare(
         &conn,
-        old_trove_to_upgrade.as_deref().into_iter(),
+        old_trove_to_upgrade.as_deref(),
         relation_plan.removals.iter(),
     )?;
     let native_execution_mode = build_execution_mode(
@@ -228,7 +249,6 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         semantics,
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
-        ccs_manifest_provides: None,
         ccs_capabilities: None,
         ccs_file_capabilities: None,
         defer_generation: false,
@@ -245,10 +265,6 @@ pub async fn cmd_install(package: &str, opts: InstallOptions<'_>) -> Result<()> 
         &extraction,
         &tx_ctx,
         &progress,
-        TransactionConfig::from_paths(
-            selected_root.selected_root().to_path_buf(),
-            PathBuf::from(db_path),
-        ),
         &mut selected_root,
         &native_transaction,
         &native_execution_mode,

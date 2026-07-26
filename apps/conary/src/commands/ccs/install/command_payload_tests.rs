@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use super::command::cmd_ccs_install;
-use super::test_support::{ccs_regular_file, ccs_symlink, stage_test_boot_assets};
+use super::test_support::{
+    ccs_regular_file, ccs_symlink, seed_test_root_layout, stage_test_boot_assets,
+};
 
 #[tokio::test]
 async fn ccs_install_rejects_child_write_beneath_package_symlink() {
@@ -122,7 +124,7 @@ async fn ccs_install_rejects_child_before_package_symlink() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -193,8 +195,15 @@ async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    std::fs::create_dir_all(&install_root).unwrap();
+    std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
     conary_core::db::init(db_path_str).unwrap();
+    seed_test_root_layout(
+        db_path_str,
+        "usrmerge",
+        &["/usr", "/usr/bin"],
+        &[("/bin", "usr/bin")],
+    );
     stage_test_boot_assets(temp_dir.path());
 
     let content = b"chkconfig".to_vec();
@@ -211,7 +220,7 @@ async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -265,15 +274,20 @@ async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
         )
         .unwrap();
     assert_eq!(stored_path, "/usr/bin/chkconfig");
-    let legacy_path_count: i64 = conn
+    let retired_alias_path_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM files WHERE path = 'bin/chkconfig'",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(legacy_path_count, 0);
-    assert!(std::fs::read_link(temp_dir.path().join("current")).is_ok());
+    assert_eq!(retired_alias_path_count, 0);
+    let publication_debts =
+        conary_core::db::models::GenerationPublication::pending_recoverable(&conn).unwrap();
+    assert!(
+        std::fs::read_link(temp_dir.path().join("current")).is_ok(),
+        "usr-merge install must publish its active generation: {publication_debts:#?}"
+    );
 }
 
 #[cfg(unix)]
@@ -292,6 +306,12 @@ async fn ccs_install_resolves_safe_existing_lib64_ancestor_inside_root() {
     std::fs::create_dir_all(install_root.join("usr/lib")).unwrap();
     std::os::unix::fs::symlink("lib", install_root.join("usr/lib64")).unwrap();
     conary_core::db::init(db_path_str).unwrap();
+    seed_test_root_layout(
+        db_path_str,
+        "lib64",
+        &["/usr", "/usr/lib"],
+        &[("/usr/lib64", "lib")],
+    );
     stage_test_boot_assets(temp_dir.path());
 
     let library_content = b"libform".to_vec();
@@ -308,7 +328,7 @@ async fn ccs_install_resolves_safe_existing_lib64_ancestor_inside_root() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -396,7 +416,7 @@ async fn ccs_install_allows_identical_existing_symlink_destination() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -483,7 +503,7 @@ async fn generation_install_records_replacement_without_mutating_current_leaf_sy
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -555,6 +575,12 @@ async fn ccs_install_coalesces_identical_usrmerge_duplicate_files() {
     #[cfg(unix)]
     std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
     conary_core::db::init(db_path_str).unwrap();
+    seed_test_root_layout(
+        db_path_str,
+        "usrmerge-duplicate",
+        &["/usr", "/usr/bin"],
+        &[("/bin", "usr/bin")],
+    );
     stage_test_boot_assets(temp_dir.path());
 
     let content = b"chkconfig".to_vec();
@@ -577,7 +603,7 @@ async fn ccs_install_coalesces_identical_usrmerge_duplicate_files() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,
@@ -627,14 +653,14 @@ async fn ccs_install_coalesces_identical_usrmerge_duplicate_files() {
         )
         .unwrap();
     assert_eq!(chkconfig_count, 1);
-    let legacy_count: i64 = conn
+    let retired_alias_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM files WHERE path IN ('bin/chkconfig', 'usr/bin/chkconfig')",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(legacy_count, 0);
+    assert_eq!(retired_alias_count, 0);
 }
 
 #[tokio::test]
@@ -649,8 +675,15 @@ async fn ccs_install_rejects_conflicting_usrmerge_duplicate_files() {
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    std::fs::create_dir_all(&install_root).unwrap();
+    std::fs::create_dir_all(install_root.join("usr/bin")).unwrap();
+    std::os::unix::fs::symlink("usr/bin", install_root.join("bin")).unwrap();
     conary_core::db::init(db_path_str).unwrap();
+    seed_test_root_layout(
+        db_path_str,
+        "usrmerge-conflict",
+        &["/usr", "/usr/bin"],
+        &[("/bin", "usr/bin")],
+    );
     stage_test_boot_assets(temp_dir.path());
 
     let bin_content = b"from-bin".to_vec();
@@ -675,7 +708,7 @@ async fn ccs_install_rejects_conflicting_usrmerge_duplicate_files() {
             "runtime".to_string(),
         ),
         ccs_regular_file(
-            "/usr/sbin/init".to_string(),
+            "/sbin/init".to_string(),
             init_hash.clone(),
             init_content.len() as u64,
             0o100755,

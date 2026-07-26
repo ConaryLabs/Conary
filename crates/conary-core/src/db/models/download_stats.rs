@@ -13,7 +13,7 @@ use serde::Serialize;
 #[derive(Debug, Clone)]
 pub struct DownloadStat {
     pub id: Option<i64>,
-    pub distro: String,
+    pub source_profile: String,
     pub package_name: String,
     pub package_version: Option<String>,
     pub downloaded_at: Option<String>,
@@ -22,10 +22,10 @@ pub struct DownloadStat {
 }
 
 impl DownloadStat {
-    pub fn new(distro: String, package_name: String) -> Self {
+    pub fn new(source_profile: String, package_name: String) -> Self {
         Self {
             id: None,
-            distro,
+            source_profile,
             package_name,
             package_version: None,
             downloaded_at: None,
@@ -42,14 +42,15 @@ impl DownloadStat {
         let tx = conn.unchecked_transaction()?;
 
         let mut stmt = tx.prepare(
-            "INSERT INTO download_stats (distro, package_name, package_version, client_ip_hash, user_agent)
+            "INSERT INTO download_stats (source_profile, package_name, package_version, client_ip_hash, user_agent)
              VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
 
         let mut count = 0;
         for event in events {
+            require_public_source_profile(&event.source_profile)?;
             stmt.execute(rusqlite::params![
-                event.distro,
+                event.source_profile,
                 event.package_name,
                 event.package_version,
                 event.client_ip_hash,
@@ -76,7 +77,7 @@ impl DownloadStat {
 /// Aggregated download counts per package
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadCount {
-    pub distro: String,
+    pub source_profile: String,
     pub package_name: String,
     pub total_count: i64,
     pub count_30d: i64,
@@ -88,7 +89,7 @@ impl DownloadCount {
     /// Convert a database row to a DownloadCount
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(Self {
-            distro: row.get(0)?,
+            source_profile: row.get(0)?,
             package_name: row.get(1)?,
             total_count: row.get(2)?,
             count_30d: row.get(3)?,
@@ -104,47 +105,56 @@ impl DownloadCount {
     pub fn refresh_aggregates(conn: &Connection) -> Result<usize> {
         // Use INSERT OR REPLACE to upsert aggregated counts
         let updated = conn.execute(
-            "INSERT OR REPLACE INTO download_counts (distro, package_name, total_count, count_30d, count_7d, last_updated)
+            "INSERT OR REPLACE INTO download_counts (source_profile, package_name, total_count, count_30d, count_7d, last_updated)
              SELECT
-                 distro,
+                 source_profile,
                  package_name,
                  COUNT(*) as total_count,
                  SUM(CASE WHEN downloaded_at >= datetime('now', '-30 days') THEN 1 ELSE 0 END) as count_30d,
                  SUM(CASE WHEN downloaded_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as count_7d,
                  datetime('now') as last_updated
              FROM download_stats
-             GROUP BY distro, package_name",
+             GROUP BY source_profile, package_name",
             [],
         )?;
         Ok(updated)
     }
 
     /// Get download counts for a specific package
-    pub fn find_by_package(conn: &Connection, distro: &str, name: &str) -> Result<Option<Self>> {
+    pub fn find_by_package(
+        conn: &Connection,
+        source_profile: &str,
+        name: &str,
+    ) -> Result<Option<Self>> {
+        require_public_source_profile(source_profile)?;
         let result = conn
             .query_row(
-                "SELECT distro, package_name, total_count, count_30d, count_7d, last_updated
+                "SELECT source_profile, package_name, total_count, count_30d, count_7d, last_updated
                  FROM download_counts
-                 WHERE distro = ?1 AND package_name = ?2",
-                [distro, name],
+                 WHERE source_profile = ?1 AND package_name = ?2",
+                [source_profile, name],
                 Self::from_row,
             )
             .optional()?;
         Ok(result)
     }
 
-    /// Get most popular packages for a distro
-    pub fn popular(conn: &Connection, distro: &str, limit: usize) -> Result<Vec<Self>> {
+    /// Get most popular packages for a source_profile
+    pub fn popular(conn: &Connection, source_profile: &str, limit: usize) -> Result<Vec<Self>> {
+        require_public_source_profile(source_profile)?;
         let mut stmt = conn.prepare(
-            "SELECT distro, package_name, total_count, count_30d, count_7d, last_updated
+            "SELECT source_profile, package_name, total_count, count_30d, count_7d, last_updated
              FROM download_counts
-             WHERE distro = ?1
+             WHERE source_profile = ?1
              ORDER BY total_count DESC
              LIMIT ?2",
         )?;
 
         let counts = stmt
-            .query_map(rusqlite::params![distro, limit as i64], Self::from_row)?
+            .query_map(
+                rusqlite::params![source_profile, limit as i64],
+                Self::from_row,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(counts)
     }
@@ -164,7 +174,7 @@ impl DownloadCount {
         )?;
 
         let total_distros: i64 = conn.query_row(
-            "SELECT COUNT(DISTINCT distro) FROM download_counts",
+            "SELECT COUNT(DISTINCT source_profile) FROM download_counts",
             [],
             |row| row.get(0),
         )?;
@@ -182,6 +192,15 @@ impl DownloadCount {
             downloads_30d,
         })
     }
+}
+
+fn require_public_source_profile(source_profile: &str) -> Result<()> {
+    if crate::repository::supported_profiles::profile_by_public_id(source_profile).is_none() {
+        return Err(crate::Error::ConfigError(format!(
+            "unsupported public source profile '{source_profile}' for download analytics"
+        )));
+    }
+    Ok(())
 }
 
 /// Global download statistics
@@ -203,9 +222,9 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         let events = vec![
-            DownloadStat::new("fedora".into(), "nginx".into()),
-            DownloadStat::new("fedora".into(), "nginx".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "nginx".into()),
+            DownloadStat::new("fedora-44".into(), "nginx".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
         ];
 
         let count = DownloadStat::insert_batch(&conn, &events).unwrap();
@@ -218,8 +237,8 @@ mod tests {
 
         // Insert some events
         let events = vec![
-            DownloadStat::new("fedora".into(), "nginx".into()),
-            DownloadStat::new("fedora".into(), "nginx".into()),
+            DownloadStat::new("fedora-44".into(), "nginx".into()),
+            DownloadStat::new("fedora-44".into(), "nginx".into()),
             DownloadStat::new("arch".into(), "nginx".into()),
         ];
         DownloadStat::insert_batch(&conn, &events).unwrap();
@@ -228,7 +247,7 @@ mod tests {
         DownloadCount::refresh_aggregates(&conn).unwrap();
 
         // Check fedora nginx
-        let count = DownloadCount::find_by_package(&conn, "fedora", "nginx")
+        let count = DownloadCount::find_by_package(&conn, "fedora-44", "nginx")
             .unwrap()
             .unwrap();
         assert_eq!(count.total_count, 2);
@@ -247,17 +266,17 @@ mod tests {
 
         let mut events = Vec::new();
         for _ in 0..10 {
-            events.push(DownloadStat::new("fedora".into(), "nginx".into()));
+            events.push(DownloadStat::new("fedora-44".into(), "nginx".into()));
         }
         for _ in 0..5 {
-            events.push(DownloadStat::new("fedora".into(), "curl".into()));
+            events.push(DownloadStat::new("fedora-44".into(), "curl".into()));
         }
-        events.push(DownloadStat::new("fedora".into(), "vim".into()));
+        events.push(DownloadStat::new("fedora-44".into(), "vim".into()));
 
         DownloadStat::insert_batch(&conn, &events).unwrap();
         DownloadCount::refresh_aggregates(&conn).unwrap();
 
-        let popular = DownloadCount::popular(&conn, "fedora", 10).unwrap();
+        let popular = DownloadCount::popular(&conn, "fedora-44", 10).unwrap();
         assert_eq!(popular.len(), 3);
         assert_eq!(popular[0].package_name, "nginx");
         assert_eq!(popular[0].total_count, 10);
@@ -270,8 +289,8 @@ mod tests {
         let (_temp, conn) = create_test_db();
 
         let events = vec![
-            DownloadStat::new("fedora".into(), "nginx".into()),
-            DownloadStat::new("fedora".into(), "curl".into()),
+            DownloadStat::new("fedora-44".into(), "nginx".into()),
+            DownloadStat::new("fedora-44".into(), "curl".into()),
             DownloadStat::new("arch".into(), "nginx".into()),
         ];
         DownloadStat::insert_batch(&conn, &events).unwrap();

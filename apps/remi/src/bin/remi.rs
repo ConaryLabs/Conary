@@ -114,9 +114,9 @@ struct IndexGenArgs {
     #[arg(short, long, default_value = "/var/lib/conary/data/repo")]
     output_dir: String,
 
-    /// Distribution to generate index for (fedora-44, ubuntu-26.04, arch)
+    /// Exact source profile to generate (fedora-44, ubuntu-26.04, arch)
     #[arg(long)]
-    distro: Option<String>,
+    source_profile: Option<String>,
 
     /// Sign the index with the specified key file
     #[arg(long)]
@@ -463,7 +463,7 @@ fn run_index_gen_command(args: IndexGenArgs) -> Result<()> {
         db_path: args.db,
         chunk_dir: args.chunk_dir,
         output_dir: args.output_dir,
-        distro: args.distro,
+        source_profile: args.source_profile,
         sign_key: args.sign_key,
     };
 
@@ -474,7 +474,7 @@ fn run_index_gen_command(args: IndexGenArgs) -> Result<()> {
         for result in results {
             println!(
                 "{}: {} packages ({} versions) -> {}{}",
-                result.distro,
+                result.source_profile,
                 result.package_count,
                 result.version_count,
                 result.index_path,

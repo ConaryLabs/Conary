@@ -218,52 +218,6 @@ pub enum CcsCommands {
         policy: String,
     },
 
-    /// Spawn a shell with packages available temporarily
-    ///
-    /// Creates an ephemeral environment with the specified packages available.
-    /// When the shell exits, the temporary environment is cleaned up.
-    /// Similar to `nix-shell` or `nix develop`.
-    Shell {
-        /// Packages to make available in the shell
-        #[arg(required = true)]
-        packages: Vec<String>,
-
-        #[command(flatten)]
-        db: DbArgs,
-
-        /// Shell to use (defaults to $SHELL or /bin/sh)
-        #[arg(long)]
-        shell: Option<String>,
-
-        /// Additional environment variables (KEY=VALUE)
-        #[arg(short, long)]
-        env: Vec<String>,
-
-        /// Keep the temporary directory after exit (for debugging)
-        #[arg(long)]
-        keep: bool,
-    },
-
-    /// Run a command with a package available temporarily
-    ///
-    /// Executes a command with the specified package available without
-    /// permanently installing it. Similar to `nix run` or `npx`.
-    Run {
-        /// Package to run from
-        package: String,
-
-        /// Command and arguments to run (after --)
-        #[arg(last = true)]
-        command: Vec<String>,
-
-        #[command(flatten)]
-        db: DbArgs,
-
-        /// Additional environment variables (KEY=VALUE)
-        #[arg(short, long)]
-        env: Vec<String>,
-    },
-
     /// Enhance converted packages with CCS features
     ///
     /// Records exact conversion provenance for packages converted from native formats.

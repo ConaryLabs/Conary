@@ -8,7 +8,8 @@ use crate::ccs::manifest::{CcsManifest, Platform};
 use crate::ccs::v2::AuthorityDocumentV2;
 use crate::ccs::v2::schema::{DependencyKindV2, PackageKindV2};
 use crate::error::{Error, Result};
-use crate::packages::traits::{Dependency, DependencyType};
+use crate::packages::traits::{ConfigFileInfo, ProvidedCapability};
+use crate::repository::dependency_model::RepositoryCapabilityKind;
 
 pub(super) fn install_manifest_from_v2(
     authority: &AuthorityDocumentV2,
@@ -32,22 +33,10 @@ pub(super) fn install_manifest_from_v2(
         };
     manifest.package.description = format!("CCS v2 {}", authority.identity.name);
 
-    for provide in &authority.provides {
-        match provide.kind {
-            DependencyKindV2::Soname => manifest.provides.sonames.push(provide.name.clone()),
-            DependencyKindV2::Binary => manifest.provides.binaries.push(provide.name.clone()),
-            DependencyKindV2::PkgConfig => manifest.provides.pkgconfig.push(provide.name.clone()),
-            DependencyKindV2::Package
-            | DependencyKindV2::Capability
-            | DependencyKindV2::File
-            | DependencyKindV2::Path => {
-                manifest.provides.capabilities.push(provide.name.clone());
-            }
-        }
-    }
-
     manifest.requirements = authority.requirements.clone();
     manifest.relations = authority.relations.clone();
+    manifest.capabilities = authority.capabilities.clone();
+    manifest.config.files = config_files_from_v2_authority(authority)?;
 
     crate::ccs::v2::lifecycle::apply_authority_to_manifest(&authority.lifecycle, &mut manifest)
         .map_err(Error::ParseError)?;
@@ -80,30 +69,53 @@ pub(super) fn files_from_v2_authority(authority: &AuthorityDocumentV2) -> Result
         .collect())
 }
 
-pub(super) fn provides_from_v2_authority(authority: &AuthorityDocumentV2) -> Vec<Dependency> {
+pub(super) fn config_files_from_v2_authority(
+    authority: &AuthorityDocumentV2,
+) -> Result<Vec<ConfigFileInfo>> {
+    let PackageKindV2::Package(data) = &authority.kind else {
+        return Err(Error::ParseError(
+            "group and redirect v2 packages do not carry config authority".to_string(),
+        ));
+    };
+
+    Ok(data
+        .config
+        .iter()
+        .map(|config| ConfigFileInfo {
+            path: config.path.clone(),
+            noreplace: config.semantics.noreplace,
+            ghost: config.semantics.ghost,
+            remove_on_upgrade: config.semantics.remove_on_upgrade,
+        })
+        .collect())
+}
+
+pub(super) fn provides_from_v2_authority(
+    authority: &AuthorityDocumentV2,
+) -> Vec<ProvidedCapability> {
     authority
         .provides
         .iter()
-        .filter_map(|provide| {
-            dependency_identity(provide.kind, &provide.name).map(|name| Dependency {
-                name,
-                version: provide.version_constraint.clone(),
-                dep_type: DependencyType::Runtime,
-                description: None,
-            })
+        .map(|provide| ProvidedCapability {
+            kind: capability_kind(provide.kind),
+            name: provide.name.clone(),
+            version: provide.provider_version.clone(),
+            version_relation: provide.version_relation,
+            version_scheme: provide.version_scheme,
+            architecture_qualifier: provide.architecture_qualifier.clone(),
         })
         .collect()
 }
 
-fn dependency_identity(kind: DependencyKindV2, name: &str) -> Option<String> {
+const fn capability_kind(kind: DependencyKindV2) -> RepositoryCapabilityKind {
     match kind {
-        DependencyKindV2::Package
-        | DependencyKindV2::Capability
-        | DependencyKindV2::File
-        | DependencyKindV2::Path => Some(name.to_string()),
-        DependencyKindV2::Binary => Some(format!("binary({name})")),
-        DependencyKindV2::Soname => Some(format!("soname({name})")),
-        DependencyKindV2::PkgConfig => Some(format!("pkgconfig({name})")),
+        DependencyKindV2::Package => RepositoryCapabilityKind::PackageName,
+        DependencyKindV2::Capability => RepositoryCapabilityKind::Virtual,
+        DependencyKindV2::File => RepositoryCapabilityKind::File,
+        DependencyKindV2::Path => RepositoryCapabilityKind::Path,
+        DependencyKindV2::Binary => RepositoryCapabilityKind::Binary,
+        DependencyKindV2::Soname => RepositoryCapabilityKind::Soname,
+        DependencyKindV2::PkgConfig => RepositoryCapabilityKind::PkgConfig,
     }
 }
 
@@ -159,5 +171,23 @@ mod tests {
         let platform = manifest.package.platform.as_ref().unwrap();
         assert_eq!(platform.os, "linux");
         assert_eq!(platform.arch.as_deref(), Some("aarch64"));
+    }
+
+    #[test]
+    fn verified_v2_package_capabilities_are_preserved_in_the_install_projection() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("capability-projection");
+        let declaration = crate::capability::CapabilityDeclaration {
+            rationale: Some("needs repository access".to_string()),
+            network: crate::capability::NetworkCapabilities {
+                connect_tcp: vec![443],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        authority.capabilities = Some(declaration.clone());
+
+        let manifest = install_manifest_from_v2(&authority, None, None).unwrap();
+
+        assert_eq!(manifest.capabilities, Some(declaration));
     }
 }

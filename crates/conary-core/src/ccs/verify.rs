@@ -2,22 +2,19 @@
 
 //! Trusted CCS v2 package verification.
 //!
-//! `archive_reader` is an explicitly untrusted structural decoder. This module
-//! is the only path that turns those bytes into a package-trust capability.
+//! `archive_reader` remains an explicitly untrusted diagnostic decoder. This
+//! module authenticates metadata before streaming signed objects to a spool.
 
-use crate::ccs::archive_reader::{UntrustedCcsArchive, inspect_untrusted_ccs_archive};
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs::File;
+use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
-mod payload;
-
-use payload::verify_v2_archive_payload;
+mod stream;
 
 #[derive(Error, Debug)]
 pub enum VerifyError {
@@ -154,14 +151,19 @@ impl TrustPolicy {
 /// bytes agreed under the supplied trust policy.
 #[derive(Debug, Clone)]
 pub struct VerifiedCcsArchive {
-    archive: UntrustedCcsArchive,
+    authority: crate::ccs::v2::AuthorityDocumentV2,
     signature: PackageSignature,
+    build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
+    debug_toml: Option<Vec<u8>>,
+    components: HashMap<String, crate::ccs::builder::ComponentData>,
+    payload: crate::packages::payload::PackagePayload,
     files_checked: usize,
 }
 
 impl VerifiedCcsArchive {
     pub fn authority(&self) -> &crate::ccs::v2::AuthorityDocumentV2 {
-        &self.archive.v2_authority
+        &self.authority
     }
 
     pub fn signature(&self) -> &PackageSignature {
@@ -169,149 +171,58 @@ impl VerifiedCcsArchive {
     }
 
     pub fn package_name(&self) -> &str {
-        &self.archive.v2_authority.identity.name
+        &self.authority.identity.name
     }
 
     pub fn package_version(&self) -> &str {
-        &self.archive.v2_authority.identity.version
+        &self.authority.identity.version
     }
 
     pub fn files_checked(&self) -> usize {
         self.files_checked
     }
 
-    pub(crate) fn archive(&self) -> &UntrustedCcsArchive {
-        &self.archive
+    pub(crate) fn build_attestation(
+        &self,
+    ) -> Option<&crate::ccs::attestation::BuildAttestationEnvelope> {
+        self.build_attestation.as_ref()
     }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ContentStatus {
-    Valid { files_checked: usize },
-    Invalid { errors: Vec<String> },
-    Skipped,
+    pub(crate) fn foreign_conversion_boundary(
+        &self,
+    ) -> Option<&crate::ccs::attestation::ForeignConversionBoundary> {
+        self.foreign_conversion_boundary.as_ref()
+    }
+
+    pub(crate) fn debug_toml(&self) -> Option<&[u8]> {
+        self.debug_toml.as_deref()
+    }
+
+    pub(crate) fn components(&self) -> &HashMap<String, crate::ccs::builder::ComponentData> {
+        &self.components
+    }
+
+    pub(crate) fn payload(&self) -> &crate::packages::payload::PackagePayload {
+        &self.payload
+    }
 }
 
 /// Verify current CCS authority, signature trust, diagnostic projections, and
 /// every payload object before returning an install/publication capability.
 pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerifiedCcsArchive> {
     policy.validate()?;
-    let file = File::open(path).with_context(|| format!("open CCS package {}", path.display()))?;
-    let archive = inspect_untrusted_ccs_archive(file)
-        .with_context(|| format!("inspect CCS v2 archive {}", path.display()))?;
-
-    let verified = crate::ccs::v2::read_authority_document(
-        &archive.v2_manifest_raw,
-        archive.signature_raw.as_deref(),
-        archive.toml_raw.as_deref(),
-        archive.v2_build_attestation_raw.as_deref(),
-        archive.v2_foreign_conversion_boundary_raw.as_deref(),
-        policy,
-    )?;
-    if verified.authority != archive.v2_authority {
-        return Err(VerifyError::PackageError(
-            "decoded authority changed between archive inspection and verification".to_string(),
-        )
-        .into());
-    }
-    if verified.build_attestation != archive.v2_build_attestation
-        || verified.foreign_conversion_boundary != archive.v2_foreign_conversion_boundary
-    {
-        return Err(VerifyError::PackageError(
-            "decoded v2 evidence changed between archive inspection and verification".to_string(),
-        )
-        .into());
-    }
-
-    let files_checked = match verify_v2_archive_payload(
-        &verified.authority,
-        &archive.components,
-        &archive.blobs,
-    )? {
-        ContentStatus::Valid { files_checked } => files_checked,
-        ContentStatus::Invalid { errors } => {
-            return Err(VerifyError::PayloadInvalid(errors.join("; ")).into());
-        }
-        ContentStatus::Skipped => 0,
-    };
-    verify_exact_component_summaries(&archive)?;
-    verify_no_unreferenced_objects(&archive)?;
-
+    let verified = stream::verify_archive(path, policy)
+        .with_context(|| format!("verify streaming CCS v2 archive {}", path.display()))?;
     Ok(VerifiedCcsArchive {
-        archive,
+        authority: verified.authority,
         signature: verified.signature,
-        files_checked,
+        build_attestation: verified.build_attestation,
+        foreign_conversion_boundary: verified.foreign_conversion_boundary,
+        debug_toml: verified.debug_toml,
+        components: verified.components,
+        payload: verified.payload,
+        files_checked: verified.files_checked,
     })
-}
-
-fn verify_exact_component_summaries(archive: &UntrustedCcsArchive) -> Result<()> {
-    let signed_names = archive
-        .v2_authority
-        .components
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let archived_names = archive
-        .components
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if signed_names != archived_names {
-        return Err(VerifyError::PayloadInvalid(format!(
-            "signed component set {signed_names:?} disagrees with archived set {archived_names:?}"
-        ))
-        .into());
-    }
-
-    for (name, signed) in &archive.v2_authority.components {
-        let component = archive
-            .components
-            .get(name)
-            .expect("component sets were proven equal");
-        let file_count = u32::try_from(component.files.len()).map_err(|_| {
-            VerifyError::PayloadInvalid(format!("component {name:?} file count exceeds u32"))
-        })?;
-        let total_size = component.files.iter().try_fold(0_u64, |total, file| {
-            total.checked_add(file.content.as_ref().map_or(0, |content| content.size))
-        });
-        let total_size = total_size.ok_or_else(|| {
-            VerifyError::PayloadInvalid(format!("component {name:?} size overflows u64"))
-        })?;
-        if file_count != signed.file_count || total_size != signed.total_size {
-            return Err(VerifyError::PayloadInvalid(format!(
-                "component {name:?} summary disagrees with signed authority: \
-                 files {file_count}/{}, bytes {total_size}/{}",
-                signed.file_count, signed.total_size
-            ))
-            .into());
-        }
-    }
-    Ok(())
-}
-
-fn verify_no_unreferenced_objects(archive: &UntrustedCcsArchive) -> Result<()> {
-    use crate::ccs::v2::schema::PackageKindV2;
-
-    let expected = match &archive.v2_authority.kind {
-        PackageKindV2::Package(package) => package
-            .files
-            .iter()
-            .filter_map(|file| file.content.as_ref().map(|content| content.sha256.as_str()))
-            .collect::<BTreeSet<_>>(),
-        _ => BTreeSet::new(),
-    };
-    let archived = archive
-        .blobs
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if expected != archived {
-        return Err(VerifyError::PayloadInvalid(format!(
-            "signed object set {expected:?} disagrees with archived set {archived:?}"
-        ))
-        .into());
-    }
-    Ok(())
 }
 
 /// Verify one manifest signature against exact archived bytes.

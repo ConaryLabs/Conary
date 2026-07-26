@@ -30,7 +30,7 @@ pub mod signing;
 pub mod v2;
 pub mod verify;
 
-pub use builder::{BuildResult, CcsBuilder, ChunkStats, ComponentData, FileEntry};
+pub use builder::{BuildResult, BuilderError, CcsBuilder, ChunkStats, ComponentData, FileEntry};
 pub use chunking::{Chunk, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats};
 pub use convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 pub use enhancement::{

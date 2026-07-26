@@ -122,7 +122,8 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
             .count();
         println!("Scanning {} files...", file_count);
 
-        let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir);
+        let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir)
+            .context("Invalid CCS build policy configuration")?;
         if options.chunked {
             builder_instance = builder_instance.with_chunking();
         } else {

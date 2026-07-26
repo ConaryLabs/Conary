@@ -113,23 +113,6 @@ pub(super) async fn dispatch_ccs_command(ccs_cmd: cli::CcsCommands) -> Result<()
             policy,
         } => commands::ccs::cmd_ccs_export(&packages, &output, &format, &policy).await,
 
-        cli::CcsCommands::Shell {
-            packages,
-            db,
-            shell,
-            env,
-            keep,
-        } => {
-            commands::ccs::cmd_ccs_shell(&packages, &db.db_path, shell.as_deref(), &env, keep).await
-        }
-
-        cli::CcsCommands::Run {
-            package,
-            command,
-            db,
-            env,
-        } => commands::ccs::cmd_ccs_run(&package, &command, &db.db_path, &env).await,
-
         cli::CcsCommands::Enhance {
             db,
             trove_id,

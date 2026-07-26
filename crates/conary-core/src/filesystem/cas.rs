@@ -22,6 +22,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tracing::{debug, warn};
 
+mod stream;
+
 /// Compute the CAS object path for a hex hash under a root directory.
 ///
 /// Uses a two-level layout: `root/<hash[..2]>/<hash[2..]>`.

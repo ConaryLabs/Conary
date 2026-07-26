@@ -29,6 +29,14 @@ fn insert_repo_package(
         1,
         format!("https://relations.invalid/{name}"),
     );
+    package.architecture = Some(
+        if scheme == VersionScheme::Debian {
+            "amd64"
+        } else {
+            "x86_64"
+        }
+        .to_string(),
+    );
     package.insert(conn).unwrap();
     package
 }

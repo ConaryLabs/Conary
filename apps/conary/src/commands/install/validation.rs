@@ -1,4 +1,4 @@
-// src/commands/install/validation.rs
+// conary/src/commands/install/validation.rs
 
 use super::{ComponentSelection, OwnershipMode};
 use anyhow::Result;
@@ -142,7 +142,7 @@ mod tests {
             "8.0.0-1".to_string(),
             TroveType::Package,
             InstallSource::AdoptedFull,
-            conary_core::repository::versioning::VersionScheme::Conary,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.native_package_identity = Some(
@@ -180,7 +180,7 @@ mod tests {
             "8.0.0-1".to_string(),
             TroveType::Package,
             InstallSource::AdoptedFull,
-            conary_core::repository::versioning::VersionScheme::Conary,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
         trove.architecture = Some("x86_64".to_string());
         trove.native_package_identity = Some(

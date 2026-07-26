@@ -21,7 +21,10 @@ fn resolved_node(kind: PayloadNodeKind, mode: u32) -> ResolvedPayloadNode {
 
 fn regular(content: &[u8], mode: u32) -> ConfigArtifact {
     ConfigArtifact::regular(
-        content,
+        PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(content),
+            size: content.len() as u64,
+        },
         resolved_node(
             PayloadNodeKind::Regular {
                 hardlink_identity: None,
@@ -41,6 +44,19 @@ fn symlink(target: &str, mode: u32) -> ConfigArtifact {
             },
             mode,
         ),
+    )
+    .unwrap()
+}
+
+fn regular_fixture_from_path(path: &Path) -> ConfigArtifact {
+    let content = fs::read(path).unwrap();
+    let node = conary_core::generation::root_manifest::capture_existing_payload_node(path).unwrap();
+    ConfigArtifact::regular(
+        PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(&content),
+            size: content.len() as u64,
+        },
+        node,
     )
     .unwrap()
 }
@@ -76,6 +92,7 @@ fn capture_update_records_exact_old_current_and_new_artifacts() {
     let db_path = temp.path().join("conary.db");
     conary_core::db::init(&db_path).unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
         "1".to_string(),
@@ -106,7 +123,7 @@ fn capture_update_records_exact_old_current_and_new_artifacts() {
     old_config.insert(&conn).unwrap();
     let incoming = crate::commands::LiveRootFile {
         path: "/etc/demo.conf".to_string(),
-        content: b"new".to_vec(),
+        content: crate::commands::LiveRootContent::from_in_memory_bytes(b"new"),
         node: resolved_node(
             PayloadNodeKind::Regular {
                 hardlink_identity: None,
@@ -118,16 +135,19 @@ fn capture_update_records_exact_old_current_and_new_artifacts() {
     let transaction = capture_install(
         &conn,
         &root,
-        ConfigSource::Rpm,
-        &[ConfigFileInfo {
-            path: "/etc/demo.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: false,
-        }],
-        &[incoming],
-        Some(trove_id),
-        &[trove_id],
+        &cas,
+        ConfigInstallCapture {
+            source: ConfigSource::Rpm,
+            declared: &[ConfigFileInfo {
+                path: "/etc/demo.conf".to_string(),
+                noreplace: true,
+                ghost: false,
+                remove_on_upgrade: false,
+            }],
+            incoming: &[incoming],
+            replacing_trove_id: Some(trove_id),
+            replaced_trove_ids: &[trove_id],
+        },
     )
     .unwrap();
 
@@ -139,28 +159,40 @@ fn capture_update_records_exact_old_current_and_new_artifacts() {
         Some(old_hash.as_str())
     );
     assert_eq!(
-        entry
-            .current
-            .as_ref()
-            .unwrap()
-            .regular_content()
-            .unwrap()
+        cas.retrieve(entry.current.as_ref().unwrap().sha256())
             .unwrap(),
         b"local"
     );
-    assert_eq!(
-        entry
-            .after
-            .as_ref()
-            .unwrap()
-            .artifact
-            .as_ref()
-            .unwrap()
-            .regular_content()
-            .unwrap()
-            .unwrap(),
-        b"new"
-    );
+    let incoming_artifact = entry.after.as_ref().unwrap().artifact.as_ref().unwrap();
+    assert_eq!(cas.retrieve(incoming_artifact.sha256()).unwrap(), b"new");
+}
+
+#[test]
+fn auxiliary_capture_accepts_only_canonical_numbered_pacsaves() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    fs::create_dir_all(root.join("etc")).unwrap();
+    for (suffix, content) in [
+        ("2", b"canonical".as_slice()),
+        ("0", b"zero".as_slice()),
+        ("01", b"leading-zero".as_slice()),
+        ("+1", b"plus".as_slice()),
+    ] {
+        fs::write(
+            root.join(format!("etc/demo.conf.pacsave.{suffix}")),
+            content,
+        )
+        .unwrap();
+    }
+
+    let auxiliaries = capture_auxiliaries(&root, &cas, "/etc/demo.conf").unwrap();
+    let paths = auxiliaries
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths, vec!["/etc/demo.conf.pacsave.2"]);
 }
 
 #[test]
@@ -168,10 +200,13 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");
     fs::create_dir_all(root.join("etc")).unwrap();
-    fs::write(root.join("etc/obsolete.conf"), b"locally modified").unwrap();
+    let obsolete = root.join("etc/obsolete.conf");
+    fs::write(&obsolete, b"locally modified").unwrap();
+    let locally_modified = regular_fixture_from_path(&obsolete);
     let db_path = temp.path().join("conary.db");
     conary_core::db::init(&db_path).unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
         "1".to_string(),
@@ -190,16 +225,19 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
     let transaction = capture_install(
         &conn,
         &root,
-        ConfigSource::Deb,
-        &[ConfigFileInfo {
-            path: "/etc/obsolete.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: true,
-        }],
-        &[],
-        Some(trove_id),
-        &[trove_id],
+        &cas,
+        ConfigInstallCapture {
+            source: ConfigSource::Deb,
+            declared: &[ConfigFileInfo {
+                path: "/etc/obsolete.conf".to_string(),
+                noreplace: true,
+                ghost: false,
+                remove_on_upgrade: true,
+            }],
+            incoming: &[],
+            replacing_trove_id: Some(trove_id),
+            replaced_trove_ids: &[trove_id],
+        },
     )
     .unwrap();
 
@@ -211,10 +249,7 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
         plan_entry(entry).unwrap(),
         vec![
             OverlayMutation::Remove("/etc/obsolete.conf.dpkg-dist".to_string()),
-            OverlayMutation::Write(
-                "/etc/obsolete.conf.dpkg-old".to_string(),
-                regular(b"locally modified", 0o100644),
-            ),
+            overlay_write("/etc/obsolete.conf.dpkg-old".to_string(), locally_modified,),
             OverlayMutation::Remove("/etc/obsolete.conf".to_string()),
         ]
     );
@@ -222,16 +257,19 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
     let other_owner = capture_install(
         &conn,
         &root,
-        ConfigSource::Deb,
-        &[ConfigFileInfo {
-            path: "/etc/obsolete.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: true,
-        }],
-        &[],
-        Some(trove_id + 1),
-        &[trove_id],
+        &cas,
+        ConfigInstallCapture {
+            source: ConfigSource::Deb,
+            declared: &[ConfigFileInfo {
+                path: "/etc/obsolete.conf".to_string(),
+                noreplace: true,
+                ghost: false,
+                remove_on_upgrade: true,
+            }],
+            incoming: &[],
+            replacing_trove_id: Some(trove_id + 1),
+            replaced_trove_ids: &[trove_id],
+        },
     )
     .unwrap();
     assert!(other_owner.entries.is_empty());
@@ -328,11 +366,8 @@ fn restore_reinstates_exact_primary_and_auxiliaries_and_removes_rotated_outputs(
     assert!(mutations.contains(&OverlayMutation::Remove(
         "/etc/demo.conf.pacsave.1".to_string()
     )));
-    assert!(mutations.contains(&OverlayMutation::Write(
-        "/etc/demo.conf".to_string(),
-        primary
-    )));
-    assert!(mutations.contains(&OverlayMutation::Write(
+    assert!(mutations.contains(&overlay_write("/etc/demo.conf".to_string(), primary)));
+    assert!(mutations.contains(&overlay_write(
         "/etc/demo.conf.pacsave".to_string(),
         pacsave
     )));
@@ -365,6 +400,33 @@ fn debian_purge_removes_primary_and_backup_artifacts() {
             "missing purge mutation for {path}: {mutations:?}"
         );
     }
+}
+
+#[test]
+fn remove_without_prior_source_fails_before_generation_staging() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime_root = ConaryRuntimeRoot::for_test_root(temp.path());
+    let transaction = GenerationConfigTransaction {
+        entries: vec![ConfigPathTransaction {
+            path: "/etc/demo.conf".to_string(),
+            operation: ConfigTransactionOperation::Remove,
+            before: None,
+            current: Some(regular(b"local", 0o100600)),
+            after: None,
+            auxiliaries: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    let error = materialize(&runtime_root, 1, &[transaction])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("no exact prior package state"), "{error}");
+    assert!(
+        !runtime_root.etc_state_dir().exists(),
+        "validation must fail before creating the generation config staging root"
+    );
 }
 
 #[test]
@@ -403,9 +465,84 @@ fn atomic_materialization_clones_unaffected_upper() {
 }
 
 #[test]
-fn materialization_preserves_regular_modes_and_symlink_targets() {
+fn materialization_merges_seeded_state_with_current_upper_using_current_precedence() {
     let temp = tempfile::tempdir().unwrap();
     let runtime_root = ConaryRuntimeRoot::for_test_root(temp.path());
+    let current_upper = runtime_root.etc_state_dir().join("1");
+    let seeded_upper = runtime_root.etc_state_dir().join("2");
+    fs::create_dir_all(current_upper.join("nested")).unwrap();
+    fs::create_dir_all(seeded_upper.join("nested")).unwrap();
+    fs::write(current_upper.join("current-only"), b"current").unwrap();
+    fs::write(current_upper.join("nested/overlap"), b"current").unwrap();
+    fs::write(seeded_upper.join("seeded-only"), b"seeded").unwrap();
+    fs::write(seeded_upper.join("nested/overlap"), b"seeded").unwrap();
+    fs::create_dir_all(runtime_root.generations_dir().join("1")).unwrap();
+    std::os::unix::fs::symlink("generations/1", runtime_root.root().join("current")).unwrap();
+
+    materialize(&runtime_root, 2, &[]).unwrap();
+
+    assert_eq!(
+        fs::read(seeded_upper.join("current-only")).unwrap(),
+        b"current"
+    );
+    assert_eq!(
+        fs::read(seeded_upper.join("seeded-only")).unwrap(),
+        b"seeded"
+    );
+    assert_eq!(
+        fs::read(seeded_upper.join("nested/overlap")).unwrap(),
+        b"current"
+    );
+}
+
+#[test]
+fn materialization_rejects_corrupt_config_cas_content_before_publication() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime_root = ConaryRuntimeRoot::for_test_root(temp.path());
+    let artifact = regular(b"expected", 0o100600);
+    let cas = CasStore::new(runtime_root.objects_dir()).unwrap();
+    let object = cas.hash_to_path(artifact.sha256()).unwrap();
+    fs::create_dir_all(object.parent().unwrap()).unwrap();
+    fs::write(&object, b"corrupt!").unwrap();
+    let transaction = GenerationConfigTransaction {
+        entries: vec![ConfigPathTransaction {
+            path: "/etc/demo.conf".to_string(),
+            operation: ConfigTransactionOperation::Restore,
+            before: None,
+            current: Some(artifact),
+            after: None,
+            auxiliaries: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    let error = materialize(&runtime_root, 1, &[transaction])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("digest mismatch"), "{error}");
+    assert!(!runtime_root.etc_state_dir().join("1").exists());
+    assert!(
+        fs::read_dir(runtime_root.etc_state_dir())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn materialization_preserves_regular_modes_and_symlink_targets() {
+    const TEST_NAME: &str = "commands::generation::config_transaction::tests::materialization_preserves_regular_modes_and_symlink_targets";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let runtime_root = ConaryRuntimeRoot::for_test_root(temp.path());
+    let cas = CasStore::new(runtime_root.objects_dir()).unwrap();
+    for content in [b"old".as_slice(), b"local".as_slice(), b"new".as_slice()] {
+        cas.store(content).unwrap();
+    }
     fs::create_dir_all(runtime_root.etc_state_dir()).unwrap();
     fs::create_dir_all(runtime_root.root()).unwrap();
 

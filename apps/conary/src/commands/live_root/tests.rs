@@ -1,4 +1,4 @@
-// src/commands/live_root/tests.rs
+// apps/conary/src/commands/live_root/tests.rs
 
 use super::*;
 use conary_core::payload::{
@@ -25,7 +25,7 @@ fn resolved_node(kind: PayloadNodeKind, mode: u32) -> ResolvedPayloadNode {
 fn live_regular(path: &str, content: &[u8], mode: u32) -> LiveRootFile {
     LiveRootFile {
         path: path.to_string(),
-        content: content.to_vec(),
+        content: LiveRootContent::from_in_memory_bytes(content),
         node: resolved_node(
             PayloadNodeKind::Regular {
                 hardlink_identity: None,
@@ -38,7 +38,7 @@ fn live_regular(path: &str, content: &[u8], mode: u32) -> LiveRootFile {
 fn live_symlink(path: &str, target: &str, mode: u32) -> LiveRootFile {
     LiveRootFile {
         path: path.to_string(),
-        content: Vec::new(),
+        content: LiveRootContent::absent(),
         node: resolved_node(
             PayloadNodeKind::Symlink {
                 target: target.to_string(),
@@ -179,6 +179,11 @@ fn begin_rejects_empty_or_path_like_transaction_ids() {
 
 #[test]
 fn install_writes_regular_file_and_symlink() {
+    const TEST_NAME: &str = "commands::live_root::tests::install_writes_regular_file_and_symlink";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
     let root = temp.path().join("root");
@@ -245,6 +250,11 @@ fn install_rejects_replacing_existing_directory_target() {
 
 #[test]
 fn rollback_restores_replaced_file() {
+    const TEST_NAME: &str = "commands::live_root::tests::rollback_restores_replaced_file";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
     let root = temp.path().join("root");
@@ -271,6 +281,11 @@ fn rollback_restores_replaced_file() {
 
 #[test]
 fn rollback_restores_original_file_after_multiple_graph_mutations() {
+    const TEST_NAME: &str = "commands::live_root::tests::rollback_restores_original_file_after_multiple_graph_mutations";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
     let root = temp.path().join("root");
@@ -381,6 +396,12 @@ fn recovery_restores_in_progress_removed_file_from_persisted_journal() {
 
 #[test]
 fn recovery_does_not_rollback_commit_pending_journal() {
+    const TEST_NAME: &str =
+        "commands::live_root::tests::recovery_does_not_rollback_commit_pending_journal";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
     let root = temp.path().join("root");
@@ -411,6 +432,12 @@ fn recovery_does_not_rollback_commit_pending_journal() {
 
 #[test]
 fn recovery_rolls_back_in_progress_journal_without_changeset() {
+    const TEST_NAME: &str =
+        "commands::live_root::tests::recovery_rolls_back_in_progress_journal_without_changeset";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
     let root = temp.path().join("root");
@@ -444,6 +471,12 @@ fn recovery_rolls_back_in_progress_journal_without_changeset() {
 
 #[test]
 fn recovery_does_not_rollback_applied_changeset_journal() {
+    const TEST_NAME: &str =
+        "commands::live_root::tests::recovery_does_not_rollback_applied_changeset_journal";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     use conary_core::db::models::{Changeset, ChangesetStatus};
 
     let temp = TempDir::new().unwrap();
@@ -624,6 +657,11 @@ fn recovery_rejects_backup_path_outside_transaction_backup_dir() {
 
 #[test]
 fn commit_removes_backup_directory() {
+    const TEST_NAME: &str = "commands::live_root::tests::commit_removes_backup_directory";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
     let root = temp.path().join("root");

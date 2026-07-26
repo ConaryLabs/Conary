@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 1
+last_updated: 2026-07-26
+revision: 3
 summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
 ---
 
@@ -42,12 +42,14 @@ become package authority.
 `MANIFEST` decodes as `AuthorityDocumentV2` with `format_version = 2`. It
 contains:
 
-- exact identity: name, version, version scheme, release, optional
-  architecture/platform, and package kind;
+- exact identity: name, version, version scheme, positive decimal CCS build
+  release, optional platform, package kind, exact source-native architecture
+  token, and required Debian `Multi-Arch` authority for Debian identities;
 - one typed package, group, or redirect body whose tag agrees with identity;
 - exact provides, requirements, relations, and component summaries;
 - exact payload paths, node variants, content digests and sizes, component
-  ownership, config policy, and conflict policy;
+  ownership, per-path config semantics (`noreplace`, `ghost`, and
+  `remove_on_upgrade`), and conflict policy;
 - source-independent declarative lifecycle plus any converted package's exact
   native lifecycle ABI;
 - provenance identities and hashes for hermetic evidence, build attestations,
@@ -58,6 +60,33 @@ Unknown or structurally inconsistent authority is rejected. Consumers do not
 fill missing authority from filenames, component JSON, TOML, payload paths,
 repository metadata, distro identity, script text, or defaults from an older
 schema.
+
+The architecture token is never normalized while converting a native package:
+Debian `all`, Arch `any`, and RPM `noarch` remain distinct signed values.
+Compatibility interprets a token together with its `version_scheme`; no token
+is a format-independent wildcard. The release remains part of exact identity
+through repository selection, SAT output, installation, state snapshots,
+rollback, and display, so two packages with the same name/version but different
+release cannot collide or be re-resolved to one another.
+
+Each provided capability signs its exact kind, name, version scheme,
+architecture qualifier, and either no version authority or a paired typed
+relation and version boundary. RPM may use all five ordered relations; Debian,
+Arch, and Conary providers may use only equality. The package self-provider is
+exact equality with the signed package version. Package version is never a
+fallback for a missing provider version. Requirements, relations, and this
+complete provider authority all participate in CCS content identity.
+
+An ordinary config declaration identifies exactly one signed regular-file or
+symlink payload whose `FileAuthorityV2.config` repeats the same semantics.
+RPM ghost config and Debian remove-on-upgrade declarations are package
+authority without incoming payload and require the corresponding signed native
+source contract. Verified package construction projects these exact
+declarations into the package transaction interface.
+
+`ConflictPolicyV2::Replace` and `PackagePolicyV2.allow_host_mutation = true`
+are rejected until typed transaction consumers implement them. Signed fields
+cannot be accepted as inert metadata.
 
 ## Payload Authority
 

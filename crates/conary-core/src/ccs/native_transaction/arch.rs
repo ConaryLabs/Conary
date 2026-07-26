@@ -11,11 +11,9 @@ use crate::ccs::native_lifecycle::{
     ArchHookOperation, ArchHookTriggerType, ArchHookWhen, LifecyclePath, NativeLifecycleEntry,
 };
 use crate::packages::arch::{alpm_hook_targets_match, package_hook_basename};
-use crate::repository::{
-    parsers::common::split_dependency,
-    versioning::{
-        RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
-    },
+use crate::repository::package_relation::parse_arch_atom;
+use crate::repository::versioning::{
+    RepoVersionConstraint, VersionScheme, parse_repo_constraint, repo_version_satisfies,
 };
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -284,15 +282,17 @@ fn arch_dependency_satisfied(
     raw: &str,
     capabilities: &[NativeInstalledCapability],
 ) -> Result<bool> {
-    let (name, raw_constraint) = split_dependency(raw);
-    if name.is_empty() {
-        bail!("persisted ALPM hook dependency is empty");
-    }
-    let constraint = parse_repo_constraint(VersionScheme::Arch, &raw_constraint)
+    let clause = parse_arch_atom(raw)
+        .map_err(anyhow::Error::msg)
         .with_context(|| format!("invalid persisted ALPM hook dependency '{raw}'"))?;
+    let constraint = parse_repo_constraint(
+        VersionScheme::Arch,
+        clause.version_constraint.as_deref().unwrap_or(""),
+    )
+    .with_context(|| format!("invalid persisted ALPM hook dependency '{raw}'"))?;
     for capability in capabilities
         .iter()
-        .filter(|capability| capability.name == name)
+        .filter(|capability| capability.name == clause.name)
     {
         if capability_satisfies(capability, &constraint)? {
             return Ok(true);

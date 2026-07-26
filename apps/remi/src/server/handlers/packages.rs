@@ -71,7 +71,7 @@ pub struct ConversionAccepted {
 }
 
 enum ConvertedManifestLookup {
-    Ready(PackageManifest),
+    Ready(Box<PackageManifest>),
     Missing,
 }
 
@@ -94,6 +94,7 @@ fn native_ambiguity_response(releases: Vec<String>) -> Response {
 
 fn manifest_from_native_publication(
     native: conary_core::db::models::NativePackagePublication,
+    route_slug: &str,
 ) -> anyhow::Result<PackageManifest> {
     let chunk_hashes: Vec<String> = serde_json::from_str(&native.chunk_hashes_json)?;
     let chunks = chunk_hashes
@@ -109,7 +110,7 @@ fn manifest_from_native_publication(
         name: native.name,
         version: native.version,
         release: Some(native.package_release),
-        distro: native.distro,
+        distro: route_slug.to_string(),
         chunks,
         total_size: native.total_size as u64,
         content_hash: native.content_hash,
@@ -135,7 +136,7 @@ fn native_manifest_lookup(
     match resolve_active_native_publication(db_path, distro, name, version, release, architecture)?
     {
         NativeLookup::Ready(native) => Ok(NativeLookup::Ready(manifest_from_native_publication(
-            native,
+            native, distro,
         )?)),
         NativeLookup::Ambiguous(releases) => Ok(NativeLookup::Ambiguous(releases)),
         NativeLookup::Missing => Ok(NativeLookup::Missing),
@@ -185,7 +186,7 @@ pub async fn get_package(
     // Check if package is already converted (use spawn_blocking to avoid blocking
     // the async runtime with synchronous SQLite I/O)
     let native_db = db_path.clone();
-    let native_distro = distro.clone();
+    let native_route = distro.clone();
     let native_name = name.clone();
     let native_version = query.version.clone();
     let native_release = query.release.clone();
@@ -193,7 +194,7 @@ pub async fn get_package(
     match tokio::task::spawn_blocking(move || {
         native_manifest_lookup(
             &native_db,
-            &native_distro,
+            &native_route,
             &native_name,
             native_version.as_deref(),
             native_release.as_deref(),
@@ -328,8 +329,9 @@ pub async fn get_package(
 
 /// Check if a package has already been converted
 ///
-/// Queries the converted_packages table for a matching distro/name/version.
-/// Returns the manifest if found and the CCS file still exists.
+/// Maps the public distro route to one exact source profile, then queries
+/// `converted_packages` by that profile, name, and version. Returns the
+/// manifest if found and the CCS file still exists.
 fn check_converted(
     db_path: &std::path::Path,
     distro: &str,
@@ -341,11 +343,14 @@ fn check_converted(
 
     // Startup already validated the current schema, so this hot path can skip it.
     let conn = conary_core::db::open_fast(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
     // Query for existing conversion
     let existing = ConvertedPackage::find_by_package_identity_with_arch(
         &conn,
-        distro,
+        source_profile.id(),
         name,
         version,
         architecture,
@@ -364,7 +369,7 @@ fn check_converted(
                 name: artifact.package_name.to_string(),
                 version: artifact.package_version.to_string(),
                 release: None,
-                distro: artifact.distro.to_string(),
+                distro: distro.to_string(),
                 chunks,
                 total_size: artifact.total_size,
                 content_hash: artifact.content_hash.to_string(),
@@ -374,7 +379,7 @@ fn check_converted(
                 scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
             };
 
-            return Ok(ConvertedManifestLookup::Ready(manifest));
+            return Ok(ConvertedManifestLookup::Ready(Box::new(manifest)));
         }
     }
 
@@ -710,9 +715,12 @@ fn converted_ccs_path_for_download(
     use conary_core::db::models::ConvertedPackage;
 
     let conn = conary_core::db::open_fast(db_path)?;
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
     let Some(converted) = ConvertedPackage::find_by_package_identity_with_arch(
         &conn,
-        distro,
+        source_profile.id(),
         name,
         version,
         architecture,

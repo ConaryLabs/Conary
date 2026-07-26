@@ -16,6 +16,7 @@ use resolvo::{
 
 use super::ConaryProvider;
 use super::matching::{
+    constraint_architecture_matches_package, constraint_architecture_matches_provide,
     constraint_matches_package, constraint_matches_provide, provider_expression_matches_package,
 };
 use super::types::ConaryConstraint;
@@ -112,33 +113,70 @@ impl DependencyProvider for ConaryProvider<'_> {
     ) -> Vec<SolvableId> {
         let (name_id, ref constraint) = self.version_sets[version_set.0 as usize];
         let requested_name = &self.names[name_id.0 as usize];
+        let requested_kind = match constraint {
+            ConaryConstraint::Repository {
+                capability_kind, ..
+            } => *capability_kind,
+            ConaryConstraint::Requested(_)
+            | ConaryConstraint::RpmRuntime(_)
+            | ConaryConstraint::ProviderExpression { .. } => None,
+        };
         candidates
             .iter()
             .copied()
             .filter(|&sid| {
                 let pkg = &self.solvables[sid.0 as usize];
                 let matches = match constraint {
+                    ConaryConstraint::RpmRuntime(_) => false,
                     ConaryConstraint::ProviderExpression { expression } => {
-                        provider_expression_matches_package(expression, pkg)
+                        constraint_architecture_matches_package(
+                            constraint,
+                            pkg,
+                            &self.native_architecture,
+                        ) && provider_expression_matches_package(expression, pkg)
                             .expect("resolver package versions are validated before SAT filtering")
                     }
-                    _ if pkg.name == *requested_name
+                    _ if matches!(
+                        requested_kind,
+                        None
+                            | Some(
+                                crate::repository::dependency_model::RepositoryCapabilityKind::PackageName
+                            )
+                    ) && (pkg.name == *requested_name
                         || self
                             .canonical_equivalents(requested_name)
                             .iter()
-                            .any(|equivalent| equivalent == &pkg.name) =>
+                            .any(|equivalent| equivalent == &pkg.name)) =>
                     {
-                        constraint_matches_package(constraint, &pkg.version, pkg.version_scheme)
-                            .expect("resolver package versions are validated before SAT filtering")
+                        constraint_architecture_matches_package(
+                            constraint,
+                            pkg,
+                            &self.native_architecture,
+                        ) && constraint_matches_package(
+                            constraint,
+                            &pkg.version,
+                            pkg.version_scheme,
+                        )
+                        .expect("resolver package versions are validated before SAT filtering")
                     }
                     _ => pkg
                         .provided_capabilities
                         .iter()
-                        .filter(|capability| capability.name == *requested_name)
+                        .filter(|capability| {
+                            capability.name == *requested_name
+                                && requested_kind.is_none_or(|kind| capability.kind == kind)
+                        })
                         .any(|capability| {
-                            constraint_matches_provide(
+                            constraint_architecture_matches_provide(
+                                constraint,
+                                pkg,
+                                &capability.architecture_qualifier,
+                                capability.version_scheme,
+                                &self.native_architecture,
+                            ) && constraint_matches_provide(
                                 constraint,
                                 capability.version.as_deref(),
+                                capability.version_relation,
                                 capability.version_scheme,
                             )
                             .expect(
@@ -238,25 +276,23 @@ impl DependencyProvider for ConaryProvider<'_> {
                 }
             }
 
-            let a_latest = self.has_positive_latest_signal(pkg_a);
-            let b_latest = self.has_positive_latest_signal(pkg_b);
-            if a_latest != b_latest {
-                return b_latest.cmp(&a_latest);
-            }
-
             // Higher repository priority is preferred
             if pkg_a.repository_priority != pkg_b.repository_priority {
                 return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
             }
 
             if pkg_a.version_scheme == pkg_b.version_scheme {
-                let version_cmp = super::matching::compare_package_versions_desc(
-                    &pkg_a.version,
-                    pkg_a.version_scheme,
-                    &pkg_b.version,
+                let version_cmp = crate::repository::versioning::compare_package_identities(
                     pkg_b.version_scheme,
+                    &pkg_b.version,
+                    pkg_b.package_release.as_deref(),
+                    pkg_a.version_scheme,
+                    &pkg_a.version,
+                    pkg_a.package_release.as_deref(),
                 )
-                .expect("resolver package versions are validated before candidate sorting");
+                .expect(
+                    "resolver package versions and releases are validated before candidate sorting",
+                );
                 if version_cmp != std::cmp::Ordering::Equal {
                     return version_cmp;
                 }

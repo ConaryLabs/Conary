@@ -56,9 +56,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let error = validate_recorded_draft(temp.path(), "record-1", None).unwrap_err();
 
-        assert!(
-            error.to_string().contains("Unsupported source target"),
-            "{error:#}"
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "cook requires an explicit recipe file or a directory containing recipe.toml; {} is not one",
+                temp.path().join("recipe.toml").display()
+            )
         );
     }
 }

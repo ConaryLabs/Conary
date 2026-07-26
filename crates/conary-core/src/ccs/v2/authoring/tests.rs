@@ -7,6 +7,15 @@ use crate::repository::dependency_model::{
     RepositoryRequirementKind,
 };
 
+fn config_file(path: &str, noreplace: bool) -> crate::packages::traits::ConfigFileInfo {
+    crate::packages::traits::ConfigFileInfo {
+        path: path.to_string(),
+        noreplace,
+        ghost: false,
+        remove_on_upgrade: false,
+    }
+}
+
 #[test]
 fn projection_requires_release_for_v2_package_authoring() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
@@ -46,6 +55,29 @@ fn projection_builds_complete_local_dev_package_authority() {
     );
     assert!(projected.authority.components["runtime"].default);
     assert!(projected.payloads_by_path.contains_key("/hello"));
+}
+
+#[test]
+fn projection_preserves_exact_package_capability_authority() {
+    let mut build = test_support::minimal_file_build_result("capable", "0.1.0", b"hello\n");
+    let declaration = crate::capability::CapabilityDeclaration {
+        rationale: Some("needs outbound repository access".to_string()),
+        network: crate::capability::NetworkCapabilities {
+            connect_tcp: vec![443],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    build.manifest.capabilities = Some(declaration.clone());
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert_eq!(projected.authority.capabilities, Some(declaration));
 }
 
 #[test]
@@ -150,8 +182,7 @@ fn projection_marks_noreplace_config_files() {
     );
     build.manifest.package.release = "1".to_string();
     build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
-    build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
-    build.manifest.config.noreplace = true;
+    build.manifest.config.files = vec![config_file("/etc/conary-example/config.toml", true)];
 
     let projected = project_build_result_to_v2(V2AuthoringInput {
         build: &build,
@@ -164,9 +195,14 @@ fn projection_marks_noreplace_config_files() {
         PackageKindV2::Package(package) => package,
         other => panic!("expected package authority, got {other:?}"),
     };
-    assert_eq!(package.files[0].config, Some(ConfigPolicyV2::NoReplace));
+    let expected = ConfigSemanticsV2 {
+        noreplace: true,
+        ghost: false,
+        remove_on_upgrade: false,
+    };
+    assert_eq!(package.files[0].config, Some(expected));
     assert_eq!(package.config[0].path, "/etc/conary-example/config.toml");
-    assert_eq!(package.config[0].policy, ConfigPolicyV2::NoReplace);
+    assert_eq!(package.config[0].semantics, expected);
 }
 
 #[test]
@@ -179,8 +215,7 @@ fn projection_marks_replace_config_when_noreplace_is_false() {
     );
     build.manifest.package.release = "1".to_string();
     build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
-    build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
-    build.manifest.config.noreplace = false;
+    build.manifest.config.files = vec![config_file("/etc/conary-example/config.toml", false)];
 
     let projected = project_build_result_to_v2(V2AuthoringInput {
         build: &build,
@@ -193,8 +228,13 @@ fn projection_marks_replace_config_when_noreplace_is_false() {
         PackageKindV2::Package(package) => package,
         other => panic!("expected package authority, got {other:?}"),
     };
-    assert_eq!(package.files[0].config, Some(ConfigPolicyV2::Replace));
-    assert_eq!(package.config[0].policy, ConfigPolicyV2::Replace);
+    let expected = ConfigSemanticsV2 {
+        noreplace: false,
+        ghost: false,
+        remove_on_upgrade: false,
+    };
+    assert_eq!(package.files[0].config, Some(expected));
+    assert_eq!(package.config[0].semantics, expected);
 }
 
 #[test]
@@ -202,7 +242,7 @@ fn projection_rejects_config_path_absent_from_payload() {
     let mut build = test_support::minimal_file_build_result("demo", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
     build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
-    build.manifest.config.files = vec!["/etc/conary-example/config.toml".to_string()];
+    build.manifest.config.files = vec![config_file("/etc/conary-example/config.toml", true)];
 
     let error = project_build_result_to_v2(V2AuthoringInput {
         build: &build,
@@ -224,7 +264,7 @@ fn projection_rejects_relative_config_paths() {
     );
     build.manifest.package.release = "1".to_string();
     build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
-    build.manifest.config.files = vec!["etc/conary-example/config.toml".to_string()];
+    build.manifest.config.files = vec![config_file("etc/conary-example/config.toml", true)];
 
     let error = project_build_result_to_v2(V2AuthoringInput {
         build: &build,
@@ -442,6 +482,7 @@ fn projection_carries_typed_requires_and_provides_without_distro_gates() {
                 name: "openssl".to_string(),
                 capability_kind: Some(RepositoryCapabilityKind::PackageName),
                 version_constraint: Some(">=3.0.0".to_string()),
+                architecture_qualifier: Default::default(),
                 native_text: None,
             },
         ),
@@ -451,6 +492,7 @@ fn projection_carries_typed_requires_and_provides_without_distro_gates() {
                 name: "tls".to_string(),
                 capability_kind: Some(RepositoryCapabilityKind::Virtual),
                 version_constraint: Some(">=1.3.0".to_string()),
+                architecture_qualifier: Default::default(),
                 native_text: None,
             },
         ),
