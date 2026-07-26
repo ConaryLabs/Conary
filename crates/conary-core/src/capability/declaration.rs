@@ -682,7 +682,7 @@ read_only = ["/etc"]
             version = 1
 
             [syscalls]
-            profile = "scriptlet-v1"
+            profile = "package-selected-profile"
         "#;
 
         let error = toml::from_str::<CapabilityDeclaration>(toml)

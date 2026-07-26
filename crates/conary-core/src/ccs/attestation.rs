@@ -239,7 +239,7 @@ pub(crate) mod test_support {
             command_risk_classifier_version:
                 crate::security::command_risk::COMMAND_RISK_CLASSIFIER_VERSION.to_string(),
             sandbox_profile: "kitchen-pristine-network-none".to_string(),
-            seccomp_profile: Some("scriptlet-v1".to_string()),
+            seccomp_profile: None,
             builder_identity: "conary-test-builder".to_string(),
             conary_version: "test".to_string(),
             issued_at: "2026-06-14T00:00:00Z".to_string(),

@@ -336,7 +336,7 @@ fn build_project_form_attestation_payload(
         publish_policy_digest: publish_policy_digest.to_string(),
         command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
         sandbox_profile: "kitchen-pristine-network-none".to_string(),
-        seccomp_profile: Some("scriptlet-v1".to_string()),
+        seccomp_profile: None,
         builder_identity: "conary-hermetic-kitchen".to_string(),
         conary_version: conary_version.to_string(),
         issued_at: chrono::Utc::now().to_rfc3339(),

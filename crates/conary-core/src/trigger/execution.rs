@@ -1,7 +1,7 @@
 // conary-core/src/trigger/execution.rs
 
 use super::TriggerExecutor;
-use crate::child_wait::wait_with_output;
+use crate::child_wait::wait_with_output_process_group;
 use crate::db::models::Trigger;
 use crate::error::{Error, Result};
 use crate::scriptlet::configure_target_command_boundary;
@@ -73,7 +73,7 @@ impl TriggerExecutor<'_> {
         cmd: &str,
         target_root: &Path,
     ) -> Result<Option<String>> {
-        let outcome = wait_with_output(&mut child, self.timeout)?;
+        let outcome = wait_with_output_process_group(&mut child, self.timeout)?;
         let stdout = String::from_utf8_lossy(&outcome.stdout);
         let stderr = String::from_utf8_lossy(&outcome.stderr);
 

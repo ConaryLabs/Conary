@@ -28,6 +28,7 @@
 mod activation_capture;
 mod arguments;
 mod boot_runtime_capture;
+mod boundary;
 mod executor;
 mod lifecycle_bridge;
 mod native_command;

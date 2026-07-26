@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 51
+revision: 52
 summary: Route serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, and subsystem proof through current feature owners.
 ---
 
@@ -124,7 +124,8 @@ commands.
   plus `docs/modules/ccs.md` and `docs/modules/recipe.md`. Debian lifecycle
   service-helper argv grammar starts in
   `crates/conary-core/src/packages/deb/lifecycle_helpers.rs` and its focused
-  child modules.
+  child modules. The selected-root namespace, capability, and seccomp contract
+  starts in `crates/conary-core/src/scriptlet/boundary.rs`.
 - Try-session start, refresh, keep, and rollback orchestration:
   `apps/conary/src/commands/try_session/session.rs`; watch-created identity:
   `apps/conary/src/commands/try_session/session/watch_marker.rs`.

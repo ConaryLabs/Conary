@@ -3,11 +3,8 @@
 use super::ScriptletExecutor;
 use super::activation_capture::ActivationCaptureSession;
 use super::boot_runtime_capture::BootRuntimeCaptureSession;
-use super::runtime::{
-    apply_sanitized_command_env, build_scriptlet_seccomp, chroot_mount_private_flags,
-    chroot_namespace_flags, wait_and_capture,
-};
-use crate::capability::enforcement::seccomp_enforce::SCRIPTLET_EXECUTOR_ABI_V1;
+use super::boundary::{SCRIPTLET_BOUNDARY_ABI_V2, ScriptletBoundary};
+use super::runtime::{apply_sanitized_command_env, wait_and_capture};
 use crate::error::{Error, Result, ScriptletFailureKind};
 use nix::errno::Errno;
 use nix::fcntl::{OFlag, open, openat};
@@ -47,7 +44,7 @@ pub(super) struct TargetRootScript {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TargetExecutionBoundary {
-    pub(crate) seccomp_enabled: bool,
+    pub(crate) contract: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -335,17 +332,12 @@ impl ScriptletExecutor {
             configure_target_command_boundary_with_mounts(&mut cmd, &self.root, bind_mounts)?;
 
         debug!(
-            "Executing in chroot {}: {} {} {:?} (seccomp: {}, syscall contract: {})",
+            "Executing in chroot {}: {} {} {:?} (boundary: {})",
             self.root.display(),
             interpreter,
             script_in_chroot,
             args,
-            if boundary.seccomp_enabled {
-                "enabled"
-            } else {
-                "unavailable"
-            },
-            SCRIPTLET_EXECUTOR_ABI_V1,
+            boundary.contract,
         );
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -357,14 +349,9 @@ impl ScriptletExecutor {
         boot_capture.child_spawned();
 
         let context = format!(
-            " (chroot: {}, seccomp: {}, syscall_contract: {})",
+            " (chroot: {}, boundary: {})",
             self.root.display(),
-            if boundary.seccomp_enabled {
-                "enabled"
-            } else {
-                "unavailable"
-            },
-            SCRIPTLET_EXECUTOR_ABI_V1,
+            boundary.contract,
         );
 
         wait_and_capture(&mut child, self.timeout, phase, &context)
@@ -412,22 +399,22 @@ pub(super) fn configure_target_command_boundary_with_mounts(
 
     let root = root.to_path_buf();
     let bind_mounts = bind_mounts.to_vec();
-    let bpf_filter = build_scriptlet_seccomp()?;
+    let prepared_boundary = ScriptletBoundary::prepare()?;
     let boundary = TargetExecutionBoundary {
-        seccomp_enabled: true,
+        contract: SCRIPTLET_BOUNDARY_ABI_V2,
     };
 
     // Safety: pre_exec runs between fork and exec in the child process.
     // All operations here are async-signal-safe.
     unsafe {
         command.pre_exec(move || {
-            nix::sched::unshare(chroot_namespace_flags())
+            nix::sched::unshare(prepared_boundary.namespace_flags())
                 .map_err(|error| std::io::Error::other(format!("unshare failed: {error}")))?;
             nix::mount::mount::<str, str, str, str>(
                 None,
                 "/",
                 None,
-                chroot_mount_private_flags(),
+                prepared_boundary.mount_private_flags(),
                 None,
             )
             .map_err(|error| {
@@ -458,18 +445,7 @@ pub(super) fn configure_target_command_boundary_with_mounts(
             nix::unistd::chdir("/")
                 .map_err(|error| std::io::Error::other(format!("chdir failed: {error}")))?;
 
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if seccompiler::apply_filter(&bpf_filter).is_err() {
-                const MESSAGE: &[u8] = b"[conary] seccomp filter application failed\n";
-                let _ = libc::write(2, MESSAGE.as_ptr().cast(), MESSAGE.len());
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "seccomp filter application failed",
-                ));
-            }
-            Ok(())
+            prepared_boundary.install_after_chroot()
         });
     }
     Ok(boundary)

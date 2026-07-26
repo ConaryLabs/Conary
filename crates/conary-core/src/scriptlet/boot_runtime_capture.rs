@@ -17,7 +17,7 @@ use super::runtime::apply_sanitized_command_env;
 use crate::boot_runtime::{
     BootRuntimeInvocation, InvocationDisposition, parse_boot_runtime_invocation,
 };
-use crate::child_wait::wait_with_output;
+use crate::child_wait::wait_with_output_process_group;
 use crate::error::{Error, Result, ScriptletFailureKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -298,7 +298,7 @@ impl BootRuntimeHandler {
                 "cannot spawn selected-root boot provider {provider}: {error}"
             ))
         })?;
-        let output = wait_with_output(&mut child, self.timeout).map_err(|error| {
+        let output = wait_with_output_process_group(&mut child, self.timeout).map_err(|error| {
             LifecycleBridgeHandlerError::new(format!(
                 "selected-root boot provider wait failed: {error}"
             ))

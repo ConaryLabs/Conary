@@ -7,7 +7,7 @@ use super::activation_capture::ActivationCaptureSession;
 use super::boot_runtime_capture::BootRuntimeCaptureSession;
 use super::process::{TargetRootScript, configure_target_command_boundary_with_mounts};
 use super::runtime::{apply_sanitized_command_env, log_script_output};
-use crate::child_wait::wait_with_output;
+use crate::child_wait::wait_with_output_process_group;
 use crate::error::{Error, Result, ScriptletFailureKind};
 use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -206,7 +206,7 @@ impl ScriptletExecutor {
             phase,
             program,
             target_root = %self.root.display(),
-            seccomp = boundary.seccomp_enabled,
+            boundary = boundary.contract,
             "executing exact native argv in the lifecycle target boundary"
         );
 
@@ -217,7 +217,7 @@ impl ScriptletExecutor {
             )
         })?;
         boot_capture.child_spawned();
-        let outcome = wait_with_output(&mut child, self.timeout)?;
+        let outcome = wait_with_output_process_group(&mut child, self.timeout)?;
         if log_output {
             log_script_output(
                 phase,

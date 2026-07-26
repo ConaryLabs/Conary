@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 54
+revision: 55
 summary: Route feature ownership through streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, and current canonical docs
 ---
 
@@ -185,6 +185,7 @@ mutation flows for local package operations.
 `crates/conary-core/src/scriptlet/executor.rs`;
 `crates/conary-core/src/scriptlet/sandbox.rs`;
 `crates/conary-core/src/scriptlet/process.rs`;
+`crates/conary-core/src/scriptlet/boundary.rs`;
 `crates/conary-core/src/scriptlet/native_lifecycle.rs`;
 `crates/conary-core/src/scriptlet/native_lifecycle/contracts.rs`;
 `crates/conary-core/src/db/models/installed_ccs_remove_hook.rs`;
@@ -623,6 +624,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/scriptlet/executor.rs`,
 `crates/conary-core/src/scriptlet/sandbox.rs`,
 `crates/conary-core/src/scriptlet/process.rs`,
+`crates/conary-core/src/scriptlet/boundary.rs`,
 `crates/conary-core/src/scriptlet/native_lifecycle.rs`,
 `crates/conary-core/src/scriptlet/native_lifecycle/contracts.rs`,
 `crates/conary-core/src/scriptlet/rpm_runtime/query_format.rs`,

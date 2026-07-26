@@ -608,7 +608,7 @@ fn attested_artifact_for_tests(
         publish_policy_digest: STATIC_PUBLISH_POLICY_DIGEST_V1.to_string(),
         command_risk_classifier_version: evidence.command_risk.classifier_version.clone(),
         sandbox_profile: "kitchen-pristine-network-none".to_string(),
-        seccomp_profile: Some("scriptlet-v1".to_string()),
+        seccomp_profile: None,
         builder_identity: "conary-test-builder".to_string(),
         conary_version: "test".to_string(),
         issued_at: "2026-06-14T00:00:00Z".to_string(),

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 22
+revision: 23
 summary: Define exact source-ABI lifecycle authority, selected-root execution, and generation-scoped activation
 ---
 
@@ -24,8 +24,10 @@ This document owns the execution and security boundary around those contracts.
    mutation.
 4. Lifecycle programs run only inside a materialized selected or explicit
    target root. The host root `/` is rejected.
-5. The child enters a private mount namespace, chroots into that root, and
-   installs Conary's closed `scriptlet-v1` seccomp contract before `exec`.
+5. The child enters private mount, network, IPC, UTS, and cgroup namespaces,
+   chroots into that root, drops every capability except the selected-root
+   filesystem mutation set, and installs `scriptlet-boundary-v2` before
+   `exec`.
 6. A missing interpreter, helper, namespace, privilege, syscall filter, exact
    semantic, or persisted-state contract fails the transaction. There is no
    direct-host, warning-only, skip-script, or permissive sandbox path.
@@ -82,25 +84,32 @@ Before spawning a lifecycle child, Conary:
   ABI defines no stdin;
 - clears the inherited environment and installs only the closed lifecycle
   environment;
-- builds the mandatory seccomp filter before mutation.
+- builds the mandatory host-escape deny filter and capability plan before
+  mutation.
 
 The child then:
 
-- enters a private mount namespace with recursive-private propagation;
+- enters private mount, network, IPC, UTS, and cgroup namespaces with
+  recursive-private mount propagation;
 - installs only Conary-owned bind mounts used by exact runtime capture;
 - chroots and changes directory to `/`;
-- applies the `scriptlet-v1` seccomp filter;
+- becomes a private process-group leader;
+- drops the capability bounding, effective, permitted, inheritable, and
+  ambient sets to the exact selected-root filesystem mutation capabilities;
+- enables `no_new_privs` and applies the `scriptlet-boundary-v2` host-escape
+  deny filter;
 - executes the declared interpreter, interpreter arguments, staged program,
   and typed lifecycle arguments;
-- has stdout and stderr captured and is killed if its exact timeout expires.
+- has stdout and stderr captured, and its entire process group is killed when
+  the leader exits or its exact timeout expires.
 
-The executor contract is architecture-specific. On x86_64 it includes `vfork`,
-because a target-provided `/bin/sh` may be dash and dash's upstream
-helper-launch path uses that syscall. It also includes both `mkdir` and
-`mkdirat`, because current target libc and utility implementations may issue
-either exact x86_64 directory-creation syscall. These are executor ABI
-requirements derived from selected target implementations, not package
-heuristics or package-selectable capabilities.
+The seccomp contract is a default-allow deny boundary, not a target-libc
+allowlist. Ordinary helper ABI evolution such as `vfork`, `clone`, `mkdir`,
+`mkdirat`, `statx`, `io_uring`, and `userfaultfd` does not require Conary
+changes. The denied classes are host escape, cross-process control and
+inspection, kernel/module control, mount-namespace escape, host keyring
+access, and host time/accounting mutation. Packages cannot select, widen, or
+suppress this boundary.
 
 Root privilege is currently required for this boundary. Lack of privilege or
 kernel support is a preflight failure, not a request to run less safely.
@@ -228,8 +237,9 @@ Closing such a gap requires one of:
 | Source transaction graphs | `crates/conary-core/src/ccs/native_transaction/` |
 | Exact lifecycle executor | `crates/conary-core/src/scriptlet/native_lifecycle.rs` |
 | Selected-root process boundary | `crates/conary-core/src/scriptlet/process.rs` |
+| Namespace, capability, and seccomp contract | `crates/conary-core/src/scriptlet/boundary.rs` |
 | Closed sandbox types | `crates/conary-core/src/scriptlet/sandbox.rs` |
-| Seccomp and subprocess runtime | `crates/conary-core/src/scriptlet/runtime.rs` |
+| Output and subprocess runtime | `crates/conary-core/src/scriptlet/runtime.rs`, `crates/conary-core/src/child_wait.rs` |
 | Exact activation capture | `crates/conary-core/src/scriptlet/activation_capture.rs` |
 | Shared systemctl parser/proxy grammar | `crates/conary-core/src/activation/systemd/grammar.rs` |
 | SELinux/AppArmor argv grammars | `crates/conary-core/src/activation/security_policy/` |
