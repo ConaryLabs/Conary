@@ -90,8 +90,10 @@ copy_elf_closure() {
 gnu_loader=/lib64/ld-linux-x86-64.so.2
 copy_runtime_path "${gnu_loader}"
 copy_elf_closure /bin/sh
+copy_elf_closure /bin/bash
+copy_elf_closure /usr/bin/bash
 
-for command_name in bash mkdir getent groupadd useradd; do
+for command_name in mkdir getent groupadd useradd; do
   command_path="$(command -v "${command_name}")"
   copy_elf_closure "${command_path}"
 done
@@ -148,6 +150,8 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
 "${script_dir}/assert-selected-generation.py" \
   --root "${runtime_root}" \
   --present /bin/sh \
+  --present /bin/bash \
+  --present /usr/bin/bash \
   --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \
   --present /etc/group \
