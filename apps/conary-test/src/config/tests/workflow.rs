@@ -54,6 +54,11 @@ struct GateJob {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorkspaceTestJob {
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WorkflowStep {
     name: Option<String>,
     run: Option<String>,
@@ -200,4 +205,28 @@ fn native_cross_source_gate_is_a_stable_all_lane_required_context() {
             "matrix gate produced the wrong result for `{result}`"
         );
     }
+}
+
+#[test]
+fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
+    let workflow = load_workflow();
+    let job: WorkspaceTestJob = parse_job(&workflow, "workspace-tests");
+
+    let namespace = named_step(&job.steps, "Enable exact ownership-test namespaces");
+    assert_eq!(
+        namespace.run.as_deref(),
+        Some(
+            "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\nunshare --user --map-root-user --mount --propagation private /bin/true\n"
+        )
+    );
+    assert!(!namespace.continue_on_error);
+    assert_eq!(namespace.condition, None);
+
+    let tests = named_step(&job.steps, "Run workspace tests");
+    assert_eq!(
+        tests.run.as_deref(),
+        Some("cargo test --workspace --exclude conary-test --verbose")
+    );
+    assert!(!tests.continue_on_error);
+    assert_eq!(tests.condition, None);
 }
