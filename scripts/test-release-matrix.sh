@@ -727,8 +727,8 @@ test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lan
         repo="$(create_release_policy_fixture)"
         replace_fixture_text_once \
             "$repo/.github/workflows/$workflow" \
-            '      - uses: ./.github/actions/setup-exact-ownership-tests' \
-            '      - run: echo "exact ownership setup removed"'
+            '        uses: ./.github/actions/setup-exact-ownership-tests' \
+            '        run: echo "exact ownership setup removed"'
 
         assert_check_release_matrix_fails "$repo" "shared exact ownership setup"
     done
@@ -743,6 +743,21 @@ test_check_release_matrix_rejects_unproven_namespace_action() {
         '        /bin/true'
 
     assert_check_release_matrix_fails "$repo" "exact ownership namespace proof"
+}
+
+test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        uses: ./.github/actions/setup-exact-ownership-tests' \
+        '        run: echo "namespace setup delayed"'
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        run: cargo test --workspace --exclude conary-test --verbose' \
+        $'        run: cargo test --workspace --exclude conary-test --verbose\n      - name: Delayed exact ownership setup\n        uses: ./.github/actions/setup-exact-ownership-tests'
+
+    assert_check_release_matrix_fails "$repo" "release workspace validation exact ownership setup order"
 }
 
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
@@ -906,6 +921,7 @@ main() {
         test_check_release_matrix_rejects_missing_live_version_assertion
         test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane
         test_check_release_matrix_rejects_unproven_namespace_action
+        test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_unpinned_tester_guide_link

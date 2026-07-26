@@ -243,9 +243,10 @@ for workflow in "$pr_workflow" "$merge_workflow" "$release_build"; do
     require_literal_count "$workflow" 'uses: ./.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
     forbid_match "$workflow" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
 done
-require_job_match "$pr_workflow" workspace-tests 'uses: \./\.github/actions/setup-exact-ownership-tests' 'PR workspace tests exact ownership setup'
-require_job_match "$merge_workflow" workspace-tests 'uses: \./\.github/actions/setup-exact-ownership-tests' 'merge workspace tests exact ownership setup'
-require_job_match "$release_build" workspace-validation 'uses: \./\.github/actions/setup-exact-ownership-tests' 'release workspace validation exact ownership setup'
+namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-tests[\s\S]*cargo test --workspace --exclude conary-test --verbose'
+require_job_match "$pr_workflow" workspace-tests "$namespace_before_tests_pattern" 'PR workspace tests exact ownership setup order'
+require_job_match "$merge_workflow" workspace-tests "$namespace_before_tests_pattern" 'merge workspace tests exact ownership setup order'
+require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
 require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'
 require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
 require_match "$release_build" 'publish-remi:[\s\S]*needs: \[prepare, workspace-validation, build-remi\]' 'remi publish should need workspace validation'
