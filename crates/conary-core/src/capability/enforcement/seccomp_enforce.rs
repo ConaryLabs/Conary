@@ -80,6 +80,7 @@ const SCRIPTLET_EXECUTOR_V1_SYSCALLS: &[&str] = &[
     "lseek",
     "madvise",
     "memfd_create",
+    "mkdir",
     "mkdirat",
     "mmap",
     "mprotect",
@@ -704,6 +705,21 @@ mod tests {
             "x86_64 /bin/sh may be dash, whose exact helper-launch ABI uses vfork"
         );
         assert_eq!(syscall_name_to_number("vfork"), Some(libc::SYS_vfork));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn scriptlet_v1_allows_x86_64_directory_creation_abis() {
+        let caps = scriptlet_executor_v1_capabilities();
+
+        for syscall in ["mkdir", "mkdirat"] {
+            assert!(
+                caps.allow.iter().any(|allowed| allowed == syscall),
+                "x86_64 target helpers may use the exact {syscall} directory-creation syscall"
+            );
+        }
+        assert_eq!(syscall_name_to_number("mkdir"), Some(libc::SYS_mkdir));
+        assert_eq!(syscall_name_to_number("mkdirat"), Some(libc::SYS_mkdirat));
     }
 
     #[test]

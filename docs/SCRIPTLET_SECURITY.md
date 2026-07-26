@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-26
-revision: 21
+revision: 22
 summary: Define exact source-ABI lifecycle authority, selected-root execution, and generation-scoped activation
 ---
 
@@ -94,11 +94,13 @@ The child then:
   and typed lifecycle arguments;
 - has stdout and stderr captured and is killed if its exact timeout expires.
 
-The executor contract is architecture-specific. On x86_64 it includes
-`vfork`, because a target-provided `/bin/sh` may be dash and dash's upstream
-helper-launch path uses that syscall. This is an executor ABI requirement
-derived from the selected interpreter implementation, not a package heuristic
-or a package-selectable capability.
+The executor contract is architecture-specific. On x86_64 it includes `vfork`,
+because a target-provided `/bin/sh` may be dash and dash's upstream
+helper-launch path uses that syscall. It also includes both `mkdir` and
+`mkdirat`, because current target libc and utility implementations may issue
+either exact x86_64 directory-creation syscall. These are executor ABI
+requirements derived from selected target implementations, not package
+heuristics or package-selectable capabilities.
 
 Root privilege is currently required for this boundary. Lack of privilege or
 kernel support is a preflight failure, not a request to run less safely.

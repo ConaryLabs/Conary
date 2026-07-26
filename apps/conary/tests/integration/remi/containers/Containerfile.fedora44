@@ -33,7 +33,8 @@ RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.rpm 1>/dev/null 2>&1
 
 RUN /usr/bin/conary --version \
     && command -v cmp \
-    && command -v diff
+    && command -v diff \
+    && test -e /lib64/ld-linux-x86-64.so.2
 
 COPY config.toml /opt/remi-tests/config.toml
 # Phase 2 test fixtures (recipes, PKGBUILD)

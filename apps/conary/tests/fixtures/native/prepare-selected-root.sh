@@ -82,6 +82,13 @@ copy_elf_closure() {
   )
 }
 
+# The selected-root layout fixture declares x86_64 + GNU libc. The kernel opens
+# PT_INTERP by its encoded absolute path, while ldd reports the canonical loader
+# target on merged-/usr distributions such as Arch. Materialize the ABI path
+# itself so the selected generation is executable without inheriting host
+# symlink topology.
+gnu_loader=/lib64/ld-linux-x86-64.so.2
+copy_runtime_path "${gnu_loader}"
 copy_elf_closure /bin/sh
 
 for command_name in bash mkdir getent groupadd useradd; do
@@ -141,6 +148,7 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
 "${script_dir}/assert-selected-generation.py" \
   --root "${runtime_root}" \
   --present /bin/sh \
+  --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \
   --present /etc/group \
   --present /sbin/init
