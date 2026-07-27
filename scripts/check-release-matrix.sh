@@ -15,6 +15,7 @@ feedback_template=".github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
 site_preview_release="site/src/lib/preview-release.ts"
 site_install_page="site/src/routes/install/+page.svelte"
 rpm_containerfile="packaging/rpm/Containerfile.build"
+rpm_spec="packaging/rpm/conary.spec"
 deb_containerfile="packaging/deb/Containerfile.build"
 arch_containerfile="packaging/arch/Containerfile.build"
 rpm_build_script="packaging/rpm/build.sh"
@@ -165,6 +166,7 @@ for required_file in \
     "$site_preview_release" \
     "$site_install_page" \
     "$rpm_containerfile" \
+    "$rpm_spec" \
     "$deb_containerfile" \
     "$arch_containerfile" \
     "$rpm_build_script" \
@@ -198,9 +200,13 @@ require_literal_count "$release_build" 'bash scripts/release-matrix.sh assert-ow
 require_job_match "$release_build" build-rpm "image: ${fedora_release_image}" 'release-build RPM builder must use the pinned Fedora 44 image'
 require_job_match "$release_build" build-deb "image: ${ubuntu_release_image}" 'release-build DEB builder must use the pinned Ubuntu 26.04 image'
 require_job_match "$release_build" build-arch "image: ${arch_release_image}" 'release-build Arch builder must use the pinned Arch image'
+require_job_match "$release_build" build-ccs 'name: Install build dependencies[\s\S]*name: Prepare dry-run release tree' 'release-build CCS dry-run prerequisites must be installed before release preparation'
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
+require_match "$rpm_spec" '^BuildRequires:[[:space:]]+systemd-rpm-macros$' 'RPM spec systemd macro build dependency'
+require_job_match "$release_build" build-rpm 'dnf install -y[\s\S]*systemd-rpm-macros' 'release-build RPM systemd macro dependency'
+require_match "$rpm_containerfile" 'systemd-rpm-macros[\s\S]*rpm --eval '\''%\{_unitdir\}'\''[\s\S]*/usr/lib/systemd/system' 'RPM Containerfile systemd macro dependency and expansion proof'
 
 rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain 1\\.96\\.0 --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
 require_job_match "$release_build" build-rpm "$rustup_flow_pattern" 'release-build RPM builder checksum-pinned rustup-init flow'
@@ -268,6 +274,7 @@ forbid_match "$release_build" 'gh release create "\$TAG_NAME" release-packages/\
 
 require_match "$rpm_build_script" 'find "\$OUTPUT".*\*\.rpm.*-delete' 'RPM build must clean stale package output'
 require_match "$rpm_build_script" 'Expected exactly one \$NAME \$VERSION x86_64 RPM' 'RPM build must fail without its expected package'
+require_match "$rpm_build_script" 'rpm --eval '\''%\{_unitdir\}'\''[\s\S]*systemd-rpm-macros build dependency' 'RPM build must fail fast without systemd macro authority'
 require_match "$deb_build_script" 'find "\$OUTPUT".*\*\.deb.*-delete' 'DEB build must clean stale package output'
 require_match "$deb_build_script" 'EXPECTED_DEB="\$OUTPUT/\$\{NAME\}_\$\{VERSION\}-1_amd64\.deb"[\s\S]*\[\[ ! -s "\$EXPECTED_DEB"' 'DEB build must require its expected package'
 require_match "$arch_build_script" 'find "\$OUTPUT".*\*\.pkg\.tar\.zst.*-delete' 'Arch build must clean stale package output'

@@ -122,6 +122,24 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.96.0
+      - name: Cache cargo
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -143,24 +161,6 @@ jobs:
           ./scripts/release.sh "$product"
           git tag --points-at HEAD | grep -Fx "$tag_name"
           bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-        with:
-          toolchain: 1.96.0
-      - name: Cache cargo
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-release-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
       - name: Build CCS package
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -218,7 +218,7 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          dnf install -y rpm-build openssl-devel xz-devel libseccomp-devel pkg-config gcc cmake perl curl git \
+          dnf install -y rpm-build openssl-devel xz-devel libseccomp-devel pkg-config gcc cmake perl systemd-rpm-macros curl git \
           && dnf clean all
       - name: Install Rust
         run: |
