@@ -79,68 +79,63 @@ fn write_v2_ccs_package_with_open<'a>(
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
     mut open_payload: impl FnMut(&str) -> Result<Box<dyn std::io::Read + 'a>>,
 ) -> Result<()> {
-    use crate::ccs::builder::{ComponentData, FileEntry};
+    use crate::ccs::budget::CCS_BUDGET;
     use crate::ccs::v2::schema::PackageKindV2;
     use flate2::Compression;
     use flate2::write::GzEncoder;
-    use std::collections::BTreeMap;
     use tar::Builder;
 
-    crate::ccs::v2::validation::validate_authority_structure(authority)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    // Authoring preflight and verification share one structural-budget owner,
+    // so a package this writer emits is admissible to the reader by
+    // construction rather than by coincidence.
+    let census =
+        crate::ccs::v2::authority_census(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
     let temp_dir = tempfile::tempdir()?;
     let manifest_cbor = authority.to_cbor()?;
+    CCS_BUDGET.admit_encoded_authority(&census, manifest_cbor.len() as u64)?;
     fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
     if let Some(debug_toml) = debug_toml {
+        CCS_BUDGET.admit_control_bytes(
+            crate::ccs::budget::BudgetDimension::DebugProjectionBytes,
+            "MANIFEST.toml",
+            debug_toml.len() as u64,
+            CCS_BUDGET.debug_projection_bytes_ceiling(&census)?,
+        )?;
         fs::write(temp_dir.path().join("MANIFEST.toml"), debug_toml)?;
     }
     if let Some(build_attestation) = build_attestation {
-        fs::write(
-            temp_dir.path().join("MANIFEST.attestation.json"),
-            serde_json::to_string_pretty(build_attestation)?,
-        )?;
+        let encoded = serde_json::to_string_pretty(build_attestation)?;
+        admit_attestation_document(&encoded, "MANIFEST.attestation.json")?;
+        fs::write(temp_dir.path().join("MANIFEST.attestation.json"), encoded)?;
     }
     if let Some(foreign_conversion_boundary) = foreign_conversion_boundary {
+        let encoded = serde_json::to_string_pretty(foreign_conversion_boundary)?;
+        admit_attestation_document(&encoded, "MANIFEST.conversion-boundary.json")?;
         fs::write(
             temp_dir.path().join("MANIFEST.conversion-boundary.json"),
-            serde_json::to_string_pretty(foreign_conversion_boundary)?,
+            encoded,
         )?;
     }
     let signature = signing_key.sign(&manifest_cbor);
-    fs::write(
-        temp_dir.path().join("MANIFEST.sig"),
-        serde_json::to_string_pretty(&signature)?,
+    let signature_document = serde_json::to_string_pretty(&signature)?;
+    CCS_BUDGET.admit_control_bytes(
+        crate::ccs::budget::BudgetDimension::SignatureBytes,
+        "MANIFEST.sig",
+        signature_document.len() as u64,
+        CCS_BUDGET.signature_bytes_ceiling(),
     )?;
+    fs::write(temp_dir.path().join("MANIFEST.sig"), signature_document)?;
 
     let PackageKindV2::Package(data) = &authority.kind else {
         anyhow::bail!("M4a v2 writer only writes package payloads");
     };
-    let mut components: BTreeMap<String, ComponentData> = authority
-        .components
-        .keys()
-        .map(|name| {
-            (
-                name.clone(),
-                ComponentData {
-                    name: name.clone(),
-                    files: Vec::new(),
-                    hash: String::new(),
-                    size: 0,
-                },
-            )
-        })
-        .collect();
 
     let objects_dir = temp_dir.path().join("objects");
     let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
     for file in &data.files {
-        let entry = FileEntry {
-            path: file.path.clone(),
-            node: file.node.clone(),
-            content: file.content.clone(),
-            component: file.component.clone(),
-            chunks: None,
-        };
+        if !authority.components.contains_key(&file.component) {
+            anyhow::bail!("missing component {}", file.component);
+        }
         if file.node.kind.is_regular() {
             let content = file.content.as_ref().with_context(|| {
                 format!(
@@ -158,23 +153,6 @@ fn write_v2_ccs_package_with_open<'a>(
                     )
                 })?;
         }
-        let component = components
-            .get_mut(&file.component)
-            .with_context(|| format!("missing component {}", file.component))?;
-        component.size += file.content.as_ref().map_or(0, |content| content.size);
-        component.files.push(entry);
-    }
-
-    let components_dir = temp_dir.path().join("components");
-    fs::create_dir_all(&components_dir)?;
-    for (name, component) in &mut components {
-        component.hash = crate::hash::sha256_prefixed(
-            &crate::ccs::attestation::canonical_json_bytes(&component.files)?,
-        );
-        fs::write(
-            components_dir.join(format!("{name}.json")),
-            serde_json::to_vec_pretty(component)?,
-        )?;
     }
 
     let output_file = fs::File::create(output_path)?;
@@ -186,6 +164,19 @@ fn write_v2_ccs_package_with_open<'a>(
         .unwrap_or(1_704_067_200);
     append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
     archive.into_inner()?.finish()?;
+    Ok(())
+}
+
+/// Admit one attestation-class control document against the shared budget.
+fn admit_attestation_document(encoded: &str, label: &str) -> Result<()> {
+    use crate::ccs::budget::{BudgetDimension, CCS_BUDGET};
+
+    CCS_BUDGET.admit_control_bytes(
+        BudgetDimension::AttestationBytes,
+        label,
+        encoded.len() as u64,
+        CCS_BUDGET.attestation_bytes_ceiling(),
+    )?;
     Ok(())
 }
 
@@ -371,10 +362,43 @@ mod tests {
         .unwrap();
         assert_eq!(contents.v2_authority.identity.name, "hello-v2");
         assert_eq!(contents.components["main"].files.len(), 1);
+        assert_eq!(contents.census.files, 1);
+        assert_eq!(contents.census.payload_objects, 1);
+    }
+
+    #[test]
+    fn writer_emits_no_duplicated_component_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("no-projection.ccs");
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("nodup");
+        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let key = crate::ccs::signing::SigningKeyPair::generate();
+        write_v2_ccs_package(&authority, &payloads, &path, &key, None, None, None).unwrap();
+
+        let mut archive =
+            tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&path).unwrap()));
+        let entries = archive
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.path().unwrap().display().to_string(),
+                    entry.header().entry_type().is_file(),
+                )
+            })
+            .collect::<Vec<_>>();
+
         assert!(
-            contents
-                .blobs
-                .contains_key(&crate::hash::sha256(b"hello world\n"))
+            !entries
+                .iter()
+                .any(|(path, _)| path.starts_with("components")),
+            "{entries:?}"
         );
+        let (first_file, _) = entries
+            .iter()
+            .find(|(_, is_file)| *is_file)
+            .expect("archive carries files");
+        assert_eq!(first_file, "MANIFEST", "{entries:?}");
     }
 }

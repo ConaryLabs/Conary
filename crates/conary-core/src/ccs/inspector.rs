@@ -32,12 +32,10 @@ impl UntrustedPackageInspection {
 
         let contents = inspect_untrusted_ccs_archive(file)?;
 
-        // Collect files from components (spec says files live in components/*.json)
-        let files: Vec<FileEntry> = contents
-            .components
-            .values()
-            .flat_map(|c| c.files.clone())
-            .collect();
+        // Files come from the signed authority. The archive no longer carries a
+        // duplicated `components/*.json` copy of the same records.
+        let files: Vec<FileEntry> =
+            crate::ccs::v2::component_view::file_entries(&contents.v2_authority);
 
         Ok(Self {
             manifest: contents.manifest,

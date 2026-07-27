@@ -569,8 +569,10 @@ packages, install CCS packages, and preserve their exact lifecycle ABIs.
 
 **Start here:** `crates/conary-core/src/ccs/`;
 `crates/conary-core/src/payload.rs`;
+`crates/conary-core/src/ccs/budget.rs`;
 `crates/conary-core/src/ccs/v2/`;
 `crates/conary-core/src/ccs/v2/authoring.rs`;
+`crates/conary-core/src/ccs/v2/component_view.rs`;
 `crates/conary-core/src/ccs/v2/debug_projection.rs`;
 `crates/conary-core/src/repository/supported_profiles/`;
 `crates/conary-core/src/ccs/archive_reader.rs`;
@@ -660,7 +662,10 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `docs/specs/ccs-format-v2.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
-**Focused proof:** `cargo test -p conary-core ccs::v2`;
+**Focused proof:** `cargo test -p conary-core ccs::budget`;
+`cargo test -p conary-core ccs::v2`;
+`cargo test -p conary-core ccs::archive_reader`;
+`cargo test -p conary-core ccs::verify`;
 `cargo test -p conary-core filesystem::cas`;
 `cargo test -p conary-core packages::rpm::payload`;
 `cargo test -p conary-core --lib lifecycle_helpers`;
@@ -685,9 +690,13 @@ crosses Remi publication;
 `docs/specs/static-repo-format-v1.md`; `docs/llms/subsystem-map.md`; the primary
 issue and draft pull request while the change is still in flight.
 
-**Safety notes:** start in `crates/conary-core/src/ccs/v2/` for v2 authority,
-validation, diagnostics, archive reading, debug projection, and content
-identity. Use `archive_reader.rs` and `package.rs` only as
+**Safety notes:** `crates/conary-core/src/ccs/budget.rs` is the sole owner of
+every CCS structural and operator-resource limit. Do not add a limit constant
+to a reader, writer, or archive path: add a dimension to the budget so
+authoring preflight and verification stay one owner and the writer cannot emit
+a package the reader refuses. Start in `crates/conary-core/src/ccs/v2/` for v2
+authority, validation, diagnostics, archive reading, debug projection, and
+content identity. Use `archive_reader.rs` and `package.rs` only as
 version-routing/adaptation surfaces. CCS v2 package and lifecycle authority is
 source-independent and must not contain a destination distro gate; transaction
 planning resolves it against typed host capabilities. Debug TOML is never

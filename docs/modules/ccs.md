@@ -46,6 +46,9 @@ CcsBuilder::new(manifest, source_dir)
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v2_projection.rs | Project verified signed v2 authority into install-time package data |
 | `AuthorityDocumentV2` | v2/schema.rs | Signed CCS v2 native package authority |
+| `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
+| `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
+| Component view | v2/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
 | `ComponentType` | components/types.rs | Closed typed names for standard component metadata; never inferred from payload paths |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
 | `PackageSignature` | signing.rs | Embedded signature with algorithm, key_id, timestamp |
@@ -321,9 +324,21 @@ install-time authority. `MANIFEST.toml` may be present for source/debug
 visibility, but TOML-only install behavior is not native authority. The
 implementation lives under `crates/conary-core/src/ccs/v2/`. CCS v2 is the
 sole native package contract: the repository has no v1 writer, parser,
-projection, fixture factory, or compatibility path. `MANIFEST.toml` and
-component JSON are checked projections only; malformed, unsupported, or
-unsigned authority never falls back to them.
+projection, fixture factory, or compatibility path. `MANIFEST.toml` is a
+checked projection only; malformed, unsupported, or unsigned authority never
+falls back to it. The archive carries no `components/*.json` copy of the signed
+file records: component views are derived from authority in
+`v2/component_view.rs`.
+
+### Structural Budget
+
+`crates/conary-core/src/ccs/budget.rs` owns every CCS limit. There is no fixed
+serialized-byte ceiling on `MANIFEST`: limits are structural counts, per-item
+string and depth bounds, aggregate variable-length pools, payload-object
+bounds, and CBOR nesting depth, and byte ceilings are derived from them. The
+writer admits the authority it is about to sign through the same
+`admit_authority` call verification uses, so a package this repository emits is
+readable by construction. `docs/specs/ccs-format-v2.md` owns the contract.
 
 Configuration authority is exact per path. Each `[[config.files]]` declaration
 and its signed v2 projection carries `noreplace`, `ghost`, and

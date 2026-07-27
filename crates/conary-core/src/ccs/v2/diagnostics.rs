@@ -12,6 +12,7 @@ pub enum V2DiagnosticCode {
     ComponentAuthorityMismatch,
     IdentityUnstable,
     ConversionNotNative,
+    StructuralBudgetExceeded,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

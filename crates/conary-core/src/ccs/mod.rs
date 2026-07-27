@@ -11,6 +11,7 @@
 
 pub mod archive_reader;
 pub mod attestation;
+pub mod budget;
 pub mod builder;
 pub mod chunking;
 pub mod convert;
@@ -30,6 +31,7 @@ pub mod signing;
 pub mod v2;
 pub mod verify;
 
+pub use budget::{AuthorityCensus, BudgetDimension, BudgetError, CCS_BUDGET, CcsStructuralBudget};
 pub use builder::{BuildResult, BuilderError, CcsBuilder, ChunkStats, ComponentData, FileEntry};
 pub use chunking::{Chunk, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats};
 pub use convert::{ConversionOptions, ConversionResult, NativePackageConverter};
