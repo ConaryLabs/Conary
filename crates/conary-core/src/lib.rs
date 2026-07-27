@@ -20,6 +20,7 @@ pub mod components;
 pub mod compression;
 pub mod config_transaction;
 pub mod container;
+pub mod corpus;
 pub mod db;
 pub mod delta;
 pub mod dependencies;

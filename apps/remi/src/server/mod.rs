@@ -62,7 +62,7 @@ pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use lite::{ProxyConfig, run_proxy};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
-pub use prewarm::{PrewarmConfig, PrewarmResult, run_prewarm};
+pub use prewarm::{PrewarmConfig, PrewarmFailure, PrewarmResult, run_prewarm};
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_external_admin_router, create_router};
 pub use search::SearchEngine;

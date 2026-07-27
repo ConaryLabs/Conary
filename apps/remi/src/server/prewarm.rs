@@ -6,6 +6,7 @@
 
 use crate::server::conversion::ConversionService;
 use anyhow::{Context, Result};
+use conary_core::corpus::ConversionFailure;
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -55,8 +56,21 @@ pub struct PrewarmResult {
     pub total_bytes: u64,
     /// List of converted package names
     pub converted: Vec<String>,
-    /// List of failed package names with errors
-    pub failed: Vec<(String, String)>,
+    /// Failed packages with their typed failure category.
+    ///
+    /// The category comes from the concrete error type, so prewarm results can
+    /// be aggregated by authority rather than by message wording. See
+    /// `conary_core::corpus` for the taxonomy.
+    pub failed: Vec<PrewarmFailure>,
+}
+
+/// One package that failed prewarm, with its typed reason.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrewarmFailure {
+    /// `name-version` of the package that failed.
+    pub package: String,
+    /// Typed category plus its human-readable diagnostic.
+    pub failure: ConversionFailure,
 }
 
 /// Popularity data for a package
@@ -191,9 +205,10 @@ async fn run_prewarm_with_permits(
             Err(e) => {
                 warn!("Failed to convert {} {}: {}", pkg.name, pkg.version, e);
                 result.packages_failed += 1;
-                result
-                    .failed
-                    .push((format!("{}-{}", pkg.name, pkg.version), e.to_string()));
+                result.failed.push(PrewarmFailure {
+                    package: format!("{}-{}", pkg.name, pkg.version),
+                    failure: ConversionFailure::classify(&e),
+                });
             }
         }
     }
@@ -386,7 +401,12 @@ mod tests {
             packages_failed: 1,
             total_bytes: 1024 * 1024,
             converted: vec!["nginx-1.24.0".to_string(), "curl-8.0.0".to_string()],
-            failed: vec![("broken-1.0.0".to_string(), "Download failed".to_string())],
+            failed: vec![PrewarmFailure {
+                package: "broken-1.0.0".to_string(),
+                failure: ConversionFailure::Publication {
+                    detail: "Download failed".to_string(),
+                },
+            }],
         };
 
         let json = serde_json::to_string_pretty(&result).unwrap();

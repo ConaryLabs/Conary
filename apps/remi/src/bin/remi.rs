@@ -522,8 +522,13 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
 
         if !result.failed.is_empty() {
             println!("\nFailed packages:");
-            for (package, error) in &result.failed {
-                println!("  {}: {}", package, error);
+            for entry in &result.failed {
+                println!(
+                    "  {} [{}]: {}",
+                    entry.package,
+                    entry.failure.kind().as_str(),
+                    entry.failure.detail()
+                );
             }
         }
 
