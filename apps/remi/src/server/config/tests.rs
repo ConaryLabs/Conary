@@ -48,6 +48,13 @@ fn prewarm_contract_rejects_invalid_interval_and_profile() {
 }
 
 #[test]
+fn conversion_contract_rejects_invalid_concurrency() {
+    let mut invalid_concurrency = RemiConfig::default();
+    invalid_concurrency.conversion.max_concurrent = 0;
+    assert!(invalid_concurrency.validate().is_err());
+}
+
+#[test]
 fn test_storage_dirs() {
     let config = RemiConfig::default();
     let dirs = config.storage_dirs();

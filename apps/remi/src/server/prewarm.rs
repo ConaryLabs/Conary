@@ -10,7 +10,12 @@ use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
+
+mod scheduler;
+
+pub(crate) use scheduler::run_prewarm_jobs;
 
 /// Pre-warming configuration
 #[derive(Debug, Clone)]
@@ -65,6 +70,13 @@ pub struct PackagePopularity {
 
 /// Run pre-warming job
 pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
+    run_prewarm_with_permits(config, None).await
+}
+
+async fn run_prewarm_with_permits(
+    config: &PrewarmConfig,
+    conversion_permits: Option<&Semaphore>,
+) -> Result<PrewarmResult> {
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(&config.distro)
             .ok_or_else(|| {
@@ -143,6 +155,15 @@ pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
 
         info!("Converting {} {}...", pkg.name, pkg.version);
 
+        let _permit = match conversion_permits {
+            Some(permits) => Some(
+                permits
+                    .acquire()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("conversion semaphore closed"))?,
+            ),
+            None => None,
+        };
         match conversion_service
             .convert_package_async(
                 &config.distro,

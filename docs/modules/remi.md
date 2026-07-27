@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 9
+revision: 10
 summary: Document Remi source, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -51,11 +51,15 @@ read-only deployment inspection. It snapshots a current database or retires an
 old schema epoch before replacement, so health failure can restore config,
 source authority, and SQLite state together. Startup reconciles the installed
 manifest before opening listeners, then immediately refreshes metadata and
-runs prewarm jobs. Multi-source refresh returns one typed result or failure per
-source. A source failure remains visible but cannot discard successful source
-commits or suppress prewarm for another exact profile. Prewarm eligibility
-comes only from the successful result's persisted `source_profile`; repository
-names, URLs, formats, and error text are not selectors.
+runs eligible exact-profile prewarm jobs concurrently under the configured
+conversion bound shared with request-driven conversions. Each profile preserves
+its own top-N ordering and sequential conversion semantics, while a slow first
+profile cannot starve the profiles after it. Multi-source refresh returns one
+typed result or failure per source. A source failure remains visible but cannot
+discard successful source commits or suppress prewarm for another exact
+profile. Prewarm eligibility comes only from the successful result's persisted
+`source_profile`; repository names, URLs, formats, and error text are not
+selectors.
 
 Both internal and external `POST /v1/admin/refresh` routes use the same response
 projection: HTTP 200 means every source completed or was current, 207 carries a
@@ -69,7 +73,9 @@ so concurrent completion order is not API order.
 `apps/remi/src/server/admin_service/refresh.rs` owns the batch state, typed
 per-source results, and bounded concurrent collection. `server/mod.rs` owns the
 exact-profile handoff from successful refresh results into configured prewarm
-jobs; HTTP handlers only publish events and project the shared batch.
+jobs; `apps/remi/src/server/prewarm/scheduler.rs` owns their bounded fair
+execution and complete outcome collection. HTTP handlers only publish events
+and project the shared batch.
 
 ## Durable Repository Signing Authority
 
