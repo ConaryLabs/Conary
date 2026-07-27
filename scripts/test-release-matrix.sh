@@ -96,6 +96,7 @@ create_release_fixture() {
     printf '.TH conary 1 "" "conary 0.7.0"\n' > "$repo/apps/conary/man/conary.1"
     printf '# release fixture lockfile\n' > "$repo/Cargo.lock"
     printf '/apps/conary/man/\n' > "$repo/.gitignore"
+    printf '%s' $'# Changelog\n\nFixture release history.\n\nEntries are newest first.\n\n## [fixture] - 2026-01-01\n' > "$repo/CHANGELOG.md"
 
     cat > "$repo/test-bin/cargo" <<'EOF'
 #!/usr/bin/env bash
@@ -506,6 +507,9 @@ test_release_prepare_only_updates_all_conary_test_manifests() {
     assert_contains "$staged_files" \
         "crates/conary-agent-contract/Cargo.toml" \
         "prepare-only should stage the agent contract version"
+    assert_contains "$(<"$repo/CHANGELOG.md")" \
+        $'- add exact lifecycle proof\n\n## [fixture]' \
+        "release notes should leave a blank line before prior history"
 
     output="$(run_release_dry_run "$repo" conary-test --target conary-test=0.9.0)"
     assert_contains "$output" \

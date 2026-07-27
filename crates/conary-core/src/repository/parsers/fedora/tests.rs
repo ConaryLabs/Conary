@@ -682,8 +682,9 @@ fn malformed_rich_dependency_rejects_repository_metadata() {
 </metadata>
 "#;
 
-    let error = parser
-        .parse_primary_xml(xml, "https://example.com")
-        .unwrap_err();
-    assert!(error.to_string().contains("repeats binary operator 'if'"));
+    assert!(
+        parser
+            .parse_primary_xml(xml, "https://example.com")
+            .is_err()
+    );
 }

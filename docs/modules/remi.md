@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 7
+last_updated: 2026-07-27
+revision: 8
 summary: Document Remi source, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -51,9 +51,25 @@ read-only deployment inspection. It snapshots a current database or retires an
 old schema epoch before replacement, so health failure can restore config,
 source authority, and SQLite state together. Startup reconciles the installed
 manifest before opening listeners, then immediately refreshes metadata and
-runs prewarm jobs. The release deployment gate requires exact source
-reconciliation, all sources populated, and at least one conversion and
-validated converted artifact for every configured public profile.
+runs prewarm jobs. Multi-source refresh returns one typed result or failure per
+source. A source failure remains visible but cannot discard successful source
+commits or suppress prewarm for another exact profile. Prewarm eligibility
+comes only from the successful result's persisted `source_profile`; repository
+names, URLs, formats, and error text are not selectors.
+
+Both internal and external `POST /v1/admin/refresh` routes use the same response
+projection: HTTP 200 means every source completed or was current, 207 carries a
+mixed success/failure batch, and 502 means every configured source failed.
+Global database/setup failures remain HTTP 500. The release deployment gate
+still requires exact source reconciliation, all sources populated, and at
+least one conversion and validated converted artifact for every configured
+public profile. Result and failure arrays are sorted by exact repository name,
+so concurrent completion order is not API order.
+
+`apps/remi/src/server/admin_service/refresh.rs` owns the batch state, typed
+per-source results, and bounded concurrent collection. `server/mod.rs` owns the
+exact-profile handoff from successful refresh results into configured prewarm
+jobs; HTTP handlers only publish events and project the shared batch.
 
 ## Canonical Map Exchange
 

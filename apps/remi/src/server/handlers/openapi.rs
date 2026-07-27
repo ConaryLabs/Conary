@@ -285,21 +285,37 @@ pub async fn openapi_spec() -> Response {
                 "post": {
                     "operationId": "syncRepo",
                     "summary": "Trigger repository metadata sync",
-                    "description": "Starts an asynchronous metadata sync for the specified repository. Returns immediately with 202. Monitor progress via the SSE events endpoint with ?filter=repo. Requires repos:write scope.",
+                    "description": "Synchronously refreshes the specified repository and returns its exact source profile and package count. Requires repos:write scope.",
                     "tags": ["repos"],
                     "security": [{ "bearerAuth": [] }],
-                    "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository identifier" }],
-                    "responses": { "202": { "description": "Sync started" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" } }
+                    "parameters": [
+                        { "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository identifier" },
+                        { "name": "force", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "description": "Refresh even when metadata is still current" }
+                    ],
+                    "responses": { "200": { "description": "Repository synchronized or already current" }, "401": { "description": "Invalid or missing token" }, "404": { "description": "Repository not found" }, "500": { "description": "Repository synchronization failed" } }
                 }
             },
             "/v1/admin/refresh": {
                 "post": {
                     "operationId": "refreshRepos",
                     "summary": "Refresh upstream repository state",
-                    "description": "Triggers a repository refresh across configured upstreams. Use repository sync endpoints for per-repo refreshes.",
+                    "description": "Synchronously refreshes every configured upstream and returns typed per-source outcomes. Successful sources commit independently; one failed source does not discard other results. A complete refresh returns 200, a mixed result returns 207, and an all-failed refresh returns 502.",
                     "tags": ["repos"],
                     "security": [{ "bearerAuth": [] }],
-                    "responses": { "202": { "description": "Refresh queued" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                    "parameters": [{
+                        "name": "force",
+                        "in": "query",
+                        "required": false,
+                        "schema": { "type": "boolean", "default": false },
+                        "description": "Refresh sources even when their metadata is still current"
+                    }],
+                    "responses": {
+                        "200": { "description": "Every configured source completed or was current" },
+                        "207": { "description": "Some sources completed and some failed; the body contains both outcome sets" },
+                        "401": { "description": "Invalid or missing token" },
+                        "403": { "description": "Insufficient scope" },
+                        "502": { "description": "Every configured source failed; the body contains typed per-source failures" }
+                    }
                 }
             },
             "/v1/admin/federation/peers": {

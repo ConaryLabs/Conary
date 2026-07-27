@@ -94,7 +94,7 @@ pub fn parse_native_relation(
     }
 
     let expression = match scheme {
-        VersionScheme::Rpm => super::rpm_dependency::parse_rpm_dependency(native_text)?,
+        VersionScheme::Rpm => super::rpm_dependency::parse_rpm_dependency(kind, native_text)?,
         VersionScheme::Debian => parse_debian_relation(native_text)?,
         VersionScheme::Arch => RepositoryRequirementExpression::Atom(parse_arch_atom(native_text)?),
         VersionScheme::Conary => {

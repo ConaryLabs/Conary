@@ -10,7 +10,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::server::ServerState;
-use crate::server::admin_service::{self, CreateRepoInput, UpdateRepoInput};
+use crate::server::admin_service::{
+    self, CreateRepoInput, RepoRefreshBatch, RepoRefreshBatchState, UpdateRepoInput,
+};
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use conary_core::db::models::RepositoryOwnership;
 use conary_core::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
@@ -352,6 +354,7 @@ pub async fn sync_repo(
                 "repo.synced",
                 serde_json::json!({
                     "name": &result.name,
+                    "source_profile": &result.source_profile,
                     "packages_synced": result.packages_synced,
                     "skipped": result.skipped,
                     "force": query.force,
@@ -361,6 +364,7 @@ pub async fn sync_repo(
             Json(serde_json::json!({
                 "status": if result.skipped { "up_to_date" } else { "synced" },
                 "name": result.name,
+                "source_profile": result.source_profile,
                 "packages_synced": result.packages_synced,
                 "skipped": result.skipped,
                 "force": query.force,
@@ -389,41 +393,60 @@ pub async fn refresh_repos(
     }
 
     match admin_service::refresh_repositories(&state, query.force).await {
-        Ok(results) => {
-            let synced = results.iter().filter(|r| !r.skipped).count();
-            let skipped = results.iter().filter(|r| r.skipped).count();
-
-            let guard = state.read().await;
-            guard.publish_event(
-                "repos.refreshed",
-                serde_json::json!({
-                    "force": query.force,
-                    "synced": synced,
-                    "skipped": skipped,
-                }),
-            );
-            drop(guard);
-
-            Json(serde_json::json!({
-                "status": "ok",
-                "force": query.force,
-                "synced": synced,
-                "skipped": skipped,
-                "results": results
-                    .into_iter()
-                    .map(|r| serde_json::json!({
-                        "name": r.name,
-                        "packages_synced": r.packages_synced,
-                        "skipped": r.skipped,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
-            .into_response()
-        }
+        Ok(batch) => refresh_batch_response(&state, query.force, batch).await,
         Err(e) => {
             tracing::error!("Failed to refresh repositories: {e}");
             json_error(500, "Failed to refresh repositories", "INTERNAL_ERROR")
         }
+    }
+}
+
+/// Publish and render the one canonical multi-source refresh result.
+pub(crate) async fn refresh_batch_response(
+    state: &Arc<RwLock<ServerState>>,
+    force: bool,
+    batch: RepoRefreshBatch,
+) -> Response {
+    let batch_state = batch.state();
+    let synced = batch.synced_count();
+    let skipped = batch.skipped_count();
+    let failed = batch.failures.len();
+    let status_code = refresh_status_code(batch_state);
+
+    {
+        let guard = state.read().await;
+        guard.publish_event(
+            "repos.refreshed",
+            serde_json::json!({
+                "force": force,
+                "state": batch_state,
+                "synced": synced,
+                "skipped": skipped,
+                "failed": failed,
+            }),
+        );
+    }
+
+    (
+        status_code,
+        Json(serde_json::json!({
+            "status": batch_state.as_str(),
+            "force": force,
+            "synced": synced,
+            "skipped": skipped,
+            "failed": failed,
+            "results": batch.results,
+            "failures": batch.failures,
+        })),
+    )
+        .into_response()
+}
+
+fn refresh_status_code(batch_state: RepoRefreshBatchState) -> StatusCode {
+    match batch_state {
+        RepoRefreshBatchState::Complete => StatusCode::OK,
+        RepoRefreshBatchState::Partial => StatusCode::MULTI_STATUS,
+        RepoRefreshBatchState::Failed => StatusCode::BAD_GATEWAY,
     }
 }
 
@@ -433,6 +456,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::test_helpers::{rebuild_app, test_app};
+    use super::{RepoRefreshBatchState, refresh_status_code};
 
     #[tokio::test]
     async fn test_repo_crud_lifecycle() {
@@ -606,9 +630,26 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["status"], "ok");
+        assert_eq!(body["status"], "complete");
         assert_eq!(body["synced"], 0);
         assert_eq!(body["skipped"], 0);
+        assert_eq!(body["failed"], 0);
+    }
+
+    #[test]
+    fn refresh_batch_state_has_distinct_http_outcomes() {
+        assert_eq!(
+            refresh_status_code(RepoRefreshBatchState::Complete),
+            StatusCode::OK
+        );
+        assert_eq!(
+            refresh_status_code(RepoRefreshBatchState::Partial),
+            StatusCode::MULTI_STATUS
+        );
+        assert_eq!(
+            refresh_status_code(RepoRefreshBatchState::Failed),
+            StatusCode::BAD_GATEWAY
+        );
     }
 
     #[tokio::test]

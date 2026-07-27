@@ -68,6 +68,7 @@ pub use security::BanList;
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -93,6 +94,14 @@ async fn ensure_admin_bootstrap_token(
     })
     .await??;
     Ok(())
+}
+
+fn successful_refresh_profiles(batch: &admin_service::RepoRefreshBatch) -> HashSet<&str> {
+    batch
+        .results
+        .iter()
+        .filter_map(|result| result.source_profile.as_deref())
+        .collect()
 }
 
 /// Server configuration
@@ -565,15 +574,34 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                 match crate::server::admin_service::refresh_repositories(&refresh_state, false)
                     .await
                 {
-                    Ok(results) => {
-                        let synced = results.iter().filter(|r| !r.skipped).count();
-                        let skipped = results.iter().filter(|r| r.skipped).count();
+                    Ok(batch) => {
+                        let synced = batch.synced_count();
+                        let skipped = batch.skipped_count();
                         tracing::info!(
-                            "Background metadata refresh complete: {} synced, {} skipped",
+                            "Background metadata refresh {}: {} synced, {} skipped, {} failed",
+                            batch.state().as_str(),
                             synced,
-                            skipped
+                            skipped,
+                            batch.failures.len()
                         );
+                        for failure in &batch.failures {
+                            tracing::warn!(
+                                repository = %failure.name,
+                                source_profile = failure.source_profile.as_deref().unwrap_or("<none>"),
+                                kind = ?failure.kind,
+                                "Repository metadata refresh failed: {}",
+                                failure.message
+                            );
+                        }
+                        let successful_profiles = successful_refresh_profiles(&batch);
                         for job in &prewarm_jobs {
+                            if !successful_profiles.contains(job.distro.as_str()) {
+                                tracing::warn!(
+                                    "Post-refresh pre-warm for {} skipped: no repository for that exact profile completed refresh",
+                                    job.distro
+                                );
+                                continue;
+                            }
                             match prewarm::run_prewarm(job).await {
                                 Ok(result) => tracing::info!(
                                     "Post-refresh pre-warm for {}: {} converted, {} skipped, {} failed",
@@ -736,6 +764,10 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 mod tests {
     use super::{
         build_http_client, ensure_admin_bootstrap_token, ensure_database_ready, open_runtime_db,
+        successful_refresh_profiles,
+    };
+    use crate::server::admin_service::{
+        RepoRefreshBatch, RepoRefreshFailure, RepoRefreshFailureKind, RepoRefreshResult,
     };
 
     fn test_db_path() -> std::path::PathBuf {
@@ -814,6 +846,38 @@ mod tests {
         let err = build_http_client(std::time::Duration::from_secs(30), "bad\0agent")
             .expect_err("invalid user agent should be surfaced as an error");
         assert!(err.to_string().contains("HTTP client"));
+    }
+
+    #[test]
+    fn failed_source_does_not_remove_successful_prewarm_profiles() {
+        let batch = RepoRefreshBatch {
+            results: vec![
+                RepoRefreshResult {
+                    name: "fedora".to_string(),
+                    source_profile: Some("fedora-44".to_string()),
+                    packages_synced: 76_354,
+                    skipped: false,
+                },
+                RepoRefreshResult {
+                    name: "ubuntu".to_string(),
+                    source_profile: Some("ubuntu-26.04".to_string()),
+                    packages_synced: 6_487,
+                    skipped: false,
+                },
+            ],
+            failures: vec![RepoRefreshFailure {
+                name: "arch-extra".to_string(),
+                source_profile: Some("arch".to_string()),
+                kind: RepoRefreshFailureKind::Internal,
+                message: "source unavailable".to_string(),
+            }],
+        };
+
+        let profiles = successful_refresh_profiles(&batch);
+        assert_eq!(profiles.len(), 2);
+        assert!(profiles.contains("fedora-44"));
+        assert!(profiles.contains("ubuntu-26.04"));
+        assert!(!profiles.contains("arch"));
     }
 
     #[test]

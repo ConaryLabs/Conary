@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 56
+revision: 57
 summary: Route feature ownership through streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
 ---
 
@@ -381,6 +381,7 @@ package transactions.
 `crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
 `crates/conary-core/src/repository/sync.rs`;
 `crates/conary-core/src/repository/download.rs`;
+`crates/conary-core/src/repository/rpm_dependency.rs`;
 `crates/conary-core/src/repository/requirement.rs`;
 `crates/conary-core/src/repository/package_relation.rs`;
 `crates/conary-core/src/repository/resolution_policy.rs`;
@@ -402,6 +403,7 @@ selection; installed package state; model replatform planning; Remi repository
 manifests, admin routes, and hosted feed configuration.
 
 **Paths:** `crates/conary-core/src/repository/*`;
+`crates/conary-core/tests/fixtures/rpm/*`;
 `crates/conary-core/src/resolver/*`;
 `crates/conary-core/src/transaction/package_relations.rs`;
 `crates/conary-core/src/transaction/package_relations/*`;
@@ -987,6 +989,9 @@ release uploads, and static test fixtures through Remi.
 
 **Start here:** `apps/remi/src/server/release_publish.rs`;
 `apps/remi/src/deployment.rs`;
+`apps/remi/src/server/mod.rs`;
+`apps/remi/src/server/admin_service.rs`;
+`apps/remi/src/server/admin_service/refresh.rs`;
 `apps/remi/src/server/repository_manifest.rs`;
 `deploy/remi-repositories.toml`;
 `crates/conary-core/src/db/current_schema/sql/remi.sql`;
@@ -1017,6 +1022,7 @@ feed profiles.
 
 **Focused proof:** `cargo test -p remi release_upload_`;
 `cargo test -p remi native_publish`;
+`cargo test -p remi refresh`;
 `cargo test -p conary --test packaging_m4c`;
 `cargo test -p remi remi_release_parity`;
 `cargo test -p remi conversion`;

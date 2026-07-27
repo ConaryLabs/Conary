@@ -24,7 +24,7 @@ pub fn parse_native_requirement(
     }
 
     let expression = match scheme {
-        VersionScheme::Rpm => super::rpm_dependency::parse_rpm_dependency(native_text)?,
+        VersionScheme::Rpm => super::rpm_dependency::parse_rpm_dependency(kind, native_text)?,
         VersionScheme::Debian => {
             let operands = native_text
                 .split('|')
@@ -191,6 +191,7 @@ mod tests {
     #[test]
     fn accepts_full_rpm_boolean_requirement() {
         let expression = parse_rpm_dependency(
+            RepositoryRequirementKind::Depends,
             "((feature-a with feature-b) if engine else (fallback without incompatible))",
         )
         .unwrap();

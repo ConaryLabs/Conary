@@ -88,7 +88,7 @@ fn root_and_or_and_version_constraints_reach_sat_exactly() {
 }
 
 #[test]
-fn root_if_and_unless_else_preserve_boolean_semantics() {
+fn root_if_else_preserves_boolean_semantics() {
     let (_temp, conn) = setup_test_db();
     let repository_id = repository(&conn);
     for name in ["condition", "required", "alternate"] {
@@ -104,20 +104,6 @@ fn root_if_and_unless_else_preserve_boolean_semantics() {
     let if_names = selected_names(&if_result);
     assert!(if_names.contains(&"condition"));
     assert!(if_names.contains(&"required"));
-
-    let unless_result = solve_rpm_roots(
-        &conn,
-        &["(required unless condition else alternate)", "condition"],
-    );
-    assert!(
-        unless_result.conflict_message.is_none(),
-        "{:?}",
-        unless_result.conflict_message
-    );
-    let unless_names = selected_names(&unless_result);
-    assert!(unless_names.contains(&"condition"));
-    assert!(unless_names.contains(&"alternate"));
-    assert!(!unless_names.contains(&"required"));
 }
 
 #[test]

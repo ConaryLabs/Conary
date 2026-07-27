@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.8.2] - 2026-07-27
+
+### Fixed
+- isolate repository refresh outcomes
+- match RPM rich dependency grammar
+- sign canonical CCS artifacts (#90)
+
 ## [remi-v0.8.1] - 2026-07-27
 
 ### Fixed
