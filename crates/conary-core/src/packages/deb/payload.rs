@@ -23,6 +23,7 @@ use crate::payload::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::path::{Component, Path};
 #[cfg(test)]
 use std::sync::Arc;
 
@@ -168,6 +169,7 @@ fn parse_reader(
     let mut pending_long_name: Option<Vec<u8>> = None;
     let mut pending_long_link: Option<Vec<u8>> = None;
     let mut entries_seen = 0usize;
+    let mut archive_root_seen = false;
 
     while let Some(block) = read_header_block(&mut reader)? {
         if block.iter().all(|byte| *byte == 0) {
@@ -200,7 +202,22 @@ fn parse_reader(
 
         let raw_path = utf8_field(&header.path, "entry path")?;
         let directory_from_trailing_slash =
-            header.entry_type == TYPE_REGULAR && raw_path.ends_with('/');
+            matches!(header.entry_type, TYPE_REGULAR_OLD | TYPE_REGULAR) && raw_path.ends_with('/');
+        if is_archive_root_path(raw_path) {
+            if header.entry_type != TYPE_DIRECTORY && !directory_from_trailing_slash {
+                return Err(data_tar_error(format!(
+                    "archive root entry {raw_path:?} is not a directory"
+                )));
+            }
+            require_zero_size("/", header.size, "archive root directory")?;
+            if archive_root_seen {
+                return Err(data_tar_error(
+                    "duplicate archive root directory is not representable",
+                ));
+            }
+            archive_root_seen = true;
+            continue;
+        }
         let raw_path = if directory_from_trailing_slash {
             raw_path.trim_end_matches('/')
         } else {
@@ -303,6 +320,15 @@ fn parse_reader(
 
     resolve_hardlinks(&mut entries)?;
     Ok(entries)
+}
+
+/// dpkg normalizes leading slash/current-directory components onto its
+/// extraction root. That root is container metadata, not one package-owned
+/// deployable path in Conary's selected-root payload model.
+fn is_archive_root_path(path: &str) -> bool {
+    let mut components = Path::new(path).components().peekable();
+    components.peek().is_some()
+        && components.all(|component| matches!(component, Component::RootDir | Component::CurDir))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

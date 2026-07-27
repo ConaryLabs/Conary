@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - carry typed SHA-256 source identities through native conversion so Remi
   prewarming emits and persists signed CCS packages (#95)
+- accept dpkg's exact zero-sized archive-root directory as container metadata
+  without admitting an empty deployable package path (#95)
 
 ## [remi-v0.8.3] - 2026-07-27
 
