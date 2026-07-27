@@ -149,8 +149,8 @@ pub async fn try_convert_to_ccs(
                     "Failed to stream package checksum: {}",
                     package_path.display()
                 )
-            })?
-            .to_prefixed_string();
+            })?;
+    let original_checksum_text = original_checksum.to_prefixed_string();
 
     // Determine format string
     let format_str = match format {
@@ -165,13 +165,13 @@ pub async fn try_convert_to_ccs(
     // Check if already converted (skip re-conversion)
     if let Some(existing) = conary_core::db::models::ConvertedPackage::find_installed_by_checksum(
         &conn,
-        &original_checksum,
+        &original_checksum_text,
     )? {
         if existing.needs_reconversion() {
             info!("Re-converting {} (algorithm upgraded)", pkg.name());
             conary_core::db::models::ConvertedPackage::delete_installed_by_checksum(
                 &conn,
-                &original_checksum,
+                &original_checksum_text,
             )?;
         } else {
             // Already converted and up to date

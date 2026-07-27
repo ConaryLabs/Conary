@@ -35,6 +35,52 @@ fn finish(builder: Builder<Vec<u8>>) -> Vec<u8> {
 }
 
 #[test]
+fn accepts_one_exact_archive_root_directory_as_container_metadata() {
+    let mut builder = Builder::new(Vec::new());
+    append(&mut builder, "./", EntryType::Directory, 0o755, &[], None);
+    append(
+        &mut builder,
+        "./usr/bin/tool",
+        EntryType::Regular,
+        0o755,
+        b"tool",
+        None,
+    );
+
+    let parsed = parse_package_files(&finish(builder)).unwrap();
+
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].path, "/usr/bin/tool");
+    assert_eq!(parsed[0].content.as_ref().unwrap().size, 4);
+}
+
+#[test]
+fn archive_root_must_be_one_zero_sized_directory() {
+    let mut duplicate = Builder::new(Vec::new());
+    append(&mut duplicate, "./", EntryType::Directory, 0o755, &[], None);
+    append(&mut duplicate, "./", EntryType::Directory, 0o755, &[], None);
+    let error = parse_package_files(&finish(duplicate)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate archive root directory"),
+        "{error}"
+    );
+
+    let mut regular = Builder::new(Vec::new());
+    append(
+        &mut regular,
+        ".",
+        EntryType::Regular,
+        0o755,
+        b"not-a-directory",
+        None,
+    );
+    let error = parse_package_files(&finish(regular)).unwrap_err();
+    assert!(error.to_string().contains("is not a directory"), "{error}");
+}
+
+#[test]
 fn parses_exact_posix_nodes_and_hardlink_identity() {
     let mut builder = Builder::new(Vec::new());
     builder.mode(HeaderMode::Complete);

@@ -30,7 +30,9 @@ impl InMemoryConversionForTest for NativePackageConverter {
     ) -> Result<ConversionResult, ConversionError> {
         let payload = crate::packages::PackagePayload::from_extracted_in_memory(files.to_vec())
             .map_err(|error| ConversionError::IoError(error.to_string()))?;
-        self.convert_payload(metadata, payload.files(), format, checksum)
+        let checksum =
+            crate::hash::Hash::parse_prefixed(checksum).expect("valid conversion test checksum");
+        self.convert_payload(metadata, payload.files(), format, &checksum)
     }
 }
 
@@ -234,6 +236,27 @@ fn passive_test_converter(output_dir: &std::path::Path) -> NativePackageConverte
     .with_signing_key(std::sync::Arc::new(
         crate::ccs::signing::SigningKeyPair::generate().with_key_id("converter-test"),
     ))
+}
+
+#[test]
+fn conversion_requires_typed_sha256_source_identity() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let metadata = make_test_metadata();
+    let files = make_test_files();
+    let payload = crate::packages::PackagePayload::from_extracted_in_memory(files).unwrap();
+    let checksum =
+        crate::hash::Hash::new(crate::hash::HashAlgorithm::Xxh128, "a".repeat(32)).unwrap();
+
+    let error = passive_test_converter(temp_dir.path())
+        .convert_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("source checksum must use SHA-256"),
+        "{error}"
+    );
 }
 
 fn verified_converted_package(result: &ConversionResult) -> crate::ccs::CcsPackage {

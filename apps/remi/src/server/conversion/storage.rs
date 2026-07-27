@@ -179,10 +179,13 @@ impl ConversionService {
         })
     }
 
-    /// Calculate SHA-256 checksum of a file
-    pub(super) fn calculate_checksum(path: &Path) -> Result<String> {
+    /// Calculate the typed SHA-256 checksum of a file.
+    pub(super) fn calculate_sha256(path: &Path) -> Result<conary_core::hash::Hash> {
         let mut file = std::fs::File::open(path)?;
-        Ok(conary_core::hash::sha256_reader_hex(&mut file)?)
+        Ok(conary_core::hash::hash_reader(
+            conary_core::hash::HashAlgorithm::Sha256,
+            &mut file,
+        )?)
     }
 }
 
@@ -216,17 +219,18 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_checksum_valid_file() {
+    fn calculated_sha256_is_typed_and_serializes_with_algorithm() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.pkg");
         std::fs::write(&file_path, b"hello world").unwrap();
 
-        let checksum = ConversionService::calculate_checksum(&file_path).unwrap();
+        let checksum = ConversionService::calculate_sha256(&file_path).unwrap();
         // SHA-256 of "hello world"
         assert_eq!(
-            checksum,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+            checksum.to_prefixed_string(),
+            "sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+        assert_eq!(checksum.algorithm, conary_core::hash::HashAlgorithm::Sha256);
     }
 
     #[test]
@@ -235,17 +239,17 @@ mod tests {
         let file_path = temp_dir.path().join("empty.pkg");
         std::fs::write(&file_path, b"").unwrap();
 
-        let checksum = ConversionService::calculate_checksum(&file_path).unwrap();
+        let checksum = ConversionService::calculate_sha256(&file_path).unwrap();
         // SHA-256 of empty string
         assert_eq!(
-            checksum,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            checksum.to_prefixed_string(),
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
 
     #[test]
     fn test_calculate_checksum_missing_file() {
-        let result = ConversionService::calculate_checksum(Path::new("/nonexistent/file.pkg"));
+        let result = ConversionService::calculate_sha256(Path::new("/nonexistent/file.pkg"));
         assert!(result.is_err());
     }
 

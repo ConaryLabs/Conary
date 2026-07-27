@@ -120,14 +120,15 @@ impl ConversionService {
         let checksum_path = pkg_path.clone();
         let started = Instant::now();
         let original_checksum =
-            tokio::task::spawn_blocking(move || Self::calculate_checksum(&checksum_path))
+            tokio::task::spawn_blocking(move || Self::calculate_sha256(&checksum_path))
                 .await
                 .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
         timing.record(ConversionPhase::Checksum, started.elapsed());
+        let original_checksum_text = original_checksum.to_prefixed_string();
 
         let started = Instant::now();
         if let Some(existing) = self
-            .cached_conversion_result_async(source_feed.id(), &repo_pkg, &original_checksum)
+            .cached_conversion_result_async(source_feed.id(), &repo_pkg, &original_checksum_text)
             .await?
         {
             timing.record(ConversionPhase::CacheLookup, started.elapsed());
@@ -223,7 +224,7 @@ impl ConversionService {
         repo_pkg: RepositoryPackage,
         pkg_path: PathBuf,
         output_dir: PathBuf,
-        original_checksum: String,
+        original_checksum: conary_core::hash::Hash,
     ) -> Result<ParsedConversion> {
         let mut phase_timings = Vec::new();
         let mut skipped_phases = Vec::new();
@@ -286,7 +287,7 @@ impl ConversionService {
         Ok(ParsedConversion {
             metadata,
             format,
-            original_checksum,
+            original_checksum: original_checksum.to_prefixed_string(),
             conversion_result,
             repo_pkg,
             phase_timings,

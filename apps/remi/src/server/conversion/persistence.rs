@@ -92,7 +92,7 @@ impl ConversionService {
             .as_ref()
             .ok_or_else(|| anyhow!("No CCS package path"))?;
 
-        let content_hash = Self::calculate_checksum(ccs_path)?;
+        let content_hash = Self::calculate_sha256(ccs_path)?.to_prefixed_string();
         let total_size = std::fs::metadata(ccs_path)?.len();
 
         let package_architecture = repo_pkg

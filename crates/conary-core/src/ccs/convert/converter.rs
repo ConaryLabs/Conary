@@ -27,6 +27,7 @@ use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::signing::SigningKeyPair;
 use crate::ccs::v2::PackageKindTagV2;
+use crate::hash::{Hash, HashAlgorithm};
 use crate::packages::common::PackageMetadata;
 use crate::packages::payload::PackagePayloadFile;
 use crate::recipe::hermetic::{
@@ -135,8 +136,15 @@ impl NativePackageConverter {
         metadata: &PackageMetadata,
         files: &[PackagePayloadFile],
         format: &str,
-        checksum: &str,
+        checksum: &Hash,
     ) -> Result<ConversionResult, ConversionError> {
+        if checksum.algorithm != HashAlgorithm::Sha256 {
+            return Err(ConversionError::ManifestError(format!(
+                "foreign conversion source checksum must use SHA-256, got '{}'",
+                checksum.algorithm
+            )));
+        }
+        let checksum = checksum.to_prefixed_string();
         let final_metadata = metadata.clone();
         let expected_version_scheme = match format {
             "rpm" => VersionScheme::Rpm,
@@ -160,7 +168,7 @@ impl NativePackageConverter {
         let build_risk_report = classify_foreign_build_body_risk(format, files);
         let scriptlet_risk_report = classify_foreign_scriptlet_risk(metadata);
         let conversion_evidence =
-            foreign_conversion_evidence(format, checksum, metadata, &build_risk_report);
+            foreign_conversion_evidence(format, &checksum, metadata, &build_risk_report);
         let conversion_evidence_hash =
             canonical_json_hash(&conversion_evidence).map_err(|error| {
                 ConversionError::ManifestError(format!(
@@ -185,7 +193,7 @@ impl NativePackageConverter {
             source_profile: self.source_profile.as_deref(),
             source_release: self.source_release.as_deref(),
             source_arch: metadata.architecture.as_deref(),
-            source_checksum: Some(checksum),
+            source_checksum: Some(&checksum),
             conversion_tool: self.conversion_tool.as_str(),
             conversion_tool_version: env!("CARGO_PKG_VERSION"),
         })
@@ -269,7 +277,7 @@ impl NativePackageConverter {
         let boundary = ForeignConversionBoundary {
             schema_version: FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
             source_format: format.to_string(),
-            source_checksum: checksum.to_string(),
+            source_checksum: checksum.clone(),
             output_identity,
             build_risk_report_hash: Some(build_risk_report_hash),
             build_risk_report: Some(build_risk_report),
@@ -328,7 +336,7 @@ impl NativePackageConverter {
             ))
         })?;
         let provenance = if artifact_exists {
-            NativeProvenance::extract_from_path(format, checksum, &metadata.package_path).map_err(
+            NativeProvenance::extract_from_path(format, &checksum, &metadata.package_path).map_err(
                 |error| {
                     ConversionError::IoError(format!(
                         "Failed to extract native package provenance: {error:#}"
@@ -340,7 +348,7 @@ impl NativePackageConverter {
                 "Native package artifact is unavailable for provenance inspection: {:?}",
                 metadata.package_path
             );
-            NativeProvenance::new(format, checksum)
+            NativeProvenance::new(format, &checksum)
         };
         if provenance.has_content() {
             tracing::info!(
@@ -357,7 +365,7 @@ impl NativePackageConverter {
             build_result,
             package_path: Some(package_path),
             original_format: format.to_string(),
-            original_checksum: checksum.to_string(),
+            original_checksum: checksum,
             native_provenance,
             native_lifecycle: Some(scriptlet_bundle.bundle),
             scriptlet_metadata: scriptlet_bundle.summary,
