@@ -2,6 +2,7 @@
 //! Recipe URL fetching, SSRF validation, and server-side recipe builds.
 
 use super::{ConversionService, ScriptletPackageMetadata, ServerConversionResult};
+use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use tempfile::TempDir;
@@ -49,9 +50,7 @@ impl ConversionService {
         let keys_dir = self.repository_keys_dir.as_ref().context(
             "Remi recipe builds require release_publish.repository_keys_dir for CCS authority signing",
         )?;
-        let key_path = keys_dir.join(profile.id()).join("targets.private");
-        let signing_key = conary_core::ccs::SigningKeyPair::load_from_file(&key_path)
-            .with_context(|| format!("load Remi recipe signing key {}", key_path.display()))?;
+        let signing_key = load_role_key(keys_dir, profile.id(), RepositorySigningRole::Targets)?;
         let config = KitchenConfig {
             source_cache: self.cache_dir.join("sources"),
             use_isolation: true, // Always use isolation on server

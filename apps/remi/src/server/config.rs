@@ -722,6 +722,18 @@ impl RemiConfig {
                 );
             }
         }
+        if self.repository_manifest.is_some() {
+            let keys_dir = self
+                .release_publish
+                .repository_keys_dir
+                .as_deref()
+                .context(
+                    "release_publish.repository_keys_dir is required with repository_manifest",
+                )?;
+            if !keys_dir.is_absolute() {
+                anyhow::bail!("release_publish.repository_keys_dir must be an absolute path");
+            }
+        }
 
         // Validate federation tier
         let valid_tiers = ["region_hub", "cell_hub", "leaf"];

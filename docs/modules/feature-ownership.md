@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-27
-revision: 58
-summary: Route feature ownership through streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
+revision: 60
+summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -592,6 +592,7 @@ packages, install CCS packages, and preserve their exact lifecycle ABIs.
 `crates/conary-core/src/filesystem/cas/stream.rs`;
 `crates/conary-core/src/packages/rpm/payload.rs`;
 `crates/conary-core/src/packages/rpm/payload/header.rs`;
+`crates/conary-core/src/packages/rpm/payload/stream.rs`;
 `crates/conary-core/src/packages/rpm/scriptlets.rs`;
 `crates/conary-core/src/packages/rpm/scriptlets/runtime_context.rs`;
 `crates/conary-core/src/packages/deb/lifecycle_helpers.rs`;
@@ -661,6 +662,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 
 **Focused proof:** `cargo test -p conary-core ccs::v2`;
 `cargo test -p conary-core filesystem::cas`;
+`cargo test -p conary-core packages::rpm::payload`;
 `cargo test -p conary-core --lib lifecycle_helpers`;
 `cargo test -p conary --test packaging_m4b`;
 `cargo test -p conary --test packaging_m4e`;
@@ -989,6 +991,7 @@ release uploads, and static test fixtures through Remi.
 
 **Start here:** `apps/remi/src/server/release_publish.rs`;
 `apps/remi/src/deployment.rs`;
+`apps/remi/src/server/signing_authority.rs`;
 `apps/remi/src/server/mod.rs`;
 `apps/remi/src/server/admin_service.rs`;
 `apps/remi/src/server/admin_service/refresh.rs`;
@@ -1009,6 +1012,7 @@ release uploads, and static test fixtures through Remi.
 `apps/remi/src/server/conversion/benchmark.rs`;
 `apps/remi/src/server/index_gen.rs`;
 `apps/remi/src/server/prewarm.rs`; `apps/remi/src/server/handlers/`;
+`deploy/remi-deploy-helper.sh`;
 `docs/modules/remi.md`; `docs/modules/test-fixtures.md`.
 
 **Neighbor systems:** CCS conversion metadata, repository client behavior,
@@ -1021,13 +1025,16 @@ feed profiles.
 `deploy/remi-repositories.toml`.
 
 **Focused proof:** `cargo test -p remi release_upload_`;
+`cargo test -p remi signing_authority`;
+`cargo test -p remi deployment`;
 `cargo test -p remi native_publish`;
 `cargo test -p remi refresh`;
 `cargo test -p conary --test packaging_m4c`;
 `cargo test -p remi remi_release_parity`;
 `cargo test -p remi conversion`;
 `cargo test -p remi test_upload_fixture`;
-`cargo test -p remi test_public_fixture_get_and_head`.
+`cargo test -p remi test_public_fixture_get_and_head`;
+`bash scripts/test-remi-deploy-helper.sh`.
 
 **Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary --test conversion_integration golden_conversion` when
@@ -1048,7 +1055,10 @@ policy, validate source-independent lifecycle authority structurally, and
 publish package rows, native publication rows, chunks, and TUF targets only
 after the shared gate and lifecycle validation pass. Native CCS release uploads
 must not create synthetic `converted_packages` rows; failed replacement must
-preserve the last public native generation.
+preserve the last public native generation. Repository signing keys are owned
+only by exact source-profile directories; deployment must preserve complete
+existing role sets unchanged and reject partial, aliased, insecure, or
+unexpected authority before activation.
 
 ## conaryd Package Jobs And Daemon Routes
 
@@ -1225,6 +1235,7 @@ matrix job in `.github/workflows/pr-gate.yml`.
 
 **Paths:** `apps/conary-test/*`;
 `apps/conary/tests/fixtures/*`;
+`apps/conary/tests/integration/remi/containers/*`;
 `apps/conary/tests/integration/remi/manifests/*`;
 `.github/workflows/pr-gate.yml`.
 

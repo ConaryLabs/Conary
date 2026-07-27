@@ -13,9 +13,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config libssl-dev libseccomp-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain 1.96.0 --profile minimal
+# Install the pinned Rust toolchain without a pipeline that can hide a failed
+# download behind a successful empty shell invocation.
+RUN set -eu; \
+    installer=/tmp/rustup-init.sh; \
+    curl --proto '=https' --tlsv1.2 \
+        --fail --show-error --silent --location \
+        --retry 5 --retry-all-errors \
+        --output "$installer" \
+        https://sh.rustup.rs; \
+    sh "$installer" -y --default-toolchain 1.96.0 --profile minimal; \
+    rm -f "$installer"; \
+    /root/.cargo/bin/cargo --version; \
+    /root/.cargo/bin/rustc --version
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 ARG INSTALL_MODE=binary

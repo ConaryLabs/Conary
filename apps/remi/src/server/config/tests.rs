@@ -177,6 +177,9 @@ chunk_min = 16384
 chunk_avg = 65536
 chunk_max = 262144
 
+[release_publish]
+repository_keys_dir = "/conary/repository-keys"
+
 [federation]
 enabled = false
 
@@ -202,6 +205,33 @@ bootstrap_token = "bootstrap-token"
         config.admin.bootstrap_token.as_deref(),
         Some("bootstrap-token")
     );
+}
+
+#[test]
+fn repository_manifest_requires_absolute_signing_authority_root() {
+    let mut missing = RemiConfig {
+        repository_manifest: Some(PathBuf::from("/etc/conary/remi-repositories.toml")),
+        ..RemiConfig::default()
+    };
+    let error = missing.validate().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("repository_keys_dir is required"),
+        "{error:#}"
+    );
+
+    missing.release_publish.repository_keys_dir = Some(PathBuf::from("relative/keys"));
+    let error = missing.validate().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("repository_keys_dir must be an absolute path"),
+        "{error:#}"
+    );
+
+    missing.release_publish.repository_keys_dir = Some(PathBuf::from("/conary/repository-keys"));
+    missing.validate().unwrap();
 }
 
 #[test]

@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 const TRANSITION_SCHEMA: u32 = 1;
 const DEFAULT_REPOSITORY_MANIFEST_TARGET: &str = "/etc/conary/remi-repositories.toml";
+const DEFAULT_REPOSITORY_KEYS_DIR: &str = "/conary/repository-keys";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeploymentState {
@@ -23,6 +24,7 @@ pub struct DeploymentState {
     pub populated_sources: usize,
     pub repository_packages: i64,
     pub converted_packages: i64,
+    pub signing_profiles: Vec<String>,
     pub sources: Vec<DeploymentSourceState>,
 }
 
@@ -53,6 +55,7 @@ pub struct PrepareOptions {
     pub config_path: PathBuf,
     pub repository_manifest_source: PathBuf,
     pub repository_manifest_target: PathBuf,
+    pub repository_keys_dir: PathBuf,
     pub deployment_id: String,
     pub max_concurrent: usize,
 }
@@ -68,6 +71,7 @@ impl PrepareOptions {
             config_path: PathBuf::from("/etc/conary/remi.toml"),
             repository_manifest_source,
             repository_manifest_target: PathBuf::from(DEFAULT_REPOSITORY_MANIFEST_TARGET),
+            repository_keys_dir: PathBuf::from(DEFAULT_REPOSITORY_KEYS_DIR),
             deployment_id,
             max_concurrent,
         }
@@ -131,6 +135,10 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
     if repository_manifest.repositories.is_empty() {
         bail!("deployment repository manifest must declare at least one source");
     }
+    crate::server::signing_authority::ensure_repository_authority(
+        &repository_manifest,
+        &options.repository_keys_dir,
+    )?;
 
     let new_config = build_current_config(options, &repository_manifest)?;
     let parsed_config: RemiConfig =
@@ -210,6 +218,15 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         .context("Remi config does not declare repository_manifest")?;
     require_plain_file(repository_manifest_path, "repository manifest")?;
     let repository_manifest = RepositoryManifest::load(repository_manifest_path)?;
+    let repository_keys_dir = config
+        .release_publish
+        .repository_keys_dir
+        .as_deref()
+        .context("Remi config does not declare release_publish.repository_keys_dir")?;
+    let signing_profiles = crate::server::signing_authority::inspect_repository_authority(
+        &repository_manifest,
+        repository_keys_dir,
+    )?;
     let db_path = config.storage_root().join("metadata/conary.db");
     match conary_core::db::schema::inspect(&db_path)? {
         SchemaCompatibility::Current => {}
@@ -253,6 +270,7 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         populated_sources,
         repository_packages: count_rows(&conn, "repository_packages")?,
         converted_packages: count_rows(&conn, "converted_packages")?,
+        signing_profiles,
         sources,
     })
 }
@@ -294,6 +312,21 @@ fn build_current_config(
     conversion.insert(
         "max_concurrent".to_string(),
         toml::Value::Integer(options.max_concurrent as i64),
+    );
+    let release_publish = root
+        .entry("release_publish")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .context("release_publish must be a TOML table")?;
+    release_publish.insert(
+        "repository_keys_dir".to_string(),
+        toml::Value::String(
+            options
+                .repository_keys_dir
+                .to_str()
+                .context("repository signing authority path must be UTF-8")?
+                .to_string(),
+        ),
     );
     let prewarm = root
         .entry("prewarm")
@@ -682,6 +715,7 @@ fn sync_parent(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::DirBuilderExt;
     use std::os::unix::fs::symlink;
 
     fn write(path: &Path, content: &str) {
@@ -742,6 +776,7 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             config_path: root.join("etc/remi.toml"),
             repository_manifest_source: root.join("staged-repositories.toml"),
             repository_manifest_target: root.join("etc/remi-repositories.toml"),
+            repository_keys_dir: root.join("repository-keys"),
             deployment_id: "remi-0.8.0".to_string(),
             max_concurrent: 32,
         }
@@ -752,6 +787,10 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         let root = temp.path().to_path_buf();
         fs::create_dir(root.join("etc")).unwrap();
         fs::create_dir(root.join("metadata")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join("repository-keys"))
+            .unwrap();
         write(&root.join("etc/remi.toml"), &base_config(&root));
         write(
             &root.join("staged-repositories.toml"),
@@ -770,6 +809,7 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         assert!(!config.contains("[upstream"));
         assert!(config.contains("max_concurrent = 32"));
         assert!(config.contains("repository_manifest"));
+        assert!(config.contains("repository_keys_dir"));
         assert!(config.contains("convert_top_n = 1000"));
         assert!(config.contains("distros = [\"fedora\"]"));
         assert_eq!(
@@ -811,6 +851,7 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         assert_eq!(state.schema_epoch, SCHEMA_EPOCH);
         assert_eq!(state.configured_sources, 1);
         assert_eq!(state.populated_sources, 0);
+        assert_eq!(state.signing_profiles, vec!["fedora-44"]);
         assert_eq!(state.sources[0].name, "opaque-source");
         assert_eq!(state.sources[0].profile, "fedora-44");
         assert_eq!(state.sources[0].package_format, "rpm");

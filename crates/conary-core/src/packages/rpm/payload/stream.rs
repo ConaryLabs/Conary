@@ -444,6 +444,26 @@ mod tests {
     use super::*;
     use std::io;
 
+    fn header_record(mode: u32, size: u64, link_target: Option<&str>) -> HeaderRecord {
+        HeaderRecord {
+            path: "/usr/lib/.build-id/fixture".to_string(),
+            mode,
+            user: "root".to_string(),
+            group: "root".to_string(),
+            mtime: 0,
+            size,
+            ghost: false,
+            digest: None,
+            link_target: link_target.map(str::to_string),
+            caps: None,
+            ima_signature: None,
+            device: 0,
+            inode: 0,
+            rdev: 0,
+            nlink: None,
+        }
+    }
+
     struct ZeroReader {
         max_requested: usize,
     }
@@ -495,5 +515,51 @@ mod tests {
         .read_to_end(&mut decoded)
         .unwrap();
         assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn symlink_payload_comparison_rejects_bytes_that_differ_from_filelinktos() {
+        let error = compare_exact_payload(
+            &mut io::Cursor::new(b"../../expecteD-target"),
+            b"../../expected-target",
+            "/usr/lib/.build-id/fixture",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("payload target differs from FILELINKTOS")
+        );
+    }
+
+    #[test]
+    fn symlink_size_and_other_nonregular_payload_content_remain_rejected() {
+        let target = b"../../expected-target";
+        let symlink = [header_record(
+            libc::S_IFLNK | 0o777,
+            target.len() as u64,
+            Some(std::str::from_utf8(target).unwrap()),
+        )];
+        let spool = PayloadSpool::new(0).unwrap();
+        let mut reader = RpmPayloadReader::new(Box::new(io::Cursor::new(target)), &symlink, &spool);
+        let error = reader
+            .read_member_content(0, target.len() as u64 - 1, None)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("size disagrees with FILELINKTOS"),
+            "{error}"
+        );
+
+        let directory = [header_record(libc::S_IFDIR | 0o755, 0, None)];
+        let mut reader = RpmPayloadReader::new(Box::new(io::Cursor::new(b"x")), &directory, &spool);
+        let error = reader.read_member_content(0, 1, None).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "non-regular RPM node /usr/lib/.build-id/fixture carries 1 payload bytes"
+            ),
+            "{error}"
+        );
     }
 }

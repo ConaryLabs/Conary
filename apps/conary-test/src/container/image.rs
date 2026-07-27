@@ -707,7 +707,7 @@ printf 'fixture\n' > "$output/$file"
     }
 
     #[test]
-    fn ubuntu_source_builder_installs_native_crypto_build_tools() {
+    fn ubuntu_source_builder_proves_pinned_rust_and_native_crypto_tools() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let containerfile = manifest_dir
             .join("../conary/tests/integration/remi/containers/Containerfile.ubuntu-26.04");
@@ -716,6 +716,16 @@ printf 'fixture\n' > "$output/$file"
         assert!(
             contents.contains("cmake"),
             "Ubuntu source-build image must install cmake for aws-lc-sys"
+        );
+        assert!(
+            contents.contains("--output \"$installer\"")
+                && contents.contains("--default-toolchain 1.96.0")
+                && contents.contains("/root/.cargo/bin/cargo --version"),
+            "Ubuntu source-build image must download, pin, and prove Rust explicitly"
+        );
+        assert!(
+            !contents.contains("https://sh.rustup.rs |"),
+            "Ubuntu source-build image must not hide rustup download failures in a pipeline"
         );
     }
 

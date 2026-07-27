@@ -17,11 +17,12 @@ use rusqlite::{OptionalExtension, params};
 use tokio::sync::RwLock;
 
 use crate::server::ServerState;
-use crate::server::handlers::tuf::{load_release_tuf_key, refresh_timestamp_for_distro_in_conn};
+use crate::server::handlers::tuf::refresh_timestamp_for_distro_in_conn;
 use crate::server::native_publish::storage::PromotedNativeArtifact;
 use crate::server::native_publish::{
     NativePublishError, NativePublishErrorCode, VerifiedNativeArtifact,
 };
+use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 
 #[derive(Debug)]
 struct SupersededNativePublication {
@@ -97,7 +98,15 @@ pub fn commit_native_publication_blocking(
         &artifact,
         &promoted,
     )?;
-    refresh_release_tuf_metadata(&tx, keys_dir, distro, repo_id, &artifact, &promoted)?;
+    refresh_release_tuf_metadata(
+        &tx,
+        keys_dir,
+        distro,
+        source_profile,
+        repo_id,
+        &artifact,
+        &promoted,
+    )?;
     tx.commit()?;
 
     for old in superseded {
@@ -310,12 +319,13 @@ fn refresh_release_tuf_metadata(
     conn: &rusqlite::Connection,
     keys_dir: &Path,
     distro: &str,
+    source_profile: &str,
     repo_id: i64,
     artifact: &VerifiedNativeArtifact,
     promoted: &PromotedNativeArtifact,
 ) -> Result<()> {
-    let targets_key = load_release_tuf_key(keys_dir, distro, "targets")?;
-    let snapshot_key = load_release_tuf_key(keys_dir, distro, "snapshot")?;
+    let targets_key = load_role_key(keys_dir, source_profile, RepositorySigningRole::Targets)?;
+    let snapshot_key = load_role_key(keys_dir, source_profile, RepositorySigningRole::Snapshot)?;
 
     let targets_version = next_tuf_metadata_version(conn, repo_id, "targets")?;
     conn.execute(
@@ -372,7 +382,7 @@ fn refresh_release_tuf_metadata(
     };
     persist_signed_snapshot(conn, repo_id, &signed_snapshot)?;
 
-    refresh_timestamp_for_distro_in_conn(conn, keys_dir, distro)?;
+    refresh_timestamp_for_distro_in_conn(conn, keys_dir, distro, source_profile)?;
     Ok(())
 }
 

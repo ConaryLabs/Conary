@@ -7,6 +7,7 @@ use super::persistence::PersistConversionInput;
 use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
 };
+use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 use conary_core::db::models::RepositoryPackage;
@@ -258,11 +259,7 @@ impl ConversionService {
         let keys_dir = self.repository_keys_dir.as_ref().context(
             "Remi conversion requires release_publish.repository_keys_dir for CCS authority signing",
         )?;
-        let signing_key = conary_core::ccs::SigningKeyPair::load_from_file(
-            &keys_dir.join(source_profile).join("targets.private"),
-        )
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("load Remi CCS authority key for {source_profile}"))?;
+        let signing_key = load_role_key(keys_dir, source_profile, RepositorySigningRole::Targets)?;
         let converter = NativePackageConverter::new(options)
             .with_source_profile(source_profile)
             .with_conversion_tool("remi")

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-27
-revision: 54
-summary: Route serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, exact release authority, and subsystem proof through current feature owners.
+revision: 55
+summary: Route exact Remi signing, serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -132,7 +132,10 @@ commands.
   `apps/conary/src/commands/try_session/session/watch_marker.rs`.
 - Remi, federation, publication, and service-owned conversion:
   `docs/modules/feature-ownership.md` slug `remi`, plus `docs/modules/remi.md`
-  and `docs/modules/federation.md`.
+  and `docs/modules/federation.md`. Durable exact-profile CCS/TUF signing
+  authority starts in `apps/remi/src/server/signing_authority.rs`; deployment
+  wiring and validation start in `apps/remi/src/deployment.rs` and
+  `deploy/remi-deploy-helper.sh`.
 - conaryd routes and package jobs: `docs/modules/feature-ownership.md` slug
   `conaryd`, plus `docs/modules/conaryd.md`.
 - Exact-tag release construction, signing, immutable publication, deployment,

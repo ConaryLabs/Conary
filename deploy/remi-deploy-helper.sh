@@ -90,6 +90,25 @@ install_owned_file() {
     install -m "$mode" "${owners[@]}" "$src" "$dest"
 }
 
+ensure_repository_keys_root() {
+    local path="$1"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ -d "$path" && ! -L "$path" ]] ||
+            die "repository signing authority root is not a plain directory: $path"
+        [[ "$(stat -c '%a' "$path")" == "700" ]] ||
+            die "repository signing authority root must have mode 0700: $path"
+        if [[ -z "$ROOT" ]]; then
+            local expected_owner observed_owner
+            expected_owner="$(id -u conary):$(id -g conary)"
+            observed_owner="$(stat -c '%u:%g' "$path")"
+            [[ "$observed_owner" == "$expected_owner" ]] ||
+                die "repository signing authority root must be owned by conary:conary: $path"
+        fi
+        return
+    fi
+    install_owned_dir 0700 "$path"
+}
+
 restart_remi() {
     [[ "$SKIP_RESTART" == "1" ]] && return 0
     systemctl restart remi
@@ -171,7 +190,7 @@ deploy_remi() {
     [[ -f "$repositories" && ! -L "$repositories" ]] ||
         die "repository manifest is not a plain file: $repositories"
 
-    local tmpdir bin candidate backup had_previous transition_manifest
+    local tmpdir bin candidate backup had_previous transition_manifest repository_keys_dir
     tmpdir="$(mktemp -d /tmp/remi-install.XXXXXX)"
     backup="${tmpdir}/remi.previous"
     bin="$(root_path /usr/local/bin/remi)"
@@ -183,6 +202,9 @@ deploy_remi() {
     [[ -f "$candidate" && ! -L "$candidate" ]] || die "bundle did not contain remi-${version}-linux-x64"
     [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
         die "candidate binary version does not match ${version}"
+
+    repository_keys_dir="$(root_path /conary/repository-keys)"
+    ensure_repository_keys_root "$repository_keys_dir"
 
     if [[ -f "$bin" ]]; then
         cp "$bin" "$backup"
@@ -198,6 +220,7 @@ deploy_remi() {
             --config "$(root_path /etc/conary/remi.toml)" \
             --repository-manifest "$repositories" \
             --repository-manifest-target "$(root_path /etc/conary/remi-repositories.toml)" \
+            --repository-keys-dir "$repository_keys_dir" \
             --deployment-id "remi-${version}" \
             --max-concurrent "$max_concurrent"
     )"; then

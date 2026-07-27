@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-27
-revision: 8
-summary: Document Remi source, canonical-map, repository trust, conversion, publication, and serving authority
+revision: 9
+summary: Document Remi source, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
 # Remi
@@ -70,6 +70,30 @@ so concurrent completion order is not API order.
 per-source results, and bounded concurrent collection. `server/mod.rs` owns the
 exact-profile handoff from successful refresh results into configured prewarm
 jobs; HTTP handlers only publish events and project the shared batch.
+
+## Durable Repository Signing Authority
+
+`apps/remi/src/server/signing_authority.rs` owns Remi's durable CCS and TUF
+signing authority. Deployment derives the unique exact profiles from the typed
+repository manifest and provisions one complete Ed25519
+`targets`/`snapshot`/`timestamp` role set per profile under
+`/conary/repository-keys/<exact-profile>/`. The root and profile directories
+are mode `0700`, private files are `0600`, and public files are `0644`. A
+profile role set is staged, synced, and atomically published; a repeat deploy
+validates and preserves the existing bytes.
+
+Existing authority is never repaired by replacement. Missing halves,
+malformed keys, mismatched private/public material, incorrect role IDs,
+symlinked or incorrectly owned entries, unsafe modes, unexpected files, and
+route-slug directories fail deployment. `deployment inspect` independently
+validates that the manifest profiles and complete signing profiles agree.
+Signing authority lives outside binary/config rollback paths.
+
+Conversion and recipe builds load `targets` by the persisted exact source
+profile. Public native-release and timestamp routes first resolve their route
+slug through the supported-profile registry, then load the exact profile's
+role keys. `fedora` and `ubuntu` are therefore never key-directory aliases for
+`fedora-44` and `ubuntu-26.04`.
 
 ## Canonical Map Exchange
 
