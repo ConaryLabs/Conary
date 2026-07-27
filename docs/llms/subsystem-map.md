@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-26
-revision: 52
-summary: Route serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, and subsystem proof through current feature owners.
+last_updated: 2026-07-27
+revision: 53
+summary: Route serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -43,6 +43,7 @@ commands.
 - `remi`: Remi ingest, conversion, publication, admin, MCP, and fixture serving
 - `conaryd`: local daemon auth, package jobs, routes, and lifecycle events
 - `bootstrap`: bootstrap prerequisite, image, seed, run, and local QEMU validation
+- `release`: exact-tag construction, immutable publication, serialized deployment, and independent proof
 - `conary-test`: declarative integration suites, HTTP, MCP, and QEMU proof
 - `agent-mcp`: transport-neutral operation vocabulary and MCP adapters
 
@@ -134,6 +135,10 @@ commands.
   and `docs/modules/federation.md`.
 - conaryd routes and package jobs: `docs/modules/feature-ownership.md` slug
   `conaryd`, plus `docs/modules/conaryd.md`.
+- Exact-tag release construction, signing, immutable publication, deployment,
+  and independent live proof: `docs/modules/feature-ownership.md` slug
+  `release`, plus `docs/operations/release-artifact-matrix.md` and
+  `docs/operations/infrastructure.md`.
 - `conary-test`, fixtures, and declarative suites:
   `docs/modules/feature-ownership.md` slug `conary-test`, plus
   `docs/INTEGRATION-TESTING.md` and `docs/modules/test-fixtures.md`.
@@ -184,6 +189,7 @@ commands.
 - [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
 - [`docs/operations/bootstrap-selfhosting-vm.md`](../operations/bootstrap-selfhosting-vm.md) for the truthful self-hosting VM build and validation path
+- [`docs/operations/release-artifact-matrix.md`](../operations/release-artifact-matrix.md) for exact release lineage, artifact, deployment, and independent verification evidence
 - [`docs/roadmaps/development-roadmap.md`](../roadmaps/development-roadmap.md) for remaining generation-bundle trust, pristine validation, and platform-projection horizons
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows

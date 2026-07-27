@@ -399,7 +399,8 @@ grep -q $'^packaging\t' <<<"$real_list" || fail "real map --list missing packagi
 grep -q $'^profiles\t' <<<"$real_list" || fail "real map --list missing profiles slug"
 grep -q $'^resolution\t' <<<"$real_list" || fail "real map --list missing resolution slug"
 grep -q $'^canonical-map\t' <<<"$real_list" || fail "real map --list missing canonical-map slug"
-[[ "$(wc -l <<<"$real_list")" -eq 15 ]] || fail "real map --list did not print 15 cards"
+grep -q $'^release\t' <<<"$real_list" || fail "real map --list missing release slug"
+[[ "$(wc -l <<<"$real_list")" -eq 16 ]] || fail "real map --list did not print 16 cards"
 
 "$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
 grep -q '^slug: install$' "$tmp/real-install.out" \
@@ -416,6 +417,12 @@ grep -q '^slug: install$' "$tmp/real-selected-root.out" \
 "$script" --path crates/conary-core/src/payload.rs > "$tmp/real-payload.out"
 grep -q '^slug: ccs$' "$tmp/real-payload.out" \
     || fail "shared payload authority did not route to the ccs card"
+"$script" --path packaging/ccs/build.sh > "$tmp/real-release-ccs.out"
+grep -q '^slug: ccs$' "$tmp/real-release-ccs.out" \
+    || fail "release CCS wrapper did not route to the ccs card"
+"$script" --path .github/workflows/release-build.yml > "$tmp/real-release.out"
+grep -q '^slug: release$' "$tmp/real-release.out" \
+    || fail "release workflow did not route to the release card"
 "$script" --path crates/conary-core/src/config_transaction/tests.rs > "$tmp/real-config-transaction.out"
 grep -q '^slug: generation$' "$tmp/real-config-transaction.out" \
     || fail "config transaction tests did not route to the generation card"

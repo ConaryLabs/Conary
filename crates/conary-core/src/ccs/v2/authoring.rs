@@ -55,6 +55,20 @@ pub fn lint_manifest_for_v2_authoring(
             blocks_publish: true,
         });
     }
+    if manifest.components.default.len() != 1 || manifest.components.default[0].trim().is_empty() {
+        findings.push(AuthoringFinding {
+            code: "m4b-default-component",
+            bucket: AuthoringFindingBucket::Contract,
+            severity: AuthoringFindingSeverity::Error,
+            field: Some("components.default"),
+            message: "v2 package authoring requires exactly one non-empty default component name"
+                .to_string(),
+            suggestion: "set [components].default = [\"runtime\"]",
+            blocks_build: true,
+            blocks_local_test: true,
+            blocks_publish: true,
+        });
+    }
     // PublicationReadiness and Style buckets are part of the stable diagnostic
     // shape, but M4b's first implementation only emits concrete
     // contract/profile findings.

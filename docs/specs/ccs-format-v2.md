@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 3
+last_updated: 2026-07-27
+revision: 4
 summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
 ---
 
@@ -60,6 +60,11 @@ Unknown or structurally inconsistent authority is rejected. Consumers do not
 fill missing authority from filenames, component JSON, TOML, payload paths,
 repository metadata, distro identity, script text, or defaults from an older
 schema.
+
+An authored package names exactly one non-empty default component. The
+`components.default` manifest field is that single authority name, not a list
+of components installed by default. Authoring lint rejects missing, blank, or
+ambiguous default-component authority before payload construction.
 
 The architecture token is never normalized while converting a native package:
 Debian `all`, Arch `any`, and RPM `noarch` remain distinct signed values.

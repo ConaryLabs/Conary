@@ -5,23 +5,66 @@
 # Stages the release binary + man page + completions, then runs conary ccs build.
 #
 # Usage:
-#   ./packaging/ccs/build.sh                    # Build from local release binary
-#   ./packaging/ccs/build.sh --from-rpm <rpm>   # Extract from RPM build
+#   ./packaging/ccs/build.sh --version <version> --key <private-key>
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+usage() {
+    echo "Usage: $0 --version <version> --key <private-key>" >&2
+    exit 1
+}
+
+VERSION=""
+SIGNING_KEY=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version)
+            [[ $# -ge 2 ]] || usage
+            VERSION="$2"
+            shift 2
+            ;;
+        --key)
+            [[ $# -ge 2 ]] || usage
+            SIGNING_KEY="$2"
+            shift 2
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+
+[[ -n "$VERSION" && -n "$SIGNING_KEY" ]] || usage
+if [[ ! -f "$SIGNING_KEY" || -L "$SIGNING_KEY" ]]; then
+    echo "CCS release signing key must be a regular, non-symlink file: $SIGNING_KEY" >&2
+    exit 1
+fi
+
+bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version conary "$VERSION"
+
 NAME="conary"
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    if [[ "$CARGO_TARGET_DIR" = /* ]]; then
+        TARGET_DIR="$CARGO_TARGET_DIR"
+    else
+        TARGET_DIR="$REPO_ROOT/$CARGO_TARGET_DIR"
+    fi
+else
+    TARGET_DIR="$REPO_ROOT/target"
+fi
 
 echo "Building $NAME $VERSION CCS package"
 
 # --- Build release binary ---
-RELEASE_BIN="$REPO_ROOT/target/release/$NAME"
+RELEASE_BIN="$TARGET_DIR/release/$NAME"
 echo "[1/4] Building release binary..."
-cargo build --release --manifest-path "$REPO_ROOT/apps/conary/Cargo.toml"
+cargo build \
+    --release \
+    --manifest-path "$REPO_ROOT/apps/conary/Cargo.toml" \
+    --target-dir "$TARGET_DIR"
 
 # --- Stage files in install layout ---
 echo "[2/4] Staging files..."
@@ -69,14 +112,19 @@ find "$OUTPUT" -maxdepth 1 -name '*.ccs' -delete
 "$RELEASE_BIN" ccs build "$STAGE" \
     --output "$OUTPUT" \
     --target ccs \
-    --source "$STAGE"
+    --source "$STAGE" \
+    --key "$SIGNING_KEY"
 
 echo "[4/4] Done."
+BUILT_CCS="$OUTPUT/${NAME}-${VERSION}-1.ccs"
 EXPECTED_CCS="$OUTPUT/${NAME}-${VERSION}.ccs"
-if [[ ! -s "$EXPECTED_CCS" || -L "$EXPECTED_CCS" ]]; then
-    echo "Expected CCS package not found: $EXPECTED_CCS" >&2
+shopt -s nullglob
+ccs_files=("$OUTPUT"/*.ccs)
+if [[ ${#ccs_files[@]} -ne 1 || "${ccs_files[0]:-}" != "$BUILT_CCS" || ! -s "$BUILT_CCS" || -L "$BUILT_CCS" ]]; then
+    echo "Expected exactly one CCS package at $BUILT_CCS; found ${#ccs_files[@]}" >&2
     exit 1
 fi
+mv -- "$BUILT_CCS" "$EXPECTED_CCS"
 
 echo "CCS package written to: $EXPECTED_CCS"
 ls -lh "$EXPECTED_CCS"

@@ -33,7 +33,7 @@ capabilities = ["package-manager", "conary"]
 binaries = ["/usr/bin/conary"]
 
 [components]
-default = ["runtime", "doc", "config"]
+default = ["runtime"]
 
 [hooks]
 
