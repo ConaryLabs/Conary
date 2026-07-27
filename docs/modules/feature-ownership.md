@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-26
-revision: 55
-summary: Route feature ownership through streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, and current canonical docs
+last_updated: 2026-07-27
+revision: 56
+summary: Route feature ownership through streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -614,6 +614,7 @@ packages, install CCS packages, and preserve their exact lifecycle ABIs.
 `apps/conary/src/commands/ccs/payload_paths.rs`;
 `apps/conary/src/commands/install/payload_identity.rs`;
 `apps/conary/tests/rpm_named_ownership.rs`;
+`packaging/ccs/`;
 `docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`;
@@ -652,6 +653,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `apps/conary/src/commands/ccs/*`;
 `apps/conary/src/commands/install/payload_identity.rs`;
 `apps/conary/tests/rpm_named_ownership.rs`;
+`packaging/ccs/*`;
 `docs/specs/ccs-format-v2.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
@@ -1142,6 +1144,56 @@ machine-specific artifacts as tracked repo truth. Non-dry-run bootstrap smoke
 can start QEMU-backed validation and depends on local container/runtime
 availability; keep dry-run smoke as the routine contributor gate unless the
 task explicitly needs live image proof.
+
+## Release Construction, Publication, Deployment, And Proof
+
+**Slug:** release
+
+**Capability:** construct exact-tag release artifacts, bind CCS and detached
+signatures to the release authority, publish immutable GitHub releases, route
+serialized deployment, and prove installed or live behavior independently.
+
+**Start here:** `.github/workflows/release-build.yml`;
+`.github/workflows/deploy-and-verify.yml`;
+`scripts/release.sh`; `scripts/release-matrix.sh`;
+`scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
+`scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
+`apps/conary/tests/release_ccs_manifest.rs`;
+`docs/operations/release-artifact-matrix.md`;
+`docs/operations/infrastructure.md`.
+
+**Neighbor systems:** CCS authoring and verification, native package
+construction, GitHub tags and releases, self-update serving, Remi deployment,
+static-site deployment, and production health proof.
+
+**Paths:** `.github/workflows/release-build.yml`;
+`.github/workflows/deploy-and-verify.yml`;
+`scripts/release.sh`; `scripts/release-matrix.sh`;
+`scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
+`scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
+`apps/conary/tests/release_ccs_manifest.rs`;
+`docs/operations/release-artifact-matrix.md`.
+
+**Focused proof:** `bash scripts/check-release-matrix.sh`;
+`bash scripts/test-release-matrix.sh`;
+`cargo test -p conary-core --example sign_hash`;
+`cargo test -p conary --test release_ccs_manifest`.
+
+**Interaction gate:** `bash scripts/test-remi-deploy-helper.sh`;
+`bash scripts/test-deploy-sites.sh` when release routing, remote deployment, or
+static-site publication changes.
+
+**Docs to update:** `docs/operations/release-artifact-matrix.md`;
+`docs/operations/infrastructure.md`;
+`docs/roadmaps/external-tester-milestone.md`;
+`docs/llms/subsystem-map.md`.
+
+**Safety notes:** published tags and releases are immutable evidence. A live
+release must come from the exact canonical tag at a reviewed commit; dry-run
+artifact proof is not publication or production proof. Release signing secrets
+must never be logged or persisted in artifacts. A successful workflow dispatch
+is not deployment proof: wait for terminal CI, then verify installed binaries,
+served artifacts, signatures, and live health independently.
 
 ## conary-test Integration Execution
 

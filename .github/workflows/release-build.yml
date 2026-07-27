@@ -162,7 +162,37 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
       - name: Build CCS package
-        run: bash packaging/ccs/build.sh
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          DRY_RUN_SIGNING_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              export RELEASE_SIGNING_KEY="$DRY_RUN_SIGNING_KEY"
+              echo "[DRY RUN] RELEASE_SIGNING_KEY not set; using deterministic dry-run signing key"
+            else
+              echo "RELEASE_SIGNING_KEY must be configured for embedded CCS release authority" >&2
+              exit 1
+            fi
+          fi
+
+          cargo build \
+            --example sign_hash \
+            --manifest-path crates/conary-core/Cargo.toml \
+            --release \
+            --target-dir target
+          authority_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$authority_dir"' EXIT
+          target/release/examples/sign_hash --write-ccs-authority "$authority_dir"
+          bash packaging/ccs/build.sh \
+            --version "$VERSION" \
+            --key "$authority_dir/release.private"
+          target/release/conary ccs verify \
+            "packaging/ccs/output/conary-${VERSION}.ccs" \
+            --policy "$authority_dir/trust-policy.toml"
       - name: Upload CCS artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -170,8 +200,6 @@ jobs:
           path: packaging/ccs/output/*.ccs
           if-no-files-found: error
           retention-days: 5
-      - name: Build signing helper
-        run: cargo build --example sign_hash --manifest-path crates/conary-core/Cargo.toml --release
       - name: Upload signing helper
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

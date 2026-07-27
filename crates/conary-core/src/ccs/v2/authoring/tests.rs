@@ -288,6 +288,25 @@ fn lint_manifest_reports_empty_release() {
 }
 
 #[test]
+fn lint_manifest_rejects_ambiguous_or_empty_default_component_authority() {
+    for defaults in [
+        Vec::new(),
+        vec!["runtime".to_string(), "doc".to_string()],
+        vec![" ".to_string()],
+    ] {
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        manifest.components.default = defaults;
+
+        let findings = lint_manifest_for_v2_authoring(&manifest);
+        assert!(findings.iter().any(|finding| {
+            finding.code == "m4b-default-component"
+                && finding.field == Some("components.default")
+                && finding.blocks_build
+        }));
+    }
+}
+
+#[test]
 fn lint_manifest_allows_declarative_lifecycle_without_distro_gate() {
     let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
     manifest.package.release = "1".to_string();

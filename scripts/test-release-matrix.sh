@@ -804,6 +804,50 @@ test_check_release_matrix_rejects_missing_signer_trust_match() {
     assert_check_release_matrix_fails "$repo" "live signing key must match an embedded trusted update key"
 }
 
+test_check_release_matrix_rejects_unsigned_embedded_ccs_authority() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'target/release/examples/sign_hash --write-ccs-authority "$authority_dir"' \
+        'echo "embedded CCS authority removed"'
+
+    assert_check_release_matrix_fails "$repo" "CCS build must derive embedded authority from the configured release seed"
+}
+
+test_check_release_matrix_rejects_unverified_embedded_ccs_authority() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '          target/release/conary ccs verify \' \
+        '          echo "embedded CCS verification removed" \'
+
+    assert_check_release_matrix_fails "$repo" "CCS build must verify its embedded release authority"
+}
+
+test_check_release_matrix_rejects_unstable_ccs_release_name() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/ccs/build.sh" \
+        'mv -- "$BUILT_CCS" "$EXPECTED_CCS"' \
+        'echo "stable CCS release name removed"'
+
+    assert_check_release_matrix_fails "$repo" "CCS wrapper must normalize one exact package-release name to the stable self-update asset"
+}
+
+test_check_release_matrix_rejects_ambiguous_ccs_target_directory() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/ccs/build.sh" \
+        '    --target-dir "$TARGET_DIR"' \
+        '    --target-dir target'
+
+    assert_check_release_matrix_fails "$repo" "CCS wrapper must use one explicit Cargo target directory"
+}
+
 test_check_release_matrix_rejects_stale_native_output_policy() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -926,6 +970,10 @@ main() {
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_unpinned_tester_guide_link
         test_check_release_matrix_rejects_missing_signer_trust_match
+        test_check_release_matrix_rejects_unsigned_embedded_ccs_authority
+        test_check_release_matrix_rejects_unverified_embedded_ccs_authority
+        test_check_release_matrix_rejects_unstable_ccs_release_name
+        test_check_release_matrix_rejects_ambiguous_ccs_target_directory
         test_check_release_matrix_rejects_stale_native_output_policy
         test_check_release_matrix_rejects_direct_release_publication
         test_check_release_matrix_rejects_late_conary_release_notes
