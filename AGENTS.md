@@ -86,6 +86,41 @@ contract, not a separate authority. Do not make an essential operation
 available only through ad hoc shell, interactive human judgment, or untyped
 free-form output, and do not weaken trust or approval boundaries for agents.
 
+## Defect Discipline
+
+Conary's product promise is that ordinary packages just work. A defect that is
+routed around rather than fixed is a promise that has not been kept, so treat
+the following as binding rather than aspirational.
+
+**Fix what you find.** When work uncovers a half-implementation, a duplicated
+authority, or a path that only works by luck, fix it or file it with the exact
+evidence. Do not build around it and leave it for the next person to rediscover.
+Scope discipline is real, and a finding outside the current slice belongs in an
+issue rather than in the slice; what is not acceptable is knowing and saying
+nothing.
+
+**A failure is evidence until it is explained.** Do not re-run a failing check
+hoping for a different result, and do not label a failure flaky, environmental,
+or unrelated without a specific reason that survives being checked. Two failures
+with different names may be one defect. An intermittent failure usually means
+the system is genuinely nondeterministic somewhere, which is itself the defect.
+Retrying until green converts a known failure into an unknown one.
+
+**Fix the cause, not the symptom.** Restoring a deleted value, widening a bound,
+or adding a special case makes a check pass without removing the condition that
+produced it. Ask what structure allowed the defect, and correct that. If the
+same fact is maintained in two places, the fix is one owner, not two updates.
+
+**Prove the property, not the instance.** A regression test that pins the exact
+input that failed will not catch the next instance of the same class. Where a
+contract exists between two components, test the contract: that everything one
+side can emit, the other admits.
+
+**Verification means the command ran.** Report the commands and their real
+output. Never describe an expected result as an observed one. When something
+could not be verified, say so plainly and name what remains unproven; a partial
+result reported accurately is worth more than an overstated one.
+
 ## Maintainability & Refactor Discipline
 
 Treat large files as review signals, not automatic failures. Planning has a
