@@ -32,6 +32,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -462,16 +463,21 @@ fn sample_hermetic_evidence(name: &str, version: &str) -> HermeticBuildEvidence 
     }
 }
 
-fn write_tuf_role_keys(keys_dir: &Path, distro: &str) {
-    let distro_dir = keys_dir.join(distro);
-    fs::create_dir_all(&distro_dir).unwrap();
+fn write_tuf_role_keys(keys_dir: &Path, route_slug: &str) {
+    let profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(route_slug).unwrap();
+    let profile_dir = keys_dir.join(profile.id());
+    fs::create_dir_all(&profile_dir).unwrap();
+    fs::set_permissions(keys_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&profile_dir, fs::Permissions::from_mode(0o700)).unwrap();
     for role in ["targets", "snapshot", "timestamp"] {
+        let private_path = profile_dir.join(format!("{role}.private"));
+        let public_path = profile_dir.join(format!("{role}.public"));
         SigningKeyPair::generate()
             .with_key_id(role)
-            .save_to_files(
-                &distro_dir.join(format!("{role}.private")),
-                &distro_dir.join(format!("{role}.public")),
-            )
+            .save_to_files(&private_path, &public_path)
             .unwrap();
+        fs::set_permissions(private_path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(public_path, fs::Permissions::from_mode(0o644)).unwrap();
     }
 }
