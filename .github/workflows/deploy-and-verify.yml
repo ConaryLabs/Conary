@@ -450,6 +450,16 @@ jobs:
             }
           fi
 
+  prove-conary-release-artifacts:
+    name: prove-conary-release-artifacts
+    needs: [resolve, deploy-conary]
+    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.deploy_mode == 'release_bundle' && needs.resolve.outputs.dry_run != 'true' && needs.deploy-conary.result == 'success' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-artifact-proof.yml
+    with:
+      tag_name: ${{ needs.resolve.outputs.tag_name }}
+
   verify-remi:
     name: verify-remi
     needs: [resolve, validate-routing]

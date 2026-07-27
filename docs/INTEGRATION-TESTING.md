@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-26
-revision: 39
-summary: Document selected-generation cross-source package lifecycle proof and its hosted PR matrix
+revision: 40
+summary: Document selected-generation cross-source package lifecycle proof from source and published native packages
 ---
 
 # Integration Testing
@@ -429,6 +429,15 @@ job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
 
+Published-release proof uses the same contract through
+`.github/workflows/release-artifact-proof.yml`. Its explicit
+`conary-test images build --native-package <path>` input resolves the target
+format from the typed supported-profile catalog, stages one canonical package
+filename, and makes the image install that package through `dnf`, `apt`, or
+`pacman`. The workflow independently matches `SHA256SUMS` and the GitHub asset
+digest before the installed `/usr/bin/conary` runs all three source formats.
+Source-built PR evidence is not a substitute for this published-byte lane.
+
 Each full parity run must pass `scripts/check-conary-test-result-gate.sh`,
 which requires zero failed, skipped, and cancelled results before the matrix
 can count as limited-preview release evidence. The `conary-test run` command also exits
@@ -803,6 +812,7 @@ the specific workflow run.
 |----------|---------|---------|
 | `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused three-distro native lifecycle matrix |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
+| `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
 
 `conary-test deploy status` is internal infrastructure state, not a product

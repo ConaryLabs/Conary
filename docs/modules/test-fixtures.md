@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-26
-revision: 22
-summary: Map fixture ownership, including the selected-generation cross-source lifecycle matrix and public v4 QEMU image contract
+revision: 23
+summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
 ---
 
 # Test Fixtures And Proof Maps
@@ -335,6 +335,11 @@ Each fixture family should record:
   image coverage. `fedora44` is the
   existing `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`.
+  Published artifacts use
+  `cargo run -p conary-test -- images build --distro <distro> --native-package <path>`
+  before the same focused suite. Only
+  `.github/workflows/release-artifact-proof.yml` binds that package to
+  published metadata, `SHA256SUMS`, and the GitHub digest.
 - **Regeneration:** Manifests are hand-maintained TOML. Rotate the test-only
   authority with `apps/conary/tests/fixtures/ccs-test-authority/generate.sh`,
   then rebuild both `conary-test-fixture/build-all.sh` and

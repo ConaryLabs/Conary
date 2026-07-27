@@ -1,6 +1,7 @@
 // conary-test/src/container/image.rs
 
 use anyhow::{Context, Result, bail};
+use conary_core::repository::supported_profiles::ProfilePackageFormat;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,12 @@ use crate::config::DistroBuildContext;
 struct StagedBuildContext {
     root: PathBuf,
     dockerfile: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativePackageArtifact<'a> {
+    path: &'a Path,
+    format: ProfilePackageFormat,
 }
 
 impl Drop for StagedBuildContext {
@@ -198,10 +205,50 @@ fn ensure_phase2_fixture_outputs(fixtures_root: &Path, conary_bin: &Path) -> Res
     Ok(())
 }
 
+fn canonical_native_package_name(format: ProfilePackageFormat) -> &'static str {
+    match format {
+        ProfilePackageFormat::Rpm => "conary-release.rpm",
+        ProfilePackageFormat::Deb => "conary-release.deb",
+        ProfilePackageFormat::Arch => "conary-release.pkg.tar.zst",
+    }
+}
+
+fn stage_native_package(root: &Path, artifact: NativePackageArtifact<'_>) -> Result<()> {
+    let metadata = fs::symlink_metadata(artifact.path).with_context(|| {
+        format!(
+            "failed to inspect native package artifact {}",
+            artifact.path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        bail!(
+            "native package artifact must be a real regular file: {}",
+            artifact.path.display()
+        );
+    }
+    if metadata.len() == 0 {
+        bail!(
+            "native package artifact must not be empty: {}",
+            artifact.path.display()
+        );
+    }
+
+    let destination = root.join(canonical_native_package_name(artifact.format));
+    fs::copy(artifact.path, &destination).with_context(|| {
+        format!(
+            "failed to stage native package artifact {} as {}",
+            artifact.path.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn stage_build_context(
     containerfile: &Path,
     distro: &str,
     build_context: DistroBuildContext,
+    native_package: Option<NativePackageArtifact<'_>>,
 ) -> Result<StagedBuildContext> {
     let integration_root = containerfile
         .parent()
@@ -254,6 +301,10 @@ fn stage_build_context(
         .arg(&staged_binary)
         .status();
 
+    if let Some(artifact) = native_package {
+        stage_native_package(&root, artifact)?;
+    }
+
     ensure_phase2_fixture_outputs(&root.join("fixtures"), &binary)?;
 
     if build_context == DistroBuildContext::WorkspaceSource {
@@ -279,13 +330,50 @@ pub async fn build_distro_image(
     distro: &str,
     build_context: DistroBuildContext,
 ) -> Result<String> {
+    build_distro_image_inner(backend, containerfile, distro, build_context, None).await
+}
+
+/// Build a distro-specific test image by installing one exact native package.
+///
+/// The package format comes from Conary's typed supported-profile catalog.
+/// Containerfiles install the staged canonical filename through the distro's
+/// native package manager before any lifecycle proof runs.
+pub async fn build_distro_image_from_native_package(
+    backend: &dyn ContainerBackend,
+    containerfile: &Path,
+    distro: &str,
+    build_context: DistroBuildContext,
+    package: &Path,
+    package_format: ProfilePackageFormat,
+) -> Result<String> {
+    build_distro_image_inner(
+        backend,
+        containerfile,
+        distro,
+        build_context,
+        Some(NativePackageArtifact {
+            path: package,
+            format: package_format,
+        }),
+    )
+    .await
+}
+
+async fn build_distro_image_inner(
+    backend: &dyn ContainerBackend,
+    containerfile: &Path,
+    distro: &str,
+    build_context: DistroBuildContext,
+    native_package: Option<NativePackageArtifact<'_>>,
+) -> Result<String> {
     let tag = format!("conary-test-{distro}:latest");
     let force_rebuild = std::env::var("CONARY_TEST_REBUILD_IMAGE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
-    let reuse_existing = std::env::var("CONARY_TEST_REUSE_IMAGE")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false);
+    let reuse_existing = native_package.is_none()
+        && std::env::var("CONARY_TEST_REUSE_IMAGE")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
 
     if reuse_existing && !force_rebuild {
         let images = backend
@@ -301,16 +389,23 @@ pub async fn build_distro_image(
         }
     }
 
-    let staged = stage_build_context(containerfile, distro, build_context)?;
+    let staged = stage_build_context(containerfile, distro, build_context, native_package)?;
+    let mut build_args = HashMap::new();
+    if native_package.is_some() {
+        build_args.insert("INSTALL_MODE".to_string(), "package".to_string());
+    }
     backend
-        .build_image(&staged.dockerfile, &tag, HashMap::new())
+        .build_image(&staged.dockerfile, &tag, build_args)
         .await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{find_project_root, stage_build_context};
+    use super::{
+        NativePackageArtifact, find_project_root, stage_build_context, stage_native_package,
+    };
     use crate::config::DistroBuildContext;
+    use conary_core::repository::supported_profiles::ProfilePackageFormat;
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -371,8 +466,9 @@ mod tests {
         )
         .expect("write pkgbuild");
 
-        let staged = stage_build_context(&containerfile, "fedora44", DistroBuildContext::Binary)
-            .expect("stage build context");
+        let staged =
+            stage_build_context(&containerfile, "fedora44", DistroBuildContext::Binary, None)
+                .expect("stage build context");
 
         assert!(
             staged
@@ -397,6 +493,25 @@ mod tests {
         assert!(staged.root.join("conary").is_file());
         assert!(!staged.root.join("target").exists());
         assert!(!staged.root.join("source").exists());
+
+        drop(staged);
+
+        let package = project_root.join("release.rpm");
+        fs::write(&package, "published package bytes").expect("write release package");
+        let staged = stage_build_context(
+            &containerfile,
+            "fedora44",
+            DistroBuildContext::Binary,
+            Some(NativePackageArtifact {
+                path: &package,
+                format: ProfilePackageFormat::Rpm,
+            }),
+        )
+        .expect("stage native package build context");
+        assert_eq!(
+            fs::read(staged.root.join("conary-release.rpm")).expect("read staged package"),
+            b"published package bytes"
+        );
 
         drop(staged);
         fs::remove_dir_all(project_root).expect("cleanup project root");
@@ -487,7 +602,7 @@ printf 'fixture\n' > "$output/$file"
         permissions.set_mode(0o755);
         fs::set_permissions(&conary, permissions).expect("make fake conary executable");
 
-        let staged = stage_build_context(&containerfile, "arch", DistroBuildContext::Binary)
+        let staged = stage_build_context(&containerfile, "arch", DistroBuildContext::Binary, None)
             .expect("stage build context");
 
         assert!(
@@ -567,6 +682,7 @@ printf 'fixture\n' > "$output/$file"
             &containerfile,
             "not-an-ubuntu-name",
             DistroBuildContext::WorkspaceSource,
+            None,
         )
         .expect("stage workspace source context");
         assert!(
@@ -581,6 +697,7 @@ printf 'fixture\n' > "$output/$file"
             &containerfile,
             "ubuntu-name-does-not-matter",
             DistroBuildContext::Binary,
+            None,
         )
         .expect("stage binary context");
         assert!(!binary_staged.root.join("source").exists());
@@ -600,5 +717,51 @@ printf 'fixture\n' > "$output/$file"
             contents.contains("cmake"),
             "Ubuntu source-build image must install cmake for aws-lc-sys"
         );
+    }
+
+    #[test]
+    fn package_mode_containerfiles_install_exact_canonical_artifacts() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let containers = manifest_dir.join("../conary/tests/integration/remi/containers");
+        for (file, package, install) in [
+            (
+                "Containerfile.fedora44",
+                "conary-release.rpm",
+                "dnf install -y /tmp/install/conary-release.rpm",
+            ),
+            (
+                "Containerfile.ubuntu-26.04",
+                "conary-release.deb",
+                "apt-get install -y /tmp/install/conary-release.deb",
+            ),
+            (
+                "Containerfile.arch",
+                "conary-release.pkg.tar.zst",
+                "pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst",
+            ),
+        ] {
+            let contents =
+                fs::read_to_string(containers.join(file)).expect("read package-mode containerfile");
+            assert!(contents.contains(package), "{file} must name {package}");
+            assert!(contents.contains(install), "{file} must run {install}");
+        }
+    }
+
+    #[test]
+    fn native_package_staging_rejects_empty_files() {
+        let directory = tempfile::tempdir().expect("create temp directory");
+        let package = directory.path().join("empty.rpm");
+        fs::write(&package, []).expect("write empty package");
+
+        let error = stage_native_package(
+            directory.path(),
+            NativePackageArtifact {
+                path: &package,
+                format: ProfilePackageFormat::Rpm,
+            },
+        )
+        .expect_err("empty package must fail");
+
+        assert!(error.to_string().contains("must not be empty"));
     }
 }

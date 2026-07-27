@@ -1,0 +1,186 @@
+name: release-artifact-proof
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: Published canonical Conary tag to prove.
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Published canonical Conary tag to prove.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-artifact-proof-${{ inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  native-package-lifecycle:
+    name: native-package-lifecycle (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora44
+            native_format: rpm
+          - distro: ubuntu-26.04
+            native_format: deb
+          - distro: arch
+            native_format: arch
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Require the hosted container runtime
+        run: docker info
+      - name: Resolve the published native package
+        id: release
+        shell: bash
+        env:
+          NATIVE_FORMAT: ${{ matrix.native_format }}
+        run: |
+          set -euo pipefail
+
+          metadata_dir="${RUNNER_TEMP}/conary-release-metadata"
+          mkdir -p "$metadata_dir"
+
+          resolved="$(bash scripts/release-matrix.sh resolve-tag "$RELEASE_TAG" --format shell)"
+          product="$(sed -n 's/^product=//p' <<< "$resolved")"
+          resolved_tag="$(sed -n 's/^tag_name=//p' <<< "$resolved")"
+          [[ "$product" == "conary" && "$resolved_tag" == "$RELEASE_TAG" ]] || {
+            echo "tag does not resolve to the canonical Conary release track" >&2
+            exit 1
+          }
+
+          git fetch --force origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [[ "$(git cat-file -t "$RELEASE_TAG")" == "tag" ]] || {
+            echo "${RELEASE_TAG} is not an annotated tag" >&2
+            exit 1
+          }
+          tag_tree="${RUNNER_TEMP}/conary-release-tag"
+          git worktree add --detach "$tag_tree" "${RELEASE_TAG}^{}"
+
+          gh release download "$RELEASE_TAG" \
+            --repo "$GH_REPO" \
+            --pattern metadata.json \
+            --dir "$metadata_dir"
+
+          metadata="${metadata_dir}/metadata.json"
+          [[ -s "$metadata" && ! -L "$metadata" ]] || {
+            echo "release metadata is missing, empty, or symlinked" >&2
+            exit 1
+          }
+
+          product="$(jq -r '.product' "$metadata")"
+          tag_name="$(jq -r '.tag_name' "$metadata")"
+          version="$(jq -r '.version' "$metadata")"
+          dry_run="$(jq -r '.dry_run' "$metadata")"
+          [[ "$product" == "conary" ]] || {
+            echo "release metadata product is ${product}, expected conary" >&2
+            exit 1
+          }
+          [[ "$tag_name" == "$RELEASE_TAG" ]] || {
+            echo "release metadata tag is ${tag_name}, expected ${RELEASE_TAG}" >&2
+            exit 1
+          }
+          [[ "$dry_run" == "false" ]] || {
+            echo "release metadata is not a live publication" >&2
+            exit 1
+          }
+          bash "$tag_tree/scripts/release-matrix.sh" assert-owned-version conary "$version"
+
+          case "$NATIVE_FORMAT" in
+            rpm) asset="conary-${version}-1.fc44.x86_64.rpm" ;;
+            deb) asset="conary_${version}-1_amd64.deb" ;;
+            arch) asset="conary-${version}-1-x86_64.pkg.tar.zst" ;;
+            *)
+              echo "unsupported native package format: ${NATIVE_FORMAT}" >&2
+              exit 1
+              ;;
+          esac
+
+          release_dir="${RUNNER_TEMP}/conary-release-${NATIVE_FORMAT}"
+          mkdir -p "$release_dir"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GH_REPO" \
+            --pattern SHA256SUMS \
+            --pattern "$asset" \
+            --dir "$release_dir"
+          cp "$metadata" "$release_dir/metadata.json"
+
+          package="${release_dir}/${asset}"
+          checksums="${release_dir}/SHA256SUMS"
+          [[ -s "$package" && ! -L "$package" ]] || {
+            echo "published native package is missing, empty, or symlinked" >&2
+            exit 1
+          }
+          [[ -s "$checksums" && ! -L "$checksums" ]] || {
+            echo "published SHA256SUMS is missing, empty, or symlinked" >&2
+            exit 1
+          }
+
+          (
+            cd "$release_dir"
+            sha256sum -c SHA256SUMS --ignore-missing
+          )
+
+          actual_digest="sha256:$(sha256sum "$package" | awk '{print $1}')"
+          release_json="$(gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json assets)"
+          published_digest="$(
+            jq -r --arg asset "$asset" \
+              '.assets[] | select(.name == $asset) | .digest' \
+              <<< "$release_json"
+          )"
+          [[ "$published_digest" == "$actual_digest" ]] || {
+            echo "GitHub digest ${published_digest} does not match ${actual_digest}" >&2
+            exit 1
+          }
+
+          echo "native_package=${package}" >> "$GITHUB_OUTPUT"
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+      - name: Build the lifecycle harness
+        run: cargo build -p conary -p conary-test
+      - name: Install the published native package in the test image
+        run: >-
+          cargo run -p conary-test --
+          images build
+          --distro "${{ matrix.distro }}"
+          --native-package "${{ steps.release.outputs.native_package }}"
+      - name: Run Cartesian lifecycle parity with the published binary
+        env:
+          CONARY_TEST_REUSE_IMAGE: "1"
+        run: >-
+          cargo run -p conary-test --
+          run
+          --distro "${{ matrix.distro }}"
+          --phase 4
+          --suite native-cross-source-lifecycle
+
+  release-artifact-proof:
+    name: release-artifact-proof
+    if: ${{ always() }}
+    needs: native-package-lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every published-package lifecycle job
+        env:
+          MATRIX_RESULT: ${{ needs.native-package-lifecycle.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "published native package lifecycle matrix result: $MATRIX_RESULT" >&2
+            exit 1
+          fi
+          echo "published native package lifecycle matrix result: $MATRIX_RESULT"
