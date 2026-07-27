@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 53
+revision: 54
 summary: Route serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 
@@ -137,7 +137,8 @@ commands.
   `conaryd`, plus `docs/modules/conaryd.md`.
 - Exact-tag release construction, signing, immutable publication, deployment,
   and independent live proof: `docs/modules/feature-ownership.md` slug
-  `release`, plus `docs/operations/release-artifact-matrix.md` and
+  `release`, plus `.github/workflows/release-artifact-proof.yml`,
+  `docs/operations/release-artifact-matrix.md`, and
   `docs/operations/infrastructure.md`.
 - `conary-test`, fixtures, and declarative suites:
   `docs/modules/feature-ownership.md` slug `conary-test`, plus

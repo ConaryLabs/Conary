@@ -61,6 +61,37 @@ fn load_config_succeeds_from_workspace_root() {
 }
 
 #[test]
+fn images_build_accepts_an_explicit_native_package() {
+    let cli = Cli::try_parse_from([
+        "conary-test",
+        "images",
+        "build",
+        "--distro",
+        "fedora44",
+        "--native-package",
+        "/tmp/conary-release.rpm",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Images {
+            command:
+                ImageCommands::Build {
+                    distro,
+                    native_package,
+                },
+        } => {
+            assert_eq!(distro, "fedora44");
+            assert_eq!(
+                native_package,
+                Some(PathBuf::from("/tmp/conary-release.rpm"))
+            );
+        }
+        _ => panic!("unexpected command"),
+    }
+}
+
+#[test]
 fn deploy_status_port_defaults_to_9090() {
     let _guard = env_lock().lock().expect("env lock");
     set_test_port_env(None);

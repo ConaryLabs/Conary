@@ -174,6 +174,10 @@ enum ImageCommands {
         /// Distro to build
         #[arg(long)]
         distro: String,
+
+        /// Published native Conary package to install in the distro image
+        #[arg(long, value_name = "PATH")]
+        native_package: Option<PathBuf>,
     },
 
     /// List built images
@@ -808,24 +812,51 @@ fn main() -> Result<()> {
         Commands::Images { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
-                ImageCommands::Build { distro } => {
+                ImageCommands::Build {
+                    distro,
+                    native_package,
+                } => {
                     let config = load_config()?;
                     rt.block_on(async {
                         let backend = conary_test::container::BollardBackend::new()?;
                         let cf_path = containerfile_path(&config, &distro)?;
-                        let build_context = config
+                        let distro_config = config
                             .distros
                             .get(&distro)
-                            .with_context(|| format!("unknown distro: {distro}"))?
-                            .build_context;
+                            .with_context(|| format!("unknown distro: {distro}"))?;
+                        let build_context = distro_config.build_context;
                         tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
-                        let tag = conary_test::container::build_distro_image(
-                            &backend,
-                            &cf_path,
-                            &distro,
-                            build_context,
-                        )
-                        .await?;
+                        let tag = match native_package {
+                            Some(package) => {
+                                let profile = conary_core::repository::supported_profiles::profile_by_public_id(
+                                    &distro_config.remi_distro,
+                                )
+                                .with_context(|| {
+                                    format!(
+                                        "distro {distro} names unsupported profile {}",
+                                        distro_config.remi_distro
+                                    )
+                                })?;
+                                conary_test::container::build_distro_image_from_native_package(
+                                    &backend,
+                                    &cf_path,
+                                    &distro,
+                                    build_context,
+                                    &package,
+                                    profile.package_format(),
+                                )
+                                .await?
+                            }
+                            None => {
+                                conary_test::container::build_distro_image(
+                                    &backend,
+                                    &cf_path,
+                                    &distro,
+                                    build_context,
+                                )
+                                .await?
+                            }
+                        };
                         if json {
                             println!(
                                 "{}",

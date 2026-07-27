@@ -22,9 +22,9 @@ RUN dnf install -y \
 # Copy all conary* files from build context (binary or package)
 COPY conary* /tmp/install/
 
-# Install: RPM package if present, otherwise raw binary
-RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.rpm 1>/dev/null 2>&1; then \
-        dnf install -y /tmp/install/*.rpm; \
+# Install: exact staged RPM package or raw binary
+RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.rpm ]; then \
+        dnf install -y /tmp/install/conary-release.rpm; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \

@@ -6,6 +6,7 @@ cd "$repo_root"
 
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
+artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
 exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
@@ -155,6 +156,7 @@ validate_deploy_routing_pairs() {
 for required_file in \
     "$release_build" \
     "$deploy_workflow" \
+    "$artifact_proof_workflow" \
     "$merge_workflow" \
     "$pr_workflow" \
     "$exact_ownership_action" \
@@ -306,10 +308,19 @@ require_job_match "$deploy_workflow" deploy-conary 'name: Set up pinned Node\.js
 require_job_match "$deploy_workflow" deploy-conary 'name: Install locked static-site dependencies[\s\S]*npm ci --prefix site[\s\S]*npm ci --prefix web' 'live Conary locked static-site dependency installation'
 require_job_match "$deploy_workflow" deploy-conary 'name: Configure static-site deployment access[\s\S]*REMI_SSH_KEY: \$\{\{ secrets\.REMI_SSH_KEY \}\}[\s\S]*REMI_SSH_TARGET: \$\{\{ secrets\.REMI_SSH_TARGET \}\}' 'live Conary static-site SSH configuration'
 require_job_match "$deploy_workflow" deploy-conary 'name: Deploy both static sites from the release tag[\s\S]*bash deploy/deploy-sites\.sh both' 'live Conary both-site deployment from the release tag'
+require_job_match "$deploy_workflow" prove-conary-release-artifacts 'needs: \[resolve, deploy-conary\][\s\S]*needs\.deploy-conary\.result == '\''success'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary deployment must hand the serialized tag to published-artifact proof'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'legacy public verify URL'
 forbid_match "$deploy_workflow" '24273700060' 'retired one-time conaryd bootstrap exception'
 forbid_match "$deploy_workflow" 'deploy_asset_ref' 'retired bootstrap-only deploy asset ref'
 forbid_match "$deploy_workflow" 'bootstrap_exception' 'retired bootstrap exception output'
+
+require_match "$artifact_proof_workflow" 'workflow_call:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'reusable published-artifact proof input'
+require_match "$artifact_proof_workflow" 'workflow_dispatch:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'manual published-artifact proof input'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'distro: fedora44[\s\S]*native_format: rpm[\s\S]*distro: ubuntu-26\.04[\s\S]*native_format: deb[\s\S]*distro: arch[\s\S]*native_format: arch' 'published-artifact three-distro typed matrix'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'release-matrix\.sh resolve-tag "\$RELEASE_TAG"[\s\S]*git cat-file -t "\$RELEASE_TAG"[\s\S]*== "tag"[\s\S]*git worktree add --detach "\$tag_tree"[\s\S]*"\$tag_tree/scripts/release-matrix\.sh" assert-owned-version conary "\$version"' 'published artifact proof must bind metadata to an annotated tag and its owned manifest'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh release download "\$RELEASE_TAG"[\s\S]*--pattern metadata\.json[\s\S]*sha256sum -c SHA256SUMS --ignore-missing[\s\S]*published_digest[\s\S]*actual_digest' 'published artifact metadata, checksum, and GitHub digest proof'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*--suite native-cross-source-lifecycle' 'published native package installation and Cartesian lifecycle proof'
+require_job_match "$artifact_proof_workflow" release-artifact-proof 'needs: native-package-lifecycle[\s\S]*MATRIX_RESULT[\s\S]*"\$MATRIX_RESULT" != "success"' 'stable all-distro published-artifact proof gate'
 
 for product in conary remi; do
     require_artifact_matrix_row "$product"

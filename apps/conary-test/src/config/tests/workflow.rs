@@ -10,6 +10,8 @@ use std::{
 const MATRIX_JOB_ID: &str = "native-cross-source-lifecycle";
 const MATRIX_GATE_ID: &str = "native-cross-source-lifecycle-gate";
 const STABLE_CHECK_CONTEXT: &str = "native-cross-source-lifecycle";
+const RELEASE_ARTIFACT_MATRIX_JOB_ID: &str = "native-package-lifecycle";
+const RELEASE_ARTIFACT_GATE_ID: &str = "release-artifact-proof";
 
 #[derive(Debug, Deserialize)]
 struct Workflow {
@@ -59,6 +61,33 @@ struct WorkspaceTestJob {
 }
 
 #[derive(Debug, Deserialize)]
+struct ReleaseArtifactMatrixJob {
+    name: String,
+    #[serde(rename = "timeout-minutes")]
+    timeout_minutes: u64,
+    strategy: ReleaseArtifactStrategy,
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseArtifactStrategy {
+    #[serde(rename = "fail-fast")]
+    fail_fast: bool,
+    matrix: ReleaseArtifactMatrix,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseArtifactMatrix {
+    include: Vec<ReleaseArtifactLane>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct ReleaseArtifactLane {
+    distro: String,
+    native_format: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct WorkflowStep {
     name: Option<String>,
     uses: Option<String>,
@@ -76,11 +105,19 @@ fn workflow_path() -> PathBuf {
 }
 
 fn load_workflow() -> Workflow {
-    let path = workflow_path();
+    load_workflow_from(workflow_path())
+}
+
+fn load_workflow_from(path: PathBuf) -> Workflow {
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     serde_yaml::from_str(&source)
         .unwrap_or_else(|error| panic!("parse {} as typed YAML: {error}", path.display()))
+}
+
+fn release_artifact_workflow_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/workflows/release-artifact-proof.yml")
 }
 
 fn parse_job<T>(workflow: &Workflow, id: &str) -> T
@@ -243,4 +280,81 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     );
     assert!(!tests.continue_on_error);
     assert_eq!(tests.condition, None);
+}
+
+#[test]
+fn release_artifact_workflow_installs_every_published_native_package() {
+    let workflow = load_workflow_from(release_artifact_workflow_path());
+    let job: ReleaseArtifactMatrixJob = parse_job(&workflow, RELEASE_ARTIFACT_MATRIX_JOB_ID);
+
+    assert_eq!(job.name, "native-package-lifecycle (${{ matrix.distro }})");
+    assert_eq!(job.timeout_minutes, 90);
+    assert!(!job.strategy.fail_fast);
+    assert_eq!(
+        job.strategy.matrix.include,
+        [
+            ReleaseArtifactLane {
+                distro: "fedora44".to_string(),
+                native_format: "rpm".to_string(),
+            },
+            ReleaseArtifactLane {
+                distro: "ubuntu-26.04".to_string(),
+                native_format: "deb".to_string(),
+            },
+            ReleaseArtifactLane {
+                distro: "arch".to_string(),
+                native_format: "arch".to_string(),
+            },
+        ]
+    );
+
+    let resolve = named_step(&job.steps, "Resolve the published native package");
+    let resolve_script = resolve.run.as_deref().expect("release resolver script");
+    for required in [
+        "release-matrix.sh resolve-tag",
+        "git cat-file -t",
+        "sha256sum -c SHA256SUMS --ignore-missing",
+        "published_digest",
+        "actual_digest",
+    ] {
+        assert!(
+            resolve_script.contains(required),
+            "release resolver must contain {required}"
+        );
+    }
+
+    let image = named_step(
+        &job.steps,
+        "Install the published native package in the test image",
+    );
+    assert!(
+        image
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("--native-package"))
+    );
+
+    let lifecycle = named_step(
+        &job.steps,
+        "Run Cartesian lifecycle parity with the published binary",
+    );
+    assert!(
+        lifecycle
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("--suite native-cross-source-lifecycle"))
+    );
+    assert_eq!(
+        lifecycle
+            .env
+            .get("CONARY_TEST_REUSE_IMAGE")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    let gate: GateJob = parse_job(&workflow, RELEASE_ARTIFACT_GATE_ID);
+    assert_eq!(gate.name, RELEASE_ARTIFACT_GATE_ID);
+    assert_eq!(gate.condition, "${{ always() }}");
+    assert_eq!(gate.needs, RELEASE_ARTIFACT_MATRIX_JOB_ID);
+    assert!(!gate.continue_on_error);
 }

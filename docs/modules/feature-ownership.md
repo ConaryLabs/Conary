@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 57
+revision: 58
 summary: Route feature ownership through streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
 ---
 
@@ -1161,6 +1161,7 @@ serialized deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
+`.github/workflows/release-artifact-proof.yml`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
@@ -1174,6 +1175,7 @@ static-site deployment, and production health proof.
 
 **Paths:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
+`.github/workflows/release-artifact-proof.yml`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
@@ -1183,11 +1185,15 @@ static-site deployment, and production health proof.
 **Focused proof:** `bash scripts/check-release-matrix.sh`;
 `bash scripts/test-release-matrix.sh`;
 `cargo test -p conary-core --example sign_hash`;
-`cargo test -p conary --test release_ccs_manifest`.
+`cargo test -p conary --test release_ccs_manifest`;
+`cargo test -p conary-test container::image`.
 
 **Interaction gate:** `bash scripts/test-remi-deploy-helper.sh`;
 `bash scripts/test-deploy-sites.sh` when release routing, remote deployment, or
-static-site publication changes.
+static-site publication changes. After a Conary release is published, the
+terminal release-artifact-proof workflow must install all three native
+packages and pass the Cartesian lifecycle before released-binary evidence is
+claimed.
 
 **Docs to update:** `docs/operations/release-artifact-matrix.md`;
 `docs/operations/infrastructure.md`;

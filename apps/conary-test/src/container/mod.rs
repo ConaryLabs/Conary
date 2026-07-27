@@ -10,7 +10,7 @@ pub use backend::{
     ContainerBackend, ContainerConfig, ContainerId, ContainerInspection, ExecResult, ImageInfo,
     NullBackend, VolumeMount,
 };
-pub use image::build_distro_image;
+pub use image::{build_distro_image, build_distro_image_from_native_package};
 pub use lifecycle::BollardBackend;
 
 #[cfg(test)]

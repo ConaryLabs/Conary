@@ -22,9 +22,9 @@ RUN pacman -Syu --noconfirm \
 # Copy all conary* files from build context (binary or package)
 COPY conary* /tmp/install/
 
-# Install: pkg.tar.zst if present, otherwise raw binary
-RUN if [ "$INSTALL_MODE" = "package" ] && ls /tmp/install/*.pkg.tar.zst 1>/dev/null 2>&1; then \
-        pacman -U --noconfirm /tmp/install/*.pkg.tar.zst; \
+# Install: exact staged Arch package or raw binary
+RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.pkg.tar.zst ]; then \
+        pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \
