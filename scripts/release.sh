@@ -617,7 +617,7 @@ main() {
         if [[ -f CHANGELOG.md ]]; then
             tmp="$(mktemp)"
             head -5 CHANGELOG.md > "$tmp"
-            printf '%s' "$changelog_entry" >> "$tmp"
+            printf '%s\n' "$changelog_entry" >> "$tmp"
             tail -n +6 CHANGELOG.md >> "$tmp"
             mv "$tmp" CHANGELOG.md
         fi
