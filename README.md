@@ -53,9 +53,9 @@ attach only a reviewed support bundle.
 ## Try It
 
 Download the pinned preview release from
-[v0.13.0](https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0) after its
-release page publishes `SHA256SUMS`, verify the package checksum, and install it
-only on a VM or non-critical host. Release artifact expectations are tracked in
+[v0.13.0](https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0), verify
+the package against its published `SHA256SUMS`, and install it only on a VM or
+non-critical host. Release artifact evidence is tracked in
 [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
 
 Then choose a source whose package format differs from the host and run the
@@ -130,7 +130,10 @@ first when the command supports it.
   advisory metadata support.
 - Native transaction-history import is not implemented.
 - Non-x86_64 generation boot assets are still reserved.
-- SBOM/provenance sidecars are not published for every preview artifact yet.
+- The 0.13 schema hard cut is not readable by the 0.12 CCS self-update parser;
+  install the 0.13 native package fresh instead of attempting that in-place
+  update.
+- SBOM/provenance sidecars are not published for the current preview suite.
 
 ## Common Commands
 
