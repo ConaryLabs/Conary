@@ -147,7 +147,8 @@ crates/conary-core/      Core library crate
     +-- repository/      Remote package sources
     |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
     |   +-- trust.rs     Tagged Debian, RPM, and Arch repository authority contracts
-    |   +-- trust/openpgp.rs Pinned certificate preparation and Arch master certification
+    |   +-- trust/openpgp.rs Trust-role dispatch over the pinned and Arch keyring owners
+    |   +-- trust/openpgp/arch/ Pacman keyring grammar, trust snapshot, and ALPM signature semantics
     |   +-- parsers/     Authenticated RPM repodata, Debian Packages, and Arch DB grammars
     |   +-- sync.rs      Trust preparation and atomic repository metadata persistence
     |   +-- download.rs  Metadata checksum plus ecosystem package-signature termination

@@ -377,6 +377,7 @@ package transactions.
 
 **Start here:** `crates/conary-core/src/repository/trust.rs`;
 `crates/conary-core/src/repository/trust/openpgp.rs`;
+`crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
 `crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
 `crates/conary-core/src/repository/sync.rs`;

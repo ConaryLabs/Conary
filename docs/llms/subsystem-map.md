@@ -97,7 +97,9 @@ commands.
   `docs/modules/feature-ownership.md` slug `resolution`, plus
   `docs/modules/source-selection.md`. Trust starts in
   `crates/conary-core/src/repository/trust.rs` and
-  `crates/conary-core/src/repository/trust/openpgp.rs`; ecosystem parsers start
+  `crates/conary-core/src/repository/trust/openpgp.rs`, with ALPM keyring and
+  package-signature semantics in
+  `crates/conary-core/src/repository/trust/openpgp/arch/`; ecosystem parsers start
   in `crates/conary-core/src/repository/parsers/`.
 - Canonical package equivalence and Remi map exchange:
   `docs/modules/feature-ownership.md` slug `canonical-map`, plus
