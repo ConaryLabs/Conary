@@ -344,10 +344,9 @@ fn near_limit_values_on_each_dimension_stay_admissible() {
 fn hostile_cbor_depth_and_length_declarations_fail_before_allocation() {
     // A declared nesting depth beyond the bound is refused while decoding the
     // header, not after descending it.
-    let mut deep = Vec::new();
-    for _ in 0..CCS_BUDGET.max_cbor_nesting_depth + 8 {
-        deep.push(0x81); // one-element array
-    }
+    // Each 0x81 is a one-element array header, so a run of them declares
+    // nesting deeper than the bound allows.
+    let mut deep = vec![0x81u8; CCS_BUDGET.max_cbor_nesting_depth + 8];
     deep.push(0x00);
     let error = CCS_BUDGET.decode_authority(&deep).unwrap_err();
     assert!(format!("{error:#}").contains("MANIFEST"), "{error:#}");
