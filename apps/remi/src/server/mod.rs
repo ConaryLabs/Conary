@@ -570,6 +570,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         } else {
             Vec::new()
         };
+        let prewarm_conversion_permits = {
+            let state = state.read().await;
+            state.job_manager.semaphore()
+        };
         tracing::info!(
             "  Metadata refresh: enabled every {}s",
             refresh_interval.as_secs()
@@ -606,6 +610,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                             );
                         }
                         let successful_profiles = successful_refresh_profile_ids(&batch);
+                        let mut eligible_jobs = Vec::new();
                         for job in &prewarm_jobs {
                             if !prewarm_route_refreshed(&job.distro, &successful_profiles) {
                                 tracing::warn!(
@@ -614,17 +619,25 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                                 );
                                 continue;
                             }
-                            match prewarm::run_prewarm(job).await {
+                            eligible_jobs.push(job.clone());
+                        }
+                        for outcome in prewarm::run_prewarm_jobs(
+                            eligible_jobs,
+                            Arc::clone(&prewarm_conversion_permits),
+                        )
+                        .await
+                        {
+                            match outcome.result {
                                 Ok(result) => tracing::info!(
                                     "Post-refresh pre-warm for {}: {} converted, {} skipped, {} failed",
-                                    job.distro,
+                                    outcome.distro,
                                     result.packages_converted,
                                     result.packages_skipped,
                                     result.packages_failed
                                 ),
                                 Err(error) => tracing::warn!(
                                     "Post-refresh pre-warm for {} failed: {}",
-                                    job.distro,
+                                    outcome.distro,
                                     error
                                 ),
                             }

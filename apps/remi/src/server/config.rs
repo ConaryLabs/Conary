@@ -714,6 +714,9 @@ impl RemiConfig {
         if self.prewarm.convert_top_n == 0 {
             anyhow::bail!("prewarm.convert_top_n must be greater than zero");
         }
+        if !(1..=128).contains(&self.conversion.max_concurrent) {
+            anyhow::bail!("conversion.max_concurrent must be in the range 1..=128");
+        }
         for route in &self.prewarm.distros {
             if conary_core::repository::supported_profiles::profile_for_remi_route(route).is_none()
             {
