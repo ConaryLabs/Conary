@@ -439,7 +439,7 @@ mod tests {
         }
 
         fn remove_tuf_role_key(&self, role: &str) {
-            let distro_dir = self.keys_dir.join(TEST_DISTRO);
+            let distro_dir = self.keys_dir.join(TEST_PROFILE);
             let _ = std::fs::remove_file(distro_dir.join(format!("{role}.private")));
             let _ = std::fs::remove_file(distro_dir.join(format!("{role}.public")));
         }

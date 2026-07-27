@@ -592,6 +592,7 @@ packages, install CCS packages, and preserve their exact lifecycle ABIs.
 `crates/conary-core/src/filesystem/cas/stream.rs`;
 `crates/conary-core/src/packages/rpm/payload.rs`;
 `crates/conary-core/src/packages/rpm/payload/header.rs`;
+`crates/conary-core/src/packages/rpm/payload/stream.rs`;
 `crates/conary-core/src/packages/rpm/scriptlets.rs`;
 `crates/conary-core/src/packages/rpm/scriptlets/runtime_context.rs`;
 `crates/conary-core/src/packages/deb/lifecycle_helpers.rs`;
@@ -661,6 +662,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 
 **Focused proof:** `cargo test -p conary-core ccs::v2`;
 `cargo test -p conary-core filesystem::cas`;
+`cargo test -p conary-core packages::rpm::payload`;
 `cargo test -p conary-core --lib lifecycle_helpers`;
 `cargo test -p conary --test packaging_m4b`;
 `cargo test -p conary --test packaging_m4e`;
