@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 59
+revision: 60
 summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
 ---
 
@@ -1235,6 +1235,7 @@ matrix job in `.github/workflows/pr-gate.yml`.
 
 **Paths:** `apps/conary-test/*`;
 `apps/conary/tests/fixtures/*`;
+`apps/conary/tests/integration/remi/containers/*`;
 `apps/conary/tests/integration/remi/manifests/*`;
 `.github/workflows/pr-gate.yml`.
 
