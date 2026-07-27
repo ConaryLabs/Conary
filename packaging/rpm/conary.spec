@@ -16,6 +16,7 @@ BuildRequires:  libseccomp-devel
 BuildRequires:  pkg-config
 BuildRequires:  cmake
 BuildRequires:  perl
+BuildRequires:  systemd-rpm-macros
 
 Requires:       openssl-libs
 Requires:       xz-libs

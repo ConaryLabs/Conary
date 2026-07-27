@@ -26,6 +26,20 @@ for arg in "$@"; do
     esac
 done
 
+require_unitdir_macro() {
+    local unitdir
+    unitdir="$(rpm --eval '%{_unitdir}')"
+    if [[ "$unitdir" != "/usr/lib/systemd/system" ]]; then
+        echo "Fedora systemd RPM macro authority is unavailable: %{_unitdir} resolved to $unitdir" >&2
+        echo "Install the systemd-rpm-macros build dependency before building Conary." >&2
+        exit 1
+    fi
+}
+
+if ! $USE_PODMAN; then
+    require_unitdir_macro
+fi
+
 echo "Building $NAME $VERSION RPM"
 
 mkdir -p "$OUTPUT"

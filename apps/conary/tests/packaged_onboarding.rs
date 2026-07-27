@@ -84,3 +84,39 @@ fn every_conary_package_format_activates_exact_booted_generation_work() {
     assert!(unit.contains("Restart=on-failure"));
     assert!(unit.contains("WantedBy=multi-user.target"));
 }
+
+#[test]
+fn fedora_package_declares_and_preflights_systemd_macro_authority() {
+    let spec = read_packaging_file("packaging/rpm/conary.spec");
+    assert!(
+        spec.lines().any(|line| {
+            line.split_once(':').is_some_and(|(field, packages)| {
+                field.trim() == "BuildRequires"
+                    && packages
+                        .split_whitespace()
+                        .any(|package| package == "systemd-rpm-macros")
+            })
+        }),
+        "RPM spec must declare the package that provides %{{_unitdir}}"
+    );
+
+    let containerfile = read_packaging_file("packaging/rpm/Containerfile.build");
+    assert!(containerfile.contains("systemd-rpm-macros"));
+    assert!(containerfile.contains("rpm --eval '%{_unitdir}'"));
+    assert!(containerfile.contains("/usr/lib/systemd/system"));
+
+    let build_script = read_packaging_file("packaging/rpm/build.sh");
+    assert!(build_script.contains("rpm --eval '%{_unitdir}'"));
+    assert!(build_script.contains("Install the systemd-rpm-macros build dependency"));
+
+    let release_workflow = read_packaging_file(".github/workflows/release-build.yml");
+    assert!(
+        release_workflow.lines().any(|line| {
+            line.contains("dnf install -y")
+                && line
+                    .split_whitespace()
+                    .any(|package| package == "systemd-rpm-macros")
+        }),
+        "release RPM build must install systemd-rpm-macros"
+    );
+}

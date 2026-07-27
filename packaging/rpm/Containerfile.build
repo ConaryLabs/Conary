@@ -16,8 +16,11 @@ RUN dnf install -y \
         gcc \
         cmake \
         perl \
+        systemd-rpm-macros \
         curl \
     && dnf clean all
+
+RUN test "$(rpm --eval '%{_unitdir}')" = "/usr/lib/systemd/system"
 
 # Install a checksum-pinned rustup bootstrap and the declared MSRV toolchain.
 RUN curl --proto '=https' --tlsv1.2 -sSf \
