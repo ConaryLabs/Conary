@@ -333,6 +333,11 @@ mod tests {
                 .verify_inline(TrustRole::ArchDatabase, SIGNATURE)
                 .is_err()
         );
-        assert!(!prepared.armored_keyring(TrustRole::ArchPackage).unwrap().is_empty());
+        assert!(
+            !prepared
+                .armored_keyring(TrustRole::ArchPackage)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
