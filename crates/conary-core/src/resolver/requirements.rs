@@ -486,7 +486,8 @@ fn atom_satisfied(
 mod tests {
     use super::*;
     use crate::repository::dependency_model::{
-        DebianMultiArch, ProvideArchitectureQualifier, RequirementArchitectureQualifier,
+        DebianMultiArch, ProvideArchitectureQualifier, RepositoryRequirementKind,
+        RequirementArchitectureQualifier,
     };
     use crate::repository::rpm_dependency::parse_rpm_dependency;
     use crate::resolver::identity::ProvidedCapability;
@@ -543,7 +544,11 @@ mod tests {
 
     #[test]
     fn with_requires_one_provider_to_supply_both_atoms() {
-        let expression = parse_rpm_dependency("(feature-a with feature-b)").unwrap();
+        let expression = parse_rpm_dependency(
+            RepositoryRequirementKind::Depends,
+            "(feature-a with feature-b)",
+        )
+        .unwrap();
         assert!(
             !requirement_expression_satisfied(
                 &expression,

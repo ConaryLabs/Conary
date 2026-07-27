@@ -142,8 +142,11 @@ pub(super) fn rpm_require_to_group(
     } else {
         format!("{name} {constraint}")
     };
-    let expression = crate::repository::rpm_dependency::parse_rpm_dependency(&native_text)
-        .map_err(Error::ParseError)?;
+    let expression = crate::repository::rpm_dependency::parse_rpm_dependency(
+        RepositoryRequirementKind::Depends,
+        &native_text,
+    )
+    .map_err(Error::ParseError)?;
     let clauses = expression.atoms().into_iter().cloned().collect::<Vec<_>>();
     let behavior = if expression.is_conditional() {
         ConditionalRequirementBehavior::Conditional
