@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 6
+revision: 7
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "v0.13.0 and remi-v0.8.5 at 6f1429c362ac161f1ef817233e72ee9c9a031c11; post-hard-cut release, deployment, and three-distro artifact proof complete"
 current_milestone: first external tester loop
@@ -108,9 +108,9 @@ the stated scope, not whether a workstream happens to be active.
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
-| Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. The `/health/ready` probe is not yet evidence bearing and is owned by W4. |
+| Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. `/health/ready` became evidence bearing in #107 and now fails closed on an absent database or an unrunnable probe; the deployed build predates that change until the next release. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
-| Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
+| Federation | experimental | Only `/v1/federation/directory` is routed and no federation call exists in chunk serving, so the router is a library nothing invokes on a local miss. TLS fingerprint pinning is enforced in code; the documented disagreement is a docs defect. See the federation horizon for measured state and slice ordering. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
 | External product readiness | unfinished | The `v0.13.0` released-package matrix is complete, but the revised cross-distro milestone remains 0/10. Outreach is now gated on the W7 corpus proof rather than on venue scheduling alone; cached-history and venue-eligibility clearance remain separate prerequisites. |
 
@@ -566,6 +566,29 @@ and enforced in the TLS client, coordinator and fetch paths are wired into
 Remi serving, admin changes reach runtime state, public chunk reachability is
 defined, and a two-node failure matrix passes. Topology tuning and alternative
 transports come later.
+
+Measured state on 2026-07-27, so the first slice is scoped against facts rather
+than against the "experimental" label. `apps/remi/src/federation/` carries
+circuit breaking, request coalescing, config, manifest, peer identity, and a
+router across 72 tests, and TLS fingerprint pinning is genuinely enforced:
+HTTPS peers require a pinned fingerprint and HTTP peers derive identity from a
+URL hash. The documentation-versus-enforcement disagreement above is therefore
+a docs defect, not absent code. What is missing is the serving wiring. Only
+`/v1/federation/directory` is routed, and no federation call exists anywhere in
+chunk serving, so the router is a library nothing invokes on a local miss.
+
+Two facts constrain the first slice. Most modules were last substantively
+touched on 2026-04-01, and the commits since were repo-wide sweeps rather than
+federation review, so the code has not been examined against the lifecycle hard
+cut, current CCS authority, or schema revision 21. Passing tests are not
+evidence that those assumptions still hold. Separately,
+`apps/remi/src/federation/mod.rs` is already over the 1,000-line planning gate,
+so any slice adding behavior there must carry an ownership refactor in the same
+change; that cost belongs in the plan rather than being discovered mid-slice.
+
+The resulting order is review and decompose, then wire fetch into serving, then
+prove the two-node failure matrix. Only the last step needs a second host, so
+acquiring one does not advance the first two.
 
 ## Explicit Deferrals and Non-Goals
 
