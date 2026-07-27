@@ -168,9 +168,12 @@ side channel.
 
 Native source selection begins only after one typed trust contract authenticates
 the repository grammar. `RepositoryTrustPolicy` in
-`crates/conary-core/src/repository/trust.rs` is the persisted authority;
-`trust/openpgp.rs` prepares exact pinned certificates and the authenticated
-Arch keyring. Parser construction, sync, package download, CLI repository
+`crates/conary-core/src/repository/trust.rs` is the persisted authority.
+`trust/openpgp.rs` is a thin role-dispatch hub over three owners:
+`trust/openpgp/store.rs` (trust-store layout and key-source transport),
+`trust/openpgp/pinned.rs` (Debian/rpm-md/RPM pinned-certificate verification),
+and `trust/openpgp/arch/` (pacman keyring grammar, trust snapshot, and ALPM
+signature semantics). Parser construction, sync, package download, CLI repository
 creation, Remi's admin API, and the hosted repository manifest all consume that
 same tagged contract. There is no signature-check boolean, permissive mode,
 runtime disable command, key lookup by short ID, or guessed key URL.
@@ -187,13 +190,56 @@ The supported chains are:
   metadata authenticates the RPM bytes; and an independently pinned package
   certificate verifies the RPM's embedded OpenPGP signature.
 - Arch: one exact keyring source supplies the pinned master certificates,
-  their certifications, and packager certificates. An explicit threshold says
-  how many distinct pinned masters must certify a packager key; the hosted Arch
-  feeds require three of the current five masters. `SigLevel` is represented
-  directly: package signatures are required, database signatures are required
-  or optional, and any signature that is present must be valid under
-  `TrustedOnly`. `Never`, `TrustAll`, and optional package signatures are not
-  representable.
+  their certifications, packager certificates, and the companion
+  `<keyring>-revoked` disabled-key list. An explicit threshold says how many
+  distinct pinned masters must certify a packager key; the hosted Arch feeds
+  require three of the current five masters, matching GnuPG's default
+  `--marginals-needed`. `SigLevel` is represented directly: package signatures
+  are required, database signatures are required or optional, and any
+  signature that is present must be valid under `TrustedOnly`. `Never`,
+  `TrustAll`, and optional package signatures are not representable.
+
+### Arch Trust Snapshots
+
+ALPM signature trust is not a pinned-certificate check, so it does not use the
+same verifier as Debian and RPM. `ArchTrustSnapshot`
+(`trust/openpgp/arch/snapshot.rs`) is the typed equivalent of a keyring
+populated by `pacman-key --populate`: pinned master authority, certified
+packager certificates with the exact certifying master set, subkey bindings,
+revocation and expiry, disabled-key state, and one explicit trust-snapshot
+time. `trust/openpgp/arch/verify.rs` evaluates a package or database signature
+against that snapshot and reports pacman's own result classes
+(`alpm_sigstatus_t` and `alpm_sigvalidity_t`); acceptance reproduces
+`_alpm_check_pgp_helper` under `TrustedOnly`.
+
+Two reference times are kept apart, because GnuPG keeps them apart:
+
+- The **trust-snapshot time** (wall-clock now) decides certificate and subkey
+  binding, key flags, revocation, and expiry. GnuPG builds the effective key
+  from the *latest* self-signature (`g10/getkey.c:2914`, `:3427`) and compares
+  expiry against `curtime` (`:3220`, `:3472`).
+- The **signature creation time** is used only for the relations GnuPG ties to
+  it (`g10/sig-check.c:363-435`): the signing key may not be newer than the
+  signature, and the signature may not have expired.
+
+Sequoia's streaming verifier instead binds keys at the signature's own
+creation time. Because `archlinux-keyring` exports one self-signature per
+component, every package signed before a packager's most recent self-signature
+refresh looked unbound under that model while pacman accepted it. The typed
+Arch verifier exists to remove that disagreement without loosening any check.
+
+`crates/conary-core/tests/fixtures/arch/` holds a bounded real-package corpus
+(the pinned `alpine-keyring` fixture plus packages from four more packager
+keys, including a signing-subkey signer) and a bounded `archlinux-keyring`
+ALPM package with the five pinned masters. Native pacman/GnuPG is the
+conformance oracle for those recorded result classes; it is never invoked at
+runtime or during tests.
+
+The prepared Arch trust store is `<keyring-dir>/native/<repo>/arch/` holding
+`certificates.pgp` plus `revoked`. It is disposable cache state: repositories
+prepared before this layout must be re-prepared (`conary repo sync`, or Remi's
+source prewarm), which refetches the keyring and rewrites both objects
+together.
 
 `crates/conary-core/src/repository/parsers/{debian,fedora,arch}.rs` owns the
 three metadata chains. Fedora metalink identity parsing is isolated in
@@ -232,6 +278,14 @@ generators' own documentation:
   [ALPM repository database signatures](https://man.archlinux.org/man/extra/alpm-repo-db/alpm-repo-db.7.en),
   [Arch's master-key trust model](https://archlinux.org/master-keys/), and the
   [`archlinux-keyring` file list](https://archlinux.org/packages/core/any/archlinux-keyring/files/)
+- pacman `a6f7467d`
+  [`lib/libalpm/signing.c`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/signing.c#L521-L719)
+  for the GPGME status/validity mapping and
+  [`scripts/pacman-key.sh.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/scripts/pacman-key.sh.in)
+  for keyring population, local signing, ownertrust, and disabled keys
+- GnuPG `gnupg-2.4.9` `g10/getkey.c`, `g10/sig-check.c`, and `g10/trustdb.c`
+  for the reference-time, expiry, revocation, and web-of-trust semantics that
+  GPGME reports back to pacman
 
 ## Eligibility vs Ranking
 
