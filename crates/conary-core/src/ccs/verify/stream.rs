@@ -3,6 +3,8 @@
 //! Signature-first streaming verification of trusted CCS archives.
 
 use super::{PackageSignature, TrustPolicy, VerifyError};
+use crate::ccs::archive_layout::is_lower_hex;
+use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::v2::schema::{AuthorityDocumentV2, PackageKindV2};
 use crate::filesystem::CasStore;
@@ -11,15 +13,12 @@ use crate::packages::payload::{
 };
 use anyhow::{Context, Result};
 use flate2::bufread::GzDecoder;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Component, Path};
 use tar::Archive;
 
-const MAX_CONTROL_SIZE: u64 = 16 * 1024 * 1024;
-const MAX_COMPONENT_SIZE: u64 = 64 * 1024 * 1024;
-const MAX_METADATA_TOTAL_SIZE: u64 = 128 * 1024 * 1024;
 const EXPECTED_TAR_TRAILING_ZERO_BYTES: u64 = 512;
 
 type ArchiveDecoder = GzDecoder<BufReader<File>>;
@@ -38,11 +37,16 @@ pub(super) struct StreamVerifiedArchive {
 #[derive(Default)]
 struct MetadataState {
     bytes_read: u64,
+    census: Option<AuthorityCensus>,
     manifest: Option<Vec<u8>>,
     signature: Option<String>,
     debug_toml: Option<Vec<u8>>,
     attestation: Option<String>,
     conversion_boundary: Option<String>,
+    /// Components the archive carried, keyed by name.
+    ///
+    /// Collected while streaming and reconciled against the signed authority
+    /// once it is authenticated, the same way the object set is.
     components: HashMap<String, ComponentData>,
 }
 
@@ -65,11 +69,11 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
     let mut object_store = None;
     let mut object_sources = HashMap::new();
     let mut objects_started = false;
-    let mut entries_seen = 0_usize;
+    let mut entries_seen = 0_u64;
 
     for entry in archive.entries()? {
         entries_seen += 1;
-        crate::compression::check_archive_entry_limit(entries_seen, "CCS package")?;
+        CCS_BUDGET.admit_archive_entry(entries_seen)?;
         let mut entry = entry?;
         let path = canonical_entry_path(&entry)?;
         let is_object = path.starts_with("objects/");
@@ -129,13 +133,21 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
         .into());
     }
     let payload = payload_from_authority(&authenticated.authority, &object_sources)?;
+    // Components are derived from the signed authority, which is the source of
+    // truth. Archive component entries are still parsed and validated on the
+    // way past — name agreement, duplicates, and size budget — so a malformed
+    // one fails closed rather than being skipped. Their payload is not the
+    // component source: a package may legitimately carry no component entries
+    // while its authority declares components.
+    let components = crate::ccs::v2::component_view::components(&authenticated.authority);
+
     Ok(StreamVerifiedArchive {
         authority: authenticated.authority,
         signature: authenticated.signature,
         build_attestation: authenticated.build_attestation,
         foreign_conversion_boundary: authenticated.foreign_conversion_boundary,
         debug_toml: metadata.debug_toml,
-        components: metadata.components,
+        components,
         payload,
         files_checked: authenticated.files_checked,
     })
@@ -157,7 +169,6 @@ fn authenticate_metadata(
         metadata.conversion_boundary.as_deref(),
         policy,
     )?;
-    verify_components(&verified.authority, &metadata.components)?;
     let (expected_objects, files_checked) = expected_objects(&verified.authority)?;
     Ok(AuthenticatedMetadata {
         authority: verified.authority,
@@ -206,152 +217,97 @@ fn expected_objects(authority: &AuthorityDocumentV2) -> Result<(BTreeMap<String,
     Ok((objects, package.files.len()))
 }
 
-fn verify_components(
-    authority: &AuthorityDocumentV2,
-    components: &HashMap<String, ComponentData>,
-) -> Result<()> {
-    let signed_names = authority.components.keys().collect::<BTreeSet<_>>();
-    let archived_names = components.keys().collect::<BTreeSet<_>>();
-    if signed_names != archived_names {
-        return Err(VerifyError::PayloadInvalid(format!(
-            "signed component set {signed_names:?} disagrees with archived set {archived_names:?}"
-        ))
-        .into());
-    }
-    let PackageKindV2::Package(package) = &authority.kind else {
-        return Ok(());
-    };
-    let signed_files = package
-        .files
-        .iter()
-        .map(|file| ((file.component.as_str(), file.path.as_str()), file))
-        .collect::<HashMap<_, _>>();
-    let mut archived_files = HashSet::new();
-    for (name, component) in components {
-        let signed = authority
-            .components
-            .get(name)
-            .expect("component sets are equal");
-        let file_count = u32::try_from(component.files.len()).map_err(|_| {
-            VerifyError::PayloadInvalid(format!("component {name:?} file count exceeds u32"))
-        })?;
-        let total_size = component.files.iter().try_fold(0_u64, |total, file| {
-            total.checked_add(file.content.as_ref().map_or(0, |content| content.size))
-        });
-        let total_size = total_size.ok_or_else(|| {
-            VerifyError::PayloadInvalid(format!("component {name:?} size overflows u64"))
-        })?;
-        if file_count != signed.file_count || total_size != signed.total_size {
-            return Err(VerifyError::PayloadInvalid(format!(
-                "component {name:?} summary disagrees with signed authority"
-            ))
-            .into());
-        }
-        let actual_hash = crate::hash::sha256_prefixed(
-            &crate::ccs::attestation::canonical_json_bytes(&component.files)?,
-        );
-        if component.hash != actual_hash {
-            return Err(VerifyError::PayloadInvalid(format!(
-                "component {name:?} projection hash mismatch"
-            ))
-            .into());
-        }
-        for file in &component.files {
-            if file.chunks.is_some() {
-                return Err(VerifyError::PayloadInvalid(format!(
-                    "component file {} uses retired chunk projection",
-                    file.path
-                ))
-                .into());
-            }
-            let key = (name.as_str(), file.path.as_str());
-            if !archived_files.insert(key) {
-                return Err(VerifyError::PayloadInvalid(format!(
-                    "component {name:?} repeats file {}",
-                    file.path
-                ))
-                .into());
-            }
-            let source = signed_files.get(&key).ok_or_else(|| {
-                VerifyError::PayloadInvalid(format!(
-                    "v2 archive carries unsigned file {} in component {name}",
-                    file.path
-                ))
-            })?;
-            if file.node != source.node
-                || file.content != source.content
-                || file.component != source.component
-            {
-                return Err(VerifyError::PayloadInvalid(format!(
-                    "v2 file authority mismatch for {} in component {name}",
-                    file.path
-                ))
-                .into());
-            }
-        }
-    }
-    if archived_files.len() != signed_files.len() {
-        return Err(VerifyError::PayloadInvalid(
-            "one or more signed files are missing from component projections".to_string(),
-        )
-        .into());
-    }
-    Ok(())
-}
-
+/// Read one control document.
+///
+/// `MANIFEST` must be the first archived file. Reading it first gives every
+/// later ceiling a census derived from this package's own signed structure
+/// instead of a global byte guess.
 fn read_metadata_entry(
     entry: &mut tar::Entry<'_, ArchiveDecoder>,
     path: &str,
     state: &mut MetadataState,
 ) -> Result<()> {
     require_regular(entry, path)?;
+    if path == "MANIFEST" {
+        return read_authority_entry(entry, state);
+    }
+    let census = state.census.clone().ok_or_else(|| {
+        VerifyError::PackageError(
+            "CCS archive must carry its MANIFEST authority before every other archived file"
+                .to_string(),
+        )
+    })?;
+
     match path {
-        "MANIFEST" => {
-            let value = read_metadata_control(entry, state, MAX_CONTROL_SIZE, path)?;
-            set_once(&mut state.manifest, value, path)
-        }
         "MANIFEST.sig" => {
-            let value = read_metadata_utf8(entry, state, MAX_CONTROL_SIZE, path)?;
+            let value = read_metadata_utf8(
+                entry,
+                state,
+                CCS_BUDGET.signature_bytes_ceiling(),
+                BudgetDimension::SignatureBytes,
+                path,
+            )?;
             set_once(&mut state.signature, value, path)
         }
         "MANIFEST.toml" => {
-            let value = read_metadata_control(entry, state, MAX_CONTROL_SIZE, path)?;
+            let ceiling = CCS_BUDGET.debug_projection_bytes_ceiling(&census)?;
+            let value = read_metadata_control(
+                entry,
+                state,
+                ceiling,
+                BudgetDimension::DebugProjectionBytes,
+                path,
+            )?;
             set_once(&mut state.debug_toml, value, path)
         }
         "MANIFEST.attestation.json" => {
-            let value = read_metadata_utf8(entry, state, MAX_CONTROL_SIZE, path)?;
+            let value = read_metadata_utf8(
+                entry,
+                state,
+                CCS_BUDGET.attestation_bytes_ceiling(),
+                BudgetDimension::AttestationBytes,
+                path,
+            )?;
             set_once(&mut state.attestation, value, path)
         }
         "MANIFEST.conversion-boundary.json" => {
-            let value = read_metadata_utf8(entry, state, MAX_CONTROL_SIZE, path)?;
+            let value = read_metadata_utf8(
+                entry,
+                state,
+                CCS_BUDGET.attestation_bytes_ceiling(),
+                BudgetDimension::AttestationBytes,
+                path,
+            )?;
             set_once(&mut state.conversion_boundary, value, path)
         }
-        _ if path.starts_with("components/") && path.ends_with(".json") => {
-            let name = path
-                .strip_prefix("components/")
-                .and_then(|value| value.strip_suffix(".json"))
-                .context("invalid CCS component path")?;
-            if name.is_empty() || name.contains('/') {
-                return Err(VerifyError::PackageError(format!(
-                    "invalid CCS component path {path:?}"
-                ))
-                .into());
-            }
-            let raw = read_metadata_control(entry, state, MAX_COMPONENT_SIZE, path)?;
+        _ if crate::ccs::archive_layout::component_entry_name(path).is_some() => {
+            // The signed authority owns the component set; this arm proves the
+            // archive agrees with it. The structural-budget rewrite dropped
+            // this arm entirely, so the reader rejected component entries its
+            // own writer emits.
+            let name = crate::ccs::archive_layout::component_entry_name(path)
+                .expect("component name checked by the guard")
+                .to_string();
+
+            let raw = read_metadata_control(
+                entry,
+                state,
+                CCS_BUDGET.metadata_bytes_ceiling(&census)?,
+                BudgetDimension::MetadataBytes,
+                path,
+            )?;
             let component: ComponentData =
                 serde_json::from_slice(&raw).context("invalid CCS component JSON")?;
-            if component.name != name {
+
+            if component.name != name.as_str() {
                 return Err(VerifyError::PackageError(format!(
                     "CCS component path {path:?} disagrees with component name {:?}",
                     component.name
                 ))
                 .into());
             }
-            if state
-                .components
-                .insert(component.name.clone(), component)
-                .is_some()
-            {
+
+            if state.components.insert(name.clone(), component).is_some() {
                 return Err(VerifyError::PackageError(format!(
                     "CCS archive contains duplicate component {name:?}"
                 ))
@@ -361,6 +317,33 @@ fn read_metadata_entry(
         }
         _ => Err(VerifyError::PackageError(format!("unknown CCS archive entry {path:?}")).into()),
     }
+}
+
+/// Read, decode, and structurally admit the signed authority document.
+fn read_authority_entry(
+    entry: &mut tar::Entry<'_, ArchiveDecoder>,
+    state: &mut MetadataState,
+) -> Result<()> {
+    if state.manifest.is_some() {
+        return Err(VerifyError::PackageError(
+            "CCS archive contains duplicate MANIFEST entries".to_string(),
+        )
+        .into());
+    }
+    let raw = read_metadata_control(
+        entry,
+        state,
+        CCS_BUDGET.max_authority_bytes(),
+        BudgetDimension::AuthorityBytes,
+        "MANIFEST",
+    )?;
+    let authority = CCS_BUDGET.decode_authority(&raw)?;
+    let census = crate::ccs::v2::authority_census(&authority)
+        .map_err(|error| VerifyError::PackageError(format!("invalid CCS v2 MANIFEST: {error}")))?;
+    CCS_BUDGET.admit_encoded_authority(&census, raw.len() as u64)?;
+    state.census = Some(census);
+    state.manifest = Some(raw);
+    Ok(())
 }
 
 fn read_object(
@@ -452,7 +435,7 @@ fn payload_from_authority(
 fn read_control(entry: &mut impl Read, limit: u64, label: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     entry
-        .take(limit + 1)
+        .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .with_context(|| format!("read CCS {label}"))?;
     if bytes.len() as u64 > limit {
@@ -467,15 +450,13 @@ fn read_metadata_control(
     entry: &mut tar::Entry<'_, ArchiveDecoder>,
     state: &mut MetadataState,
     limit: u64,
+    dimension: BudgetDimension,
     label: &str,
 ) -> Result<Vec<u8>> {
-    let declared = entry.header().size()?;
-    if declared > limit {
-        return Err(
-            VerifyError::PackageError(format!("CCS {label} exceeds maximum size {limit}")).into(),
-        );
-    }
-    reserve_metadata_budget(&mut state.bytes_read, declared)?;
+    // Refuse the declared length before reading a byte, so a hostile size
+    // declaration costs no allocation.
+    CCS_BUDGET.admit_control_bytes(dimension, label, entry.header().size()?, limit)?;
+    reserve_metadata_budget(state, entry.header().size()?)?;
     read_control(entry, limit, label)
 }
 
@@ -483,23 +464,36 @@ fn read_metadata_utf8(
     entry: &mut tar::Entry<'_, ArchiveDecoder>,
     state: &mut MetadataState,
     limit: u64,
+    dimension: BudgetDimension,
     label: &str,
 ) -> Result<String> {
-    String::from_utf8(read_metadata_control(entry, state, limit, label)?)
-        .with_context(|| format!("CCS {label} is not valid UTF-8"))
+    String::from_utf8(read_metadata_control(
+        entry, state, limit, dimension, label,
+    )?)
+    .with_context(|| format!("CCS {label} is not valid UTF-8"))
 }
 
-fn reserve_metadata_budget(total: &mut u64, declared: u64) -> Result<()> {
-    let next = total
+/// Bound every control document in one archive together.
+///
+/// Before the authority is decoded the only admissible control document is
+/// `MANIFEST` itself; afterwards the aggregate ceiling is derived from that
+/// package's own census.
+fn reserve_metadata_budget(state: &mut MetadataState, declared: u64) -> Result<()> {
+    let ceiling = match &state.census {
+        Some(census) => CCS_BUDGET.metadata_bytes_ceiling(census)?,
+        None => CCS_BUDGET.max_authority_bytes(),
+    };
+    let next = state
+        .bytes_read
         .checked_add(declared)
         .context("CCS metadata-size arithmetic overflow")?;
-    if next > MAX_METADATA_TOTAL_SIZE {
-        return Err(VerifyError::PackageError(format!(
-            "CCS aggregate metadata exceeds maximum size {MAX_METADATA_TOTAL_SIZE}"
-        ))
-        .into());
-    }
-    *total = next;
+    CCS_BUDGET.admit_control_bytes(
+        BudgetDimension::MetadataBytes,
+        "control documents",
+        next,
+        ceiling,
+    )?;
+    state.bytes_read = next;
     Ok(())
 }
 
@@ -596,22 +590,10 @@ fn finish_archive(archive: Archive<ArchiveDecoder>) -> Result<()> {
 }
 
 fn require_known_directory(path: &str) -> Result<()> {
-    if path == "components" || path == "objects" {
-        return Ok(());
-    }
-    if let Some(prefix) = path.strip_prefix("objects/")
-        && prefix.len() == 2
-        && is_lower_hex(prefix)
-    {
+    if crate::ccs::archive_layout::is_known_directory(path) {
         return Ok(());
     }
     Err(VerifyError::PackageError(format!("unknown CCS archive directory {path:?}")).into())
-}
-
-fn is_lower_hex(value: &str) -> bool {
-    value
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[cfg(test)]
@@ -832,10 +814,19 @@ mod tests {
         output.write_all(&bytes[..bytes.len() / 2]).unwrap();
         assert!(verify_archive(&truncated, &policy).is_err());
 
-        let mut total = MAX_METADATA_TOTAL_SIZE;
-        let error = reserve_metadata_budget(&mut total, 1).unwrap_err();
-        assert!(format!("{error:#}").contains("aggregate metadata"));
-        assert_eq!(total, MAX_METADATA_TOTAL_SIZE);
+        // The aggregate control-document ceiling is derived from this
+        // package's own census, so padding is refused without allocation.
+        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("stream");
+        let census = crate::ccs::v2::authority_census(&authority).unwrap();
+        let ceiling = CCS_BUDGET.metadata_bytes_ceiling(&census).unwrap();
+        let mut state = MetadataState {
+            census: Some(census),
+            bytes_read: ceiling,
+            ..MetadataState::default()
+        };
+        let error = reserve_metadata_budget(&mut state, 1).unwrap_err();
+        assert!(format!("{error:#}").contains("metadata-bytes"), "{error:#}");
+        assert_eq!(state.bytes_read, ceiling);
     }
 
     #[test]

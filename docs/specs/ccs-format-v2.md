@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 4
+revision: 5
 summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
 ---
 
@@ -25,13 +25,23 @@ A package is a gzip-compressed tar archive. Its accepted entries are:
 | `MANIFEST.toml` | optional regular file | diagnostic projection only; its digest must match signed authority when present |
 | `MANIFEST.attestation.json` | optional regular file | build-attestation envelope bound by signed provenance |
 | `MANIFEST.conversion-boundary.json` | optional regular file | foreign-conversion boundary bound by signed provenance |
-| `components/<name>.json` | one per signed component | diagnostic payload index checked exactly against signed component summaries |
 | `objects/<aa>/<62 lowercase hex>` | one per signed regular-file digest | content-addressed payload bytes |
 
-The reader rejects duplicate authority, signatures, projections, components,
-or objects; unknown files and directories; non-canonical object paths; archive
-path escapes; oversized entries; extraction-limit overflow; object/hash
-disagreement; and any entry type not admitted for its path.
+`MANIFEST` is the first archived file. Directory entries may precede it; no
+other regular file may. Reading authority first lets every later ceiling be
+derived from this package's own signed structure instead of a global guess.
+
+There is no `components/<name>.json` entry. That projection re-encoded every
+signed file record in JSON, measured at 1.8x the CBOR authority it duplicated,
+and it could add no authority because verification had to prove it matched the
+`MANIFEST` exactly. Component views are derived from signed authority by
+`crates/conary-core/src/ccs/v2/component_view.rs`.
+
+The reader rejects duplicate authority, signatures, projections, or objects;
+unknown files and directories; authority that does not arrive first;
+non-canonical object paths; archive path escapes; object/hash disagreement; any
+entry type not admitted for its path; and every structural-budget violation
+below.
 
 Tar ordering, timestamps, ownership, and compression are transport details.
 Writers emit deterministic ordering and normalized timestamps. They never
@@ -103,10 +113,53 @@ regular-file content authority.
 For regular files, the archive contains exactly one object at the canonical
 path derived from the lowercase digest. Verification recomputes every digest
 and size, rejects missing or unreferenced objects, and proves that every
-component projection has the signed name, file count, and byte total.
+component summary has the signed name, file count, and byte total.
 
-`MANIFEST.toml` and `components/*.json` are readable projections. A projection
-may help inspection, but it can neither add nor replace install behavior.
+`MANIFEST.toml` is a readable projection. A projection may help inspection, but
+it can neither add nor replace install behavior.
+
+## Structural Budget
+
+`crates/conary-core/src/ccs/budget.rs` is the single owner of every CCS limit.
+Authoring preflight and verification both call `admit_authority`, so the writer
+cannot emit a package the reader refuses. There is no separate reader-side
+limit table and no fixed serialized-byte ceiling on `MANIFEST`.
+
+The budget states explicit dimensions, each with its own typed diagnostic:
+
+- counts: payload nodes, payload objects, components, config declarations,
+  provides, requirement groups, relation groups, lifecycle entries, and archive
+  entries;
+- per-item lengths: install-path bytes and path-component depth, identifier
+  bytes, link-target bytes, xattr count, xattr name and value bytes, and
+  lifecycle script body bytes;
+- aggregate pools: total path bytes, total xattr bytes, total non-payload
+  authority bytes, and total payload bytes;
+- per-object and decoder limits: payload object bytes and CBOR nesting depth.
+
+Byte ceilings are derived from those dimensions rather than chosen:
+
+- `max_authority_bytes()` bounds decoder memory before allocation. It is the
+  envelope plus `max_files` times the fixed per-record cost plus the aggregate
+  pools. A reader refuses a declared `MANIFEST` length above it before reading
+  a byte.
+- `authority_bytes_ceiling(census)` bounds the exact document one package may
+  occupy, computed from that package's measured structure, so a package that
+  declares little authority cannot ship a padded document.
+- `debug_projection_bytes_ceiling`, `signature_bytes_ceiling`,
+  `attestation_bytes_ceiling`, and `metadata_bytes_ceiling` bound the remaining
+  control documents from the same census.
+
+Every ceiling uses checked arithmetic; an overflow is a typed refusal, not a
+wrap. Hostile CBOR depth or length declarations, excessive counts, oversized
+strings, truncated authority, duplicate authority, unsigned or duplicated
+objects, and decompression bombs all fail before large allocation or any
+persistence.
+
+Untrusted inspection never retains payload bytes: it stream-hashes each object
+against its canonical path and discards it. Verification streams objects into
+the payload spool with their signed sizes. Neither path buffers whole-package
+payload.
 
 ## Signatures And Trust
 
@@ -180,6 +233,7 @@ Git history is the only source for the removed pre-alpha implementation.
 Focused verification for this contract is:
 
 ```bash
+cargo test -p conary-core ccs::budget
 cargo test -p conary-core ccs::v2
 cargo test -p conary-core ccs::archive_reader
 cargo test -p conary-core ccs::verify

@@ -5,21 +5,52 @@ mod identity;
 
 use super::diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 use super::schema::*;
+use crate::ccs::budget::{AuthorityCensus, CCS_BUDGET};
 use config::{validate_config_authority, validate_package_policy};
 use identity::{validate_identity, validate_provides};
 
 pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
-    validate_authority_common(authority)
+    validate_authority_common(authority).map(|_| ())
 }
 
 pub fn validate_authority_structure(
     authority: &AuthorityDocumentV2,
 ) -> Result<(), V2ValidationError> {
+    validate_authority_common(authority).map(|_| ())
+}
+
+/// Validate and return the structural census the shared budget measured.
+///
+/// Authoring uses the census to prove the bytes it is about to sign fit the
+/// ceiling those exact bytes derive; verification uses it to prove the archived
+/// bytes do. Neither side owns a private limit table.
+pub fn authority_census(
+    authority: &AuthorityDocumentV2,
+) -> Result<AuthorityCensus, V2ValidationError> {
     validate_authority_common(authority)
 }
 
-fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
+fn validate_authority_common(
+    authority: &AuthorityDocumentV2,
+) -> Result<AuthorityCensus, V2ValidationError> {
     let mut diagnostics = Vec::new();
+
+    // The shared structural budget runs first: a document that declares
+    // hostile counts, lengths, or depth is refused before any other pass walks
+    // it, and the same admission runs in authoring preflight and verification.
+    let census = match CCS_BUDGET.admit_authority(authority) {
+        Ok(census) => census,
+        Err(error) => {
+            return Err(V2ValidationError {
+                diagnostics: vec![V2Diagnostic::error(
+                    V2DiagnosticCode::StructuralBudgetExceeded,
+                    error.to_string(),
+                    Some(error.field.clone()),
+                    "keep signed authority inside the canonical CCS structural budget",
+                )],
+            });
+        }
+    };
 
     if authority.format_version != FORMAT_VERSION_V2 {
         diagnostics.push(V2Diagnostic::error(
@@ -125,7 +156,7 @@ fn validate_authority_common(authority: &AuthorityDocumentV2) -> Result<(), V2Va
     }
 
     if diagnostics.is_empty() {
-        Ok(())
+        Ok(census)
     } else {
         Err(V2ValidationError { diagnostics })
     }

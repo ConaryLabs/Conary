@@ -408,8 +408,13 @@ impl AuthorityDocumentV2 {
         Ok(buf)
     }
 
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self, ciborium::de::Error<std::io::Error>> {
-        ciborium::from_reader(bytes)
+    /// Decode signed authority under the canonical structural budget.
+    ///
+    /// There is no unbounded decode entry point: every consumer goes through
+    /// `crate::ccs::budget`, so a hostile nesting depth or declared length
+    /// fails before allocation.
+    pub fn from_cbor(bytes: &[u8]) -> anyhow::Result<Self> {
+        crate::ccs::budget::CCS_BUDGET.decode_authority(bytes)
     }
 
     #[cfg(test)]

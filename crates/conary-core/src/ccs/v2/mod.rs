@@ -2,6 +2,7 @@
 //! CCS v2 native package authority.
 
 pub mod authoring;
+pub mod component_view;
 pub mod debug_projection;
 pub mod diagnostics;
 pub mod identity;
@@ -26,3 +27,4 @@ pub use schema::{
     ProvidedCapabilityV2,
 };
 pub use validation::validate_authority;
+pub use validation::{authority_census, validate_authority_structure};
