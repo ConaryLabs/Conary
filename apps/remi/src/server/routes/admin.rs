@@ -274,38 +274,7 @@ async fn refresh_upstream(
     Query(query): Query<admin_handlers::RefreshQuery>,
 ) -> Response {
     match crate::server::admin_service::refresh_repositories(&state, query.force).await {
-        Ok(results) => {
-            let synced = results.iter().filter(|r| !r.skipped).count();
-            let skipped = results.iter().filter(|r| r.skipped).count();
-
-            {
-                let guard = state.read().await;
-                guard.publish_event(
-                    "repos.refreshed",
-                    serde_json::json!({
-                        "force": query.force,
-                        "synced": synced,
-                        "skipped": skipped,
-                    }),
-                );
-            }
-
-            Json(serde_json::json!({
-                "status": "ok",
-                "force": query.force,
-                "synced": synced,
-                "skipped": skipped,
-                "results": results
-                    .into_iter()
-                    .map(|r| serde_json::json!({
-                        "name": r.name,
-                        "packages_synced": r.packages_synced,
-                        "skipped": r.skipped,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
-            .into_response()
-        }
+        Ok(batch) => admin_handlers::refresh_batch_response(&state, query.force, batch).await,
         Err(e) => {
             tracing::error!("Upstream refresh failed: {e}");
             (

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 16
+revision: 17
 summary: Document exact profile-owned source policy, canonical map authority, native repository authority, package identity, and lifecycle handoff
 ---
 
@@ -208,6 +208,17 @@ dependencies and provisions are parsed through the official typed
 `RelationOrSoname` grammar. Soname v1 and v2 values remain complete atomic
 `Soname` identities; Conary never guesses a package-version boundary inside
 them. Ordinary package relations retain their exact ALPM comparison semantics.
+
+RPM requirement grammar is owned by
+`repository/rpm_dependency.rs`. Its parser state is derived from RPM
+`a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`
+[`rpmrichParseInternal()` and `rpmrichParseForTag()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L1309-L1421),
+not from dependency text or a package list. It accepts RPM's exact comparison
+spellings and canonicalizes aliases before typed version evaluation; enforces
+the same-operator chain and tag-context rules; and constructs repeated `with`
+from the right side as RPM does. The source-pinned Fedora 44 corpus under
+`crates/conary-core/tests/fixtures/rpm/` proves real repository expressions
+without granting those packages exceptional behavior.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:

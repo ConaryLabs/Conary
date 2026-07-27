@@ -9,7 +9,6 @@
 //! The service layer is also the integration point for MCP tool handlers,
 //! which need the same business logic without HTTP framing.
 
-use futures::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{net::IpAddr, str::FromStr};
@@ -27,8 +26,14 @@ use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
 
+mod refresh;
 mod test_data;
 
+pub use refresh::{
+    RepoRefreshBatch, RepoRefreshBatchState, RepoRefreshFailure, RepoRefreshFailureKind,
+    RepoRefreshResult,
+};
+use refresh::{RepoRefreshOutcome, collect_refresh_outcomes};
 pub use test_data::{
     PushStepData, PushTestResultData, TestDetail, TestHealthSummary, TestRunDetail,
     TestStepWithLogs, create_test_run, get_test_detail, get_test_logs, get_test_run_detail,
@@ -563,14 +568,6 @@ pub struct UpdateRepoInput {
     pub trust: Option<RepositoryTrustPolicy>,
 }
 
-/// Result of a repository metadata refresh.
-#[derive(Debug, Clone)]
-pub struct RepoRefreshResult {
-    pub name: String,
-    pub packages_synced: usize,
-    pub skipped: bool,
-}
-
 enum RepoRefreshPlan {
     Missing,
     Skipped(RepoRefreshResult),
@@ -684,12 +681,14 @@ async fn refresh_loaded_repo(
     repo: Repository,
 ) -> Result<RepoRefreshResult, ServiceError> {
     let name = repo.name.clone();
+    let source_profile = repo.source_profile.clone();
     let packages_synced = conary_core::repository::sync_repository_from_db_path(db, repo)
         .await
         .map_err(ServiceError::from)?;
 
     Ok(RepoRefreshResult {
         name,
+        source_profile,
         packages_synced,
         skipped: false,
     })
@@ -750,6 +749,7 @@ pub async fn sync_repo(
         if !force && !conary_core::repository::needs_sync(&repo) {
             return Ok(RepoRefreshPlan::Skipped(RepoRefreshResult {
                 name: repo.name,
+                source_profile: repo.source_profile,
                 packages_synced: 0,
                 skipped: true,
             }));
@@ -770,7 +770,7 @@ pub async fn sync_repo(
 pub async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
-) -> Result<Vec<RepoRefreshResult>, ServiceError> {
+) -> Result<RepoRefreshBatch, ServiceError> {
     let db = db_path(state).await;
     let repos = blocking_anyhow({
         let db = db.clone();
@@ -781,29 +781,36 @@ pub async fn refresh_repositories(
     })
     .await?;
 
-    let mut refresh_stream = futures::stream::iter(repos.into_iter().map(|repo| {
-        let db = db.clone();
-        async move {
-            if !force && !conary_core::repository::needs_sync(&repo) {
-                return Ok(RepoRefreshResult {
-                    name: repo.name,
-                    packages_synced: 0,
-                    skipped: true,
-                });
+    let jobs =
+        repos.into_iter().map(|repo| {
+            let db = db.clone();
+            let name = repo.name.clone();
+            let source_profile = repo.source_profile.clone();
+            async move {
+                let result = if !force && !conary_core::repository::needs_sync(&repo) {
+                    Ok(RepoRefreshResult {
+                        name: name.clone(),
+                        source_profile: source_profile.clone(),
+                        packages_synced: 0,
+                        skipped: true,
+                    })
+                } else {
+                    refresh_loaded_repo(db, repo).await
+                };
+                match result {
+                    Ok(result) => RepoRefreshOutcome::Success(result),
+                    Err(error) => RepoRefreshOutcome::Failure(
+                        RepoRefreshFailure::from_service_error(name, source_profile, error),
+                    ),
+                }
             }
-            refresh_loaded_repo(db, repo).await
-        }
-    }))
-    .buffer_unordered(4);
+        });
+    let batch = collect_refresh_outcomes(jobs).await;
 
-    let mut results = Vec::new();
-    while let Some(result) = refresh_stream.next().await {
-        results.push(result?);
-    }
-
-    // After successful sync, trigger canonical rebuild if cooldown elapsed.
+    // After at least one successful source, trigger canonical rebuild if the
+    // cooldown elapsed. One failed source must not starve successful sources.
     // Failures here are non-fatal -- the sync result is returned regardless.
-    {
+    if !batch.results.is_empty() {
         let db_path = db_path(state).await;
         let canonical_cfg = state.read().await.canonical_config.clone();
         blocking(move || {
@@ -826,5 +833,5 @@ pub async fn refresh_repositories(
         .unwrap_or_else(|e| tracing::warn!("Post-sync canonical rebuild task failed: {e}"));
     }
 
-    Ok(results)
+    Ok(batch)
 }

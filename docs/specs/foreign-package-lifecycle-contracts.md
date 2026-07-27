@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-27
-revision: 33
+revision: 34
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -618,6 +618,18 @@ scheme, relation, and EVR boundary from the header. `<`, `<=`, `=`, `>=`, and
 overlap, including inclusive/exclusive endpoints, unversioned existence
 provides, and RPM's partial-EVR equality behavior. It never substitutes the
 owning package EVR or reinterprets the range through another ecosystem.
+
+RPM rich requirements are typed source ABI, not text to split later. The
+parser is pinned to RPM
+[`rpmrichParseInternal()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L1309-L1396)
+and carries `and`, `or`, `if`, `unless`, `else`, `with`, and `without` into
+`RepositoryRequirementExpression`. Only `and`, `or`, and `with` may repeat at
+one level; repeated `with` is represented by RPM's right-side chain. RPM's
+`=<`, `==`, and `=>` comparison aliases canonicalize to `<=`, `=`, and `>=`
+before native RPM version evaluation, while `!=` is not an RPM dependency
+operator. Requires-like and conflict-like tag contexts retain RPM's distinct
+`if`/`unless` nesting checks. The implementation never recognizes a dependency
+by package name or adds a skip/allowlist for repository metadata.
 
 ### RPM Lifecycle Surface
 
