@@ -303,7 +303,8 @@ mod tests {
     /// only the separator byte separates.
     #[test]
     fn separator_homoglyphs_are_ordinary_name_bytes_not_separators() {
-        let sanitized = sanitize_path("usr\u{ff0f}bin\u{ff0f}tool").expect("valid single component");
+        let sanitized =
+            sanitize_path("usr\u{ff0f}bin\u{ff0f}tool").expect("valid single component");
 
         assert_eq!(sanitized, PathBuf::from("usr\u{ff0f}bin\u{ff0f}tool"));
         assert_eq!(

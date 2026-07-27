@@ -222,7 +222,10 @@ mod tests {
 
     #[test]
     fn current_directory_components_are_dropped() {
-        assert_eq!(deploy("./usr/./bin/foo").unwrap().to_bytes(), b"usr/bin/foo");
+        assert_eq!(
+            deploy("./usr/./bin/foo").unwrap().to_bytes(),
+            b"usr/bin/foo"
+        );
     }
 
     // -- Traversal safety, decided on exact components ----------------------
