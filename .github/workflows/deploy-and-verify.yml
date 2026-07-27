@@ -641,6 +641,17 @@ jobs:
           REMOTE_EOF
       - name: Verify remi health
         run: curl -fsS https://remi.conary.io/health >/dev/null
+      - name: Verify remi readiness
+        # /health is an unconditional liveness reply and proves only that the
+        # process is listening. /health/ready opens the database, requires the
+        # expected schema revision, and checks the serving directories and free
+        # space, failing closed when a probe cannot run. Deployment evidence
+        # needs the second, not the first.
+        run: |
+          set -euo pipefail
+          body=$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)
+          echo "$body"
+          echo "$body" | jq -e '.ready == true' >/dev/null
 
   no-deploy-required:
     name: no-deploy-required

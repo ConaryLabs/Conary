@@ -43,6 +43,7 @@ mod prewarm;
 pub mod publication;
 pub mod r2;
 pub mod rate_limit;
+pub mod readiness;
 pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
@@ -127,6 +128,8 @@ pub struct ServerConfig {
     pub cache_max_bytes: u64,
     /// Chunk TTL in days before LRU eviction
     pub chunk_ttl_days: u32,
+    /// Free bytes the serving root must have before readiness reports ready.
+    pub readiness_min_free_bytes: u64,
 
     // === Phase 0 additions ===
     /// Enable Bloom filter for fast negative lookups

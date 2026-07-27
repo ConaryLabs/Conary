@@ -150,6 +150,12 @@ pub struct StorageSection {
     /// Maximum cache size in bytes (e.g., "700GB", "1TB")
     #[serde(default)]
     pub max_cache_size: Option<String>,
+
+    /// Free space the serving root must have before readiness reports ready
+    /// (e.g., "10GB"). Readiness fails closed below this, and reports the
+    /// probe as unavailable when free space cannot be measured at all.
+    #[serde(default)]
+    pub readiness_min_free: Option<String>,
 }
 
 impl Default for StorageSection {
@@ -160,6 +166,7 @@ impl Default for StorageSection {
             eviction_min_age: default_eviction_min_age(),
             negative_cache_ttl: default_negative_cache_ttl(),
             max_cache_size: None,
+            readiness_min_free: None,
         }
     }
 }
@@ -763,6 +770,13 @@ impl RemiConfig {
         30
     }
 
+    fn readiness_min_free_bytes(&self) -> Result<u64> {
+        match self.storage.readiness_min_free {
+            Some(ref size_str) => parse_size(size_str),
+            None => Ok(crate::server::readiness::DEFAULT_MIN_FREE_BYTES),
+        }
+    }
+
     fn enable_bloom_filter(&self) -> bool {
         true
     }
@@ -789,6 +803,7 @@ impl RemiConfig {
             max_concurrent_conversions: self.conversion.max_concurrent,
             cache_max_bytes: self.cache_max_bytes()?,
             chunk_ttl_days: self.chunk_ttl_days(),
+            readiness_min_free_bytes: self.readiness_min_free_bytes()?,
             enable_bloom_filter: self.enable_bloom_filter(),
             bloom_expected_chunks: self.bloom_expected_chunks(),
             upstream_url: None,
