@@ -133,16 +133,27 @@ fn arch_provides_are_exact_typed_provider_contracts() {
     let parsed = ArchPackage::parse_provides(
         "example",
         "1.0-1",
-        &["virtual-abi=2".to_string(), "unversioned".to_string()],
+        &[
+            "virtual-abi=2".to_string(),
+            "unversioned".to_string(),
+            "libwlroots-0.18.so=libwlroots-0.18.so-64".to_string(),
+            "lib:libwayland-client.so.0".to_string(),
+        ],
     )
     .unwrap();
 
-    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed.len(), 5);
     assert_eq!(parsed[0].kind, RepositoryCapabilityKind::PackageName);
     assert_eq!(parsed[0].version.as_deref(), Some("1.0-1"));
     assert_eq!(parsed[1].kind, RepositoryCapabilityKind::Virtual);
     assert_eq!(parsed[1].version.as_deref(), Some("2"));
     assert_eq!(parsed[2].version, None);
+    assert_eq!(parsed[3].name, "libwlroots-0.18.so=libwlroots-0.18.so-64");
+    assert_eq!(parsed[3].kind, RepositoryCapabilityKind::Soname);
+    assert_eq!(parsed[3].version, None);
+    assert_eq!(parsed[4].name, "lib:libwayland-client.so.0");
+    assert_eq!(parsed[4].kind, RepositoryCapabilityKind::Soname);
+    assert_eq!(parsed[4].version, None);
 
     let error = ArchPackage::parse_provides("example", "1.0-1", &["virtual-abi>=2".to_string()])
         .unwrap_err();
@@ -152,7 +163,10 @@ fn arch_provides_are_exact_typed_provider_contracts() {
 #[test]
 fn arch_runtime_optional_and_build_requirements_keep_typed_kinds() {
     let runtime = ArchPackage::parse_requirements(
-        &["glibc>=2.34".to_string()],
+        &[
+            "glibc>=2.34".to_string(),
+            "libwlroots-0.18.so=libwlroots-0.18.so-64".to_string(),
+        ],
         RepositoryRequirementKind::Depends,
     )
     .unwrap();
@@ -170,6 +184,15 @@ fn arch_runtime_optional_and_build_requirements_keep_typed_kinds() {
         runtime[0].alternatives[0].version_constraint.as_deref(),
         Some(">= 2.34")
     );
+    assert_eq!(
+        runtime[1].alternatives[0].name,
+        "libwlroots-0.18.so=libwlroots-0.18.so-64"
+    );
+    assert_eq!(
+        runtime[1].alternatives[0].capability_kind,
+        Some(RepositoryCapabilityKind::Soname)
+    );
+    assert!(runtime[1].alternatives[0].version_constraint.is_none());
     assert_eq!(optional[0].kind, RepositoryRequirementKind::Optional);
     assert_eq!(optional[0].description.as_deref(), Some("for scripts"));
     assert_eq!(build[0].kind, RepositoryRequirementKind::Build);

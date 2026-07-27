@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 32
+last_updated: 2026-07-27
+revision: 33
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -1043,8 +1043,31 @@ Authoritative references:
 
 - [`alpm-install-scriptlet(5)`](https://man.archlinux.org/man/alpm-install-scriptlet.5.en)
 - [`alpm-hooks(5)`](https://man.archlinux.org/man/alpm-hooks.5.en)
+- [`alpm-package-relation(7)`](https://alpm.archlinux.page/specifications/alpm-package-relation.7.html)
+- [`alpm-sonamev1(7)`](https://alpm.archlinux.page/specifications/alpm-sonamev1.7.html)
+- [`alpm-soname(7)`](https://alpm.archlinux.page/specifications/alpm-soname.7.html)
+- [pinned pacman/libalpm dependency parser](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/deps.c)
 - [pinned pacman/libalpm source](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/trans.c)
 - [pinned Arch pacman build contract](https://gitlab.archlinux.org/archlinux/packaging/packages/pacman/-/blob/abdc0dfedf3ca553a02dde8551e972fe745535b7/PKGBUILD)
+
+### ALPM Relations And Sonames
+
+Runtime dependencies and provisions use the official ALPM grammar through
+`alpm_types::RelationOrSoname`, whose parse precedence is soname v2, soname
+v1, then package relation. This is source grammar, not punctuation matching or
+a package exception.
+
+ALPM soname v1 and v2 values are atomic `Soname` capability identities. Conary
+stores the complete canonical string, including a v1 identity such as
+`libwlroots-0.18.so=libwlroots-0.18.so-64`, without treating any portion as an
+Arch package-version constraint. A runtime soname requirement matches only an
+identical typed soname provision; a same-named package or virtual provision is
+not equivalent.
+
+Ordinary package and virtual provisions remain package relations. They may be
+unversioned or use ALPM's exact `=` relation; other comparison operators are
+rejected for provisions. Conflicts, replacements, optional dependencies, and
+build dependencies continue to use their documented package-relation grammar.
 
 ### `.INSTALL` Functions
 

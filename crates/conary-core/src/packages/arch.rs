@@ -30,7 +30,7 @@ use crate::packages::traits::{
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
-use crate::repository::package_relation::parse_native_relation;
+use crate::repository::package_relation::{parse_arch_provide, parse_native_relation};
 use crate::repository::versioning::VersionScheme;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -283,8 +283,6 @@ impl ArchPackage {
         package_version: &str,
         entries: &[String],
     ) -> Result<Vec<ProvidedCapability>> {
-        use crate::repository::versioning::{RepoVersionConstraint, parse_repo_constraint};
-
         let mut provides = vec![ProvidedCapability {
             kind: RepositoryCapabilityKind::PackageName,
             name: package_name.to_string(),
@@ -296,38 +294,15 @@ impl ArchPackage {
             architecture_qualifier: Default::default(),
         }];
         for entry in entries {
-            let clause = crate::repository::package_relation::parse_arch_atom(entry)
-                .map_err(Error::ParseError)?;
-            let version =
-                clause
-                    .version_constraint
-                    .as_deref()
-                    .map(|constraint| {
-                        match parse_repo_constraint(VersionScheme::Arch, constraint)? {
-                    RepoVersionConstraint::Exact(version) => Ok(version),
-                    _ => Err(
-                        crate::repository::versioning::VersionComparisonError::InvalidConstraint {
-                            scheme: VersionScheme::Arch.as_str(),
-                            constraint: constraint.to_string(),
-                            reason: "ALPM versioned provides require the exact '=' operator"
-                                .to_string(),
-                        },
-                    ),
-                }
-                    })
-                    .transpose()
-                    .map_err(|error| Error::ParseError(error.to_string()))?;
+            let parsed = parse_arch_provide(entry, package_name).map_err(Error::ParseError)?;
             let provide = ProvidedCapability {
-                kind: if clause.name == package_name {
-                    RepositoryCapabilityKind::PackageName
-                } else {
-                    RepositoryCapabilityKind::Virtual
-                },
-                name: clause.name,
-                version_relation: version
+                kind: parsed.kind,
+                name: parsed.name,
+                version_relation: parsed
+                    .version
                     .as_ref()
                     .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
-                version,
+                version: parsed.version,
                 version_scheme: VersionScheme::Arch,
                 architecture_qualifier: Default::default(),
             };

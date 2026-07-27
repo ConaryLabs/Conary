@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 15
+last_updated: 2026-07-27
+revision: 16
 summary: Document exact profile-owned source policy, canonical map authority, native repository authority, package identity, and lifecycle handoff
 ---
 
@@ -201,6 +201,13 @@ three metadata chains. Fedora metalink identity parsing is isolated in
 package checks. Missing keys, a missing required signature, an unsupported
 hash, duplicate authority records, invalid certification thresholds, or any
 identity mismatch fail closed and remove a partially downloaded package.
+
+The Arch repository parser and direct package parser share
+`repository/package_relation.rs` as the ALPM relation authority. Runtime
+dependencies and provisions are parsed through the official typed
+`RelationOrSoname` grammar. Soname v1 and v2 values remain complete atomic
+`Soname` identities; Conary never guesses a package-version boundary inside
+them. Ordinary package relations retain their exact ALPM comparison semantics.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:

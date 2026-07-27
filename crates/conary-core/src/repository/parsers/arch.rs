@@ -10,10 +10,10 @@ use crate::compression::decompress_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
-    RepositoryRequirementGroup, RepositoryRequirementKind,
+    RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
+    RepositoryRequirementKind,
 };
-use crate::repository::package_relation::parse_native_relation;
+use crate::repository::package_relation::{parse_arch_provide, parse_native_relation};
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use crate::repository::trust::{ArchSignatureRequirement, RepositoryTrustPolicy, TrustRole};
 use crate::repository::versioning::VersionScheme;
@@ -221,52 +221,17 @@ impl ArchParser {
 
         if let Some(prov_list) = desc_fields.get("PROVIDES") {
             for prov in prov_list {
-                let clause = crate::repository::package_relation::parse_arch_atom(prov).map_err(
-                    |error| {
-                        Error::ParseError(format!(
-                            "invalid Arch %PROVIDES% entry '{prov}': {error}"
-                        ))
-                    },
-                )?;
-                let kind = if clause.name == name {
-                    RepositoryCapabilityKind::PackageName
-                } else {
-                    // ALPM's PROVIDES field declares a capability but does not
-                    // carry a distinct soname/path type. Do not derive one
-                    // from the capability spelling.
-                    RepositoryCapabilityKind::Virtual
-                };
-
-                let prov_version = clause
-                    .version_constraint
-                    .as_deref()
-                    .map(|constraint| {
-                        match crate::repository::versioning::parse_repo_constraint(
-                            VersionScheme::Arch,
-                            constraint,
-                        )
-                        .map_err(|error| {
-                            Error::ParseError(format!(
-                                "invalid Arch %PROVIDES% entry '{prov}': {error}"
-                            ))
-                        })? {
-                            crate::repository::versioning::RepoVersionConstraint::Exact(
-                                version,
-                            ) => Ok(version),
-                            _ => Err(Error::ParseError(format!(
-                                "Arch %PROVIDES% entry '{prov}' must be unversioned or use the exact '=' relation"
-                            ))),
-                        }
-                    })
-                    .transpose()?;
+                let parsed = parse_arch_provide(prov, name).map_err(|error| {
+                    Error::ParseError(format!("invalid Arch %PROVIDES% entry '{prov}': {error}"))
+                })?;
 
                 provides.push(RepositoryProvide {
-                    name: clause.name,
-                    kind,
-                    version_relation: prov_version.as_ref().map(|_| {
+                    name: parsed.name,
+                    kind: parsed.kind,
+                    version_relation: parsed.version.as_ref().map(|_| {
                         crate::repository::dependency_model::ProvideVersionRelation::Equal
                     }),
-                    version: prov_version,
+                    version: parsed.version,
                     architecture_qualifier:
                         crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
                     native_text: Some(prov.clone()),
@@ -484,6 +449,7 @@ impl RepositoryParser for ArchParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repository::dependency_model::RepositoryCapabilityKind;
 
     fn parser() -> ArchParser {
         let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Arch {
@@ -791,6 +757,8 @@ x86_64
 %PROVIDES%
 libm.so=6-64
 libpthread.so
+libwlroots-0.18.so=libwlroots-0.18.so-64
+lib:libwayland-client.so.0
 ";
 
         let fields = parser.parse_desc_file(desc).unwrap();
@@ -798,8 +766,8 @@ libpthread.so
             .package_from_fields("https://example.test", &fields, None)
             .unwrap();
 
-        // Self-provide + 2 explicit provides
-        assert!(pkg.provides.len() >= 3);
+        // Self-provide + 4 explicit provides
+        assert_eq!(pkg.provides.len(), 5);
 
         let self_prov = pkg
             .provides
@@ -811,18 +779,60 @@ libpthread.so
         let libm = pkg
             .provides
             .iter()
-            .find(|p| p.name == "libm.so")
+            .find(|p| p.name == "libm.so=6-64")
             .expect("libm.so provide missing");
-        assert_eq!(libm.kind, RepositoryCapabilityKind::Virtual);
-        assert_eq!(libm.version.as_deref(), Some("6-64"));
+        assert_eq!(libm.kind, RepositoryCapabilityKind::Soname);
+        assert!(libm.version.is_none());
 
         let libpthread = pkg
             .provides
             .iter()
             .find(|p| p.name == "libpthread.so")
             .expect("libpthread.so provide missing");
-        assert_eq!(libpthread.kind, RepositoryCapabilityKind::Virtual);
+        assert_eq!(libpthread.kind, RepositoryCapabilityKind::Soname);
         assert!(libpthread.version.is_none());
+
+        let wlroots = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "libwlroots-0.18.so=libwlroots-0.18.so-64")
+            .expect("versioned soname v1 provide missing");
+        assert_eq!(wlroots.kind, RepositoryCapabilityKind::Soname);
+        assert!(wlroots.version.is_none());
+
+        let wayland = pkg
+            .provides
+            .iter()
+            .find(|p| p.name == "lib:libwayland-client.so.0")
+            .expect("soname v2 provide missing");
+        assert_eq!(wayland.kind, RepositoryCapabilityKind::Soname);
+        assert!(wayland.version.is_none());
+    }
+
+    #[test]
+    fn repository_runtime_sonames_are_atomic_typed_requirements() {
+        let parser = parser();
+        let requirements = parser
+            .parse_structured_depends(
+                "%DEPENDS%\n\
+                 libwlroots-0.18.so=libwlroots-0.18.so-64\n\
+                 lib:libwayland-client.so.0\n",
+            )
+            .unwrap();
+
+        assert_eq!(requirements.len(), 2);
+        for (requirement, identity) in requirements.iter().zip([
+            "libwlroots-0.18.so=libwlroots-0.18.so-64",
+            "lib:libwayland-client.so.0",
+        ]) {
+            let clause = &requirement.alternatives[0];
+            assert_eq!(clause.name, identity);
+            assert_eq!(
+                clause.capability_kind,
+                Some(RepositoryCapabilityKind::Soname)
+            );
+            assert!(clause.version_constraint.is_none());
+        }
     }
 
     #[test]
@@ -877,6 +887,11 @@ x86_64
         let error = parser
             .parse_structured_depends("%DEPENDS%\nopenssl>=\n")
             .unwrap_err();
-        assert!(error.to_string().contains("empty version"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid Arch %DEPENDS% entry 'openssl>='"),
+            "{error}"
+        );
     }
 }
