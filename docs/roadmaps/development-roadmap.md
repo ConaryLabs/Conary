@@ -1,11 +1,11 @@
 ---
 last_updated: 2026-07-27
-revision: 5
+revision: 6
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "v0.13.0 and remi-v0.8.5 at 6f1429c362ac161f1ef817233e72ee9c9a031c11; post-hard-cut release, deployment, and three-distro artifact proof complete"
 current_milestone: first external tester loop
-active_workstream: W3 First External Tester Loop
-next_workstream: post-milestone work selected from tester evidence
+active_workstream: W4 Source Fidelity Hard Cut
+next_workstream: W5 Source Authority Model
 ---
 
 # Codebase Development Roadmap
@@ -60,6 +60,19 @@ the revised cross-distro flow. One external tester's two successful
 adoption-led reports remain useful historical evidence but do not satisfy the
 new source-format/host-format crossing requirement.
 
+### Engineering precondition for outreach
+
+Outreach is gated on the corpus proof in W7, not merely on venue scheduling.
+Ordinary Fedora and Arch repository packages currently fail conversion in
+classes owned by #98, #99, and #102 through #105. A tester asking for
+`ansible`, `btop`, `aisleriot`, `NetworkManager`, or `bash-completion` reaches
+a known typed failure, so outreach conducted before W7 spends scarce
+first-impression attempts reproducing defects the tracker already owns.
+
+W4 through W7 therefore precede the outreach half of the milestone. This does
+not relax the 10-unique-tester exit condition; it orders the work so each
+attempt tests onboarding rather than parser fidelity.
+
 ## Principles and Safety Boundaries
 
 - Make source-independent package installation the primary path. Preserve
@@ -91,15 +104,15 @@ the stated scope, not whether a workstream happens to be active.
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
 | Packaging, static repositories, trust, and self-update | solid | `v0.13.0` has exact tag, hashes, detached signature, current signed self-update, deployment, and native RPM/DEB/Arch installed-binary proof. The intentional 0.12 schema boundary requires a fresh native-package install. No SBOM/provenance sidecars are published or planned. |
-| CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. |
+| CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. These share one root cause: the shared package model normalizes source facts at parse time instead of at each consumer's boundary. W5 owns the structural correction. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
-| Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. |
+| Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. The `/health/ready` probe is not yet evidence bearing and is owned by W4. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
 | Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | The `v0.13.0` released-package matrix is complete, but the revised cross-distro milestone remains 0/10. The former 2026-07-20 through 2026-07-22 outreach slots passed without posts; rescheduling still requires cached-history and current venue-eligibility clearance. |
+| External product readiness | unfinished | The `v0.13.0` released-package matrix is complete, but the revised cross-distro milestone remains 0/10. Outreach is now gated on the W7 corpus proof rather than on venue scheduling alone; cached-history and venue-eligibility clearance remain separate prerequisites. |
 
 ## Workstreams
 
@@ -134,34 +147,24 @@ the stated scope, not whether a workstream happens to be active.
   behavior lives in the owning module docs and tests.
 - **Dependencies:** none. W3 owns current release, outreach, and tester status.
 
-### W3 First External Tester Loop
+### W3 Post-Hard-Cut Release Gate
 
-- **Outcome:** Conary has external evidence that strangers can install and
-  remove a package whose source format differs from the supported host's native
-  format.
+- **Outcome:** complete. Conary publishes an immutable, signed, deployed
+  release whose RPM, DEB, and Arch packages each pass the Cartesian
+  source-format lifecycle on their matching supported host.
+- **Scope change:** W3 originally bundled this release gate with external
+  tester outreach. The release half is closed; the outreach half moved to W8
+  behind the W4 through W7 engineering gate, because the release proof covers
+  a curated lifecycle rather than ordinary repository packages. Outreach state,
+  venue eligibility, and the 0/10 tracker are now W8's.
 - **Current truth:** the post-hard-cut release gate is complete at immutable
   `v0.13.0` with compatible production `remi-v0.8.5`. The released RPM, DEB,
   and Arch packages passed the Cartesian source-format lifecycle on Fedora 44,
-  Ubuntu 26.04 LTS, and Arch. No broad external venue post has been published.
-  One organic external tester's former adoption-led Ubuntu and Fedora reports
-  remain valid onboarding evidence but do not count toward the revised
-  cross-distro milestone, so the tracker remains 0/10. The former 2026-07-20
-  through 2026-07-22 outreach window passed without a post. Issue #41's Artix
-  host and Fedora-form source route remain outside the supported host proof and
-  require exact source-selection, source-pin, and repository evidence before
-  classification.
-- **Execution status:** active; release, deployment, and published-package
-  proof are complete, while broad outreach and replacement dates remain
-  postponed.
-- **Dependencies:** GitHub Support must dereference the cached pull-request and
-  commit views that still expose pre-rewrite history, and the maintainer must
-  re-check each venue's current account/rule eligibility immediately before
-  submission.
-- **Next gate:** after GitHub Support confirms the cached history is no longer
-  reachable and venue checks pass, assign a new staggered schedule. Then submit
-  the refreshed Show HN packet, record its actual URL and timestamp, and
-  collect privacy-safe reports toward the first unique qualifying
-  tester.
+  Ubuntu 26.04 LTS, and Arch. That lifecycle is a curated proof, not a
+  repository-wide one; W7 owns the ordinary-package corpus.
+- **Execution status:** complete for the release, deployment, and
+  published-package proof it owns.
+- **Dependencies:** none remaining.
 - **Proof:** immutable `v0.13.0` published at `2026-07-27T11:57:44Z`;
   annotated tag object `f8298522fd7fe95a4994184ae20c34cf64096818`
   peels to `6f1429c362ac161f1ef817233e72ee9c9a031c11`. Exact-tag
@@ -186,19 +189,302 @@ the stated scope, not whether a workstream happens to be active.
   per-product evidence live in the release matrix. No SBOM or provenance
   sidecars are published. The known conversion failures are owned by #98,
   #99, and #102 through #105; the false-success unknown API fallback is owned
-  by #67 rather than hidden as release success. Issues 37 and 38 remain two
+  by #67 rather than hidden as release success.
+- **Limitations:** the release proof does not establish that ordinary
+  repository packages convert. W4 through W7 own that claim.
+
+### W4 Source Fidelity Hard Cut
+
+- **Outcome:** ordinary Fedora and Arch repository packages stop failing
+  conversion on Conary-invented invariants, and hosted Remi health becomes
+  evidence bearing.
+- **Execution status:** active. This is the current workstream.
+- **Issues:** #102 (P0), #103 (P0), #98 (P0), #99 (P0, split into three
+  slices), plus #107 for the Remi readiness probe.
+- **Ordering:** #102, #103, and #107 run in parallel with #98
+  and the #99 slices. They touch disjoint owners: Arch trust, CCS container
+  authority, Remi serving, RPM payload projection, and ALPM payload
+  projection.
+- **Cross-workstream dependency:** #110's typed corpus result schema lands
+  before the W4 slices close, so each slice reports against it. This is a
+  deliberate exception to the workstream ordering. Retrofitting typed results
+  onto six finished fixes costs more than defining the schema once up front,
+  and without it the W4 gate has no vocabulary to report in other than message
+  text. A small piece of W7 therefore starts during W4.
+- **Scope corrections applied to the existing issues:**
+  - #99's path slice widens beyond ALPM. `crates/conary-core/src/filesystem/path.rs`
+    rejects non-ASCII paths, and `packages/archive_utils.rs` routes RPM, Debian,
+    and ALPM parsing through it, so valid non-ASCII UTF-8 paths in RPM and DEB
+    packages are also rejected as traversal. The shared authority is fixed once
+    and proved with fixtures from all three source formats.
+  - #99 splits into three independently owned slices under one parent: lossless
+    source and deployment paths, the exact libarchive xattr grammar, and
+    declared archive/spool resource budgeting. They share a parent epic, not a
+    single implementation pull request.
+  - #99's resource-budget slice and #103 must share one declared-budget owner
+    type. #103 already delineates ownership; the constraint here is that the two
+    slices do not each invent a budget model.
+- **Gate:** a bounded hosted Remi prewarm sample advances past the RPM
+  hardlink, ALPM path, libarchive xattr, payload-size, Arch trust, and CCS
+  authority-size failure classes with no package-specific handling, and
+  `/health/ready` fails closed on an absent database or a failed disk probe.
+
+### W5 Source Authority Model
+
+- **Outcome:** source package facts are preserved in their native ontology and
+  normalized at each consumer's boundary, so the class of defect behind #98,
+  #99, #104, and #105 cannot recur.
+- **Execution status:** blocked on W4.
+- **Issues:** #108 (design specification under `docs/specs/`), then #104 and
+  #105 as sibling implementation slices.
+- **Rationale:** `PackageMetadata` and the flat `ProvidedCapability` and
+  `ConfigFileInfo` shapes assume that similarly named facts across ecosystems
+  share one ontology. They do not. RPM hardlink sets, ALPM backup declarations,
+  and source-declared same-name provisions each carry source-specific semantics
+  that the shared model erases at parse time.
+- **Design rule:** normalization belongs at the boundary of a specific
+  consumer, not at initial parse time. Each native parser produces a lossless
+  source-specific authority model; explicit fallible projections serve
+  resolution, CCS authoring, and native transaction planning.
+- **Ordering:** the specification lands before #104 and #105 so both slices
+  delete the ambiguous representation against one agreed target rather than
+  two. #98 informs the specification but is not blocked by it.
+- **Gate:** the pinned ASP.NET and `bash-completion` fixtures convert, sign,
+  verify, and install with no special cases, and the old ambiguous projections
+  are deleted rather than aliased.
+
+### W6 Authority Audit Closure
+
+- **Outcome:** the finite authority defects in #67 are closed as narrow owned
+  slices with proof, and #67 becomes an audit epic rather than an
+  implementation issue spanning twelve subsystems.
+- **Execution status:** blocked on W4; overlaps W5.
+- **Issues:** #67 as epic, #109 for the trigger-status gap, plus one narrow issue per remaining ledger item.
+- **Ledger gaps found on audit that #67 does not currently own:**
+  - `TriggerStatus::parse` in `db/models/trigger.rs` resolves unknown or
+    corrupt persisted status to `Pending` through `unwrap_or`. #67 covers
+    trigger *patterns*, not trigger *status*. A corrupt persisted status
+    therefore becomes executable pending work, which is a mutation-authority
+    defect rather than a display fallback. Add a ledger entry or a narrow issue.
+  - The `sanitize_path` ASCII heuristic is a #67-class invented authority but is
+    owned only by #99, and only for ALPM. Cross-reference both.
+- **Priority split within the ledger:** the publish-destination parser, Remi
+  typed transport failures and retry disposition, trigger status, and required
+  source-pin strength are P1 and belong here. The `ccs/policy.rs`
+  transformations are P2 and move to W9, because every `BuildPolicyConfig`
+  toggle defaults to `false` and `ccs/convert/converter.rs` constructs the
+  default, so stripping, shebang rewriting, and man-page compression never run
+  on the foreign-package conversion path. They are opt-in build-recipe policy,
+  not conversion authority.
+- **Gate:** each closed ledger item records landing commit, typed owner,
+  deleted authority, proof, and contract revision.
+
+### W7 Just-Works Corpus Gate
+
+- **Outcome:** a clean machine on each supported host completes the ordinary
+  user journey end to end, and failures are reported as typed stages rather
+  than message text.
+- **Execution status:** blocked on W4 through W6.
+- **Issues:** #110 as the corpus umbrella, plus #39 for bootstrap.
+- **User journey:** install the signed release through one documented bootstrap
+  entry point; `conary system init` with no hand-edited state; sync and
+  authenticate repositories; request a package by ordinary name; resolve the
+  complete transaction; obtain or produce a signed CCS artifact through Remi;
+  reopen and verify it; preview the exact transaction; install with no manual
+  script approval or package-specific exception; query installed identity,
+  provenance, files, and reason; update; remove; roll back; and leave package
+  database, filesystem, generation state, and activation debt mutually
+  consistent after forced failures.
+- **Matrix:** the existing Cartesian principle holds. RPM, DEB, and ALPM source
+  artifacts each against Fedora 44, Ubuntu 26.04 LTS, and Arch targets.
+- **Corpus selection:** by typed semantic dimension, not by popular package
+  name. Identity, payload, metadata, relations, configuration, lifecycle,
+  trust, runtime, and failure each require declared coverage, and every fixture
+  is selected for its recorded properties.
+- **Typed result:** the runner emits a per-case record carrying source profile,
+  source artifact identity, target capability snapshot, per-stage results, and
+  a typed outcome. Failures aggregate by stage and failure enum. Aggregating by
+  error-message text is prohibited. Remi's current prewarm result keeps failed
+  identity plus a string error, which is adequate for logs and inadequate as
+  roadmap authority.
+- **Bootstrap:** #39 completes as a release-owned protocol, not a wrapper
+  around internal steps. Discover supported host facts, fetch signed release
+  metadata, select the exact platform artifact, verify digest and signature,
+  install atomically, initialize current-profile repository authority, and run
+  a non-mutating health proof.
+- **Gate:** the full three-by-three corpus passes through hosted Remi with zero
+  package-specific exceptions, and remote KVM validation is restored.
+
+### W8 External Tester Outreach
+
+- **Outcome:** Conary has external evidence that strangers can install and
+  remove a package whose source format differs from the supported host's native
+  format.
+- **Execution status:** gated on W7. Scope inherited from the former W3.
+- **Issue:** #48.
+- **Current truth:** no broad external venue post has been published, and the
+  tracker remains 0/10. One organic external tester's former adoption-led
+  Ubuntu and Fedora reports remain valid onboarding evidence but do not count
+  toward the revised cross-distro milestone. The former 2026-07-20 through
+  2026-07-22 outreach window passed without a post. Issues 37 and 38 remain two
   same-format onboarding attempts by one person and contribute zero qualifying
-  completions. Each future completion belongs to a unique outsider and covers
+  completions. Issue #41's Artix host and Fedora-form source route remain
+  outside the supported host proof and require exact source-selection,
+  source-pin, and repository evidence before classification.
+- **Dependencies:** W7's corpus gate; GitHub Support must dereference the
+  cached pull-request and commit views that still expose pre-rewrite history;
+  and the maintainer must re-check each venue's current account and rule
+  eligibility immediately before submission.
+- **Next gate:** after W7 passes, GitHub Support confirms the cached history is
+  no longer reachable, and venue checks pass, assign a new staggered schedule.
+  Then submit the refreshed Show HN packet, record its actual URL and
+  timestamp, and collect privacy-safe reports toward the first unique
+  qualifying tester.
+- **Evidence rule:** each completion belongs to a unique outsider and covers
   exactly `foreign artifact install -> list/query -> update --dry-run ->
-  remove` on a supported host where source and host formats differ.
+  remove` on a supported host where source and host formats differ. Every
+  reported failure is recorded as a user-journey stage failure using W7's typed
+  vocabulary, not as a free-form feedback category.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
-  observed failures. A pivot still requires a reproducible systemic blocker;
-  it cannot be inferred from low interest alone.
+  observed failures. A pivot still requires a reproducible systemic blocker; it
+  cannot be inferred from low interest alone.
 - **Non-goals:** automated posting, redefining partial attempts as completion,
   or broadening the supported scope to make the count easier.
 
+## Issue Map
+
+Every open issue has exactly one owning workstream. The roadmap owns ordering,
+cross-issue blockers, and milestone truth; each issue owns bounded scope,
+acceptance criteria, and proof.
+
+| Workstream | Issues | Priority |
+| --- | --- | --- |
+| W4 Source Fidelity Hard Cut | #102, #103, #98, #99 (slices 99a-99c), #107 | P0 |
+| W5 Source Authority Model | #108 specification, #104, #105 | P0 |
+| W6 Authority Audit Closure | #67 epic, #109, plus narrow ledger slices | P1 |
+| W7 Just-Works Corpus Gate | #110 umbrella, #39 | P0 |
+| W8 External Tester Outreach | #48 | gated |
+| W9 Common Package Capability Classes | #74, #50, #46, #67 P2 remainder | P1 |
+| W10 Distro-Agnostic Takeover | #62 epic decomposed, #68 | P2 |
+| Native packaging horizon | #70, #51, #72 | P2 |
+| Service and operator horizon | #69, #65, #66, #73 | P2 |
+| System artifacts horizon | #63, #64, #71 | P2 |
+| Closed | #41 closed 2026-07-27 as fixed in v0.13.0; Artix route tracked as W8 evidence | not engineering work |
+
+### Known overlaps
+
+These issues intersect. Each pair below is delineated rather than merged,
+because merging would produce an implementation pull request spanning several
+authority owners.
+
+- **#98, #104, and #105 share one root cause.** All three exist because the
+  shared package model normalizes source facts at parse time. They keep
+  separate pinned fixtures and acceptance criteria, but W5's specification
+  governs all three so the corrections converge on one target model instead of
+  three local patches.
+- **#99 and #103 both need declared budgets.** #103 already records the
+  boundary: #99 owns ALPM archive resource bounds, #103 owns the generated CCS
+  authority format. The remaining constraint is that they share one
+  declared-budget owner type rather than each inventing a budget model.
+- **#99 and #67 both touch invented authority.** The `sanitize_path` ASCII
+  heuristic is a #67-class defect, but only #99 owns it, and only for ALPM.
+  #99's path slice is widened to cover RPM and Debian, and #67 cross-references
+  it rather than duplicating the work.
+- **#67 and #62 already delegate.** #67's final ledger item hands the fixed
+  three-entry repository feed catalog to #62. The `source_profile` schema
+  `CHECK` constraint belongs with that handoff.
+- **#67 and #66 already coordinate.** The conary-test MCP dual mutation
+  authority item names #66 as its coordination point.
+- **#62, #68, and #71 form one ecosystem cluster.** #68 depends on stable
+  source and repository authority from #62; #71 adds a fourth source ABI and
+  waits for both.
+- **#65 and #66 both target fleet-scale control.** #65 is the replatforming
+  operation, #66 the typed gateway that would expose it. #66's local typed APIs
+  stabilize first.
+- **#41 overlaps #99's path authority but is not open work.** The reported
+  defect shipped fixed in v0.12.0; only reporter confirmation is outstanding.
+  It belongs in a support state, not the engineering queue. Its Artix host
+  remains outside supported scope and is tracked as W8 evidence.
+
 ## Post-Milestone Horizons
+
+The first two horizons below are ordered workstreams with owning issues. The
+remainder are thematic horizons that admit work only when it advances the
+current milestone, resolves a safety or release blocker, or is explicitly
+accepted here.
+
+### W9 Common Package Capability Classes
+
+- **Outcome:** package classes that require a substantive compatibility service
+  rather than a parser correction complete the same user journey.
+- **Execution status:** gated on W7. Ordered after outreach begins, not before.
+- **Issues:** #74, #50, #46, and the P2 remainder of #67.
+- **Ordering and rationale:**
+  - #74 `rpmlib(ConcurrentAccess)` is an ecosystem-level runtime capability, not
+    a package exception. The design is a transaction-local read-only query
+    service populated from Conary's typed transaction state, exposed whenever
+    the package declares the typed capability. Scripts are never inspected to
+    guess what they might query, and nested mutation remains a separate rejected
+    capability.
+  - #50 package-backed SELinux lifecycle stays a target-provider capability with
+    typed install, remove, and reconcile operations. Provider executable,
+    grammar, digest, and operating mode come from the target capability
+    inventory, never from a package or distro list.
+  - #46 narrow initramfs regeneration is boot critical and stays behind explicit
+    target and VM proof. The persisted operation is a typed regeneration intent
+    that an Ubuntu-capable provider lowers to its exact implementation; the
+    observed literal command is evidence for deriving the source semantic, not
+    the universal operation.
+  - The `ccs/policy.rs` transformations deferred from W6 are hard cut here. ELF
+    stripping requires a declared digest-pinned build-tool capability or is
+    disabled; shared-object identity comes from parsed ELF type and dynamic
+    metadata rather than filename; shebang rewriting parses the exact grammar
+    with exact interpreter mappings; man-page compression requires a declared
+    package role; a transformation failure fails the build unless the recipe
+    marked it optional; and the output attestation records the transformation
+    implementation with input and output digests.
+- **Also in scope:** a fuzz and property-testing lane, which the workspace does
+  not currently have. Targets are RPM dependency expressions, ALPM relation
+  grammar, PAX paths and xattrs, CCS section budgets and canonical encoding,
+  repository declaration parsers, and URL and route parsing. Parser correctness
+  is too central to rest on curated fixtures alone.
+
+### W10 Distro-Agnostic Takeover
+
+- **Outcome:** Conary enrolls native repositories transactionally and supports
+  package ecosystems without a distro-name routing matrix.
+- **Execution status:** gated on W9. #62 remains an epic and is not implemented
+  as one slice.
+- **Issues:** #62 as epic, decomposed into the slices below; #68 follows.
+- **Decomposition:**
+  - Lossless native repository declarations, with separate parsers and models
+    for APT, RPM/DNF, Zypper, and ALPM. No generic repository-config model until
+    source evidence is preserved.
+  - Trust-import planning that yields a typed importable, ambiguous, or
+    unsupported disposition, with exact unresolved authority shown before
+    mutation. Key roles are never guessed from filenames or URLs.
+  - Follow-and-pin policy modeled per repository or repository group rather than
+    at a global distro level.
+  - Transactional repository enrollment, where package-installed repository
+    files and keys produce typed enrollment operations participating in install,
+    update, remove, and rollback. A completed filesystem is never scraped for
+    files that resemble repositories.
+  - Native repository files become projections of Conary-owned state, with drift
+    detection instead of two mutation authorities.
+  - Conformance targets added one at a time: a Debian derivative, an Arch
+    derivative, openSUSE Tumbleweed as an independent RPM ecosystem, and Artix
+    as a non-systemd target-capability test. Named distributions are conformance
+    proof, not runtime selectors.
+- **Schema prerequisite:** `db/current_schema/sql/remi.sql` currently constrains
+  `source_profile` to an inline three-value `CHECK` list. That is acceptable for
+  the current release epoch, but W10 requires replacing hard-coded schema
+  membership with an exact repository and source identity table, foreign keys,
+  immutable authenticated snapshot identity, a typed ecosystem and version
+  scheme, and separately recorded target compatibility. Do not grow the `CHECK`
+  list. Pre-alpha rules apply: replace the schema, rebuild disposable state, and
+  delete the old definition in the same slice. #67's final ledger item already
+  delegates the fixed feed catalog here.
 
 ### Feedback-Driven Compatibility and Authority
 
@@ -211,14 +497,23 @@ the stated scope, not whether a workstream happens to be active.
 
 ### Native Packaging and System-Building Completeness
 
+Owning issues: #70 maintainer adoption kit, #51 pristine self-host validation
+reruns, #72 composable system models.
+
 - Deliver general package-building and static publishing workflows usable by
   third parties, then make bootstrap a consumer of that tooling.
 - Close CCS v2 dependency-authoring, lock, and reproducibility gaps.
 - Connect model, source selection, builder, and derivation inputs end to end.
 - Improve self-hosting, recipes, groups, migration runbooks, and key/trust UX
   based on demonstrated users rather than speculative surface area.
+- #70 depends on the W10 contracts being settled; publishing a maintainer kit
+  against contracts that are about to change spends third-party goodwill twice.
 
 ### Kernel, Boot, and Security Outcomes
+
+The two package-authority slices in this area, #46 initramfs regeneration and
+#50 SELinux module lifecycle, are promoted into W9 because they block ordinary
+package classes. What remains here is the broader boot and security surface.
 
 - Require fail-closed target-profile facts for public behavior.
 - Add proof-backed native adapters rather than unverified policy exceptions.
@@ -229,15 +524,27 @@ the stated scope, not whether a workstream happens to be active.
 
 ### Service and Operator Maturity
 
+Owning issues: #69 desktop package backend, #65 fleet replatforming, #66 agent
+control-plane gateway, #73 agent-assisted contribution.
+
 - Prove conaryd's exact root/daemon/configured-group authorization contract
   through packaged deployment and restart scenarios.
 - Replace echo-style dry runs with real resolver plans and prove restart safety
   before adding destructive routes.
 - Decide distribution and deployment support for Remi, conaryd, and the test
   harness; improve observability, migration, and recovery guidance.
+- #69, #65, and #66 all consume the daemon and operation contracts, so they
+  follow conaryd's authorization and dry-run proof rather than running beside
+  it. #65 additionally depends on #63. #67's conary-test MCP ledger item is
+  explicitly coordinated with #66.
 
 ### System Artifacts and Platform Breadth
 
+Owning issues: #63 declarative replatforming, #64 bootable installer, #51
+deterministic input staging, #71 eopkg and Solus support.
+
+- #71 adds a fourth source ABI and does not enter before W10's conformance
+  slices prove the existing three are distro-agnostic.
 - Keep x86_64 generation boot proof repeatable on maintained fixtures.
 - Move boot activation to strict verity only when the kernel and image
   pipeline can prove it, and remove developer live-switch machinery once
@@ -310,12 +617,19 @@ publication, public fresh-cache KVM proof, and final integrated release gates.
 W2 closed after exact release identity, multi-distro artifact publication,
 checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
-clean-host proof. W3 is now active; its earlier release proof gate was reopened
-for the supported `htop` SONAME repair and again for issue #41's path-safety
-and support-bundle defects, then superseded by the post-hard-cut package
-authority suite. That release gate is closed with verified immutable
-`v0.13.0` and production `remi-v0.8.5`. The 2026-07-20 through 2026-07-22
-manual outreach window passed without a post and is now retired. Rescheduling
-waits for GitHub Support to dereference cached pre-rewrite pull-request and
-commit views and for the venue-specific eligibility checks. No replacement
-date is assigned yet.
+clean-host proof. W3's release proof gate was reopened for the supported `htop`
+SONAME repair and again for issue #41's path-safety and support-bundle defects,
+then superseded by the post-hard-cut package authority suite; it closed with
+verified immutable `v0.13.0` and production `remi-v0.8.5`.
+
+W3 was subsequently split. Its release gate is complete, and its external
+tester outreach moved to W8 behind an engineering gate, because a bounded
+hosted prewarm sample showed that ordinary Fedora and Arch repository packages
+still fail conversion in classes owned by #98, #99, and #102 through #105.
+Outreach against those defects would spend first-impression attempts
+reproducing known typed failures. W4 is now active.
+
+The 2026-07-20 through 2026-07-22 manual outreach window passed without a post
+and is retired. Rescheduling now waits on the W7 corpus gate in addition to
+GitHub Support dereferencing cached pre-rewrite pull-request and commit views
+and the venue-specific eligibility checks. No replacement date is assigned.
