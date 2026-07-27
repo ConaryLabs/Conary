@@ -21,6 +21,7 @@ use crate::server::handlers::{
     jobs, models, oci, openapi, packages, profiles, recipes, search, seeds, self_update, sparse,
     tuf,
 };
+use crate::server::readiness::{self, ReadinessInputs};
 use crate::server::security::RateLimiter;
 use crate::server::{ServerConfig, ServerState};
 use axum::{

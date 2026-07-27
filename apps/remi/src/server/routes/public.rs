@@ -203,84 +203,47 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
+/// Report whether this server can actually answer requests.
+///
+/// Every probe fails closed: an absent database, a wrong schema revision, a
+/// missing directory, insufficient free space, or a probe that could not run at
+/// all all produce 503. Deploy verification and the release pipeline consume
+/// this endpoint, so it must never report readiness it has not established.
+/// The evaluation itself lives in `server::readiness`, where each failure mode
+/// is covered by a focused test.
 async fn readiness_check(
     axum::extract::State(state): axum::extract::State<Arc<RwLock<ServerState>>>,
 ) -> Response {
-    let (db_path, chunk_dir, cache_dir) = {
+    let inputs = {
         let state_guard = state.read().await;
         let config = &state_guard.config;
-        (
-            config.db_path.clone(),
-            config.chunk_dir.clone(),
-            config.cache_dir.clone(),
-        )
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        let db_ok = db_path.exists() || db_path.parent().is_some_and(|p| p.exists() && p.is_dir());
-        let chunk_dir_ok = chunk_dir.exists() && chunk_dir.is_dir();
-        let cache_dir_ok = cache_dir.exists() && cache_dir.is_dir();
-        let disk_ok = check_disk_space(&chunk_dir, 10 * 1024 * 1024 * 1024);
-        (db_ok, chunk_dir_ok, cache_dir_ok, disk_ok)
-    })
-    .await;
-
-    let (db_ok, chunk_dir_ok, cache_dir_ok, disk_ok) = match result {
-        Ok(checks) => checks,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Readiness check failed").into_response();
+        ReadinessInputs {
+            db_path: config.db_path.clone(),
+            chunk_dir: config.chunk_dir.clone(),
+            cache_dir: config.cache_dir.clone(),
+            min_free_bytes: config.readiness_min_free_bytes,
         }
     };
 
-    if db_ok && chunk_dir_ok && cache_dir_ok && disk_ok {
-        (StatusCode::OK, "READY").into_response()
+    // Probes open a database and stat filesystems; keep them off the runtime.
+    let report = match tokio::task::spawn_blocking(move || readiness::evaluate(&inputs)).await {
+        Ok(report) => report,
+        Err(error) => {
+            // The probe task itself failed, so readiness is unknown. Unknown is
+            // not ready.
+            tracing::error!("readiness probe task failed: {error}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "readiness probe did not complete",
+            )
+                .into_response();
+        }
+    };
+
+    if report.ready {
+        (StatusCode::OK, Json(report)).into_response()
     } else {
-        let details = ReadinessDetails {
-            ready: false,
-            db_accessible: db_ok,
-            chunk_dir_ok,
-            cache_dir_ok,
-            disk_space_ok: disk_ok,
-        };
-        (StatusCode::SERVICE_UNAVAILABLE, Json(details)).into_response()
-    }
-}
-
-#[derive(Serialize)]
-struct ReadinessDetails {
-    ready: bool,
-    db_accessible: bool,
-    chunk_dir_ok: bool,
-    cache_dir_ok: bool,
-    disk_space_ok: bool,
-}
-
-fn check_disk_space(path: &std::path::Path, min_bytes: u64) -> bool {
-    #[cfg(unix)]
-    {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-
-        let path_cstr = match CString::new(path.as_os_str().as_bytes()) {
-            Ok(s) => s,
-            Err(_) => return true,
-        };
-
-        unsafe {
-            let mut stat: libc::statvfs = std::mem::zeroed();
-            if libc::statvfs(path_cstr.as_ptr(), &mut stat) == 0 {
-                #[allow(clippy::unnecessary_cast)]
-                let free_bytes = stat.f_bavail as u64 * stat.f_bsize as u64;
-                return free_bytes >= min_bytes;
-            }
-        }
-        true
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (path, min_bytes);
-        true
+        (StatusCode::SERVICE_UNAVAILABLE, Json(report)).into_response()
     }
 }
 

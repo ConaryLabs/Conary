@@ -46,6 +46,16 @@ expressions are not source, parser, or trust authority. A configured native
 parser or trust failure is an error for that source; it does not silently retry
 the URL as another metadata format or continue unsigned.
 
+`apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
+unconditional liveness reply and proves only that the process is listening;
+`/health/ready` is the evidence-bearing one. It opens the database read-only,
+requires the expected schema revision, and checks the serving directories and
+configured free-space floor. A probe that cannot run reports `unavailable`
+rather than success, so an unmeasurable resource never reads as ready. Deploy
+verification and `scripts/remi-health.sh` assert `ready == true` from that
+endpoint; liveness alone is not deployment evidence. The free-space floor is
+`storage.readiness_min_free`, defaulting to 10 GiB.
+
 `apps/remi/src/deployment.rs` owns recoverable config/schema transitions and
 read-only deployment inspection. It snapshots a current database or retires an
 old schema epoch before replacement, so health failure can restore config,

@@ -91,6 +91,10 @@ echo ""
 # ── Smoke checks (always run) ────────────────────────────────────────────
 echo "=== Core Endpoints ==="
 check "health"           "$ENDPOINT/health"
+# /health is an unconditional liveness reply. Readiness is the evidence-bearing
+# one: it opens the database, requires the expected schema revision, and checks
+# the serving directories and free space, failing closed when a probe cannot run.
+check_contains "readiness" "$ENDPOINT/health/ready" '"ready":true'
 check "stats overview"   "$ENDPOINT/v1/stats/overview"
 
 echo ""
