@@ -30,14 +30,10 @@ pub(super) fn cook_foreign_package(
     })?;
     let mut package_file = std::fs::File::open(package_path)
         .with_context(|| format!("Failed to open foreign package: {}", package_path.display()))?;
-    let checksum = format!(
-        "sha256:{}",
-        conary_core::hash::hash_reader(
-            conary_core::hash::HashAlgorithm::Sha256,
-            &mut package_file,
-        )?
-        .value
-    );
+    let checksum = conary_core::hash::hash_reader(
+        conary_core::hash::HashAlgorithm::Sha256,
+        &mut package_file,
+    )?;
     let payload = package.package_payload().with_context(|| {
         format!(
             "Failed to open payload for foreign package: {}",

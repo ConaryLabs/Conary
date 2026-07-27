@@ -462,13 +462,12 @@ fn assert_conversion_preserves_native_entries(
         .package_payload()
         .expect("open package payload sources");
 
+    let checksum = conary_core::hash::Hash::parse_prefixed(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .expect("valid native ABI test checksum");
     let result = converter
-        .convert_payload(
-            &metadata,
-            payload.files(),
-            format,
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
+        .convert_payload(&metadata, payload.files(), format, &checksum)
         .unwrap_or_else(|error| panic!("convert {format} package: {error}"));
 
     let bundle = result

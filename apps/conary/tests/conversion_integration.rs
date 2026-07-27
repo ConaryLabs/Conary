@@ -92,7 +92,8 @@ impl InMemoryConversionForTest for NativePackageConverter {
     ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult> {
         let payload =
             conary_core::packages::PackagePayload::from_extracted_in_memory(files.to_vec())?;
-        self.convert_payload(metadata, payload.files(), format, checksum)
+        let checksum = conary_core::hash::Hash::parse_prefixed(checksum)?;
+        self.convert_payload(metadata, payload.files(), format, &checksum)
             .map_err(Into::into)
     }
 }
