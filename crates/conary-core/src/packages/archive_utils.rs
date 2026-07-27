@@ -1,7 +1,7 @@
 // conary-core/src/packages/archive_utils.rs
 
 use crate::error::Result;
-use crate::filesystem::path::sanitize_path;
+use crate::filesystem::source_path::SourcePathBytes;
 pub use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
 use tracing::warn;
 
@@ -14,15 +14,19 @@ pub fn is_regular_file_mode(mode: u32) -> bool {
     (mode & S_IFMT) == S_IFREG
 }
 
-/// Normalize archive entry path to absolute form with security sanitization
+/// Normalize an archive entry path to absolute form with traversal validation.
+///
+/// Shared by the RPM, Debian, and ALPM payload parsers, so a change here
+/// affects every source format.
+///
+/// Validation happens on the declared bytes: traversal is decided by exact
+/// component comparison, not by character class. The UTF-8 requirement comes
+/// last and belongs to persistence rather than to safety — Conary stores paths
+/// as text, so a path that cannot be represented there fails explicitly instead
+/// of being lossily converted into one that does not match the artifact.
 pub fn normalize_path(path: &str) -> Result<String> {
-    let sanitized = sanitize_path(path)?;
-    let s = sanitized.to_string_lossy();
-    if s.starts_with('/') {
-        Ok(s.to_string())
-    } else {
-        Ok(format!("/{}", s))
-    }
+    let deployment = SourcePathBytes::from(path).to_deployment_path()?;
+    Ok(format!("/{}", deployment.to_utf8()?))
 }
 
 /// Check if file size exceeds limit, warn if so

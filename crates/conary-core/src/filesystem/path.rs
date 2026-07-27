@@ -6,15 +6,21 @@
 //! sources (packages, repositories, etc.) to prevent path traversal attacks.
 
 use crate::error::{Error, Result};
-use std::path::{Component, Path, PathBuf};
+use crate::filesystem::source_path::SourcePathBytes;
+use std::path::{Path, PathBuf};
 
 /// Sanitize a path from an untrusted source
 ///
-/// This function:
-/// 1. Rejects paths containing `..` (parent directory) components
-/// 2. Skips `.` (current directory) components
-/// 3. Strips leading slashes to make the path relative
-/// 4. Returns an error for empty paths
+/// Delegates to [`SourcePathBytes`], which decides traversal by exact
+/// component comparison on bytes. This function:
+/// 1. Rejects paths containing an exact `..` component
+/// 2. Skips `.` components
+/// 3. Drops leading, trailing, and repeated separators, making the path relative
+/// 4. Rejects NUL bytes and paths with no deployable components
+///
+/// Character class is deliberately not consulted. Non-ASCII paths are valid in
+/// every source format Conary parses; a name is traversal only if it *is* `..`,
+/// not if it merely looks unusual.
 ///
 /// # Security
 ///
@@ -41,56 +47,25 @@ use std::path::{Component, Path, PathBuf};
 /// assert!(sanitize_path("usr/../../../etc/passwd").is_err());
 /// ```
 pub fn sanitize_path(path: impl AsRef<Path>) -> Result<PathBuf> {
-    let path = path.as_ref();
-    let path_str = path.to_string_lossy();
+    Ok(source_path_for(path.as_ref())
+        .to_deployment_path()?
+        .to_path_buf())
+}
 
-    // Reject null bytes -- these truncate paths at C API boundaries (open(), stat(), etc.)
-    if path_str.contains('\0') {
-        return Err(Error::PathTraversal("path contains null byte".to_string()));
-    }
+/// Recover the declared bytes of a path for validation.
+///
+/// On Unix this is exact. Validation is defined on bytes rather than on
+/// decoded text so that traversal is decided by component identity, not by how
+/// a path renders.
+#[cfg(unix)]
+fn source_path_for(path: &Path) -> SourcePathBytes {
+    use std::os::unix::ffi::OsStrExt;
+    SourcePathBytes::new(path.as_os_str().as_bytes().to_vec())
+}
 
-    // Reject non-ASCII paths from untrusted sources to avoid Unicode
-    // normalization edge cases on filesystems that treat homoglyphs as
-    // separators or normalize canonically equivalent forms.
-    if !path_str.is_ascii() {
-        return Err(Error::PathTraversal(
-            "path contains non-ASCII characters".to_string(),
-        ));
-    }
-
-    // Strip leading slashes to make relative
-    let relative = path_str.trim_start_matches('/');
-
-    let mut normalized = PathBuf::new();
-
-    for component in Path::new(relative).components() {
-        match component {
-            Component::Normal(c) => {
-                // Normal path component - keep it
-                normalized.push(c);
-            }
-            Component::CurDir => {
-                // "." - skip it
-            }
-            Component::ParentDir => {
-                // ".." - this is a path traversal attempt
-                return Err(Error::PathTraversal(path_str.to_string()));
-            }
-            Component::Prefix(_) | Component::RootDir => {
-                // Skip Windows prefixes and root markers
-                // (we already stripped leading slashes)
-            }
-        }
-    }
-
-    // Reject empty paths
-    if normalized.as_os_str().is_empty() {
-        return Err(Error::InvalidPath(
-            "Empty path after sanitization".to_string(),
-        ));
-    }
-
-    Ok(normalized)
+#[cfg(not(unix))]
+fn source_path_for(path: &Path) -> SourcePathBytes {
+    SourcePathBytes::new(path.to_string_lossy().as_bytes().to_vec())
 }
 
 /// Safely join a root path with an untrusted path
@@ -302,10 +277,49 @@ mod tests {
         assert!(sanitize_path("./").is_err());
     }
 
+    /// Behavior change: non-ASCII paths are accepted.
+    ///
+    /// The previous rule rejected every non-ASCII path as traversal, which is
+    /// not a rule of ALPM, RPM, Debian, tar, or Linux, and rejected valid
+    /// repository packages across all three source formats.
     #[test]
-    fn test_sanitize_path_non_ascii_rejected() {
-        assert!(sanitize_path("usr/bin/cafe\u{301}").is_err());
-        assert!(sanitize_path("usr\u{ff0f}bin\u{ff0f}tool").is_err());
+    fn sanitize_path_accepts_valid_non_ascii_paths() {
+        assert_eq!(
+            sanitize_path("usr/bin/cafe\u{301}").unwrap(),
+            PathBuf::from("usr/bin/cafe\u{301}")
+        );
+        assert_eq!(
+            sanitize_path("usr/share/doc/n\u{f8}rsk.txt").unwrap(),
+            PathBuf::from("usr/share/doc/n\u{f8}rsk.txt")
+        );
+    }
+
+    /// A separator homoglyph is not a separator.
+    ///
+    /// U+FF0F FULLWIDTH SOLIDUS renders like `/` but is not the separator byte,
+    /// so `usr／bin／tool` is one ordinary component, not three. It cannot
+    /// escape a directory precisely because it does not split the path. The old
+    /// rule rejected it out of homoglyph anxiety; the correct answer is that
+    /// only the separator byte separates.
+    #[test]
+    fn separator_homoglyphs_are_ordinary_name_bytes_not_separators() {
+        let sanitized = sanitize_path("usr\u{ff0f}bin\u{ff0f}tool").expect("valid single component");
+
+        assert_eq!(sanitized, PathBuf::from("usr\u{ff0f}bin\u{ff0f}tool"));
+        assert_eq!(
+            sanitized.components().count(),
+            1,
+            "a fullwidth solidus must not split the path"
+        );
+    }
+
+    /// The security property is unchanged: traversal is still rejected, and
+    /// dressing it in non-ASCII does not get it through.
+    #[test]
+    fn traversal_is_still_rejected_regardless_of_character_class() {
+        assert!(sanitize_path("usr/\u{e9}t\u{e9}/../../etc/passwd").is_err());
+        assert!(sanitize_path("../etc/passwd").is_err());
+        assert!(sanitize_path("usr/\u{e9}t\u{e9}/file").is_ok());
     }
 
     #[test]
