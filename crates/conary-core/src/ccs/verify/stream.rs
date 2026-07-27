@@ -3,6 +3,7 @@
 //! Signature-first streaming verification of trusted CCS archives.
 
 use super::{PackageSignature, TrustPolicy, VerifyError};
+use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::v2::schema::{AuthorityDocumentV2, PackageKindV2};
@@ -42,6 +43,11 @@ struct MetadataState {
     debug_toml: Option<Vec<u8>>,
     attestation: Option<String>,
     conversion_boundary: Option<String>,
+    /// Components the archive carried, keyed by name.
+    ///
+    /// Collected while streaming and reconciled against the signed authority
+    /// once it is authenticated, the same way the object set is.
+    components: HashMap<String, ComponentData>,
 }
 
 struct AuthenticatedMetadata {
@@ -127,7 +133,14 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
         .into());
     }
     let payload = payload_from_authority(&authenticated.authority, &object_sources)?;
+    // Components are derived from the signed authority, which is the source of
+    // truth. Archive component entries are still parsed and validated on the
+    // way past — name agreement, duplicates, and size budget — so a malformed
+    // one fails closed rather than being skipped. Their payload is not the
+    // component source: a package may legitimately carry no component entries
+    // while its authority declares components.
     let components = crate::ccs::v2::component_view::components(&authenticated.authority);
+
     Ok(StreamVerifiedArchive {
         authority: authenticated.authority,
         signature: authenticated.signature,
@@ -266,6 +279,41 @@ fn read_metadata_entry(
                 path,
             )?;
             set_once(&mut state.conversion_boundary, value, path)
+        }
+        _ if crate::ccs::archive_layout::component_entry_name(path).is_some() => {
+            // The signed authority owns the component set; this arm proves the
+            // archive agrees with it. The structural-budget rewrite dropped
+            // this arm entirely, so the reader rejected component entries its
+            // own writer emits.
+            let name = crate::ccs::archive_layout::component_entry_name(path)
+                .expect("component name checked by the guard")
+                .to_string();
+
+            let raw = read_metadata_control(
+                entry,
+                state,
+                CCS_BUDGET.metadata_bytes_ceiling(&census)?,
+                BudgetDimension::MetadataBytes,
+                path,
+            )?;
+            let component: ComponentData =
+                serde_json::from_slice(&raw).context("invalid CCS component JSON")?;
+
+            if component.name != name.as_str() {
+                return Err(VerifyError::PackageError(format!(
+                    "CCS component path {path:?} disagrees with component name {:?}",
+                    component.name
+                ))
+                .into());
+            }
+
+            if state.components.insert(name.clone(), component).is_some() {
+                return Err(VerifyError::PackageError(format!(
+                    "CCS archive contains duplicate component {name:?}"
+                ))
+                .into());
+            }
+            Ok(())
         }
         _ => Err(VerifyError::PackageError(format!("unknown CCS archive entry {path:?}")).into()),
     }
@@ -542,22 +590,10 @@ fn finish_archive(archive: Archive<ArchiveDecoder>) -> Result<()> {
 }
 
 fn require_known_directory(path: &str) -> Result<()> {
-    if path == "objects" {
-        return Ok(());
-    }
-    if let Some(prefix) = path.strip_prefix("objects/")
-        && prefix.len() == 2
-        && is_lower_hex(prefix)
-    {
+    if crate::ccs::archive_layout::is_known_directory(path) {
         return Ok(());
     }
     Err(VerifyError::PackageError(format!("unknown CCS archive directory {path:?}")).into())
-}
-
-fn is_lower_hex(value: &str) -> bool {
-    value
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[cfg(test)]

@@ -56,7 +56,7 @@ pub enum BuilderError {
 }
 
 /// A file entry in a CCS package
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileEntry {
     /// Installation path (absolute)
@@ -76,7 +76,7 @@ pub struct FileEntry {
 }
 
 /// Component data in a built package
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentData {
     pub name: String,

@@ -392,7 +392,7 @@ mod tests {
         assert!(
             !entries
                 .iter()
-                .any(|(path, _)| path.starts_with("components")),
+                .any(|(path, _)| path.starts_with(crate::ccs::archive_layout::COMPONENTS_DIR)),
             "{entries:?}"
         );
         let (first_file, _) = entries

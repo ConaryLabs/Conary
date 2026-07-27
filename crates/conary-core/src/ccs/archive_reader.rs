@@ -8,6 +8,7 @@
 //! establish package trust: mutation and publication callers must pass the
 //! result through `ccs::verify::verify_package`.
 
+use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
@@ -414,13 +415,7 @@ fn require_regular<R: Read>(entry: &tar::Entry<'_, R>, label: &str) -> anyhow::R
 }
 
 fn require_known_directory(path: &str) -> anyhow::Result<()> {
-    if path == "objects" {
-        return Ok(());
-    }
-    if let Some(prefix) = path.strip_prefix("objects/")
-        && prefix.len() == 2
-        && is_lower_hex(prefix)
-    {
+    if crate::ccs::archive_layout::is_known_directory(path) {
         return Ok(());
     }
     anyhow::bail!("unknown CCS archive directory {path:?}")
@@ -445,12 +440,6 @@ fn canonical_entry_path<R: Read>(entry: &tar::Entry<'_, R>) -> anyhow::Result<St
         .to_str()
         .context("CCS archive entry path is not valid UTF-8")?;
     Ok(path.strip_prefix("./").unwrap_or(path).to_string())
-}
-
-fn is_lower_hex(value: &str) -> bool {
-    value
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[cfg(test)]

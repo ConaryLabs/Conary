@@ -9,6 +9,7 @@
 //! - Package installation (via PackageFormat trait)
 //! - Declarative hook execution
 
+pub mod archive_layout;
 pub mod archive_reader;
 pub mod attestation;
 pub mod budget;
