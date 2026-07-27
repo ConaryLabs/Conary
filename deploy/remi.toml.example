@@ -90,6 +90,12 @@ enabled = true
 # Search index directory (defaults to {storage.root}/search-index)
 # index_dir = "/conary/search-index"
 
+[release_publish]
+# Durable exact-profile CCS and TUF signing authority. The deployment helper
+# creates this root for the conary service account; Remi atomically provisions
+# one targets/snapshot/timestamp role set per repository-manifest profile.
+repository_keys_dir = "/conary/repository-keys"
+
 [prewarm]
 # Pre-warming pipeline: proactively convert popular packages
 enabled = true

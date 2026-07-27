@@ -257,35 +257,45 @@ fn project_single(
     member: stream::PayloadMember,
 ) -> Result<PackagePayloadFile> {
     let node = source_node(record)?;
-    let (content_authority, source) = if matches!(node.kind, PayloadNodeKind::Regular { .. }) {
-        let source = member.source.ok_or_else(|| {
-            parse_error(format!(
-                "RPM regular node {} has no payload source",
-                record.path
-            ))
-        })?;
-        require_regular_content(record, member.content_size, &source)?;
-        let sha256 = member.sha256.ok_or_else(|| {
-            parse_error(format!(
-                "RPM regular node {} has no SHA-256 authority",
-                record.path
-            ))
-        })?;
-        (
-            Some(PayloadContentAuthority {
-                sha256,
-                size: member.content_size,
-            }),
-            Some(source),
-        )
-    } else {
-        if member.content_size != 0 || member.source.is_some() || member.sha256.is_some() {
-            return Err(parse_error(format!(
-                "non-regular RPM node {} retained ambiguous payload content",
-                record.path
-            )));
+    let (content_authority, source) = match &node.kind {
+        PayloadNodeKind::Regular { .. } => {
+            let source = member.source.ok_or_else(|| {
+                parse_error(format!(
+                    "RPM regular node {} has no payload source",
+                    record.path
+                ))
+            })?;
+            require_regular_content(record, member.content_size, &source)?;
+            let sha256 = member.sha256.ok_or_else(|| {
+                parse_error(format!(
+                    "RPM regular node {} has no SHA-256 authority",
+                    record.path
+                ))
+            })?;
+            (
+                Some(PayloadContentAuthority {
+                    sha256,
+                    size: member.content_size,
+                }),
+                Some(source),
+            )
         }
-        (None, None)
+        PayloadNodeKind::Symlink { target }
+            if member.content_size == target.len() as u64
+                && member.source.is_none()
+                && member.sha256.is_none() =>
+        {
+            (None, None)
+        }
+        _ => {
+            if member.content_size != 0 || member.source.is_some() || member.sha256.is_some() {
+                return Err(parse_error(format!(
+                    "non-regular RPM node {} retained ambiguous payload content",
+                    record.path
+                )));
+            }
+            (None, None)
+        }
     };
     validate_projected(&record.path, &node, content_authority.as_ref())?;
     PackagePayloadFile::new(record.path.clone(), node, content_authority, source)
@@ -596,6 +606,7 @@ mod tests {
         RpmFileDigestAlgorithm, apply_capability_operation, digest_hex, parse,
         parse_file_capabilities, require_partial_hardlink_count,
     };
+    use crate::payload::PayloadNodeKind;
     use rpm::IndexTag;
     use std::io::Cursor;
 
@@ -646,6 +657,32 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "/usr/share/sha1-fixture/data");
         assert_eq!(files[0].content, content);
+    }
+
+    #[test]
+    fn source_validated_rpm_symlink_projects_without_regular_content_authority() {
+        let path = "/usr/lib/.build-id/a7/232a5f6ed485eb65b89f39caa2da4dfe8288b5";
+        let target = "../../../../usr/bin/curl";
+        let mut builder =
+            rpm::PackageBuilder::new("symlink-fixture", "1", "MIT", "x86_64", "symlink fixture");
+        builder
+            .with_symlink(rpm::FileOptions::symlink(path, target))
+            .unwrap();
+        let package = builder.build().unwrap();
+
+        let payload = parse(&package).unwrap();
+        assert_eq!(payload.files().len(), 1);
+        let file = &payload.files()[0];
+        assert_eq!(file.path, path);
+        assert_eq!(
+            file.node.kind,
+            PayloadNodeKind::Symlink {
+                target: target.to_string()
+            }
+        );
+        assert!(file.content_authority.is_none());
+        assert!(file.source().is_none());
+        assert!(file.to_extracted_in_memory().unwrap().content.is_empty());
     }
 
     fn main_header_value_offset(bytes: &[u8], header_start: usize, wanted: IndexTag) -> usize {

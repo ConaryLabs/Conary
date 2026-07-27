@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 47
+last_updated: 2026-07-27
+revision: 48
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -146,6 +146,12 @@ both source identity and resolved numeric identity so later generation,
 rollback, query, and verification paths do not repeat or guess resolution.
 Unknown names, conflicting header/payload facts, unsupported archive records,
 and missing content authority reject the package before filesystem mutation.
+For an RPM symlink, `FILELINKTOS` owns the target and the CPIO member must carry
+exactly those target bytes at exactly that length. After the streaming parser
+proves that equality, projection retains the target as symlink variant data
+without inventing regular-file content authority. Any mismatched target or
+length still fails, and every other non-regular node must carry zero payload
+bytes.
 
 **convert/** -- RPM, Debian, and Arch to CCS conversion. Source package parsers
 produce a typed native ABI before conversion: exact lifecycle slots, body

@@ -10,6 +10,7 @@
 //! - {version}.root.json (versioned roots for key rotation)
 
 use crate::server::ServerState;
+use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, bail};
 use axum::{
     Json,
@@ -17,7 +18,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::trust::{
     MetaFile, Signed, TUF_SPEC_VERSION, TimestampMetadata, sign_tuf_metadata,
 };
@@ -166,6 +166,13 @@ pub async fn refresh_timestamp_for_distro(
     state: &Arc<RwLock<ServerState>>,
     distro: &str,
 ) -> Result<TimestampRefreshResult> {
+    let source_profile =
+        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+            .with_context(|| {
+                format!("release route {distro} does not map to exactly one repository profile")
+            })?
+            .id()
+            .to_string();
     let (db_path, keys_dir) = {
         let guard = state.read().await;
         let keys_dir = guard
@@ -179,7 +186,7 @@ pub async fn refresh_timestamp_for_distro(
     let distro = distro.to_string();
 
     tokio::task::spawn_blocking(move || {
-        refresh_timestamp_for_distro_blocking(&db_path, &keys_dir, &distro)
+        refresh_timestamp_for_distro_blocking(&db_path, &keys_dir, &distro, &source_profile)
     })
     .await
     .context("refresh timestamp blocking task failed")?
@@ -270,32 +277,23 @@ fn query_tuf_role_metadata(
         .optional()?)
 }
 
-pub(crate) fn load_release_tuf_key(
-    keys_dir: &StdPath,
-    distro: &str,
-    role: &str,
-) -> Result<SigningKeyPair> {
-    let path = keys_dir.join(distro).join(format!("{role}.private"));
-    SigningKeyPair::load_from_file(&path)
-        .map_err(anyhow::Error::from)
-        .with_context(|| format!("load Remi {role} TUF signing key {}", path.display()))
-}
-
 fn refresh_timestamp_for_distro_blocking(
     db_path: &StdPath,
     keys_dir: &StdPath,
     distro: &str,
+    source_profile: &str,
 ) -> Result<TimestampRefreshResult> {
     let conn = open_handler_db(db_path)?;
-    refresh_timestamp_for_distro_in_conn(&conn, keys_dir, distro)
+    refresh_timestamp_for_distro_in_conn(&conn, keys_dir, distro, source_profile)
 }
 
 pub(crate) fn refresh_timestamp_for_distro_in_conn(
     conn: &rusqlite::Connection,
     keys_dir: &StdPath,
     distro: &str,
+    source_profile: &str,
 ) -> Result<TimestampRefreshResult> {
-    let timestamp_key = load_release_tuf_key(keys_dir, distro, "timestamp")?;
+    let timestamp_key = load_role_key(keys_dir, source_profile, RepositorySigningRole::Timestamp)?;
     let repo_id: i64 = conn
         .query_row(
             "SELECT id FROM repositories WHERE name = ?1 AND tuf_enabled = 1",
@@ -817,11 +815,20 @@ mod tests {
 
     impl TimestampRefreshFixture {
         fn new(distro: &str, write_timestamp_key: bool) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
             let temp = tempfile::tempdir().unwrap();
             let db_path = temp.path().join("remi.db");
             let keys_dir = temp.path().join("keys");
-            let distro_key_dir = keys_dir.join(distro);
+            let source_profile =
+                conary_core::repository::supported_profiles::profile_for_remi_route(distro)
+                    .unwrap()
+                    .id();
+            let distro_key_dir = keys_dir.join(source_profile);
             std::fs::create_dir_all(&distro_key_dir).unwrap();
+            std::fs::set_permissions(&keys_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&distro_key_dir, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
 
             let conn = Connection::open(&db_path).unwrap();
             conn.execute("PRAGMA foreign_keys = ON", []).unwrap();

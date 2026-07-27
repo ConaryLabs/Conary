@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 17
+last_updated: 2026-07-27
+revision: 18
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -148,11 +148,20 @@ not cover the task or when you are debugging the underlying service path itself.
   `/conary/deployment-backups/`, and emits the transition manifest used for
   automatic rollback. The pre-deploy database remains recoverable; retired
   schemas are not migrated in place.
+- The helper creates `/conary/repository-keys` as a `conary:conary` mode-0700
+  durable authority root before candidate preparation. The candidate
+  atomically creates one complete targets/snapshot/timestamp key set under
+  each exact manifest profile. Repeat deployments preserve those bytes.
+  Existing wrong ownership or modes, partial or mismatched role pairs,
+  symlinks, unexpected entries, and route-slug aliases fail before service
+  activation. This directory is deliberately outside release rollback and
+  deletion paths.
 - After health succeeds, the deployment job polls
   `conary-remi-deploy inspect-remi --require-repopulated`. Success requires all
-  configured sources to contain metadata and at least one validated converted
-  artifact for every configured public profile; dispatch or a green health
-  probe alone is not deployment proof.
+  configured sources to contain metadata, a complete signing role set for
+  every exact source profile, and at least one validated converted artifact for
+  every configured public profile; dispatch or a green health probe alone is
+  not deployment proof.
 - Conary release artifact publication through the same helper verifies the
   CI-produced `SHA256SUMS` file from the staging directory before installing
   files into `/conary/releases/<version>`. The helper copies that verified

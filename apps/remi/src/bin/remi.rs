@@ -284,6 +284,10 @@ struct DeploymentPrepareArgs {
     #[arg(long, default_value = "/etc/conary/remi-repositories.toml")]
     repository_manifest_target: PathBuf,
 
+    /// Durable exact-profile repository signing authority.
+    #[arg(long, default_value = "/conary/repository-keys")]
+    repository_keys_dir: PathBuf,
+
     /// Stable deployment identity used in the recoverable backup name.
     #[arg(long)]
     deployment_id: String,
@@ -338,6 +342,7 @@ fn run_deployment_command(command: DeploymentCommand) -> Result<()> {
                 config_path: args.config,
                 repository_manifest_source: args.repository_manifest,
                 repository_manifest_target: args.repository_manifest_target,
+                repository_keys_dir: args.repository_keys_dir,
                 deployment_id: args.deployment_id,
                 max_concurrent: args.max_concurrent,
             })?;

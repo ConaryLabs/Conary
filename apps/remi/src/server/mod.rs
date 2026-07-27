@@ -48,6 +48,7 @@ pub mod repository_manifest;
 mod routes;
 pub mod search;
 pub mod security;
+pub(crate) mod signing_authority;
 pub mod test_db;
 
 pub use analytics::AnalyticsRecorder;
@@ -96,12 +97,17 @@ async fn ensure_admin_bootstrap_token(
     Ok(())
 }
 
-fn successful_refresh_profiles(batch: &admin_service::RepoRefreshBatch) -> HashSet<&str> {
+fn successful_refresh_profile_ids(batch: &admin_service::RepoRefreshBatch) -> HashSet<&str> {
     batch
         .results
         .iter()
         .filter_map(|result| result.source_profile.as_deref())
         .collect()
+}
+
+fn prewarm_route_refreshed(route: &str, successful_profile_ids: &HashSet<&str>) -> bool {
+    conary_core::repository::supported_profiles::profile_for_remi_route(route)
+        .is_some_and(|profile| successful_profile_ids.contains(profile.id()))
 }
 
 /// Server configuration
@@ -395,6 +401,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     ensure_database_ready(&server_config.db_path)?;
     if let Some(manifest_path) = remi_config.repository_manifest.as_deref() {
         let manifest = repository_manifest::RepositoryManifest::load(manifest_path)?;
+        let keys_root = server_config
+            .release_publish
+            .repository_keys_dir
+            .as_deref()
+            .context("release_publish.repository_keys_dir is required with repository_manifest")?;
+        signing_authority::ensure_repository_authority(&manifest, keys_root)?;
         let mut conn = open_runtime_db(&server_config.db_path)?;
         let reconciled = manifest.reconcile(&mut conn)?;
         tracing::info!(
@@ -593,11 +605,11 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                                 failure.message
                             );
                         }
-                        let successful_profiles = successful_refresh_profiles(&batch);
+                        let successful_profiles = successful_refresh_profile_ids(&batch);
                         for job in &prewarm_jobs {
-                            if !successful_profiles.contains(job.distro.as_str()) {
+                            if !prewarm_route_refreshed(&job.distro, &successful_profiles) {
                                 tracing::warn!(
-                                    "Post-refresh pre-warm for {} skipped: no repository for that exact profile completed refresh",
+                                    "Post-refresh pre-warm for {} skipped: its exact profile did not complete refresh",
                                     job.distro
                                 );
                                 continue;
@@ -764,7 +776,7 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 mod tests {
     use super::{
         build_http_client, ensure_admin_bootstrap_token, ensure_database_ready, open_runtime_db,
-        successful_refresh_profiles,
+        prewarm_route_refreshed, successful_refresh_profile_ids,
     };
     use crate::server::admin_service::{
         RepoRefreshBatch, RepoRefreshFailure, RepoRefreshFailureKind, RepoRefreshResult,
@@ -873,11 +885,14 @@ mod tests {
             }],
         };
 
-        let profiles = successful_refresh_profiles(&batch);
+        let profiles = successful_refresh_profile_ids(&batch);
         assert_eq!(profiles.len(), 2);
         assert!(profiles.contains("fedora-44"));
         assert!(profiles.contains("ubuntu-26.04"));
         assert!(!profiles.contains("arch"));
+        assert!(prewarm_route_refreshed("fedora", &profiles));
+        assert!(prewarm_route_refreshed("ubuntu", &profiles));
+        assert!(!prewarm_route_refreshed("arch", &profiles));
     }
 
     #[test]

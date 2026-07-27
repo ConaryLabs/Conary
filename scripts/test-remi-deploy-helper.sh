@@ -77,10 +77,15 @@ fi
 if [[ "\${1:-}" == "deployment" && "\${2:-}" == "prepare" ]]; then
     shift 2
     config=""
+    repository_keys_dir=""
     while [[ \$# -gt 0 ]]; do
         case "\$1" in
             --config)
                 config="\$2"
+                shift 2
+                ;;
+            --repository-keys-dir)
+                repository_keys_dir="\$2"
                 shift 2
                 ;;
             *)
@@ -89,8 +94,10 @@ if [[ "\${1:-}" == "deployment" && "\${2:-}" == "prepare" ]]; then
                 ;;
         esac
     done
+    [[ -d "\$repository_keys_dir" && ! -L "\$repository_keys_dir" ]]
     transition="\${config}.transition.json"
     printf '{}\n' >"\$transition"
+    printf '%s\n' "\$repository_keys_dir" >"\${config}.repository-keys-path"
     echo "\$transition"
     exit 0
 fi
@@ -236,8 +243,43 @@ test_deploy_remi_uses_candidate_owned_transition() {
     run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
 
     test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.0"
+    test "$(cat "$fake_root/etc/conary/remi.toml.repository-keys-path")" = \
+        "$fake_root/conary/repository-keys"
+    test "$(stat -c '%a' "$fake_root/conary/repository-keys")" = "700"
+    printf 'stable-authority\n' >"$fake_root/conary/repository-keys/preserved"
     test ! -e "$bundle"
     test ! -e "$repositories"
+
+    bundle="${tmpdir}/remi-0.8.1.tar.gz"
+    repositories="${tmpdir}/repositories-repeat.toml"
+    make_fake_remi_bundle "$bundle" 0.8.1
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
+    run_helper "$fake_root" deploy-remi 0.8.1 "$bundle" "$repositories" 32
+
+    test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.1"
+    test "$(cat "$fake_root/conary/repository-keys/preserved")" = "stable-authority"
+}
+
+test_deploy_remi_rejects_malformed_authority_root() {
+    local fake_root="${tmpdir}/root-remi-malformed"
+    local bundle="${tmpdir}/remi-malformed.tar.gz"
+    local repositories="${tmpdir}/repositories-malformed.toml"
+    write_config "$fake_root"
+    mkdir -p "$fake_root/usr/local/bin" "$fake_root/conary/repository-keys"
+    chmod 0755 "$fake_root/conary/repository-keys"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
+
+    expect_fail "insecure repository authority root" \
+        run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+    test ! -e "$fake_root/usr/local/bin/remi"
+
+    chmod 0700 "$fake_root/conary/repository-keys"
+    rmdir "$fake_root/conary/repository-keys"
+    ln -s "${tmpdir}" "$fake_root/conary/repository-keys"
+    expect_fail "symlinked repository authority root" \
+        run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+    test ! -e "$fake_root/usr/local/bin/remi"
 }
 
 test_install_helper_requires_exact_digest() {
@@ -268,6 +310,7 @@ main() {
     test_deploy_site_replaces_web_root_from_staging
     test_deploy_site_rejects_unknown_target
     test_deploy_remi_uses_candidate_owned_transition
+    test_deploy_remi_rejects_malformed_authority_root
     test_install_helper_requires_exact_digest
 
     echo "remi deploy helper smoke passed"

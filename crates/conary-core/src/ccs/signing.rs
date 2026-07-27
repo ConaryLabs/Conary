@@ -269,8 +269,29 @@ struct KeyFile {
     key_id: Option<String>,
 }
 
-/// Load a public key from a file (for trust policy)
-pub fn load_public_key(path: &Path) -> Result<String> {
+/// Parsed public half of a CCS signing key pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningPublicKey {
+    key: String,
+    key_id: Option<String>,
+}
+
+impl SigningPublicKey {
+    /// Get the base64-encoded Ed25519 public key.
+    #[must_use]
+    pub fn public_key_base64(&self) -> &str {
+        &self.key
+    }
+
+    /// Get the persisted role/key identifier.
+    #[must_use]
+    pub fn key_id(&self) -> Option<&str> {
+        self.key_id.as_deref()
+    }
+}
+
+/// Load and validate a public signing-key file.
+pub fn load_signing_public_key(path: &Path) -> Result<SigningPublicKey> {
     let content = fs::read_to_string(path).map_err(|e| {
         Error::IoError(format!(
             "Failed to read public key {}: {}",
@@ -287,7 +308,22 @@ pub fn load_public_key(path: &Path) -> Result<String> {
         ))
     })?;
 
-    Ok(key_file.key)
+    if key_file.algorithm != "ed25519" {
+        return Err(Error::ParseError(format!(
+            "Unsupported public key algorithm: {}",
+            key_file.algorithm
+        )));
+    }
+
+    Ok(SigningPublicKey {
+        key: key_file.key,
+        key_id: key_file.key_id,
+    })
+}
+
+/// Load a public key from a file (for trust policy)
+pub fn load_public_key(path: &Path) -> Result<String> {
+    load_signing_public_key(path).map(|key| key.key)
 }
 
 #[cfg(test)]
@@ -389,5 +425,29 @@ mod tests {
 
         let public_key = load_public_key(&public_path).unwrap();
         assert_eq!(public_key, keypair.public_key_base64());
+    }
+
+    #[test]
+    fn public_key_loader_preserves_role_identity_and_rejects_other_algorithms() {
+        let temp_dir = TempDir::new().unwrap();
+        let private_path = temp_dir.path().join("targets.private");
+        let public_path = temp_dir.path().join("targets.public");
+        let keypair = SigningKeyPair::generate().with_key_id("targets");
+        keypair.save_to_files(&private_path, &public_path).unwrap();
+
+        let public_key = load_signing_public_key(&public_path).unwrap();
+        assert_eq!(public_key.public_key_base64(), keypair.public_key_base64());
+        assert_eq!(public_key.key_id(), Some("targets"));
+
+        let unsupported = fs::read_to_string(&public_path)
+            .unwrap()
+            .replace("algorithm = \"ed25519\"", "algorithm = \"rsa\"");
+        fs::write(&public_path, unsupported).unwrap();
+        let error = load_signing_public_key(&public_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported public key algorithm")
+        );
     }
 }

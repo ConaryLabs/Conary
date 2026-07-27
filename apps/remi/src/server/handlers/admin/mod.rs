@@ -176,10 +176,15 @@ pub(crate) mod test_helpers {
     fn test_release_publish(
         root: &std::path::Path,
     ) -> crate::server::config::ReleasePublishSection {
+        use std::os::unix::fs::PermissionsExt;
+
         let keys_dir = root.join("keys");
-        for distro in ["fedora", "ubuntu"] {
-            let distro_dir = keys_dir.join(distro);
+        std::fs::create_dir_all(&keys_dir).unwrap();
+        std::fs::set_permissions(&keys_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for profile in ["fedora-44", "ubuntu-26.04"] {
+            let distro_dir = keys_dir.join(profile);
             std::fs::create_dir_all(&distro_dir).unwrap();
+            std::fs::set_permissions(&distro_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
             let private = distro_dir.join("targets.private");
             let public = distro_dir.join("targets.public");
             if !private.exists() {

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.8.3] - 2026-07-27
+
+### Fixed
+- repair Fedora and dry-run build prerequisites (#94)
+- provision durable exact-profile CCS/TUF signing authority and reject
+  incomplete, aliased, or insecure key state (#95)
+- route successful refreshes and public TUF operations through typed profile
+  identity, and accept source-validated RPM symlink payloads (#95)
+
 ## [remi-v0.8.2] - 2026-07-27
 
 ### Fixed

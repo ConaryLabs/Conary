@@ -301,7 +301,7 @@ mod tests {
             let keys_dir = temp.path().join("keys");
             std::fs::create_dir_all(&chunk_dir).unwrap();
             std::fs::create_dir_all(&cache_dir).unwrap();
-            write_tuf_role_keys(&keys_dir, TEST_DISTRO, tuf_roles);
+            write_tuf_role_keys(&keys_dir, TEST_PROFILE, tuf_roles);
 
             let conn = rusqlite::Connection::open(&db_path).unwrap();
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
@@ -683,8 +683,12 @@ mod tests {
     }
 
     fn write_tuf_role_keys(keys_dir: &Path, distro: &str, roles: &[&str]) {
+        use std::os::unix::fs::PermissionsExt;
+
         let distro_dir = keys_dir.join(distro);
         std::fs::create_dir_all(&distro_dir).unwrap();
+        std::fs::set_permissions(keys_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&distro_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         for role in roles {
             SigningKeyPair::generate()
                 .with_key_id(role)
