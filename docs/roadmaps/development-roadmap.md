@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-07-25
-revision: 4
+last_updated: 2026-07-27
+revision: 5
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
-proof_baseline: "v0.12.0 at eb256b19b4f04ca1d03b6af39a2819d746d3a22a; release and issue-remediation proof complete"
+proof_baseline: "v0.13.0 and remi-v0.8.5 at 6f1429c362ac161f1ef817233e72ee9c9a031c11; post-hard-cut release, deployment, and three-distro artifact proof complete"
 current_milestone: first external tester loop
 active_workstream: W3 First External Tester Loop
 next_workstream: post-milestone work selected from tester evidence
@@ -90,16 +90,16 @@ the stated scope, not whether a workstream happens to be active.
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | `v0.12.0` has exact tag, artifact hashes, signature, supported Arch-path, deployment, and real installed-binary self-update proof. No SBOM/provenance sidecars are published or planned. |
-| CCS conversion and native lifecycle authority | active hard switch | PR #61 replaces review/refusal-era scriptlet policy with exact RPM, Debian, and ALPM lifecycle transactions; release, deployment, and cross-distro matrix proof remain. |
+| Packaging, static repositories, trust, and self-update | solid | `v0.13.0` has exact tag, hashes, detached signature, current signed self-update, deployment, and native RPM/DEB/Arch installed-binary proof. The intentional 0.12 schema boundary requires a fresh native-package install. No SBOM/provenance sidecars are published or planned. |
+| CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. |
 | Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
-| Remi core and publication | solid | Operator-run limited-preview scope; distribution, cold-start readiness, and a wider stranger-operated path remain limited. |
+| Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
 | Federation | experimental | Coordinator and fetch paths are not wired into serving; TLS identity documentation and enforcement do not yet agree. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | One organic tester completed the former adoption flow on Ubuntu 26.04 and Fedora 44 with verified release-package checksums; the revised cross-distro milestone is 0/10, the former 2026-07-20 through 2026-07-22 outreach slots passed without posts, and new outreach requires a released cross-distro matrix. |
+| External product readiness | unfinished | The `v0.13.0` released-package matrix is complete, but the revised cross-distro milestone remains 0/10. The former 2026-07-20 through 2026-07-22 outreach slots passed without posts; rescheduling still requires cached-history and current venue-eligibility clearance. |
 
 ## Workstreams
 
@@ -139,20 +139,20 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** Conary has external evidence that strangers can install and
   remove a package whose source format differs from the supported host's native
   format.
-- **Current truth:** the W3a publication and issue-remediation gate is complete
-  at immutable `v0.12.0`. It preserves the preceding exact SONAME, ELF-class,
-  and constraint-aware Arch fixes and adds safe in-root system-symlink
-  traversal plus usable installed-host support diagnostics. No broad external
-  venue post has been published. One organic external tester completed the
-  former adoption-led flow on Ubuntu 26.04 LTS and Fedora 44. Those reports
-  remain valid release/onboarding evidence but do not count toward the revised
-  cross-distro milestone, so the tracker is 0/10.
-  The former 2026-07-20 through 2026-07-22 outreach window passed without a
-  post. Issue #41's reported Artix host and Fedora-form source route remain
-  outside supported-scope proof and require the repaired bundle's source-selection,
-  source-pin, and repository evidence before classification.
-- **Execution status:** active; release remediation is complete, but broad
-  outreach and its replacement dates remain postponed.
+- **Current truth:** the post-hard-cut release gate is complete at immutable
+  `v0.13.0` with compatible production `remi-v0.8.5`. The released RPM, DEB,
+  and Arch packages passed the Cartesian source-format lifecycle on Fedora 44,
+  Ubuntu 26.04 LTS, and Arch. No broad external venue post has been published.
+  One organic external tester's former adoption-led Ubuntu and Fedora reports
+  remain valid onboarding evidence but do not count toward the revised
+  cross-distro milestone, so the tracker remains 0/10. The former 2026-07-20
+  through 2026-07-22 outreach window passed without a post. Issue #41's Artix
+  host and Fedora-form source route remain outside the supported host proof and
+  require exact source-selection, source-pin, and repository evidence before
+  classification.
+- **Execution status:** active; release, deployment, and published-package
+  proof are complete, while broad outreach and replacement dates remain
+  postponed.
 - **Dependencies:** GitHub Support must dereference the cached pull-request and
   commit views that still expose pre-rewrite history, and the maintainer must
   re-check each venue's current account/rule eligibility immediately before
@@ -160,47 +160,37 @@ the stated scope, not whether a workstream happens to be active.
 - **Next gate:** after GitHub Support confirms the cached history is no longer
   reachable and venue checks pass, assign a new staggered schedule. Then submit
   the refreshed Show HN packet, record its actual URL and timestamp, and
-  continue collecting privacy-safe reports toward the second unique qualifying
+  collect privacy-safe reports toward the first unique qualifying
   tester.
-- **Proof:** immutable `v0.12.0` was published at
-  `2026-07-23T21:39:20Z`; annotated tag object
-  `8411169b40d8523ee716518cb3dc3e51acddb019` peels to commit
-  `eb256b19b4f04ca1d03b6af39a2819d746d3a22a`. Remediation merge CI
-  `30041401268` and release-commit CI `30042990554` passed 11/11 jobs,
-  release-build `30043930486` passed, and exact-tag deploy-and-verify
-  `30047027525` passed. Seven assets are published; independent downloads
-  matched all five `SHA256SUMS` payloads and all seven REST digests, and the
-  official preceding binary verified the detached CCS signature. An isolated
-  schema-77 database completed a signed update from the official preceding
-  preview to `v0.12.0` and then reported itself current. The exact Arch package
-  binary initialized profile `arch`, synchronized 15,462 Arch-only Remi rows,
-  installed and
-  executed `htop 3.5.2-1-arch`, and removed all five files and the trove. In
-  the same isolated writable root it installed and removed a one-file probe
-  through `/usr/lib64 -> lib`, while a paired out-of-root symlink was rejected
-  without an outside write or trove. Host pacman inventory, linker cache,
-  installed Conary binary, and `/usr/lib64` stayed unchanged. This was exact
-  released-binary proof with live-host pacman evidence read-only, not native
-  `pacman -U` or a pristine VM. Support-bundle self-tests passed, and an
-  isolated bundle captured integrity, table, repository, and profile summaries
-  without including its database; this host had no installed root-owned
-  Conary database for a live cached-sudo success. Full Remi health passed
-  10/10, six public routes returned HTTP 200, and the deployed CCS matched
-  release hash
-  `c973fb654b67da0619d6837b34e2f5f78bbea90dfd9fb8de19b6edf9cbe9582a`,
-  size `16183371`, and signature. The preceding Fedora-form KVM result remains
-  a conaryOS regression baseline rather than literal stock Fedora native-PM
-  proof. No SBOM or provenance sidecars are published or planned. The
-  repository Welcome Discussion remains live at discussion 36, and issue 35
-  remains closed with its released-path proof; neither repository action
-  launches broad outreach. Issues 37 and 38 remain two supported-host attempts
-  by one unique tester. They are historical onboarding evidence, not
-  completions under the revised milestone. Each qualifying completion belongs
-  to a unique outsider and covers exactly `foreign artifact install ->
-  list/query -> update --dry-run -> remove` on a supported host with the pinned
-  release, where source and host native package formats differ. Record failed
-  attempts and triage every report as `fix-now`, `next-slice`,
-  `validated-no-action`, or `declined-with-reason` with an owner.
+- **Proof:** immutable `v0.13.0` published at `2026-07-27T11:57:44Z`;
+  annotated tag object `f8298522fd7fe95a4994184ae20c34cf64096818`
+  peels to `6f1429c362ac161f1ef817233e72ee9c9a031c11`. Exact-tag
+  release-build `30261256730` passed the workspace and four package builders.
+  Independent downloads found exactly seven assets, matched all five
+  `SHA256SUMS` entries and every GitHub digest, and verified the detached CCS
+  signature with the official preceding release key. A copied released 0.13
+  binary forced a signed update through the production channel and remained
+  `conary 0.13.0`; the incompatible 0.12 CCS parser is an intentional hard-cut
+  reinstall boundary, not a compatibility path. Deploy-and-proof run
+  `30263948968` passed: the server's exact seven files match the release,
+  conary.io serves the exact tag and a branded HTTP 404, and native RPM, DEB,
+  and Arch packages each installed and passed the owned Cartesian lifecycle on
+  their matching supported host. Current `remi-v0.8.5` tag object
+  `1d9b8588fe01453bab20f1a7956e4aa9d6263702` peels to the same commit;
+  release-build `30259180128` and protected deploy `30260847616` passed. Live
+  inspection reports schema revision 21, five populated sources, 98,266
+  repository packages, exact Arch/Fedora/Ubuntu signing profiles, 2,368
+  conversions, full health 10/10, and public converted CCS proof. conaryd
+  0.7.0 and conary-test 0.9.0 remain immutable build-only products from
+  `a231276a900bbe8a8ccb6a0942f104cba2ab86b4`. Exact hashes and complete
+  per-product evidence live in the release matrix. No SBOM or provenance
+  sidecars are published. The known conversion failures are owned by #98,
+  #99, and #102 through #105; the false-success unknown API fallback is owned
+  by #67 rather than hidden as release success. Issues 37 and 38 remain two
+  same-format onboarding attempts by one person and contribute zero qualifying
+  completions. Each future completion belongs to a unique outsider and covers
+  exactly `foreign artifact install -> list/query -> update --dry-run ->
+  remove` on a supported host where source and host formats differ.
 - **Limitations:** no qualifying completion for three weeks after launch
   triggers a maintainer review of venue reach, onboarding friction, and
   observed failures. A pivot still requires a reproducible systemic blocker;
@@ -322,8 +312,10 @@ checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
 clean-host proof. W3 is now active; its earlier release proof gate was reopened
 for the supported `htop` SONAME repair and again for issue #41's path-safety
-and support-bundle defects. That remediation gate is closed with verified
-immutable `v0.12.0`. The 2026-07-20 through 2026-07-22 manual outreach window
-passed without a post and is now retired. Rescheduling waits for GitHub Support
-to dereference cached pre-rewrite pull-request and commit views and for the
-venue-specific eligibility checks. No replacement date is assigned yet.
+and support-bundle defects, then superseded by the post-hard-cut package
+authority suite. That release gate is closed with verified immutable
+`v0.13.0` and production `remi-v0.8.5`. The 2026-07-20 through 2026-07-22
+manual outreach window passed without a post and is now retired. Rescheduling
+waits for GitHub Support to dereference cached pre-rewrite pull-request and
+commit views and for the venue-specific eligibility checks. No replacement
+date is assigned yet.

@@ -28,12 +28,13 @@ products published at different times came from one commit:
   evidence, but none is current production authority.
 
 Conary and Remi are deployed and independently identified below. Conary's
-published native-package lifecycle matrix remains the final preview-support
-gate. Broad outreach is still postponed even after that gate passes.
+published native-package lifecycle matrix passed on all three supported hosts,
+so the bounded pre-alpha preview is open. Broad outreach remains separately
+postponed.
 
 | Product | Artifact classes | Release workflow | Source authority | Release URL | Required evidence | Preview support | Known caveats | Source-build fallback |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst` | `.github/workflows/release-build.yml`, `scripts/release.sh conary`, `scripts/release-matrix.sh` | annotated tag object `f8298522fd7fe95a4994184ae20c34cf64096818`, commit `6f1429c362ac161f1ef817233e72ee9c9a031c11` | https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0 | exact publication, checksums, GitHub digests, detached signature, current binary/self-update, deployment, endpoint, site, SBOM, and provenance status recorded below; published native-package lifecycle run `30263948968` is in progress | closed until run `30263948968` passes | pre-alpha; disposable, snapshotted, or explicitly non-critical x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch hosts only; the intentional schema hard cut requires a fresh native-package install from 0.12 | `cargo build -p conary` |
+| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst` | `.github/workflows/release-build.yml`, `scripts/release.sh conary`, `scripts/release-matrix.sh` | annotated tag object `f8298522fd7fe95a4994184ae20c34cf64096818`, commit `6f1429c362ac161f1ef817233e72ee9c9a031c11` | https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0 | exact publication, checksums, GitHub digests, detached signature, current binary/self-update, deployment, endpoint, site, released-package lifecycle, SBOM, and provenance status recorded below | limited pre-alpha preview | disposable, snapshotted, or explicitly non-critical x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch hosts only; the intentional schema hard cut requires a fresh native-package install from 0.12 | `cargo build -p conary` |
 | `remi` | binary and deploy bundle | `.github/workflows/release-build.yml`, `scripts/release.sh remi`, `scripts/release-matrix.sh` | annotated tag object `1d9b8588fe01453bab20f1a7956e4aa9d6263702`, commit `6f1429c362ac161f1ef817233e72ee9c9a031c11` | https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.8.5 | exact publication, checksums, installed identity, signature, protected deployment, current schema/source/signing state, conversions, full health, public converted CCS, SBOM, and provenance status recorded below | live operator service | conversion defects are explicit engineering work in #98, #99, and #102 through #105; unknown `/v1` paths currently receive the SPA fallback instead of an API 404 and are tracked in #67 | `cargo build -p remi` |
 | `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh conaryd`, `scripts/release-matrix.sh` | annotated tag object `381ee55cd051234dd78647ef5d7a8c3250c6b9df`, commit `a231276a900bbe8a8ccb6a0942f104cba2ab86b4` | https://github.com/ConaryLabs/Conary/releases/tag/conaryd-v0.7.0 | exact publication, three-asset inventory, matching independent/GitHub checksums, raw/tar identity, binary version, build-only routing, signature, SBOM, and provenance status recorded below | release artifact only; no deployment | Forge staging remains paused; package jobs retain the CLI live-mutation acknowledgement boundary | `cargo build -p conaryd` |
 | `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh conary-test`, `scripts/release-matrix.sh` | annotated tag object `6c4a8cb4bb2c6e89f359a8ceb89ac40a5ce06890`, commit `a231276a900bbe8a8ccb6a0942f104cba2ab86b4` | https://github.com/ConaryLabs/Conary/releases/tag/conary-test-v0.9.0 | exact publication, three-asset inventory, matching independent/GitHub checksums, raw/tar identity, binary version, suite inventory, build-only routing, signature, SBOM, and provenance status recorded below | release artifact only; no deployment | QEMU/KVM suites require a capable local host while remote validation is paused | `cargo build -p conary-test` |
@@ -80,9 +81,11 @@ gate. Broad outreach is still postponed even after that gate passes.
   CCS hash and size, and a signature. Both sites were built from the exact tag:
   conary.io and its install guide serve `v0.13.0`, while an unknown route
   returns the branded HTTP 404.
-- The three published-native-package lifecycle jobs in run `30263948968`
-  remain in progress. This row stays closed until all three and the aggregate
-  job pass.
+- Run `30263948968` completed successfully. Its immutable RPM, DEB, and Arch
+  packages installed through the native package managers on Fedora 44, Ubuntu
+  26.04 LTS, and Arch; each host passed the one owned Cartesian
+  native-cross-source lifecycle suite, and the aggregate
+  `release-artifact-proof` job passed.
 - No SBOM or provenance sidecars are published. The CCS has both its embedded
   package authority and the separately verified release-digest signature.
 

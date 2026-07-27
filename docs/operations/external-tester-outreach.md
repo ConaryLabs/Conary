@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 4
+last_updated: 2026-07-27
+revision: 5
 status: postponed
 target_release: v0.13.0
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -11,23 +11,21 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > **POSTPONED; NO NEW DATE IS ASSIGNED:** the current qualifying milestone is
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
-> differed from the host's native format. Intended release `v0.13.0` remains a
-> candidate, not a published tester baseline. Do not publish the copy below
-> until the cross-distro implementation has exact artifact and deployment
-> proof and the external cached-history and venue-eligibility gates are closed.
+> differed from the host's native format. Release `v0.13.0` is now the
+> published and verified tester baseline. Do not publish the copy below until
+> the separate external cached-history and venue-eligibility gates are closed.
 
-`v0.13.0` is the intended release for this packet. Treat that tag and every
-link below as a candidate until the release artifact matrix records the
-published tag, checksums, signature, installed-binary proof, live deployment,
-and a successful cross-distro package loop. The maintainer assigns fresh dates
-only after those facts are durable, then posts manually and remains available
-to answer comments.
+`v0.13.0` is the pinned release for this packet. The release artifact matrix
+records its published tag, checksums, signature, installed-binary proof, live
+deployment, and released-package cross-distro lifecycle. The maintainer assigns
+fresh dates only after the remaining external gates close, then posts manually
+and remains available to answer comments.
 
 ## Show HN Submission
 
 - **Title:** `Show HN: Conary - install RPM, DEB, and Arch packages across distros`
 - **URL:** `https://github.com/ConaryLabs/Conary`
-- **Reschedule state:** TBD after release and external launch-gate clearance
+- **Reschedule state:** TBD after external launch-gate clearance
 
 Submit the repository URL, then add the following opening comment.
 
@@ -73,7 +71,7 @@ before mutation; there is no capability-approval bypass.
 Agent-assisted walkthrough, including download and checksum verification:
 https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tester-loop.md
 
-Pinned release candidate:
+Pinned release:
 https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
 
 Privacy-safe feedback form:
@@ -118,7 +116,7 @@ https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tes
 Repository:
 https://github.com/ConaryLabs/Conary
 
-Pinned release candidate:
+Pinned release:
 https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
 
 I'm interested both in product defects and in whether repo-owned instructions
@@ -153,7 +151,7 @@ pinned release checksum, inspect the complete dry-run, ask before every live
 mutation, keep a private transcript, and draft privacy-safe feedback:
 https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tester-loop.md
 
-Repository and release candidate:
+Repository and pinned release:
 https://github.com/ConaryLabs/Conary
 https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
 
@@ -186,13 +184,13 @@ failed attempts are useful evidence.
   reports as non-qualifying historical evidence.
 - [x] Rewrite the venue copy around the cross-distro package loop.
 - [x] Retire the passed 2026-07-20 through 2026-07-22 dates.
-- [ ] Publish immutable `v0.13.0` with RPM, DEB, Arch, CCS, checksums, and the
+- [x] Publish immutable `v0.13.0` with RPM, DEB, Arch, CCS, checksums, and the
   required signature and installed-binary evidence.
-- [ ] Record exact cross-distro install/query/update-preview/remove proof for
+- [x] Record exact cross-distro install/query/update-preview/remove proof for
   the released binary on supported hosts.
-- [ ] Deploy the exact release sites and independently verify live status and
+- [x] Deploy the exact release sites and independently verify live status and
   body claims.
-- [ ] Update the release artifact matrix and milestone tracker with exact
+- [x] Update the release artifact matrix and milestone tracker with exact
   release, deployment, and Remi population evidence.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.
