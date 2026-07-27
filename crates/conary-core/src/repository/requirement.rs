@@ -42,9 +42,13 @@ pub fn parse_native_requirement(
                 )
             }
         }
-        VersionScheme::Arch => RepositoryRequirementExpression::Atom(
-            super::package_relation::parse_arch_atom(native_text)?,
-        ),
+        VersionScheme::Arch => {
+            RepositoryRequirementExpression::Atom(if kind == RepositoryRequirementKind::Depends {
+                super::package_relation::parse_arch_runtime_atom(native_text)?
+            } else {
+                super::package_relation::parse_arch_atom(native_text)?
+            })
+        }
         VersionScheme::Conary => RepositoryRequirementExpression::Atom(
             super::package_relation::parse_inline_atom(native_text, scheme)?,
         ),

@@ -14,6 +14,13 @@ use super::dependency_model::{
 use super::versioning::{RepoVersionConstraint, repo_version_satisfies};
 use super::versioning::{VersionScheme, parse_repo_constraint};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedArchProvide {
+    pub name: String,
+    pub kind: RepositoryCapabilityKind,
+    pub version: Option<String>,
+}
+
 pub struct PackageRelationProvide<'a> {
     pub name: &'a str,
     pub version: Option<&'a str>,
@@ -562,6 +569,90 @@ pub(crate) fn parse_arch_atom(input: &str) -> Result<RepositoryRequirementClause
     let clause = parse_inline_atom(input, VersionScheme::Arch)?;
     validate_arch_name(&clause.name, input)?;
     Ok(clause)
+}
+
+pub(crate) fn parse_arch_runtime_atom(input: &str) -> Result<RepositoryRequirementClause, String> {
+    match input
+        .parse::<alpm_types::RelationOrSoname>()
+        .map_err(|error| error.to_string())?
+    {
+        alpm_types::RelationOrSoname::Relation(relation) => {
+            Ok(arch_package_relation_clause(relation))
+        }
+        alpm_types::RelationOrSoname::SonameV1(soname) => {
+            Ok(arch_soname_clause(soname.to_string(), input))
+        }
+        alpm_types::RelationOrSoname::SonameV2(soname) => {
+            Ok(arch_soname_clause(soname.to_string(), input))
+        }
+    }
+}
+
+pub(crate) fn parse_arch_provide(
+    input: &str,
+    package_name: &str,
+) -> Result<ParsedArchProvide, String> {
+    match input
+        .parse::<alpm_types::RelationOrSoname>()
+        .map_err(|error| error.to_string())?
+    {
+        alpm_types::RelationOrSoname::Relation(relation) => {
+            let version = match relation.version_requirement {
+                None => None,
+                Some(requirement)
+                    if requirement.comparison == alpm_types::VersionComparison::Equal =>
+                {
+                    Some(requirement.version.to_string())
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "Arch %PROVIDES% entry '{input}' must be unversioned or use the exact '=' relation"
+                    ));
+                }
+            };
+            let name = relation.name.to_string();
+            let kind = if name == package_name {
+                RepositoryCapabilityKind::PackageName
+            } else {
+                RepositoryCapabilityKind::Virtual
+            };
+            Ok(ParsedArchProvide {
+                name,
+                kind,
+                version,
+            })
+        }
+        alpm_types::RelationOrSoname::SonameV1(soname) => Ok(ParsedArchProvide {
+            name: soname.to_string(),
+            kind: RepositoryCapabilityKind::Soname,
+            version: None,
+        }),
+        alpm_types::RelationOrSoname::SonameV2(soname) => Ok(ParsedArchProvide {
+            name: soname.to_string(),
+            kind: RepositoryCapabilityKind::Soname,
+            version: None,
+        }),
+    }
+}
+
+fn arch_package_relation_clause(
+    relation: alpm_types::PackageRelation,
+) -> RepositoryRequirementClause {
+    let name = relation.name.to_string();
+    match relation.version_requirement {
+        Some(requirement) => RepositoryRequirementClause::versioned(
+            name,
+            format!("{} {}", requirement.comparison, requirement.version),
+        ),
+        None => RepositoryRequirementClause::name_only(name),
+    }
+}
+
+fn arch_soname_clause(identity: String, native_text: &str) -> RepositoryRequirementClause {
+    let mut clause = RepositoryRequirementClause::name_only(identity);
+    clause.capability_kind = Some(RepositoryCapabilityKind::Soname);
+    clause.native_text = Some(native_text.to_string());
+    clause
 }
 
 pub(super) fn parse_inline_atom(
