@@ -5,7 +5,7 @@
 
 requirements = [
     { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "glibc", capability_kind = "Virtual", native_text = "glibc" } }, alternatives = [{ name = "glibc", capability_kind = "Virtual", native_text = "glibc" }], native_text = "glibc" },
-    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "openssl-libs", capability_kind = "PackageName", version_constraint = ">=3.0", native_text = "openssl-libs >=3.0" } }, alternatives = [{ name = "openssl-libs", capability_kind = "PackageName", version_constraint = ">=3.0", native_text = "openssl-libs >=3.0" }], native_text = "openssl-libs >=3.0" },
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "openssl-libs", capability_kind = "PackageName", version_constraint = ">=3.0.0", native_text = "openssl-libs >=3.0.0" } }, alternatives = [{ name = "openssl-libs", capability_kind = "PackageName", version_constraint = ">=3.0.0", native_text = "openssl-libs >=3.0.0" }], native_text = "openssl-libs >=3.0.0" },
     { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "xz-libs", capability_kind = "PackageName", native_text = "xz-libs" } }, alternatives = [{ name = "xz-libs", capability_kind = "PackageName", native_text = "xz-libs" }], native_text = "xz-libs" },
 ]
 
