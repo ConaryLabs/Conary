@@ -36,10 +36,12 @@ Remote Forge validation is paused pending a KVM-capable runner. The dated
 2026-05-21 Group O local QEMU run established the earlier export baseline. The
 dated 2026-07-16 Group O local KVM run superseded it by passing all five
 installed-runtime, file-capability, and bootstrap-run raw/qcow2 cases against
-`minimal-boot-v4`. The suites now target `minimal-boot-v5` (v4 plus injected
-host `libseccomp` and glibc runtime libraries, a stopgap with no published
-artifact); issue #153 records the decision to re-base the guest images on
-Fedora 44 rather than keep patching a frozen bootstrap-built image.
+`minimal-boot-v4`. That run predates the #61 schema epoch cut, and the
+`minimal-boot-*` lineage cannot run the current build at all: those images ship
+a bootstrap-built Conary database at a retired schema. The suites now target
+`fedora44-guest-v1`, an official Fedora Cloud Base 44 image built by
+`scripts/build-qemu-guest-image.sh` per #153's re-base decision. It has no
+published artifact yet, and no suite run against it is recorded.
 The dated 2026-05-21 Group P QEMU run passed ISO generation-carrier,
 provenance-sidecar, copy-back, read-only carrier boot, and writable `/etc`
 overlay proof. These are local x86_64 evidence, not a broad or current

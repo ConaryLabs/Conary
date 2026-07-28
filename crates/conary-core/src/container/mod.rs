@@ -51,7 +51,7 @@ mod namespaces;
 
 pub use analysis::{ScriptAnalysis, ScriptRisk, analyze_script};
 use namespaces::{
-    UserNamespaceSync, adopt_raw_fd, chdir_syscall, chroot_syscall,
+    RlimitResource, UserNamespaceSync, adopt_raw_fd, chdir_syscall, chroot_syscall,
     configure_user_namespace_root_mapping_for_pid, fork_process, prepare_user_namespace_entrypoint,
     prepare_user_namespace_root, sandbox_host_gid, sandbox_host_uid, sandbox_namespace_flags,
     set_parent_death_signal, set_rlimit_syscall, sethostname_syscall,
@@ -526,7 +526,7 @@ pub struct Sandbox {
 
 mod execution;
 /// Set a resource limit if the value is non-zero
-fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64, name: &str) {
+fn set_rlimit(resource: RlimitResource, value: u64, name: &str) {
     if value > 0 {
         let limit = libc::rlimit {
             rlim_cur: value,

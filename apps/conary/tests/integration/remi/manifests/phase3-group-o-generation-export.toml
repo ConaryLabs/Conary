@@ -29,7 +29,7 @@ fatal = true
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v5"
+image = "fedora44-guest-v1"
 memory_mb = 2048
 timeout_seconds = 900
 ssh_port = 2240
@@ -59,7 +59,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v5"
+image = "fedora44-guest-v1"
 memory_mb = 2048
 timeout_seconds = 1500
 ssh_port = 2244
@@ -91,7 +91,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v5"
+image = "fedora44-guest-v1"
 memory_mb = 2048
 timeout_seconds = 5400
 ssh_port = 2245
@@ -157,7 +157,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v5"
+image = "fedora44-guest-v1"
 memory_mb = 2048
 timeout_seconds = 7200
 ssh_port = 2247
@@ -257,7 +257,7 @@ group = "generation-export"
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v5"
+image = "fedora44-guest-v1"
 memory_mb = 2048
 timeout_seconds = 5400
 ssh_port = 2242

@@ -37,7 +37,11 @@ pub enum FsVerityError {
 
 /// `FS_IOC_ENABLE_VERITY` ioctl number
 /// `_IOW('f', 0x85, struct fsverity_enable_arg)` = `0x40806685`
-const FS_IOC_ENABLE_VERITY: libc::c_ulong = 0x4080_6685;
+///
+/// `libc::Ioctl` is the request type `ioctl(2)` actually takes on the target
+/// C library: `c_ulong` on glibc, `c_int` on musl. Typing the constant with it
+/// keeps the call site identical on both.
+const FS_IOC_ENABLE_VERITY: libc::Ioctl = 0x4080_6685;
 
 /// `FS_VERITY_HASH_ALG_SHA256`
 const FS_VERITY_HASH_ALG_SHA256: u32 = 1;

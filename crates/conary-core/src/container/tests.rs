@@ -561,6 +561,6 @@ fn test_set_rlimit_syscall_rejects_invalid_resource() {
         rlim_cur: 1,
         rlim_max: 1,
     };
-    let invalid_resource = libc::__rlimit_resource_t::MAX;
+    let invalid_resource = super::RlimitResource::MAX;
     assert!(set_rlimit_syscall(invalid_resource, &limit).is_err());
 }

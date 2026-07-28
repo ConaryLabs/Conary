@@ -78,22 +78,32 @@ export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
 guest SSH access, exported-image boot, and generation file-capability xattr
 preservation. Group P adds the focused ISO generation-carrier path:
 
-The active source fixture for the phase-3 QEMU suites is `minimal-boot-v5`.
-It is `minimal-boot-v4` with the build host's `libseccomp.so.2` and glibc
-runtime set (`ld-linux-x86-64.so.2`, `libc`, `libm`, `libmvec`, `libpthread`,
-`libdl`, `librt`, `libutil`, `libresolv`, `libnss_files`, `libnss_dns`) copied
-into `/usr/lib`, because the staged `conary` binary is built on a rolling host
-whose glibc is newer than the frozen guest's. It keeps the v4 disposable
-`conaryos-test-key-v4` identity and the 20 GiB root. **v5 is a stopgap and has
-no published artifact**: it exists only in a local `~/.cache/conary-test/`
-cache, so a host with an empty cache cannot run these suites until either v5 is
-published or the re-base lands. Library injection into a frozen guest is a
-workaround, not a contract; issue #153 records the decision to re-base the QEMU
-guest images on Fedora 44 and to decouple the staged binary from the host
-glibc, which removes the drift instead of patching around it.
+The active source fixture for the phase-3 QEMU suites is `fedora44-guest-v1`,
+an official Fedora Cloud Base 44 qcow2 provisioned by
+`scripts/build-qemu-guest-image.sh` and carrying the `conaryos-test-key-v4`
+disposable identity. **It has no published artifact**: it exists only in a local
+`~/.cache/conary-test/` cache, so a host with an empty cache cannot run these
+suites until it is published.
 
-Historical evidence below predates that retarget and was recorded against
-`minimal-boot-v4`.
+It replaces the `minimal-boot-*` lineage, which the current build cannot use for
+two independent reasons found on 2026-07-28:
+
+- Those images are conaryOS artifacts of the bootstrap pipeline, so their
+  staged-binary path depends on a frozen glibc that a rolling build host
+  outgrows (#153). `minimal-boot-v5` patched that by hand by injecting host
+  libraries — a workaround, not a contract, and it never produced a green suite
+  run.
+- They ship a bootstrap-built `/var/lib/conary/conary.db` at migration-chain
+  schema version 66. The schema epoch hard cut in df607ee8 (#61, 2026-07-26)
+  retired it, so `conary system init` refuses inside them with
+  `database uses retired migration-chain schema version 66`. #157 owns the
+  product gap that the refusal names a rebuild no command performs.
+
+The Fedora image ships no `/var/lib/conary` at all, so `system init` creates a
+fresh database at the current schema.
+
+Historical evidence below predates both the re-base and the #61 schema cut, and
+was recorded against `minimal-boot-v4`.
 
 Current 2026-07-16 W1 Group O local KVM evidence is green. The source fixture
 was `minimal-boot-v4`, expanded to 20 GiB for full CAS adoption and paired with
@@ -134,7 +144,26 @@ The source QEMU image for Groups N and O must already include the runtime
 generation toolchain (`cpio`, `dracut`, `depmod`, `systemd-repart`, `qemu-img`,
 FAT/ext4 mkfs tools, and composefs inspection tools as needed). Group P uses the
 same source fixture and provisions ISO helper packages through Conary when
-`xorriso`/`mtools` are absent before it assembles the generation. The focused
+`xorriso`/`mtools` are absent before it assembles the generation.
+
+A step with `stage_conary = true` copies the host-built `conary` into the guest,
+which couples the guest to the build host's glibc and to a matching
+`libseccomp.so.2`. `scripts/build-static-conary.sh` removes that coupling: it
+builds a static libseccomp for musl once, caches it, and produces a
+statically linked `conary` for `x86_64-unknown-linux-musl` that runs on any
+guest. Point the harness at it with `CONARY_HOST_BIN`. The build is debug
+profile and the binary is a test-staging artifact, not a release artifact.
+
+`scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
+Fedora Cloud Base qcow2 plus provisioning, and `bash
+scripts/test-build-qemu-guest-image.sh` is its fast proof. It exists because the
+active `minimal-boot-*` fixtures are conaryOS artifacts of the bootstrap
+pipeline and have no regeneration path once that pipeline is removed. The
+manifests still name the `minimal-boot-*` images; pointing them at a
+Fedora-based image is a separate change, so treat the builder as the
+regeneration path rather than as the fixture the suites currently boot. See
+`docs/modules/test-fixtures.md` under `qemu-source-image-fixtures` for the
+image contract and the identity/size rotation helper. The focused
 2026-05-21 KVM run passed the superseded bootstrap-run form of `TISO01`: it
 exported that generation to ISO, copied the ISO and provenance sidecar back to
 `target/local-validation/group-p-iso-export/`, booted the ISO with
@@ -726,7 +755,7 @@ guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
 ```toml
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v5"
+image = "fedora44-guest-v1"
 scratch_disk_mb = 65536
 local_image_path = "/tmp/conary-generation-export/generated.qcow2"
 copy_to_guest = [

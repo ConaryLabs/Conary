@@ -11,6 +11,17 @@ use nix::unistd::{ForkResult, Pid, fork};
 
 use crate::error::{Error, Result, ScriptletFailureKind};
 
+/// C-library resource identifier accepted by `setrlimit`.
+///
+/// glibc declares the parameter as `__rlimit_resource_t` while musl declares it
+/// as `int`, and each library types its own `RLIMIT_*` constants to match. This
+/// alias is the single owner of that ABI difference so callers stay identical
+/// on every libc.
+#[cfg(target_env = "musl")]
+pub(super) type RlimitResource = libc::c_int;
+#[cfg(not(target_env = "musl"))]
+pub(super) type RlimitResource = libc::__rlimit_resource_t;
+
 pub(super) struct UserNamespaceSync {
     pub(super) request_fd: OwnedFd,
     pub(super) ack_fd: OwnedFd,
@@ -63,7 +74,7 @@ pub(super) fn chdir_syscall(path: &CStr) -> std::io::Result<()> {
 }
 
 pub(super) fn set_rlimit_syscall(
-    resource: libc::__rlimit_resource_t,
+    resource: RlimitResource,
     limit: &libc::rlimit,
 ) -> std::io::Result<()> {
     // SAFETY: `limit` points to initialized memory owned by the caller.

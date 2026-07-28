@@ -35,8 +35,9 @@ const OVMF_CODE_PATHS: &[&str] = &[
 ///
 /// Bump this whenever the fixture rotates its SSH identity, so a cached key
 /// from an older image cannot silently survive the rotation. It tracks the
-/// identity, not the image version: `minimal-boot-v5` patches v4's libraries
-/// in place and inherits v4's authorized key, so it stays on `-v4`.
+/// identity, not the image: `fedora44-guest-v1` is provisioned with this same
+/// disposable key rather than a fresh one, so the name outlives the conaryOS
+/// image lineage it was originally minted for.
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key-v4";
 
 struct ScratchDisk {
