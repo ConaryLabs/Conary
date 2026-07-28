@@ -16,7 +16,7 @@ mod tests {
     use crate::repository::metadata::RepositoryMetadata as JsonRepositoryMetadata;
     use crate::repository::parsers::PackageMetadata;
     use crate::repository::remi_metadata::{
-        RemiProvide, RemiRequirement, RemiRequirementGroup, RemiSparseVersionEntry,
+        RemiProvide, RemiRequirement, RemiRequirementGroup, RemiSparseResolutionVersionEntry,
     };
     use crate::repository::versioning::VersionScheme;
     use crate::trust::metadata::{TargetDescription, VerifiedTufState};

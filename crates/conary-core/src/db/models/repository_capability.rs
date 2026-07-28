@@ -138,6 +138,38 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
+    /// Load exact provides for a bounded set of repository packages in one
+    /// query.
+    pub fn find_by_repository_packages(
+        conn: &Connection,
+        repository_package_ids: &[i64],
+    ) -> Result<Vec<Self>> {
+        if repository_package_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = repository_package_ids
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
+                    version_scheme, architecture_qualifier_kind, architecture
+             FROM repository_provides
+             WHERE repository_package_id IN ({placeholders})
+             ORDER BY repository_package_id, capability, version"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(repository_package_ids.iter()),
+                Self::from_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,

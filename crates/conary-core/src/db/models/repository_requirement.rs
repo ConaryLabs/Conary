@@ -145,6 +145,38 @@ impl RepositoryRequirement {
         Ok(rows)
     }
 
+    /// Load exact requirement clauses for a bounded set of repository
+    /// packages in one query.
+    pub fn find_by_repository_packages(
+        conn: &Connection,
+        repository_package_ids: &[i64],
+    ) -> Result<Vec<Self>> {
+        if repository_package_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = repository_package_ids
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, repository_package_id, group_id, capability, version_constraint, kind,
+                    dependency_type, raw
+             FROM repository_requirements
+             WHERE repository_package_id IN ({placeholders})
+             ORDER BY repository_package_id, group_id, capability, version_constraint"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(repository_package_ids.iter()),
+                Self::from_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// List all requirement clauses belonging to a specific group.
     pub fn find_by_group(conn: &Connection, group_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
@@ -300,6 +332,38 @@ impl RepositoryRequirementGroup {
         )?;
         let rows = stmt
             .query_map([repository_package_id], Self::from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Load exact requirement groups for a bounded set of repository packages
+    /// in one query.
+    pub fn find_by_repository_packages(
+        conn: &Connection,
+        repository_package_ids: &[i64],
+    ) -> Result<Vec<Self>> {
+        if repository_package_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = repository_package_ids
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, repository_package_id, kind, behavior, description, native_text,
+                    expression_json
+             FROM repository_requirement_groups
+             WHERE repository_package_id IN ({placeholders})
+             ORDER BY repository_package_id, id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(repository_package_ids.iter()),
+                Self::from_row,
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }

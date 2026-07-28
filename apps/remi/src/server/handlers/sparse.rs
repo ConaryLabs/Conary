@@ -12,50 +12,37 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{ConvertedPackage, NativePackagePublication, RepositoryPackage};
-use conary_core::repository::remi_metadata::{RemiProvide, RemiRequirementGroup};
+use conary_core::repository::remi_metadata::{
+    REMI_SPARSE_MAX_PAGE_SIZE, REMI_SPARSE_MIN_PACKAGE_SIZE, RemiSparseListInclude,
+    RemiSparsePackageList as PackageListResponse, RemiSparsePackagePage,
+};
+pub use conary_core::repository::remi_metadata::{
+    RemiSparseIndexEntry as SparseIndexEntry, RemiSparseVersionEntry as SparseVersionEntry,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// A sparse index entry for a single package across all versions
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SparseIndexEntry {
-    pub name: String,
-    pub distro: String,
-    pub versions: Vec<SparseVersionEntry>,
-}
+mod page;
 
-/// Version-level metadata within a sparse index entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SparseVersionEntry {
-    pub version: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release: Option<String>,
-    pub provides: Vec<RemiProvide>,
-    pub requirement_groups: Vec<RemiRequirementGroup>,
-    pub architecture: Option<String>,
-    pub size: i64,
-    pub converted: bool,
-    pub content_hash: Option<String>,
-}
+use page::{build_package_list, build_package_page};
 
 /// Query parameters for the package list endpoint
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub page: Option<usize>,
     pub per_page: Option<usize>,
+    #[serde(default)]
+    pub include: RemiSparseListInclude,
 }
 
-/// Paginated package list response
 #[derive(Debug, Serialize)]
-pub struct PackageListResponse {
-    pub distro: String,
-    pub packages: Vec<String>,
-    pub total: usize,
-    pub page: usize,
-    pub per_page: usize,
+#[serde(untagged)]
+enum PackageListProjection {
+    Names(PackageListResponse),
+    Versions(RemiSparsePackagePage),
 }
 
 /// GET /v1/index/{distro}/{name}
@@ -131,9 +118,10 @@ pub async fn get_sparse_entry(
     }
 }
 
-/// GET /v1/index/{distro}?page=1&per_page=100
+/// GET /v1/index/{distro}?page=1&per_page=100&include=versions
 ///
-/// Returns a paginated list of package names for a distribution.
+/// Returns package names by default, or complete resolution entries when the
+/// typed `include=versions` expansion is selected.
 pub async fn list_packages(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(distro): Path<String>,
@@ -144,15 +132,24 @@ pub async fn list_packages(
     }
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(100).clamp(1, 1000);
+    let per_page = query
+        .per_page
+        .unwrap_or(100)
+        .clamp(1, REMI_SPARSE_MAX_PAGE_SIZE);
+    let include = query.include;
 
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
     drop(state_guard);
 
-    let result =
-        tokio::task::spawn_blocking(move || build_package_list(&db_path, &distro, page, per_page))
-            .await;
+    let result = tokio::task::spawn_blocking(move || match include {
+        RemiSparseListInclude::Names => {
+            build_package_list(&db_path, &distro, page, per_page).map(PackageListProjection::Names)
+        }
+        RemiSparseListInclude::Versions => build_package_page(&db_path, &distro, page, per_page)
+            .map(PackageListProjection::Versions),
+    })
+    .await;
 
     match result {
         Ok(Ok(list)) => {
@@ -195,34 +192,7 @@ fn build_sparse_entry(
         return Ok(None);
     }
 
-    // Get all versions of this package across all matching repositories
-    let placeholders: String = (1..=repo_ids.len())
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let name_idx = repo_ids.len() + 1;
-    let sql = format!(
-        "SELECT {}
-         FROM repository_packages
-         WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
-         AND size > 0
-         ORDER BY version",
-        RepositoryPackage::COLUMNS
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
-        .iter()
-        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-        .collect();
-    params.push(Box::new(name.to_string()));
-
-    let mut stmt = conn.prepare(&sql)?;
-    let packages: Vec<RepositoryPackage> = stmt
-        .query_map(
-            rusqlite::params_from_iter(&params),
-            RepositoryPackage::from_row,
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let packages = load_visible_repository_packages(&conn, &repo_ids, &[name.to_string()])?;
 
     if packages.is_empty() {
         return Ok(None);
@@ -312,80 +282,54 @@ fn build_sparse_entry(
     }))
 }
 
-/// Build a paginated list of unique package names for a distro, aggregating
-/// across all matching repos (e.g. arch-core + arch-extra).
-fn build_package_list(
-    db_path: &std::path::Path,
-    distro: &str,
-    page: usize,
-    per_page: usize,
-) -> Result<PackageListResponse, anyhow::Error> {
-    let conn = Connection::open(db_path)?;
-    let source_profile =
-        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
-
-    // Find all repositories for this distro
-    let repositories = find_repositories_for_profile(&conn, source_profile.id())?;
-    let repo_ids = repositories
-        .iter()
-        .map(super::require_persisted_repository_id)
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    if repo_ids.is_empty() {
-        return Ok(PackageListResponse {
-            distro: distro.to_string(),
-            packages: vec![],
-            total: 0,
-            page,
-            per_page,
-        });
+fn load_visible_repository_packages(
+    conn: &Connection,
+    repo_ids: &[i64],
+    names: &[String],
+) -> Result<Vec<RepositoryPackage>, anyhow::Error> {
+    if repo_ids.is_empty() || names.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let placeholders: String = (1..=repo_ids.len())
-        .map(|i| format!("?{i}"))
+    let repository_placeholders = (1..=repo_ids.len())
+        .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
         .join(", ");
-
-    // Count distinct package names across all repos
-    let count_sql = format!(
-        "SELECT COUNT(DISTINCT name) FROM repository_packages WHERE repository_id IN ({placeholders})"
-    );
-    let count_params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    let total: usize = conn.query_row(
-        &count_sql,
-        rusqlite::params_from_iter(&count_params),
-        |row| row.get::<_, i64>(0).map(|v| v as usize),
-    )?;
-
-    // Get paginated distinct names
-    let offset = (page - 1) * per_page;
-    let limit_idx = repo_ids.len() + 1;
-    let offset_idx = repo_ids.len() + 2;
-    let list_sql = format!(
-        "SELECT DISTINCT name FROM repository_packages
-         WHERE repository_id IN ({placeholders})
-         ORDER BY name
-         LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    let first_name_index = repo_ids.len() + 1;
+    let name_placeholders = (first_name_index..first_name_index + names.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let minimum_size_index = first_name_index + names.len();
+    let sql = format!(
+        "SELECT {}
+         FROM repository_packages
+         WHERE repository_id IN ({repository_placeholders})
+           AND name IN ({name_placeholders})
+           AND size >= ?{minimum_size_index}
+         ORDER BY name, version, package_release, architecture",
+        RepositoryPackage::COLUMNS
     );
 
-    let mut list_params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    list_params.push(Box::new(per_page as i64));
-    list_params.push(Box::new(offset as i64));
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
+        .iter()
+        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+    params.extend(
+        names
+            .iter()
+            .cloned()
+            .map(|name| Box::new(name) as Box<dyn rusqlite::types::ToSql>),
+    );
+    params.push(Box::new(REMI_SPARSE_MIN_PACKAGE_SIZE));
 
-    let mut stmt = conn.prepare(&list_sql)?;
-    let packages: Vec<String> = stmt
-        .query_map(rusqlite::params_from_iter(&list_params), |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(PackageListResponse {
-        distro: distro.to_string(),
-        packages,
-        total,
-        page,
-        per_page,
-    })
+    let mut stmt = conn.prepare(&sql)?;
+    stmt.query_map(
+        rusqlite::params_from_iter(&params),
+        RepositoryPackage::from_row,
+    )?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(Into::into)
 }
 
 /// Alias to shared implementations in handlers/mod.rs
@@ -451,6 +395,7 @@ mod tests {
             Query(ListQuery {
                 page: None,
                 per_page: None,
+                include: RemiSparseListInclude::Names,
             }),
         )
         .await;
@@ -478,7 +423,13 @@ mod tests {
         repo.insert(conn).unwrap()
     }
 
-    fn insert_package(conn: &Connection, repo_id: i64, name: &str, version: &str, size: i64) {
+    fn insert_package(
+        conn: &Connection,
+        repo_id: i64,
+        name: &str,
+        version: &str,
+        size: i64,
+    ) -> i64 {
         let mut pkg = RepositoryPackage::new(
             repo_id,
             name.to_string(),
@@ -513,6 +464,7 @@ mod tests {
             );
             atom.insert(conn).unwrap();
         }
+        package_id
     }
 
     fn insert_stale_conversion(
@@ -626,6 +578,63 @@ mod tests {
 
         let result = build_sparse_entry(temp_file.path(), "fedora", "nginx").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn sparse_list_bulk_page_and_lookup_share_one_visibility_contract() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
+        let fetchable_id = insert_package(&conn, repo_id, "fetchable", "1.0-1.fc44", 1024);
+        conn.execute(
+            "UPDATE repository_packages SET metadata = ?1 WHERE id = ?2",
+            rusqlite::params![
+                serde_json::json!({
+                    "security_advisory": {
+                        "id": "FEDORA-2026-0001",
+                        "source": "remi",
+                        "source_trust": "trusted",
+                        "fixed_version": "1.0-1.fc44"
+                    }
+                })
+                .to_string(),
+                fetchable_id,
+            ],
+        )
+        .unwrap();
+        insert_package(&conn, repo_id, "mixed", "0.9-1.fc44", 0);
+        insert_package(&conn, repo_id, "mixed", "1.0-1.fc44", 2048);
+        insert_package(&conn, repo_id, "placeholder-only", "1.0-1.fc44", 0);
+
+        let all_names = ["fetchable", "mixed", "placeholder-only"];
+        let fetchable = all_names
+            .into_iter()
+            .filter(|name| {
+                build_sparse_entry(temp_file.path(), "fedora", name)
+                    .unwrap()
+                    .is_some()
+            })
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let list = build_package_list(temp_file.path(), "fedora", 1, 100).unwrap();
+        let page = build_package_page(temp_file.path(), "fedora", 1, 100).unwrap();
+        let page_names = page
+            .packages
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(fetchable, vec!["fetchable", "mixed"]);
+        assert_eq!(list.packages, fetchable);
+        assert_eq!(page_names, fetchable);
+        assert_eq!(list.total, fetchable.len());
+        assert_eq!(page.total, fetchable.len());
+        assert_eq!(
+            page.packages[0].versions[0].metadata.as_ref().unwrap()["security_advisory"]["id"],
+            "FEDORA-2026-0001"
+        );
+        assert_eq!(page.packages[1].versions.len(), 1);
+        assert_eq!(page.packages[1].versions[0].version, "1.0-1.fc44");
+        assert_eq!(page.packages[1].versions[0].requirement_groups.len(), 2);
     }
 
     #[test]

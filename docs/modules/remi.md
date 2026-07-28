@@ -90,11 +90,22 @@ and project the shared batch.
 ## Sparse Client Sync
 
 The Conary `remi` repository strategy consumes only Remi's sparse index. It
-pages through `GET /v1/index/{distro}` in fixed 128-name pages and fetches the
-per-name `GET /v1/index/{distro}/{name}` documents with at most 16 requests in
-flight. Each per-name document carries every version plus the exact normalized
-provides and grouped native requirements required for offline resolution.
+pages through
+`GET /v1/index/{distro}?page=N&per_page=128&include=versions`. The typed
+expansion returns one resolution-only document per name, including every
+version plus the exact normalized provides and grouped native requirements
+needed for offline resolution, together with persisted package metadata such
+as explicitly trusted security advisories. Conversion-cache state, diagnostic
+scriptlet summaries, and content hashes stay on other public projections
+because sync does not consume them.
 `GET /v1/{distro}/metadata` is not a client-sync fallback.
+
+Remi opens SQLite once for each HTTP page, selects all visible package/version
+rows for the page together, and batch-loads their normalized provides and
+requirement groups. Historical zero-sized discovery placeholders are excluded
+by one shared wire threshold used by the name count, name page, bulk page, and
+per-name lookup; every listed name is therefore fetchable and `total` counts
+that exact set.
 
 Each bounded page is written to a disabled staging repository. The previously
 synced repository remains the only enabled snapshot while network and parsing
@@ -104,12 +115,13 @@ links canonical IDs, and advances `last_sync`. A failed fetch, malformed page,
 duplicate exact version identity, or persistence error deletes the stage and
 leaves the prior snapshot unchanged.
 
-The sparse package-list response cap is derived from the endpoint grammar:
-the requested page size, Remi's 256-byte public-name bound, worst-case JSON
-escaping, and the fixed response envelope. Per-package responses have no
-corpus-sized cap; their structural owner is one package name across its
-versions. Distribution growth therefore increases page and request count, not
-the client's retained working set.
+The fixed name page is the structural owner of distribution scaling:
+distribution growth increases page count, not the retained metadata set or
+HTTP request count within one page. Relation collections remain exact native
+semantics and are never truncated to satisfy a guessed byte ceiling. The
+client validates stable totals, global name ordering, page identity, non-empty
+version sets, and unique version/release/architecture identities before a
+page enters the staging repository.
 
 ## Durable Repository Signing Authority
 
@@ -231,9 +243,9 @@ review outcome.
 Package detail, monolithic metadata, generated indexes, search, OCI, delta, and
 download routes expose the sanitized `scriptlets` projection. Sparse index
 documents carry resolution authority—versions, provides, requirements,
-architecture, size, conversion state, and public content hash—rather than the
-diagnostic scriptlet summary. Program bodies and local filesystem paths are
-not part of any public response.
+architecture, size, persisted package metadata, conversion state, and public
+content hash—rather than the diagnostic scriptlet summary. Program bodies and
+local filesystem paths are not part of any public response.
 
 ### Current Converted Artifact Serving
 

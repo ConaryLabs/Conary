@@ -13,45 +13,54 @@ use crate::repository::dependency_model::{
     ConditionalRequirementBehavior, RepositoryRequirementExpression,
     RepositoryRequirementGroup as TypedRequirementGroup, RepositoryRequirementKind,
 };
+use crate::repository::metadata::PackageSecurityAdvisoryMetadata;
 use crate::repository::package_relation::validate_native_relation;
-use crate::repository::remi_metadata::{
-    REMI_SPARSE_NAME_MAX_BYTES, REMI_SPARSE_SYNC_PAGE_SIZE, RemiSparseIndexEntry,
-    RemiSparsePackageList, RemiSparseVersionEntry, sparse_package_list_max_bytes,
-};
-use crate::repository::retry::{RetryConfig, with_retry_async};
+use crate::repository::remi_metadata::RemiSparseResolutionVersionEntry;
 use crate::repository::versioning::VersionScheme;
-use futures::stream::{self, StreamExt};
 use rusqlite::Connection;
-use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
+use super::apply_trusted_package_security_advisory;
 use super::native::append_synced_package_rows;
 use super::support::run_blocking_sync;
 use super::types::SyncedPackageRow;
+
+mod sparse;
+
+use sparse::RemiSparseSync;
+#[cfg(test)]
+use sparse::fetch_sparse_page_with_retry;
 
 pub(super) fn remi_sync_row(
     repo_id: i64,
     endpoint: String,
     distro: String,
     name: String,
-    entry: RemiSparseVersionEntry,
+    entry: RemiSparseResolutionVersionEntry,
 ) -> Result<SyncedPackageRow> {
-    let RemiSparseVersionEntry {
+    let RemiSparseResolutionVersionEntry {
         version,
         release,
-        converted: _,
         architecture,
         provides: wire_provides,
         requirement_groups: wire_requirement_groups,
         size,
-        content_hash: _,
+        metadata,
     } = entry;
     let profile = crate::repository::supported_profiles::profile_for_remi_target(&distro)
         .ok_or_else(|| Error::ConfigError(format!("unsupported Remi target: {distro}")))?;
     let route_slug = profile.remi_route_slug();
     let public_profile_id = profile.id();
-    let package_release = release.unwrap_or_default();
+    let package_release = release
+        .or_else(|| {
+            metadata
+                .as_ref()
+                .and_then(|metadata| metadata.pointer("/identity/release"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
     let mut query = vec![format!("version={}", urlencoding::encode(&version))];
     if !package_release.is_empty() {
         query.push(format!("release={}", urlencoding::encode(&package_release)));
@@ -77,6 +86,42 @@ pub(super) fn remi_sync_row(
     );
     package.package_release = package_release;
     package.architecture = architecture;
+
+    let mut metadata = metadata.unwrap_or(serde_json::Value::Null);
+    if let Some(advisory_value) = metadata.get("security_advisory").cloned() {
+        match serde_json::from_value::<PackageSecurityAdvisoryMetadata>(advisory_value) {
+            Ok(advisory) => {
+                match apply_trusted_package_security_advisory(
+                    &mut package,
+                    &advisory,
+                    "remi",
+                    "unknown",
+                ) {
+                    Ok(normalized) => {
+                        if let Some(object) = metadata.as_object_mut() {
+                            object.insert("security_advisory".to_string(), normalized);
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Ignoring untrusted Remi security advisory metadata for {} {}: {}",
+                            name, version, error
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "Ignoring malformed Remi security advisory metadata for {} {}: {}",
+                    name, version, error
+                );
+            }
+        }
+    }
+    package.metadata = match metadata {
+        serde_json::Value::Null => None,
+        ref value => Some(value.to_string()),
+    };
 
     package.source_profile = Some(public_profile_id.to_string());
 
@@ -220,315 +265,6 @@ fn validate_remi_relation_group(
     relation.alternatives = alternatives;
     relation.native_text = group.native_text.clone();
     validate_native_relation(&relation, scheme).map_err(Error::ConfigError)
-}
-
-const REMI_SPARSE_ENTRY_CONCURRENCY: usize = 16;
-
-struct RemiSparseSync {
-    client: RepositoryClient,
-    retry_policy: RetryConfig,
-    endpoint: String,
-    configured_target: String,
-    route_slug: String,
-    repo_id: i64,
-    next_page: usize,
-    expected_total_names: Option<usize>,
-    names_seen: usize,
-    last_name: Option<String>,
-}
-
-impl RemiSparseSync {
-    fn new(repo: &Repository) -> Result<Self> {
-        let configured_target = repo.source_profile.as_deref().ok_or_else(|| {
-            Error::ConfigError(format!(
-                "Repository '{}' has strategy 'remi' but no source profile configured (use --source-profile)",
-                repo.name
-            ))
-        })?;
-        let profile =
-            crate::repository::supported_profiles::profile_for_remi_target(configured_target)
-                .ok_or_else(|| {
-                    Error::ConfigError(format!("unsupported Remi target: {configured_target}"))
-                })?;
-        let endpoint = repo
-            .default_strategy_endpoint
-            .as_deref()
-            .unwrap_or(&repo.url)
-            .trim_end_matches('/')
-            .to_string();
-        let repo_id = repo
-            .id
-            .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-
-        Ok(Self {
-            client: RepositoryClient::new()?,
-            retry_policy: RetryConfig::quick(),
-            endpoint,
-            configured_target: configured_target.to_string(),
-            route_slug: profile.remi_route_slug().to_string(),
-            repo_id,
-            next_page: 1,
-            expected_total_names: None,
-            names_seen: 0,
-            last_name: None,
-        })
-    }
-
-    async fn next_rows(&mut self) -> Result<Option<Vec<SyncedPackageRow>>> {
-        if self
-            .expected_total_names
-            .is_some_and(|total| self.names_seen == total)
-        {
-            return Ok(None);
-        }
-
-        let list_url = format!(
-            "{}/v1/index/{}?page={}&per_page={}",
-            self.endpoint, self.route_slug, self.next_page, REMI_SPARSE_SYNC_PAGE_SIZE
-        );
-        let list = fetch_sparse_list_with_retry(
-            &self.client,
-            &list_url,
-            &self.retry_policy,
-            REMI_SPARSE_SYNC_PAGE_SIZE,
-        )
-        .await?;
-
-        let endpoint = self.endpoint.as_str();
-        let route_slug = self.route_slug.as_str();
-        let retry_policy = &self.retry_policy;
-        let client = &self.client;
-        let fetches = stream::iter(list.packages.iter().cloned())
-            .map(|name| async move {
-                let url = format!(
-                    "{endpoint}/v1/index/{route_slug}/{}",
-                    urlencoding::encode(&name)
-                );
-                let entry = fetch_sparse_entry_with_retry(client, &url, retry_policy).await?;
-                Ok::<_, Error>((name, entry))
-            })
-            .buffer_unordered(REMI_SPARSE_ENTRY_CONCURRENCY);
-        let entries = fetches
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
-        self.consume_page(list, entries).map(Some)
-    }
-
-    fn consume_page(
-        &mut self,
-        list: RemiSparsePackageList,
-        entries: Vec<(String, RemiSparseIndexEntry)>,
-    ) -> Result<Vec<SyncedPackageRow>> {
-        self.validate_list_page(&list)?;
-        if entries.len() != list.packages.len() {
-            return Err(Error::ParseError(format!(
-                "Remi sparse page returned {} entries for {} package names",
-                entries.len(),
-                list.packages.len()
-            )));
-        }
-        let mut expected_names = list.packages.iter().cloned().collect::<HashSet<_>>();
-        let mut rows = Vec::new();
-        for (requested_name, entry) in entries {
-            if !expected_names.remove(&requested_name) {
-                return Err(Error::ParseError(format!(
-                    "Remi sparse page returned an unexpected or duplicate entry for '{requested_name}'"
-                )));
-            }
-            self.validate_sparse_entry(&requested_name, &entry)?;
-            let mut seen_versions = HashSet::new();
-            for version in entry.versions {
-                let key = (
-                    version.version.clone(),
-                    version.release.clone(),
-                    version.architecture.clone(),
-                );
-                if !seen_versions.insert(key) {
-                    return Err(Error::ParseError(format!(
-                        "Remi sparse entry '{}' repeats an exact version/release/architecture identity",
-                        requested_name
-                    )));
-                }
-                rows.push(remi_sync_row(
-                    self.repo_id,
-                    self.endpoint.clone(),
-                    self.configured_target.clone(),
-                    requested_name.clone(),
-                    version,
-                )?);
-            }
-        }
-        if !expected_names.is_empty() {
-            return Err(Error::ParseError(
-                "Remi sparse page omitted one or more requested package entries".to_string(),
-            ));
-        }
-
-        self.names_seen = self
-            .names_seen
-            .checked_add(list.packages.len())
-            .ok_or_else(|| Error::ParseError("Remi sparse package count overflow".to_string()))?;
-        self.last_name = list.packages.last().cloned();
-        self.next_page += 1;
-        Ok(rows)
-    }
-
-    fn validate_list_page(&mut self, list: &RemiSparsePackageList) -> Result<()> {
-        if list.distro != self.route_slug {
-            return Err(Error::ParseError(format!(
-                "Remi sparse list distro '{}' disagrees with requested route '{}'",
-                list.distro, self.route_slug
-            )));
-        }
-        if list.page != self.next_page || list.per_page != REMI_SPARSE_SYNC_PAGE_SIZE {
-            return Err(Error::ParseError(format!(
-                "Remi sparse list pagination disagrees with request: page={}, per_page={}",
-                list.page, list.per_page
-            )));
-        }
-        if list.packages.len() > REMI_SPARSE_SYNC_PAGE_SIZE {
-            return Err(Error::ParseError(format!(
-                "Remi sparse list returned {} names for a {}-name page",
-                list.packages.len(),
-                REMI_SPARSE_SYNC_PAGE_SIZE
-            )));
-        }
-        match self.expected_total_names {
-            Some(total) if total != list.total => {
-                return Err(Error::ParseError(format!(
-                    "Remi sparse list changed total package-name count during sync: {total} -> {}",
-                    list.total
-                )));
-            }
-            None => self.expected_total_names = Some(list.total),
-            _ => {}
-        }
-        if list.packages.is_empty() && self.names_seen < list.total {
-            return Err(Error::ParseError(format!(
-                "Remi sparse list ended after {} of {} package names",
-                self.names_seen, list.total
-            )));
-        }
-        if self
-            .names_seen
-            .checked_add(list.packages.len())
-            .is_none_or(|count| count > list.total)
-        {
-            return Err(Error::ParseError(
-                "Remi sparse list returned more package names than its declared total".to_string(),
-            ));
-        }
-
-        let mut previous = self.last_name.as_deref();
-        for name in &list.packages {
-            validate_sparse_name(name)?;
-            if previous.is_some_and(|prior| prior >= name.as_str()) {
-                return Err(Error::ParseError(format!(
-                    "Remi sparse package names are not globally unique and ordered at '{name}'"
-                )));
-            }
-            previous = Some(name);
-        }
-        Ok(())
-    }
-
-    fn validate_sparse_entry(
-        &self,
-        requested_name: &str,
-        entry: &RemiSparseIndexEntry,
-    ) -> Result<()> {
-        if entry.name != requested_name {
-            return Err(Error::ParseError(format!(
-                "Remi sparse entry name '{}' disagrees with requested package '{requested_name}'",
-                entry.name
-            )));
-        }
-        if entry.distro != self.route_slug {
-            return Err(Error::ParseError(format!(
-                "Remi sparse entry distro '{}' disagrees with requested route '{}'",
-                entry.distro, self.route_slug
-            )));
-        }
-        if entry.versions.is_empty() {
-            return Err(Error::ParseError(format!(
-                "Remi sparse entry '{requested_name}' has no versions"
-            )));
-        }
-        Ok(())
-    }
-}
-
-fn validate_sparse_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > REMI_SPARSE_NAME_MAX_BYTES
-        || name.contains('/')
-        || name.contains("..")
-        || name.contains('\0')
-    {
-        return Err(Error::ParseError(format!(
-            "Remi sparse list contains invalid package name {name:?}"
-        )));
-    }
-    Ok(())
-}
-
-async fn fetch_sparse_list_with_retry(
-    client: &RepositoryClient,
-    url: &str,
-    retry_policy: &RetryConfig,
-    requested_page_size: usize,
-) -> Result<RemiSparsePackageList> {
-    with_retry_async(retry_policy, || async {
-        let response = fetch_sparse_response(client, url).await?;
-        let bytes = crate::repository::client::read_response_bytes_with_limit(
-            response,
-            sparse_package_list_max_bytes(requested_page_size),
-            url,
-        )
-        .await?;
-        serde_json::from_slice(&bytes).map_err(|error| {
-            Error::ParseError(format!(
-                "Failed to parse Remi sparse package list from {url}: {error}"
-            ))
-        })
-    })
-    .await
-}
-
-async fn fetch_sparse_entry_with_retry(
-    client: &RepositoryClient,
-    url: &str,
-    retry_policy: &RetryConfig,
-) -> Result<RemiSparseIndexEntry> {
-    with_retry_async(retry_policy, || async {
-        let response = fetch_sparse_response(client, url).await?;
-        response.json().await.map_err(|error| {
-            Error::ParseError(format!(
-                "Failed to parse Remi sparse package entry from {url}: {error}"
-            ))
-        })
-    })
-    .await
-}
-
-async fn fetch_sparse_response(client: &RepositoryClient, url: &str) -> Result<reqwest::Response> {
-    crate::repository::client::validate_url_scheme(url)?;
-    let response = client
-        .inner()
-        .get(url)
-        .timeout(crate::repository::client::TimeoutConfig::default().download)
-        .send()
-        .await
-        .map_err(|error| Error::DownloadError(format!("{error}: {url}")))?;
-    if !response.status().is_success() {
-        return Err(Error::HttpStatus {
-            status: response.status().as_u16(),
-            url: url.to_string(),
-        });
-    }
-    Ok(response)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -775,8 +511,8 @@ mod tests {
     use crate::db::testing::create_test_db;
     use crate::repository::package_relation::parse_native_relation;
     use crate::repository::remi_metadata::{
-        REMI_SPARSE_MAX_PAGE_SIZE, RemiProvide, RemiRequirement, RemiRequirementGroup,
-        RemiSparseIndexEntry, RemiSparsePackageList, RemiSparseVersionEntry,
+        REMI_SPARSE_SYNC_PAGE_SIZE, RemiProvide, RemiRequirement, RemiRequirementGroup,
+        RemiSparsePackagePage, RemiSparseResolutionEntry, RemiSparseResolutionVersionEntry,
     };
     use std::io::{Read, Write};
 
@@ -784,11 +520,10 @@ mod tests {
         name: &str,
         version: &str,
         version_scheme: VersionScheme,
-    ) -> RemiSparseVersionEntry {
-        RemiSparseVersionEntry {
+    ) -> RemiSparseResolutionVersionEntry {
+        RemiSparseResolutionVersionEntry {
             version: version.to_string(),
             release: None,
-            converted: false,
             architecture: Some("x86_64".to_string()),
             provides: vec![RemiProvide {
                 capability: name.to_string(),
@@ -804,7 +539,7 @@ mod tests {
             }],
             requirement_groups: Vec::new(),
             size: 1024,
-            content_hash: None,
+            metadata: None,
         }
     }
 
@@ -1005,7 +740,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remi_sparse_entry_fetch_retries_truncated_json() {
+    async fn remi_sparse_page_fetch_retries_truncated_json() {
         use crate::repository::retry::RetryConfig;
         use std::sync::{
             Arc,
@@ -1037,9 +772,9 @@ mod tests {
 
                 let attempt = server_attempts.fetch_add(1, Ordering::SeqCst);
                 let body = if attempt == 0 {
-                    r#"{"name":"qemu-img""#
+                    r#"{"distro":"fedora""#
                 } else {
-                    r#"{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","converted":false,"architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024,"content_hash":null}]}"#
+                    r#"{"distro":"fedora","packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1057,18 +792,72 @@ mod tests {
             jitter_factor: 0.0,
         };
         let client = RepositoryClient::new().unwrap();
-        let entry = fetch_sparse_entry_with_retry(
+        let page = fetch_sparse_page_with_retry(
             &client,
-            &format!("http://{addr}/v1/index/fedora/qemu-img"),
+            &format!("http://{addr}/v1/index/fedora?include=versions"),
             &retry,
         )
         .await
         .unwrap();
 
-        assert_eq!(entry.name, "qemu-img");
-        assert_eq!(entry.versions.len(), 1);
+        assert_eq!(page.packages[0].name, "qemu-img");
+        assert_eq!(page.packages[0].versions.len(), 1);
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remi_sparse_sync_fetches_one_complete_http_page() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_string(&RemiSparsePackagePage {
+            distro: "fedora".to_string(),
+            packages: vec![sparse_test_entry("alpha"), sparse_test_entry("beta")],
+            total: 2,
+            page: 1,
+            per_page: REMI_SPARSE_SYNC_PAGE_SIZE,
+        })
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let repo = sparse_test_repo(format!("http://{addr}"), &conn);
+        let mut fetcher = RemiSparseSync::new(&repo).unwrap();
+        let rows = fetcher.next_rows().await.unwrap().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(fetcher.next_rows().await.unwrap().is_none());
+
+        let request = server.await.unwrap();
+        assert!(
+            request
+                .starts_with("GET /v1/index/fedora?page=1&per_page=128&include=versions HTTP/1.1"),
+            "unexpected sparse sync request: {request}"
+        );
     }
 
     fn sparse_test_repo(endpoint: String, conn: &Connection) -> Repository {
@@ -1080,8 +869,8 @@ mod tests {
         repo
     }
 
-    fn sparse_test_entry(name: &str) -> RemiSparseIndexEntry {
-        RemiSparseIndexEntry {
+    fn sparse_test_entry(name: &str) -> RemiSparseResolutionEntry {
+        RemiSparseResolutionEntry {
             name: name.to_string(),
             distro: "fedora".to_string(),
             versions: vec![remi_entry_for_tests(name, "1.0-1.fc44", VersionScheme::Rpm)],
@@ -1097,79 +886,78 @@ mod tests {
         let end = start
             .saturating_add(REMI_SPARSE_SYNC_PAGE_SIZE)
             .min(package_count);
-        let packages = (start..end)
+        let entries = (start..end)
             .map(|index| format!("pkg-{index:08}"))
-            .collect::<Vec<_>>();
-        let entries = packages
-            .iter()
-            .map(|name| (name.clone(), sparse_test_entry(name)))
+            .map(|name| sparse_test_entry(&name))
             .collect();
-        fetcher.consume_page(
-            RemiSparsePackageList {
-                distro: "fedora".to_string(),
-                packages,
-                total: package_count,
-                page,
-                per_page: REMI_SPARSE_SYNC_PAGE_SIZE,
-            },
-            entries,
-        )
+        fetcher.consume_page(RemiSparsePackagePage {
+            distro: "fedora".to_string(),
+            packages: entries,
+            total: package_count,
+            page,
+            per_page: REMI_SPARSE_SYNC_PAGE_SIZE,
+        })
     }
 
     #[test]
-    fn sparse_wire_contract_admits_every_emitted_field_and_bounds_name_pages() {
+    fn sparse_wire_contract_round_trips_complete_resolution_page() {
         let emitted = serde_json::json!({
-            "name": "hello",
             "distro": "fedora",
-            "versions": [{
-                "version": "1.0",
-                "release": "2",
-                "provides": [{
-                    "capability": "hello",
+            "packages": [{
+                "name": "hello",
+                "distro": "fedora",
+                "versions": [{
                     "version": "1.0",
-                    "version_relation": "equal",
-                    "kind": "package",
-                    "raw": "hello = 1.0",
-                    "version_scheme": "rpm",
-                    "architecture_qualifier": {"kind": "implicit"}
-                }],
-                "requirement_groups": [{
-                    "kind": "depends",
-                    "behavior": "hard",
-                    "description": null,
-                    "native_text": "glibc >= 2.39",
-                    "expression_json": "{\"kind\":\"atom\",\"clause\":{\"name\":\"glibc\",\"version_constraint\":\">= 2.39\",\"capability_kind\":null,\"native_text\":null}}",
-                    "clauses": [{
-                        "capability": "glibc",
-                        "version_constraint": ">= 2.39",
+                    "release": "2",
+                    "provides": [{
+                        "capability": "hello",
+                        "version": "1.0",
+                        "version_relation": "equal",
                         "kind": "package",
-                        "dependency_type": "runtime",
-                        "raw": "glibc >= 2.39"
-                    }]
-                }],
-                "architecture": "x86_64",
-                "size": 4096,
-                "converted": true,
-                "content_hash": "sha256:content"
-            }]
+                        "raw": "hello = 1.0",
+                        "version_scheme": "rpm",
+                        "architecture_qualifier": {"kind": "implicit"}
+                    }],
+                    "requirement_groups": [{
+                        "kind": "depends",
+                        "behavior": "hard",
+                        "description": null,
+                        "native_text": "glibc >= 2.39",
+                        "expression_json": "{\"kind\":\"atom\",\"clause\":{\"name\":\"glibc\",\"version_constraint\":\">= 2.39\",\"capability_kind\":null,\"native_text\":null}}",
+                        "clauses": [{
+                            "capability": "glibc",
+                            "version_constraint": ">= 2.39",
+                            "kind": "package",
+                            "dependency_type": "runtime",
+                            "raw": "glibc >= 2.39"
+                        }]
+                    }],
+                    "architecture": "x86_64",
+                    "size": 4096,
+                    "metadata": {
+                        "security_advisory": {
+                            "id": "FEDORA-2026-0001",
+                            "source": "remi",
+                            "source_trust": "trusted",
+                            "fixed_version": "1.0"
+                        }
+                    }
+                }]
+            }],
+            "total": 1,
+            "page": 1,
+            "per_page": REMI_SPARSE_SYNC_PAGE_SIZE
         });
-        let entry: RemiSparseIndexEntry = serde_json::from_value(emitted).unwrap();
-        assert_eq!(entry.versions[0].release.as_deref(), Some("2"));
+        let page: RemiSparsePackagePage = serde_json::from_value(emitted).unwrap();
+        assert_eq!(page.packages[0].versions[0].release.as_deref(), Some("2"));
         assert_eq!(
-            entry.versions[0].content_hash.as_deref(),
-            Some("sha256:content")
+            page.packages[0].versions[0].requirement_groups[0].clauses[0].capability,
+            "glibc"
         );
-
-        let escaped_name = "\u{1}".repeat(REMI_SPARSE_NAME_MAX_BYTES);
-        let page = RemiSparsePackageList {
-            distro: "f".repeat(REMI_SPARSE_NAME_MAX_BYTES),
-            packages: vec![escaped_name; REMI_SPARSE_MAX_PAGE_SIZE],
-            total: usize::MAX,
-            page: usize::MAX,
-            per_page: REMI_SPARSE_MAX_PAGE_SIZE,
-        };
-        let bytes = serde_json::to_vec(&page).unwrap();
-        assert!(bytes.len() as u64 <= sparse_package_list_max_bytes(REMI_SPARSE_MAX_PAGE_SIZE));
+        assert_eq!(
+            page.packages[0].versions[0].metadata.as_ref().unwrap()["security_advisory"]["id"],
+            "FEDORA-2026-0001"
+        );
     }
 
     #[test]
@@ -1238,8 +1026,10 @@ mod tests {
         const CHILD_ENV: &str = "CONARY_ISSUE_156_PACKAGE_COUNT";
         const TEST_NAME: &str = "repository::sync::remi::tests::sparse_sync_peak_rss_is_independent_of_distribution_package_count";
         if std::env::var_os(CHILD_ENV).is_none() {
+            const FEDORA_SPARSE_NAME_COUNT: usize = 67_430;
+            let package_counts = [512usize, FEDORA_SPARSE_NAME_COUNT];
             let mut measurements = Vec::new();
-            for package_count in [512usize, 20_000] {
+            for package_count in package_counts {
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", TEST_NAME, "--nocapture"])
                     .env(CHILD_ENV, package_count.to_string())
@@ -1259,7 +1049,9 @@ mod tests {
             let growth_kib = measurements[1].saturating_sub(measurements[0]);
             assert!(
                 growth_kib < 32 * 1024,
-                "VmHWM grew by {growth_kib} KiB when package count grew 39x"
+                "VmHWM grew by {growth_kib} KiB when package count grew from {} to {}",
+                package_counts[0],
+                package_counts[1]
             );
             return;
         }

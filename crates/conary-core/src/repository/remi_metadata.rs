@@ -16,6 +16,13 @@ pub const REMI_SPARSE_NAME_MAX_BYTES: usize = 256;
 /// Maximum page size admitted by Remi's sparse package-name listing.
 pub const REMI_SPARSE_MAX_PAGE_SIZE: usize = 1000;
 
+/// Smallest repository-package artifact admitted by Remi's public index.
+///
+/// Historical zero-sized rows are discovery placeholders, not downloadable
+/// package records. Every sparse list and lookup uses this shared threshold so
+/// the list cannot advertise a name that the lookup route hides.
+pub const REMI_SPARSE_MIN_PACKAGE_SIZE: i64 = 1;
+
 /// Number of package names Conary requests and persists per sparse sync page.
 ///
 /// This fixed page is the structural owner of the sync working set. Increasing
@@ -24,26 +31,6 @@ pub const REMI_SPARSE_MAX_PAGE_SIZE: usize = 1000;
 pub const REMI_SPARSE_SYNC_PAGE_SIZE: usize = 128;
 const _: () = assert!(REMI_SPARSE_SYNC_PAGE_SIZE <= REMI_SPARSE_MAX_PAGE_SIZE);
 
-/// Maximum compact JSON bytes for a requested sparse package-name page.
-///
-/// A page contains at most `per_page` names, each at most 256 input bytes.
-/// JSON escaping can expand one input byte to at most six ASCII bytes
-/// (`\u00XX`). The remaining fixed envelope contains the distro, pagination
-/// counters, field names, punctuation, and integer text.
-pub const fn sparse_package_list_max_bytes(per_page: usize) -> u64 {
-    const JSON_ESCAPE_EXPANSION: usize = 6;
-    const STRING_DELIMITERS_AND_COMMA: usize = 3;
-    const FIXED_ENVELOPE_BYTES: usize = 2048;
-
-    (per_page
-        .saturating_mul(
-            REMI_SPARSE_NAME_MAX_BYTES
-                .saturating_mul(JSON_ESCAPE_EXPANSION)
-                .saturating_add(STRING_DELIMITERS_AND_COMMA),
-        )
-        .saturating_add(FIXED_ENVELOPE_BYTES)) as u64
-}
-
 /// One sparse-index document for a package name across all versions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +38,19 @@ pub struct RemiSparseIndexEntry {
     pub name: String,
     pub distro: String,
     pub versions: Vec<RemiSparseVersionEntry>,
+}
+
+/// Resolution-only sparse entry emitted by bulk sync pages.
+///
+/// Conversion state and content hashes belong to on-demand package lookup and
+/// are deliberately absent here: repository sync persists native resolution
+/// authority and does not consume serving-cache state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemiSparseResolutionEntry {
+    pub name: String,
+    pub distro: String,
+    pub versions: Vec<RemiSparseResolutionVersionEntry>,
 }
 
 /// One version emitted by a sparse package document.
@@ -68,12 +68,49 @@ pub struct RemiSparseVersionEntry {
     pub content_hash: Option<String>,
 }
 
+/// One native resolution version emitted by a bulk sparse page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemiSparseResolutionVersionEntry {
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+    pub provides: Vec<RemiProvide>,
+    pub requirement_groups: Vec<RemiRequirementGroup>,
+    pub architecture: Option<String>,
+    pub size: i64,
+    /// Persisted package metadata consumed by repository sync, including
+    /// explicitly trusted security-advisory authority when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// One page from Remi's sparse package-name listing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemiSparsePackageList {
     pub distro: String,
     pub packages: Vec<String>,
+    pub total: usize,
+    pub page: usize,
+    pub per_page: usize,
+}
+
+/// Optional sparse-list expansion selected by the `include` query field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemiSparseListInclude {
+    #[default]
+    Names,
+    Versions,
+}
+
+/// One sparse sync page containing complete resolution entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemiSparsePackagePage {
+    pub distro: String,
+    pub packages: Vec<RemiSparseResolutionEntry>,
     pub total: usize,
     pub page: usize,
     pub per_page: usize,
