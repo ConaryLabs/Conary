@@ -465,7 +465,13 @@ fn list_xattr_names(c_path: &CString, path: &Path) -> crate::Result<Vec<String>>
 
 fn set_mtime(path: &Path, seconds: i64, nanoseconds: u32) -> crate::Result<()> {
     let c_path = c_path(path)?;
-    let seconds = libc::time_t::try_from(seconds).map_err(|_| {
+    // Convert into whatever `timespec::tv_sec` is on this target rather than
+    // naming a libc alias for it: `libc::time_t` is deprecated on musl, and the
+    // field is the structural owner of the width either way. The conversion is
+    // i64->i64 and therefore redundant on x86_64, but not on targets with a
+    // narrower `tv_sec`, where dropping it would silently truncate an mtime.
+    #[allow(clippy::useless_conversion)]
+    let seconds = seconds.try_into().map_err(|_| {
         crate::Error::InvalidPath(format!(
             "mtime seconds are not representable at {}",
             path.display()

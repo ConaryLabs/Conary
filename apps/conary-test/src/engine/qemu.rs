@@ -814,8 +814,7 @@ impl Drop for PreparedHostConary {
 }
 
 fn prepare_host_conary_for_guest() -> Result<PreparedHostConary> {
-    ensure_default_host_conary_built()?;
-    let source = crate::paths::host_conary_binary()?;
+    let source = resolve_staged_conary_binary()?;
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system time before unix epoch")?
@@ -836,27 +835,63 @@ fn prepare_host_conary_for_guest() -> Result<PreparedHostConary> {
     Ok(PreparedHostConary { path, temp_dir })
 }
 
-fn ensure_default_host_conary_built() -> Result<()> {
+/// Builder for the `conary` the harness stages into a guest.
+const STATIC_CONARY_BUILD_SCRIPT: &str = "scripts/build-static-conary.sh";
+
+/// Locate the `conary` binary to stage into the guest.
+///
+/// The staged binary crosses into a frozen distro image, so it must not depend
+/// on the build host's C library. A host-glibc build only works while the guest
+/// happens to be newer than the builder, and it fails at the guest's dynamic
+/// linker when it is not:
+///
+/// ```text
+/// /usr/bin/conary: /lib64/libm.so.6: version `GLIBC_2.44' not found
+/// ```
+///
+/// which is what a rolling build host does to Fedora 44 and what it previously
+/// did to the conaryOS images. The default is therefore a static musl build,
+/// produced by the script that owns that knowledge rather than by reproducing
+/// its libseccomp setup here.
+///
+/// `CONARY_HOST_BIN` and `CONARY_BIN` still select a binary explicitly, for
+/// staging something the harness did not build.
+fn resolve_staged_conary_binary() -> Result<PathBuf> {
     if std::env::var_os("CONARY_HOST_BIN").is_some() || std::env::var_os("CONARY_BIN").is_some() {
-        return Ok(());
+        return crate::paths::host_conary_binary();
     }
 
     let project_root = crate::paths::project_dir()?;
-    let status = std::process::Command::new("cargo")
-        .args(["build", "-p", "conary"])
+    let script = project_root.join(STATIC_CONARY_BUILD_SCRIPT);
+    let output = std::process::Command::new("bash")
+        .arg(&script)
+        .arg("--print-path")
         .current_dir(&project_root)
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to run cargo build -p conary in {}",
-                project_root.display()
-            )
-        })?;
-    if !status.success() {
-        anyhow::bail!("cargo build -p conary failed with {status}");
+        .output()
+        .with_context(|| format!("failed to run {}", script.display()))?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "{} failed with {}: {}\n\
+             The staged guest binary must be statically linked; set CONARY_HOST_BIN to stage a \
+             specific binary instead, understanding that a host-glibc build fails inside a guest \
+             whose glibc is older.",
+            script.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
 
-    Ok(())
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    if !path.is_file() {
+        anyhow::bail!(
+            "{} reported {} but no such file exists",
+            script.display(),
+            path.display()
+        );
+    }
+
+    Ok(path)
 }
 
 async fn stage_conary_binary(
