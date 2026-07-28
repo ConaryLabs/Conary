@@ -2,9 +2,17 @@
 #
 # Phase 3, Group P: ISO generation export validation.
 #
-# This suite builds a bootstrap-run generation, exports it as a bootable ISO,
-# copies the ISO and provenance sidecar to the host, then boots the ISO as a
-# local QEMU input.
+# This suite assembles a supported-host Fedora 44 root from ordinary repository
+# installs on a scratch disk, publishes it as a generation, exports it as a
+# bootable ISO, copies the ISO and provenance sidecar to the host, then boots
+# the ISO as a local QEMU input. No bootstrap surface is involved.
+#
+# Group O's TGE02 is the same basis in qcow2 form. The manifest system has no
+# cross-suite artifact passing, so each suite assembles its own root; the cost
+# is repository installs, not a source build.
+#
+# The suite pins the Fedora 44 source profile rather than following the
+# ${REMI_DISTRO} selector, because its package set is Fedora's.
 
 [suite]
 name = "ISO Generation Export QEMU"
@@ -12,8 +20,8 @@ phase = 3
 
 [[test]]
 id = "TISO01"
-name = "bootstrap_run_generation_iso_export_boots"
-description = "Export a bootstrap-run generation artifact to ISO, copy it to the host, then boot it under UEFI"
+name = "supported_host_generation_iso_export_boots"
+description = "Assemble a Fedora 44 root from ordinary repository installs, publish it as a generation, export it to ISO, then boot the read-only carrier under UEFI"
 timeout = 7200
 group = "iso-generation-export"
 fatal = true
@@ -27,44 +35,50 @@ ssh_port = 2250
 stage_conary = true
 scratch_disk_mb = 65536
 copy_to_guest = [
-    { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
+    { source = "apps/conary/tests/fixtures/supported-host-generation-export", dest = "/opt/remi-tests/fixtures/supported-host-generation-export" },
+    { source = "apps/conary/tests/fixtures/ccs-test-authority", dest = "/opt/remi-tests/fixtures/ccs-test-authority" },
 ]
 commands = [
     "conary system init",
-    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove ${REPO_NAME} || true; conary repo add ${REPO_NAME} https://remi.conary.io --package-format json --default-strategy remi --remi-endpoint https://remi.conary.io --source-profile fedora-44; conary repo sync ${REPO_NAME} --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo ${REPO_NAME} --yes --sandbox always --no-deps; done; ldconfig; fi",
+    "if ! command -v xorriso >/dev/null || ! command -v mmd >/dev/null || ! command -v mcopy >/dev/null; then conary repo remove ${REPO_NAME} || true; conary repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile fedora-44; conary repo sync ${REPO_NAME} --force; for pkg in libburn libisofs libisoburn xorriso mtools; do conary install \"$pkg\" --repo ${REPO_NAME} --yes --sandbox always --no-deps; done; ldconfig; fi",
     "xorriso -version >/dev/null",
     "mmd -V >/dev/null",
     "mcopy -V >/dev/null",
     "for cmd in sqlite3 cpio dracut depmod systemd-repart qemu-img mkfs.ext4 mkfs.vfat xorriso mmd mcopy composefs-info; do command -v \"$cmd\" >/dev/null || { echo \"generation-builder-ready QEMU fixture missing $cmd\"; exit 1; }; done",
     "test -d /usr/lib/dracut || { echo 'generation-builder-ready QEMU fixture missing /usr/lib/dracut'; exit 1; }",
-    "test -d /var/lib/conary/bootstrap-inputs",
-    "test -f /var/lib/conary/bootstrap-inputs/conaryos.toml",
-    "test -d /var/lib/conary/bootstrap-inputs/recipes",
+    "test -f /opt/remi-tests/fixtures/supported-host-generation-export/fixture-system.toml",
+    "test -f /opt/remi-tests/fixtures/supported-host-generation-export/conary-qemu-test-access/ccs.toml",
+    "test -f /opt/remi-tests/fixtures/supported-host-generation-export/conary-qemu-test-access/stage-links.sh",
     "for i in $(seq 1 20); do test -b /dev/disk/by-id/virtio-conary-scratch && exit 0; sleep 1; done; ls -l /dev/disk/by-id /dev/vd*; false",
     "mkfs.ext4 -F /dev/disk/by-id/virtio-conary-scratch",
     "mkdir -p /mnt/conary-scratch",
     "mount -o noatime /dev/disk/by-id/virtio-conary-scratch /mnt/conary-scratch",
-    "mkdir -p /mnt/conary-scratch/seed /mnt/conary-scratch/bootstrap-run /mnt/conary-scratch/export",
-    "conary bootstrap seed --from-adopted --distro conaryos --distro-version qemu-fixture --output /mnt/conary-scratch/seed --yes",
-    "test -f /mnt/conary-scratch/seed/seed.erofs",
-    "mkdir -p /var/cache/conary/sources /tmp/conary-fixture-source/generation-fixture-rootfs-1.0.0",
-    "printf '%s\\n' 'generation export fixture source' > /tmp/conary-fixture-source/generation-fixture-rootfs-1.0.0/README",
-    "tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cf /var/cache/conary/sources/sha256_d11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8 -C /tmp/conary-fixture-source generation-fixture-rootfs-1.0.0",
-    "printf '%s  %s\\n' 'd11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8' '/var/cache/conary/sources/sha256_d11cfc8fb74688f2141ba2975d17bcd16762f07dbdcb97ac3a572961701addb8' | sha256sum -c -",
-    "conary bootstrap run /var/lib/conary/bootstrap-inputs/conaryos.toml --seed /mnt/conary-scratch/seed --recipe-dir /var/lib/conary/bootstrap-inputs/recipes --work-dir /mnt/conary-scratch/bootstrap-run --up-to system",
-    "conary system generation export --path /mnt/conary-scratch/bootstrap-run/output/current --format iso --output /mnt/conary-scratch/export/bootstrap-run-generation.iso",
-    "test -s /mnt/conary-scratch/export/bootstrap-run-generation.iso",
-    "test -s /mnt/conary-scratch/export/bootstrap-run-generation.iso.conary-provenance.json",
-    "grep -q '\"format\": \"iso\"' /mnt/conary-scratch/export/bootstrap-run-generation.iso.conary-provenance.json",
-    "grep -q '\"artifact_manifest_sha256\"' /mnt/conary-scratch/export/bootstrap-run-generation.iso.conary-provenance.json",
-    "echo bootstrap-run-generation-iso-export-ok",
+    "mkdir -p /mnt/conary-scratch/sys /mnt/conary-scratch/export /mnt/conary-scratch/access-output",
+    "set -e; ACCESS=/opt/remi-tests/fixtures/supported-host-generation-export/conary-qemu-test-access; KEYFILE=$ACCESS/stage/etc/ssh/authorized_keys/root; test -s /root/.ssh/authorized_keys; KEY=$(head -n 1 /root/.ssh/authorized_keys); test -n \"$KEY\"; grep -q '__CONARY_QEMU_TEST_PUBLIC_KEY__' \"$KEYFILE\"; sed -i \"s|__CONARY_QEMU_TEST_PUBLIC_KEY__|$KEY|\" \"$KEYFILE\"; ! grep -q '__CONARY_QEMU_TEST_PUBLIC_KEY__' \"$KEYFILE\"",
+    "set -e; ACCESS=/opt/remi-tests/fixtures/supported-host-generation-export/conary-qemu-test-access; sh \"$ACCESS/stage-links.sh\" \"$ACCESS/stage\"; test -L \"$ACCESS/stage/etc/systemd/system/multi-user.target.wants/sshd.service\"; conary ccs build \"$ACCESS\" --output /mnt/conary-scratch/access-output --source \"$ACCESS/stage\" --key ${FIXTURE_CCS_KEY}",
+    "ACCESS_CCS=$(ls /mnt/conary-scratch/access-output/*.ccs | head -1); test -n \"$ACCESS_CCS\"; printf '%s\\n' \"$ACCESS_CCS\" > /mnt/conary-scratch/access-ccs-path",
+    "conary system init --db-path /mnt/conary-scratch/sys/conary.db",
+    "conary repo add supported-host-fedora-44 ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile fedora-44 --db-path /mnt/conary-scratch/sys/conary.db",
+    "conary repo sync supported-host-fedora-44 --force --db-path /mnt/conary-scratch/sys/conary.db",
+    "set -e; ACCESS_CCS=$(cat /mnt/conary-scratch/access-ccs-path); conary ccs install --yes \"$ACCESS_CCS\" --policy ${FIXTURE_CCS_POLICY} --sandbox always --db-path /mnt/conary-scratch/sys/conary.db > /var/tmp/supported-host-access-install.log 2>&1; cat /var/tmp/supported-host-access-install.log",
+    "set -e; conary model apply --model /opt/remi-tests/fixtures/supported-host-generation-export/fixture-system.toml --db-path /mnt/conary-scratch/sys/conary.db --yes --no-autoremove > /var/tmp/supported-host-model-apply.log 2>&1; cat /var/tmp/supported-host-model-apply.log",
+    "set -e; conary system generation publish --yes --db-path /mnt/conary-scratch/sys/conary.db > /var/tmp/supported-host-publish.log 2>&1; cat /var/tmp/supported-host-publish.log; GEN=$(sed -n 's/^Generation publication complete: generation \\([0-9][0-9]*\\) selected\\.$/\\1/p' /var/tmp/supported-host-publish.log | tail -1); test -n \"$GEN\"; printf '%s\\n' \"$GEN\" > /mnt/conary-scratch/export/supported-host-generation.txt",
+    "set -e; GEN=$(cat /mnt/conary-scratch/export/supported-host-generation.txt); test -f /mnt/conary-scratch/sys/generations/$GEN/.conary-artifact.json; test -f /mnt/conary-scratch/sys/generations/$GEN/cas-manifest.json; test -f /mnt/conary-scratch/sys/generations/$GEN/boot-assets/manifest.json",
+    "set -e; GEN=$(cat /mnt/conary-scratch/export/supported-host-generation.txt); composefs-info ls /mnt/conary-scratch/sys/generations/$GEN/root.erofs > /var/tmp/supported-host-root-listing.txt; grep -Eq '^/sbin[[:space:]].*-> /?usr/sbin$' /var/tmp/supported-host-root-listing.txt; grep -Eq '^/usr/sbin[[:space:]].*-> /?(usr/)?bin$' /var/tmp/supported-host-root-listing.txt",
+    "set -e; GEN=$(cat /mnt/conary-scratch/export/supported-host-generation.txt); conary system generation export --path /mnt/conary-scratch/sys/generations/$GEN --format iso --output /mnt/conary-scratch/export/supported-host-generation.iso",
+    "test -s /mnt/conary-scratch/export/supported-host-generation.iso",
+    "test -s /mnt/conary-scratch/export/supported-host-generation.iso.conary-provenance.json",
+    "grep -q '\"format\": \"iso\"' /mnt/conary-scratch/export/supported-host-generation.iso.conary-provenance.json",
+    "grep -q '\"artifact_manifest_sha256\"' /mnt/conary-scratch/export/supported-host-generation.iso.conary-provenance.json",
+    "echo supported-host-generation-iso-export-ok",
 ]
 copy_from_guest = [
-    { source = "/mnt/conary-scratch/export/bootstrap-run-generation.iso", dest = "target/local-validation/group-p-iso-export/bootstrap-run-generation.iso" },
-    { source = "/mnt/conary-scratch/export/bootstrap-run-generation.iso.conary-provenance.json", dest = "target/local-validation/group-p-iso-export/bootstrap-run-generation.iso.conary-provenance.json" },
+    { source = "/mnt/conary-scratch/export/supported-host-generation.iso", dest = "target/local-validation/group-p-iso-export/supported-host-generation.iso" },
+    { source = "/mnt/conary-scratch/export/supported-host-generation.iso.conary-provenance.json", dest = "target/local-validation/group-p-iso-export/supported-host-generation.iso.conary-provenance.json" },
+    { source = "/mnt/conary-scratch/export/supported-host-generation.txt", dest = "target/local-validation/group-p-iso-export/supported-host-generation.txt" },
 ]
 expect_output = [
-    "bootstrap-run-generation-iso-export-ok",
+    "supported-host-generation-iso-export-ok",
 ]
 
 [test.step.assert]
@@ -72,26 +86,29 @@ exit_code = 0
 
 [[test.step]]
 [test.step.qemu_boot]
-image = "local-bootstrap-run-generation-iso-export"
-local_image_path = "target/local-validation/group-p-iso-export/bootstrap-run-generation.iso"
+image = "local-supported-host-generation-iso-export"
+local_image_path = "target/local-validation/group-p-iso-export/supported-host-generation.iso"
 image_format = "iso"
 memory_mb = 2048
 timeout_seconds = 420
 ssh_port = 2251
+copy_to_guest = [
+    { source = "target/local-validation/group-p-iso-export/supported-host-generation.txt", dest = "/tmp/expected-generation" },
+]
 commands = [
-    "grep -q 'conary.generation=1' /proc/cmdline",
+    "EXPECTED=$(cat /tmp/expected-generation); grep -q \"conary.generation=$EXPECTED\" /proc/cmdline",
     "grep -q 'conary.carrier=readonly' /proc/cmdline",
     "grep -q 'rootfstype=iso9660' /proc/cmdline",
-    "TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/1\" || test \"$TARGET\" = \"1\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/1\"",
-    "test -f /conary/generations/1/.conary-artifact.json",
-    "test -f /conary/generations/1/cas-manifest.json",
-    "test -f /conary/generations/1/boot-assets/manifest.json",
+    "EXPECTED=$(cat /tmp/expected-generation); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$EXPECTED\" || test \"$TARGET\" = \"$EXPECTED\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$EXPECTED\"",
+    "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/.conary-artifact.json",
+    "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/cas-manifest.json",
+    "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/boot-assets/manifest.json",
     "printf '%s\\n' iso-overlay-ok > /etc/conary-iso-overlay-test",
     "grep -q iso-overlay-ok /etc/conary-iso-overlay-test",
-    "echo bootstrap-run-generation-iso-export-booted",
+    "echo supported-host-generation-iso-export-booted",
 ]
 expect_output = [
-    "bootstrap-run-generation-iso-export-booted",
+    "supported-host-generation-iso-export-booted",
 ]
 
 [test.step.assert]

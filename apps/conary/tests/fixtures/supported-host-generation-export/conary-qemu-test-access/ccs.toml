@@ -1,0 +1,55 @@
+requirements = []
+relations = []
+
+[package]
+name = "conary-qemu-test-access"
+version = "1.0.0"
+version_scheme = "conary"
+description = "QEMU harness SSH access and unit enablement for the supported-host generation export fixture"
+release = "1"
+kind = "package"
+
+[provides]
+capabilities = []
+sonames = []
+binaries = []
+pkgconfig = []
+
+[suggests]
+capabilities = []
+
+[components]
+rules = []
+default = ["runtime"]
+
+[components.files]
+
+[hooks]
+users = []
+groups = []
+directories = []
+services = []
+systemd = []
+tmpfiles = []
+sysctl = []
+alternatives = []
+
+[scriptlets]
+capabilities = []
+
+[config]
+files = []
+
+[policy]
+reject_paths = []
+strip_binaries = false
+normalize_timestamps = false
+compress_manpages = false
+
+[policy.fix_shebangs]
+
+[redirects]
+renames = []
+obsoletes = []
+merges = []
+splits = []

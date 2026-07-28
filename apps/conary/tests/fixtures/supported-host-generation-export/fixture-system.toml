@@ -1,0 +1,59 @@
+# apps/conary/tests/fixtures/supported-host-generation-export/fixture-system.toml
+#
+# System model for the supported-host bootable generation fixture.
+#
+# Every entry is an ordinary Fedora 44 package installed through Remi
+# conversion by `conary model apply`. Nothing here is bootstrap-specific: the
+# root that Groups O and P export and boot is assembled by the same install
+# path a user gets on a supported host.
+#
+# `model apply` turns each entry into a separate dependency-resolved install,
+# so no ordering may be relied on. Every intermediate generation publication
+# fails (a publication demands a complete kernel set and an ESP boot binary),
+# publication failure is non-fatal to the install, and each session
+# materializes from the latest candidate, so the selected root accumulates
+# until `conary system generation publish` succeeds once and clears the debt.
+#
+# Why each non-obvious entry is here:
+#   filesystem              owns the /sbin -> usr/sbin -> bin chain that
+#                           generation root validation walks to reach the
+#                           /usr/bin/init entrypoint.
+#   systemd-*               systemd only Recommends these on Fedora 44, and a
+#                           strict-Requires resolver will not pull them in.
+#   systemd-boot-unsigned   ships /usr/lib/systemd/boot/efi/systemd-bootx64.efi,
+#                           the source the generation builder stages as the
+#                           ESP BOOTX64.EFI.
+#   kernel-modules-core     erofs, overlay, iso9660, vfat, and e1000 are
+#                           modules on Fedora 44, not built into kernel-core.
+#   composefs               provides mount.composefs; the dracut module picks
+#                           the helper up with `inst_multiple -o`, so a root
+#                           without it builds an initramfs that fails at
+#                           generation mount with no build-time signal.
+#   util-linux-core         also satisfies systemd's
+#                           (util-linux-core or util-linux) rich dependency.
+#   conary-qemu-test-access built and installed by the suite from
+#                           `conary-qemu-test-access/`. It is listed by name so
+#                           model apply treats it as explicitly wanted; the
+#                           suite installs it by path before apply so apply
+#                           never tries to resolve it from the repository.
+
+[model]
+version = 1
+install = [
+    "filesystem",
+    "systemd",
+    "systemd-udev",
+    "systemd-networkd",
+    "systemd-networkd-defaults",
+    "systemd-resolved",
+    "systemd-pam",
+    "dbus-broker",
+    "systemd-boot-unsigned",
+    "kernel-core",
+    "kernel-modules-core",
+    "composefs",
+    "openssh-server",
+    "util-linux-core",
+    "shadow-utils",
+    "conary-qemu-test-access",
+]
