@@ -210,13 +210,7 @@ fn runtime_boot_asset_sources_for_release(
         )));
     }
 
-    let efi_bootloader = boot_root.join("EFI/BOOT/BOOTX64.EFI");
-    if !regular_file_exists(&efi_bootloader) {
-        return Err(crate::error::Error::NotFound(format!(
-            "missing required boot asset efi_bootloader at {}",
-            efi_bootloader.display()
-        )));
-    }
+    let efi_bootloader = resolve_efi_bootloader_source(boot_root, system_root)?;
 
     Ok(RuntimeBootAssetSources {
         kernel_version: release.to_string(),
@@ -225,6 +219,37 @@ fn runtime_boot_asset_sources_for_release(
         efi_bootloader,
         _sysroot_workspace: None,
     })
+}
+
+/// ESP location the generation stages its EFI bootloader from.
+const ESP_BOOTLOADER_REL: &str = "EFI/BOOT/BOOTX64.EFI";
+
+/// systemd-boot's own installed EFI binary, the file `bootctl install` copies
+/// to the ESP. Conary captures that mutation instead of executing it, so the
+/// generation builder owns the copy.
+const SYSTEMD_BOOT_EFI_REL: &str = "usr/lib/systemd/boot/efi/systemd-bootx64.efi";
+
+/// Resolve the exact file staged as the generation's `BOOTX64.EFI`.
+///
+/// A sysroot that already carries an ESP layout wins. Otherwise the
+/// systemd-boot package's shipped binary is staged directly, which is what
+/// `bootctl install` would have done had Conary executed it.
+fn resolve_efi_bootloader_source(boot_root: &Path, system_root: &Path) -> crate::Result<PathBuf> {
+    let staged_esp = boot_root.join(ESP_BOOTLOADER_REL);
+    if regular_file_exists(&staged_esp) {
+        return Ok(staged_esp);
+    }
+
+    let systemd_boot_efi = system_root.join(SYSTEMD_BOOT_EFI_REL);
+    if regular_file_exists(&systemd_boot_efi) {
+        return Ok(systemd_boot_efi);
+    }
+
+    Err(crate::error::Error::NotFound(format!(
+        "missing required boot asset efi_bootloader; expected a staged ESP binary at {} or systemd-boot's installed binary at {}",
+        staged_esp.display(),
+        systemd_boot_efi.display()
+    )))
 }
 
 #[cfg(test)]
@@ -540,6 +565,111 @@ mod tests {
         assert!(args.lines().any(|line| line == RUNTIME_DRACUT_ADD_MODULES));
         assert!(args.lines().any(|line| line == "--omit"));
         assert!(args.lines().any(|line| line == RUNTIME_DRACUT_OMIT_MODULES));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generation_boot_assets_stage_systemd_boot_binary_when_the_sysroot_has_no_esp() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let gen_dir = generations_root.join("7");
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        let cas = CasStore::new(&objects_dir).unwrap();
+
+        let release = "6.20.0-conary";
+        let kernel_hash = cas.store(b"cas-kernel").unwrap();
+        let modules_dep_hash = cas.store(b"modules-dep").unwrap();
+        let systemd_boot_hash = cas.store(b"systemd-boot-efi").unwrap();
+        let runtime_inputs = exact_runtime_inputs(vec![
+            (
+                format!("/boot/vmlinuz-{release}"),
+                kernel_hash,
+                b"cas-kernel".len() as u64,
+            ),
+            (
+                format!("/usr/lib/modules/{release}/modules.dep"),
+                modules_dep_hash,
+                b"modules-dep".len() as u64,
+            ),
+            (
+                "/usr/lib/systemd/boot/efi/systemd-bootx64.efi".to_string(),
+                systemd_boot_hash,
+                b"systemd-boot-efi".len() as u64,
+            ),
+        ]);
+        write_executable(
+            &fake_dracut,
+            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
+        );
+        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+
+        let sources = resolve_generation_boot_asset_sources_with_tools(
+            &runtime_inputs,
+            &generations_root,
+            Path::new("/boot"),
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
+        )
+        .unwrap();
+
+        assert!(
+            sources
+                .efi_bootloader
+                .ends_with("usr/lib/systemd/boot/efi/systemd-bootx64.efi"),
+            "the generation must stage systemd-boot's own binary when no ESP layout exists; got {}",
+            sources.efi_bootloader.display()
+        );
+
+        let manifest =
+            stage_runtime_boot_assets_from_sources(&gen_dir, 7, "x86_64", &sources).unwrap();
+
+        assert_eq!(manifest.efi_bootloader, "EFI/BOOT/BOOTX64.EFI");
+        let staged = gen_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"systemd-boot-efi");
+    }
+
+    #[test]
+    fn runtime_boot_asset_resolution_names_both_efi_sources_when_neither_exists() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.17.1-300.fc44.x86_64";
+        let module_dir = tmp.path().join("lib/modules").join(release);
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(&boot_root).unwrap();
+        std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(
+            boot_root.join(format!("initramfs-{release}.img")),
+            b"initramfs",
+        )
+        .unwrap();
+
+        let error = resolve_runtime_boot_asset_sources(&boot_root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("missing required boot asset efi_bootloader"));
+        assert!(
+            error.contains(
+                boot_root
+                    .join("EFI/BOOT/BOOTX64.EFI")
+                    .to_str()
+                    .expect("temp path is utf-8")
+            )
+        );
+        assert!(
+            error.contains(
+                tmp.path()
+                    .join("usr/lib/systemd/boot/efi/systemd-bootx64.efi")
+                    .to_str()
+                    .expect("temp path is utf-8")
+            )
+        );
     }
 
     #[cfg(unix)]
