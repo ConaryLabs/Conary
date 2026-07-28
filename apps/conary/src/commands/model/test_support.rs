@@ -72,8 +72,12 @@ pub(super) fn build_test_ccs_package(
                 size: component_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([(binary_hash, binary_content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(binary_hash, binary_content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

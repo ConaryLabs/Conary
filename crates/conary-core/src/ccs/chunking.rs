@@ -301,8 +301,20 @@ impl ChunkStore {
     /// Retrieve a chunk by hash
     pub fn get_chunk(&self, hash: &[u8; 32]) -> Result<Vec<u8>> {
         let path = self.chunk_path(hash);
-        let data = std::fs::read(&path)
+        let mut file = File::open(&path)
             .with_context(|| format!("Failed to read chunk: {}", path.display()))?;
+        let mut data = Vec::with_capacity(MAX_CHUNK_SIZE as usize);
+        Read::by_ref(&mut file)
+            .take(u64::from(MAX_CHUNK_SIZE) + 1)
+            .read_to_end(&mut data)
+            .with_context(|| format!("Failed to read chunk: {}", path.display()))?;
+        if data.len() > MAX_CHUNK_SIZE as usize {
+            bail!(
+                "stored chunk exceeds the {} byte maximum: {}",
+                MAX_CHUNK_SIZE,
+                path.display()
+            );
+        }
         let expected_hash = hex::encode(hash);
         crate::hash::verify_sha256(&data, &expected_hash).map_err(|error| {
             anyhow::anyhow!("chunk hash mismatch for {}: {}", path.display(), error)
@@ -783,7 +795,11 @@ mod tests {
             return;
         }
 
-        let data = std::fs::read(binary_path).unwrap();
+        let mut data = Vec::new();
+        File::open(binary_path)
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
         println!("\nTesting CDC on real binary:");
         println!("  Binary: {:?}", binary_path);
         println!(

@@ -3,6 +3,7 @@
 //! Exact executable identities for target-owned hook interfaces.
 
 use serde::{Deserialize, Serialize};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -133,8 +134,11 @@ impl ExecutableInterface {
         if !functional_handshake(&actual_executable, contract) {
             return None;
         }
-        let executable_sha256 =
-            crate::hash::sha256_prefixed(&std::fs::read(&actual_executable).ok()?);
+        let mut executable = File::open(&actual_executable).ok()?;
+        let executable_sha256 = format!(
+            "sha256:{}",
+            crate::hash::sha256_reader_hex(&mut executable).ok()?
+        );
         Some(Self {
             executable: persisted_executable,
             contract,

@@ -148,7 +148,6 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
         match &file.node.kind {
             PayloadNodeKind::Regular { .. } => {
-                let content = super::get_file_content(file, &result.blobs)?;
                 // Write to temp location
                 let content_hash = &file
                     .content
@@ -156,7 +155,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     .expect("regular node content validated by CCS builder")
                     .sha256;
                 let temp_path = temp_dir.path().join(content_hash);
-                fs::write(&temp_path, &content)?;
+                super::copy_file_content(result, file, &temp_path)?;
 
                 // Determine file options
                 let options =
@@ -326,7 +325,7 @@ mod tests {
             manifest,
             components: HashMap::new(),
             files: vec![],
-            blobs: HashMap::new(),
+            payloads: Vec::new(),
             total_size: 0,
             chunked: false,
             chunk_stats: None,

@@ -13,7 +13,7 @@ use crate::ccs::manifest::Hooks;
 use crate::payload::PayloadNodeKind;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tar::Builder as TarBuilder;
@@ -225,8 +225,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
         match &file.node.kind {
             PayloadNodeKind::Regular { .. } => {
-                let content = super::get_file_content(file, &result.blobs)?;
-                fs::write(&dest_path, &content)?;
+                super::copy_file_content(result, file, &dest_path)?;
 
                 // Set permissions
                 let mut perms = fs::metadata(&dest_path)?.permissions();
@@ -380,11 +379,12 @@ fn create_arch_package(pkg_root: &Path, output_path: &Path) -> Result<()> {
         archive.finish()?;
     }
 
-    // Compress with zstd
-    let tar_data = fs::read(&tar_path)?;
-    let compressed = zstd::encode_all(&tar_data[..], 19)?; // Level 19 for high compression
-
-    fs::write(output_path, compressed)?;
+    // Compress from disk so native export does not re-buffer the full tarball.
+    let mut tar_file = File::open(&tar_path)?;
+    let output_file = File::create(output_path)?;
+    let mut encoder = zstd::Encoder::new(output_file, 19)?; // Level 19 for high compression
+    io::copy(&mut tar_file, &mut encoder)?;
+    encoder.finish()?;
     fs::remove_file(&tar_path)?;
 
     Ok(())
@@ -433,7 +433,7 @@ mod tests {
             manifest,
             components: HashMap::new(),
             files: vec![],
-            blobs: HashMap::new(),
+            payloads: Vec::new(),
             total_size: 0,
             chunked: false,
             chunk_stats: None,

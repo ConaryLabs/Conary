@@ -75,8 +75,12 @@ async fn ccs_install_persists_capability_declarations() {
                 size: total_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,
@@ -160,8 +164,12 @@ async fn ccs_install_rejects_scriptlet_capabilities_without_enforcement_before_m
                 size: total_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,

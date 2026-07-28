@@ -204,9 +204,9 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                         ))
                         .map_err(anyhow::Error::from)?
                     };
-                    builder::write_v2_ccs_package(
+                    builder::write_v2_ccs_package_from_sources(
                         &projected.authority,
-                        &projected.payloads_by_path,
+                        &projected.payloads,
                         &output_path,
                         &signing_key,
                         projected.debug_toml.as_deref(),

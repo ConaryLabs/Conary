@@ -55,8 +55,12 @@ async fn ccs_install_rejects_child_write_beneath_package_symlink() {
                 size: child_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(child_hash, child_content.clone())]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(child_hash, child_content.clone())]),
+        )
+        .unwrap(),
         total_size: child_content.len() as u64,
         chunked: false,
         chunk_stats: None,
@@ -143,11 +147,15 @@ async fn ccs_install_rejects_child_before_package_symlink() {
                 size: (child_content.len() + init_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([
-            (child_hash, child_content.clone()),
-            (init_hash, init_content.clone()),
-        ]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([
+                (child_hash, child_content.clone()),
+                (init_hash, init_content.clone()),
+            ]),
+        )
+        .unwrap(),
         total_size: (child_content.len() + init_content.len()) as u64,
         chunked: false,
         chunk_stats: None,
@@ -239,8 +247,12 @@ async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
                 size: total_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, content.clone()), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content.clone()), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,
@@ -346,8 +358,12 @@ async fn ccs_install_resolves_safe_existing_lib64_ancestor_inside_root() {
                 size: total_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([(library_hash, library_content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(library_hash, library_content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,
@@ -434,8 +450,12 @@ async fn ccs_install_allows_identical_existing_symlink_destination() {
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash, init_content.clone())]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash, init_content.clone())]),
+        )
+        .unwrap(),
         total_size: init_content.len() as u64,
         chunked: false,
         chunk_stats: None,
@@ -521,8 +541,12 @@ async fn generation_install_records_replacement_without_mutating_current_leaf_sy
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash, init_content.clone())]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash, init_content.clone())]),
+        )
+        .unwrap(),
         total_size: init_content.len() as u64,
         chunked: false,
         chunk_stats: None,
@@ -622,8 +646,12 @@ async fn ccs_install_coalesces_identical_usrmerge_duplicate_files() {
                 size: content.len() as u64 * 2 + init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, content.clone()), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content.clone()), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: content.len() as u64 * 2,
         chunked: false,
         chunk_stats: None,
@@ -727,12 +755,16 @@ async fn ccs_install_rejects_conflicting_usrmerge_duplicate_files() {
                 size: (bin_content.len() + usr_content.len() + init_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([
-            (bin_hash, bin_content),
-            (usr_hash, usr_content),
-            (init_hash, init_content),
-        ]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([
+                (bin_hash, bin_content),
+                (usr_hash, usr_content),
+                (init_hash, init_content),
+            ]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

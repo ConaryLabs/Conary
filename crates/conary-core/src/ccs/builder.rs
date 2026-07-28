@@ -1,27 +1,25 @@
 // conary-core/src/ccs/builder.rs
-//! CCS package builder
+//! CCS package builder.
 //!
-//! Builds .ccs packages from a manifest and source directory.
-//! Handles file scanning, explicit component assignment, and package creation.
-//! Supports Content-Defined Chunking (CDC) for efficient delta updates.
+//! The builder owns typed package assembly. Native source discovery lives in
+//! `builder/source.rs`, policy owns disk-backed transforms, and
+//! `builder/package_writer.rs` owns final streamed archive emission.
 
 use crate::ccs::chunking::{Chunker, MIN_CHUNK_SIZE};
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::policy::{PolicyAction, PolicyChain, PolicyError};
-use crate::hash;
-use crate::packages::traits::ExtractedFile;
-use crate::payload::{
-    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
-};
-use anyhow::Result;
+use crate::packages::payload::{PackagePayloadFile, ReopenablePayload};
+use crate::payload::PayloadContentAuthority;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use std::sync::Arc;
 
 mod package_writer;
+mod source;
 
 pub use package_writer::{
     print_build_summary, write_signed_current_ccs_package, write_v2_ccs_package,
@@ -31,127 +29,202 @@ pub use package_writer::{
 #[cfg(test)]
 pub(crate) mod test_support;
 
-/// Typed errors for the CCS builder pipeline
+/// Typed errors for the CCS builder pipeline.
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderError {
-    /// The manifest contains an invalid build-policy configuration.
     #[error(transparent)]
     PolicyConfiguration(#[from] PolicyError),
 
-    /// File is not under the expected source directory
     #[error("file not under source directory: {0}")]
     FileNotUnderSource(PathBuf),
 
-    /// A build policy rejected a file
     #[error("policy rejected file {path}: {reason}")]
     PolicyRejected { path: String, reason: String },
 
-    /// Chunker was expected but not initialized
     #[error("chunker not initialized even though chunking is enabled")]
     ChunkerNotInitialized,
 
-    /// I/O error during build (file read/write, directory creation)
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// A file entry in a CCS package
+/// One signed file entry in a CCS package.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileEntry {
-    /// Installation path (absolute)
     pub path: String,
-    /// Exact POSIX node authority.
-    pub node: PayloadNode,
-    /// Content authority, present only for regular files.
+    pub node: crate::payload::PayloadNode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<PayloadContentAuthority>,
-    /// Component assignment
     pub component: String,
-    /// Chunk hashes for CDC (if file is chunked)
-    /// When present, the file content is stored as chunks instead of a single blob.
-    /// Chunks are stored by their hash in objects/ and must be concatenated in order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunks: Option<Vec<String>>,
 }
 
-/// Component data in a built package
+/// Component data in a built package.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComponentData {
     pub name: String,
     pub files: Vec<FileEntry>,
-    /// Combined hash of all files in component (merkle-ish)
     pub hash: String,
-    /// Total size of component
     pub size: u64,
 }
 
-/// Result of building a CCS package
+/// Result of building a CCS package.
 #[derive(Debug)]
 pub struct BuildResult {
-    /// Package manifest with exact author and source-package metadata.
     pub manifest: CcsManifest,
-    /// Components with their files
     pub components: HashMap<String, ComponentData>,
-    /// All file entries
     pub files: Vec<FileEntry>,
-    /// Content blobs (hash -> content)
-    /// With CDC enabled, this contains chunks; without CDC, it contains whole files.
-    pub blobs: HashMap<String, Vec<u8>>,
-    /// Total package size
+    /// Reopenable content descriptors. No payload object is aggregated here.
+    pub payloads: Vec<PackagePayloadFile>,
     pub total_size: u64,
-    /// Whether CDC chunking was used
     pub chunked: bool,
-    /// CDC statistics (if chunking was used)
     pub chunk_stats: Option<ChunkStats>,
 }
 
-/// Statistics about CDC chunking in a build
+impl BuildResult {
+    /// Resolve the sole content descriptor for a signed regular-file path.
+    pub fn payload(&self, path: &str) -> Result<&PackagePayloadFile> {
+        let mut matches = self.payloads.iter().filter(|payload| payload.path == path);
+        let payload = matches
+            .next()
+            .with_context(|| format!("missing payload source for {path}"))?;
+        if matches.next().is_some() {
+            anyhow::bail!("payload source path {path} appears more than once");
+        }
+        Ok(payload)
+    }
+
+    /// Open a regular file and verify descriptor authority matches build state.
+    pub fn open_file(&self, file: &FileEntry) -> Result<Box<dyn Read + Send>> {
+        let payload = self.payload(&file.path)?;
+        if payload.node != file.node || payload.content_authority != file.content {
+            anyhow::bail!(
+                "payload descriptor authority disagrees with build entry {}",
+                file.path
+            );
+        }
+        payload.open_content().map_err(anyhow::Error::from)
+    }
+}
+
+/// Convert already-bounded test fixture blobs into the same reopenable source
+/// descriptors used by production authoring.
+///
+/// This is public only because workspace integration tests are separate
+/// crates. It rejects aggregate fixture input above the package-writer's fixed
+/// small-memory ceiling.
+#[doc(hidden)]
+pub fn payloads_from_bounded_memory_for_tests(
+    files: &[FileEntry],
+    blobs: HashMap<String, Vec<u8>>,
+) -> Result<Vec<PackagePayloadFile>> {
+    let total = blobs.values().try_fold(0_u64, |total, bytes| {
+        total
+            .checked_add(bytes.len() as u64)
+            .context("bounded in-memory CCS fixture size overflow")
+    })?;
+    if total > package_writer::BOUNDED_MEMORY_FIXTURE_BYTES {
+        anyhow::bail!(
+            "bounded in-memory CCS fixture input is {} bytes; limit is {} bytes",
+            total,
+            package_writer::BOUNDED_MEMORY_FIXTURE_BYTES
+        );
+    }
+    let blobs = blobs
+        .into_iter()
+        .map(|(hash, bytes)| (hash, Arc::<[u8]>::from(bytes)))
+        .collect::<HashMap<_, _>>();
+    let mut used = HashSet::new();
+    let mut payloads = Vec::with_capacity(files.len());
+    for file in files {
+        let source = if file.node.kind.is_regular() {
+            let authority = file.content.as_ref().with_context(|| {
+                format!(
+                    "regular fixture payload node {} has no content authority",
+                    file.path
+                )
+            })?;
+            let bytes = if let Some(chunks) = &file.chunks {
+                let capacity = usize::try_from(authority.size)
+                    .context("bounded fixture payload size exceeds usize")?;
+                let mut assembled = Vec::with_capacity(capacity);
+                for chunk in chunks {
+                    let bytes = blobs.get(chunk).with_context(|| {
+                        format!("missing bounded fixture chunk {chunk} for {}", file.path)
+                    })?;
+                    used.insert(chunk.as_str());
+                    assembled.extend_from_slice(bytes);
+                }
+                Arc::<[u8]>::from(assembled)
+            } else {
+                used.insert(authority.sha256.as_str());
+                Arc::clone(blobs.get(&authority.sha256).with_context(|| {
+                    format!("missing bounded fixture payload for {}", file.path)
+                })?)
+            };
+            if bytes.len() as u64 != authority.size
+                || crate::hash::sha256(&bytes) != authority.sha256
+            {
+                anyhow::bail!(
+                    "bounded fixture payload does not match authority for {}",
+                    file.path
+                );
+            }
+            Some(ReopenablePayload::from_in_memory_bytes(bytes))
+        } else {
+            None
+        };
+        payloads.push(
+            PackagePayloadFile::new(
+                file.path.clone(),
+                file.node.clone(),
+                file.content.clone(),
+                source,
+            )
+            .map_err(anyhow::Error::from)?,
+        );
+    }
+    if let Some(extra) = blobs.keys().find(|hash| !used.contains(hash.as_str())) {
+        anyhow::bail!("bounded fixture carries unreferenced payload object {extra}");
+    }
+    Ok(payloads)
+}
+
+/// Statistics from bounded FastCDC visits.
 #[derive(Debug, Clone, Default)]
 pub struct ChunkStats {
-    /// Number of files that were chunked
     pub chunked_files: usize,
-    /// Number of files stored as whole blobs (too small to chunk)
     pub whole_files: usize,
-    /// Total number of chunks created
     pub total_chunks: usize,
-    /// Number of unique chunks (after dedup within package)
     pub unique_chunks: usize,
-    /// Bytes saved by intra-package deduplication
     pub dedup_savings: u64,
 }
 
-/// CCS package builder
+/// Native CCS authoring builder.
 pub struct CcsBuilder {
     manifest: CcsManifest,
     source_dir: PathBuf,
     install_prefix: PathBuf,
     policy_chain: PolicyChain,
-    /// Enable CDC chunking for delta-efficient packages
     use_chunking: bool,
-    /// Chunker instance (created lazily if chunking is enabled)
     chunker: Option<Chunker>,
-    /// Exact source-package payload entries. When present, this is the
-    /// authority for explicit directories and entry kinds; the temporary
-    /// materialization tree is not rescanned for inferred parent directories.
-    package_entries: Option<Vec<ExtractedFile>>,
 }
 
-fn is_suspicious_component_executable(component: &str, node: &PayloadNode) -> bool {
+fn is_suspicious_component_executable(component: &str, node: &crate::payload::PayloadNode) -> bool {
     node.kind.is_regular()
         && node.mode & 0o111 != 0
         && matches!(component, "doc" | "config" | "data")
 }
 
 impl CcsBuilder {
-    /// Create a builder after compiling the complete manifest policy chain.
     pub fn new(
         manifest: CcsManifest,
         source_dir: &Path,
     ) -> std::result::Result<Self, BuilderError> {
         let policy_chain = PolicyChain::from_config(&manifest.policy)?;
-
         Ok(Self {
             manifest,
             source_dir: source_dir.to_path_buf(),
@@ -159,432 +232,201 @@ impl CcsBuilder {
             policy_chain,
             use_chunking: false,
             chunker: None,
-            package_entries: None,
         })
     }
 
-    /// Set the install prefix (default: /)
+    #[must_use]
     pub fn with_install_prefix(mut self, prefix: &Path) -> Self {
         self.install_prefix = prefix.to_path_buf();
         self
     }
 
-    /// Enable CDC chunking for delta-efficient packages
-    ///
-    /// When enabled, large files are split into content-defined chunks.
-    /// This enables efficient delta updates - clients only download
-    /// changed chunks instead of entire files.
+    #[must_use]
     pub fn with_chunking(mut self) -> Self {
         self.use_chunking = true;
         self.chunker = Some(Chunker::new());
         self
     }
 
-    /// Build from exact source-package payload entries instead of inferring
-    /// package structure from the materialized source tree.
-    pub fn with_package_entries(mut self, entries: &[ExtractedFile]) -> Self {
-        self.package_entries = Some(entries.to_vec());
-        self
-    }
-
-    /// Build the package
+    /// Build source-backed package authority without retaining payload bytes.
     pub fn build(&self) -> Result<BuildResult> {
         self.validate_component_contract()?;
-        // Phase 1: Collect files with content (before policies)
-        let mut raw_files: Vec<(PathBuf, FileEntry, Vec<u8>)> = Vec::new();
-        if let Some(package_entries) = &self.package_entries {
-            for package_entry in package_entries {
-                let source_path =
-                    crate::filesystem::safe_join(&self.source_dir, &package_entry.path)?;
-                let (entry, content) = self.collect_package_entry(package_entry)?;
-                raw_files.push((source_path, entry, content));
-            }
-        } else {
-            let mut hardlink_anchors = HashMap::new();
-            for source_path in self.scan_source_files()? {
-                let (entry, content) = self.collect_file(&source_path, &mut hardlink_anchors)?;
-                raw_files.push((source_path, entry, content));
-            }
-        }
+        let source_paths = self.scan_source_files()?;
+        let workspace_parent = self
+            .source_dir
+            .parent()
+            .unwrap_or(self.source_dir.as_path());
+        let policy_workspace = Arc::new(
+            tempfile::Builder::new()
+                .prefix(".conary-ccs-authoring-")
+                .tempdir_in(workspace_parent)
+                .with_context(|| {
+                    format!(
+                        "create CCS authoring workspace beside {}",
+                        self.source_dir.display()
+                    )
+                })?,
+        );
 
-        // Phase 2: Apply policies and optionally chunk files
-        let mut files = Vec::new();
-        let mut blobs = HashMap::new();
+        let mut hardlink_anchors = HashMap::new();
+        let mut files = Vec::with_capacity(source_paths.len());
+        let mut payloads = Vec::with_capacity(source_paths.len());
         let mut components: HashMap<String, Vec<FileEntry>> = HashMap::new();
         let mut chunk_stats = ChunkStats::default();
+        let mut unique_chunks = HashSet::new();
 
-        for (source_path, mut entry, content) in raw_files {
-            let (action, new_content) = self.policy_chain.apply(
-                &mut entry,
-                content,
+        for (index, source_path) in source_paths.into_iter().enumerate() {
+            let mut collected = self.collect_source(&source_path, &mut hardlink_anchors)?;
+            let entry_workspace = policy_workspace.path().join(format!("{index:08}"));
+            fs::create_dir(&entry_workspace)?;
+            let policy_action = self.policy_chain.apply(
+                &mut collected.entry,
                 &source_path,
+                &entry_workspace,
                 &self.manifest.policy,
             )?;
-            let final_content = match action {
-                PolicyAction::Skip => {
-                    continue;
+            if matches!(policy_action, PolicyAction::Skip) {
+                continue;
+            }
+            if let PolicyAction::Reject(reason) = policy_action {
+                return Err(BuilderError::PolicyRejected {
+                    path: collected.entry.path,
+                    reason,
                 }
-                PolicyAction::Reject(msg) => {
-                    return Err(BuilderError::PolicyRejected {
-                        path: entry.path.clone(),
-                        reason: msg,
+                .into());
+            }
+
+            let source = if collected.entry.node.kind.is_regular() {
+                let payload_source = match policy_action {
+                    PolicyAction::Replace(path) => {
+                        ReopenablePayload::from_spooled_path(path, Arc::clone(&policy_workspace))
                     }
-                    .into());
+                    PolicyAction::Keep => ReopenablePayload::from_path(source_path),
+                    PolicyAction::Skip | PolicyAction::Reject(_) => unreachable!(),
+                };
+                let authority = stream_content_authority(&payload_source)?;
+                collected.entry.content = Some(authority.clone());
+                if self.use_chunking && authority.size >= u64::from(MIN_CHUNK_SIZE) {
+                    self.visit_chunks(
+                        &mut collected.entry,
+                        &payload_source,
+                        authority.size,
+                        &mut chunk_stats,
+                        &mut unique_chunks,
+                    )?;
+                } else {
+                    chunk_stats.whole_files += 1;
                 }
-                PolicyAction::Keep => new_content,
-                PolicyAction::Replace(_) => {
-                    let content_authority = entry.content.as_mut().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "policy attempted to replace non-regular payload node {}",
-                            entry.path
-                        )
-                    })?;
-                    content_authority.sha256 = hash::sha256(&new_content);
-                    content_authority.size = new_content.len() as u64;
-                    new_content
-                }
+                Some(payload_source)
+            } else {
+                None
             };
 
-            if is_suspicious_component_executable(&entry.component, &entry.node) {
+            collected.entry.node.validate()?;
+            collected
+                .entry
+                .node
+                .validate_content(collected.entry.content.as_ref())?;
+            if is_suspicious_component_executable(&collected.entry.component, &collected.entry.node)
+            {
                 tracing::warn!(
                     "Suspicious executable file {} assigned to '{}' component",
-                    entry.path,
-                    entry.component
+                    collected.entry.path,
+                    collected.entry.component
                 );
             }
-
-            // Phase 3: Store content (chunked or whole)
-            if !entry.node.kind.is_regular() {
-                if !final_content.is_empty() {
-                    anyhow::bail!(
-                        "non-regular payload node {} carries payload bytes",
-                        entry.path
-                    );
-                }
-            } else if self.use_chunking && self.should_chunk(&entry, &final_content) {
-                // Chunk the file
-                let chunker = self
-                    .chunker
-                    .as_ref()
-                    .ok_or(BuilderError::ChunkerNotInitialized)?;
-                let chunks = chunker.chunk_bytes(&final_content);
-
-                let mut chunk_hashes = Vec::with_capacity(chunks.len());
-                for chunk in &chunks {
-                    let chunk_hash = hex::encode(chunk.hash);
-                    chunk_hashes.push(chunk_hash.clone());
-                    chunk_stats.total_chunks += 1;
-
-                    // Store chunk (may deduplicate)
-                    use std::collections::hash_map::Entry;
-                    match blobs.entry(chunk_hash) {
-                        Entry::Vacant(e) => {
-                            e.insert(chunk.data.clone());
-                            chunk_stats.unique_chunks += 1;
-                        }
-                        Entry::Occupied(_) => {
-                            chunk_stats.dedup_savings += chunk.length as u64;
-                        }
-                    }
-                }
-
-                entry.chunks = Some(chunk_hashes);
-                chunk_stats.chunked_files += 1;
-            } else {
-                // Store as whole blob
-                let content_authority = entry.content.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "regular payload node {} has no content authority",
-                        entry.path
-                    )
-                })?;
-                blobs.insert(content_authority.sha256.clone(), final_content);
-                chunk_stats.whole_files += 1;
-            }
-
+            let payload = PackagePayloadFile::new(
+                collected.entry.path.clone(),
+                collected.entry.node.clone(),
+                collected.entry.content.clone(),
+                source,
+            )
+            .map_err(anyhow::Error::from)?;
             components
-                .entry(entry.component.clone())
+                .entry(collected.entry.component.clone())
                 .or_default()
-                .push(entry.clone());
-
-            files.push(entry);
+                .push(collected.entry.clone());
+            files.push(collected.entry);
+            payloads.push(payload);
         }
 
-        // Build component data
         let mut component_data = HashMap::new();
-        for (name, comp_files) in components {
-            let size: u64 = comp_files
+        for (name, component_files) in components {
+            let size = component_files
                 .iter()
                 .filter_map(|file| file.content.as_ref().map(|content| content.size))
                 .sum();
-            let hash = self.compute_component_hash(&comp_files);
-
+            let hash = self.compute_component_hash(&component_files);
             component_data.insert(
                 name.clone(),
                 ComponentData {
                     name,
-                    files: comp_files,
+                    files: component_files,
                     hash,
                     size,
                 },
             );
         }
-
         let total_size = files
             .iter()
             .filter_map(|file| file.content.as_ref().map(|content| content.size))
             .sum();
+        chunk_stats.unique_chunks = unique_chunks.len();
 
         Ok(BuildResult {
             manifest: self.manifest.clone(),
             components: component_data,
             files,
-            blobs,
+            payloads,
             total_size,
             chunked: self.use_chunking,
-            chunk_stats: if self.use_chunking {
-                Some(chunk_stats)
-            } else {
-                None
-            },
+            chunk_stats: self.use_chunking.then_some(chunk_stats),
         })
     }
 
-    /// Determine if a file should be chunked
-    ///
-    /// Files are chunked if:
-    /// - They are regular files (not symlinks/directories)
-    /// - They are larger than the minimum chunk size (16KB)
-    fn should_chunk(&self, entry: &FileEntry, content: &[u8]) -> bool {
-        if !entry.node.kind.is_regular() {
-            return false;
-        }
-
-        // Only chunk files larger than minimum chunk size
-        // (smaller files wouldn't benefit from CDC)
-        content.len() >= MIN_CHUNK_SIZE as usize
-    }
-
-    /// Collect a file's metadata and content without hashing
-    fn collect_file(
+    fn visit_chunks(
         &self,
-        source_path: &Path,
-        hardlink_anchors: &mut HashMap<(u64, u64), (String, String)>,
-    ) -> Result<(FileEntry, Vec<u8>)> {
-        // Calculate install path
-        let relative = source_path
-            .strip_prefix(&self.source_dir)
-            .map_err(|_| BuilderError::FileNotUnderSource(source_path.to_path_buf()))?;
-        let install_path = self.install_prefix.join(relative);
-        let install_path_str = install_path
-            .to_str()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "CCS payload install path derived from {} is not valid UTF-8",
-                    source_path.display()
-                )
-            })?
-            .to_string();
-
-        // Get metadata
-        let metadata = fs::symlink_metadata(source_path)?;
-        let source_kind = metadata.file_type();
-        let xattrs = read_payload_xattrs(source_path)?;
-
-        // Determine file type and content from the filesystem's typed entry
-        // metadata, never from mode bits or target presence.
-        let (kind, content) = if source_kind.is_symlink() {
-            let target = fs::read_link(source_path)?;
-            let target = target.into_os_string().into_string().map_err(|_| {
-                anyhow::anyhow!(
-                    "payload symlink {} has a non-UTF-8 target",
-                    source_path.display()
-                )
-            })?;
-            (PayloadNodeKind::Symlink { target }, Vec::new())
-        } else if source_kind.is_dir() {
-            (PayloadNodeKind::Directory, Vec::new())
-        } else if source_kind.is_file() {
-            let hardlink_key = (metadata.dev(), metadata.ino());
-            if metadata.nlink() > 1
-                && let Some((target, identity)) = hardlink_anchors.get(&hardlink_key)
-            {
-                (
-                    PayloadNodeKind::Hardlink {
-                        target: target.clone(),
-                        identity: identity.clone(),
-                    },
-                    Vec::new(),
-                )
-            } else {
-                let hardlink_identity = (metadata.nlink() > 1).then(|| {
-                    let identity = format!("path:{install_path_str}");
-                    hardlink_anchors
-                        .insert(hardlink_key, (install_path_str.clone(), identity.clone()));
-                    identity
-                });
-                (
-                    PayloadNodeKind::Regular { hardlink_identity },
-                    fs::read(source_path)?,
-                )
+        entry: &mut FileEntry,
+        source: &ReopenablePayload,
+        expected_size: u64,
+        stats: &mut ChunkStats,
+        unique_chunks: &mut HashSet<String>,
+    ) -> Result<()> {
+        let chunker = self
+            .chunker
+            .as_ref()
+            .ok_or(BuilderError::ChunkerNotInitialized)?;
+        let mut chunk_hashes = Vec::new();
+        let processed = chunker.visit_reader_chunks(source.open()?, |chunk| {
+            let hash = chunk.hash_hex();
+            chunk_hashes.push(hash.clone());
+            stats.total_chunks += 1;
+            if !unique_chunks.insert(hash) {
+                stats.dedup_savings = stats
+                    .dedup_savings
+                    .checked_add(u64::from(chunk.length))
+                    .context("chunk deduplication savings overflow")?;
             }
-        } else if source_kind.is_block_device() {
-            let (major, minor) = payload_device_numbers(metadata.rdev());
-            (PayloadNodeKind::BlockDevice { major, minor }, Vec::new())
-        } else if source_kind.is_char_device() {
-            let (major, minor) = payload_device_numbers(metadata.rdev());
-            (
-                PayloadNodeKind::CharacterDevice { major, minor },
-                Vec::new(),
-            )
-        } else if source_kind.is_fifo() {
-            (PayloadNodeKind::Fifo, Vec::new())
-        } else if source_kind.is_socket() {
-            (PayloadNodeKind::Socket, Vec::new())
-        } else {
+            Ok(())
+        })?;
+        if processed != expected_size {
             anyhow::bail!(
-                "unsupported source payload entry kind at {}",
-                source_path.display()
+                "payload source size changed while chunking {}: expected {}, got {}",
+                entry.path,
+                expected_size,
+                processed
             );
-        };
-
-        let content_authority = kind.is_regular().then(|| PayloadContentAuthority {
-            sha256: hash::sha256(&content),
-            size: content.len() as u64,
-        });
-        let node = PayloadNode {
-            kind,
-            mode: metadata.mode(),
-            user: PayloadIdentity::Numeric {
-                id: u64::from(metadata.uid()),
-            },
-            group: PayloadIdentity::Numeric {
-                id: u64::from(metadata.gid()),
-            },
-            mtime: PayloadTimestamp {
-                seconds: metadata.mtime(),
-                nanoseconds: u32::try_from(metadata.mtime_nsec()).map_err(|_| {
-                    anyhow::anyhow!(
-                        "payload entry {} has invalid negative mtime nanoseconds",
-                        source_path.display()
-                    )
-                })?,
-            },
-            xattrs,
-        };
-        node.validate()?;
-        node.validate_content(content_authority.as_ref())?;
-
-        // Apply exact component assignment.
-        let component = self.component_for_path(&install_path_str)?;
-
-        let entry = FileEntry {
-            path: install_path_str,
-            node,
-            content: content_authority,
-            component,
-            chunks: None, // Set during build if chunking is enabled
-        };
-
-        Ok((entry, content))
-    }
-
-    fn collect_package_entry(&self, file: &ExtractedFile) -> Result<(FileEntry, Vec<u8>)> {
-        let relative = Path::new(&file.path)
-            .strip_prefix("/")
-            .unwrap_or_else(|_| Path::new(&file.path));
-        let install_path = self.install_prefix.join(relative);
-        let install_path_str = install_path
-            .to_str()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "CCS payload install path derived from {} is not valid UTF-8",
-                    file.path
-                )
-            })?
-            .to_string();
-        file.node.validate()?;
-        file.node
-            .validate_content(file.content_authority.as_ref())?;
-        let content = if file.node.kind.is_regular() {
-            let authority = file.content_authority.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "regular payload entry {} has no content authority",
-                    file.path
-                )
-            })?;
-            if authority.size != file.content.len() as u64
-                || authority.sha256 != hash::sha256(&file.content)
-            {
-                anyhow::bail!(
-                    "regular payload entry {} content does not match its exact authority",
-                    file.path
-                );
-            }
-            file.content.clone()
-        } else {
-            if !file.content.is_empty() {
-                anyhow::bail!("non-regular payload entry {} carries content", file.path);
-            }
-            Vec::new()
-        };
-
-        let component = self.component_for_path(&install_path_str)?;
-        Ok((
-            FileEntry {
-                path: install_path_str,
-                node: file.node.clone(),
-                content: file.content_authority.clone(),
-                component,
-                chunks: None,
-            },
-            content,
-        ))
-    }
-
-    /// Scan source directory for all explicit entries.
-    fn scan_source_files(&self) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-
-        for entry in WalkDir::new(&self.source_dir) {
-            let entry = entry.map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to scan complete CCS source authority at {}: {error}",
-                    self.source_dir.display()
-                )
-            })?;
-            let path = entry.path();
-
-            // Skip the source directory itself
-            if path == self.source_dir {
-                continue;
-            }
-
-            // Skip manifest files - these are metadata, not package content
-            if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
-                && (file_name == "ccs.toml" || file_name == "MANIFEST.toml")
-            {
-                continue;
-            }
-
-            files.push(path.to_path_buf());
         }
-
-        files.sort();
-        Ok(files)
+        entry.chunks = Some(chunk_hashes);
+        stats.chunked_files += 1;
+        Ok(())
     }
 
-    /// Resolve a file's explicit author-owned component assignment.
-    ///
-    /// Exact path declarations take precedence over author-declared glob
-    /// grammar. A path without either declaration belongs to the single
-    /// lossless runtime component; Conary never guesses from its filename.
     fn component_for_path(&self, path: &str) -> Result<String> {
-        if let Some(comp) = self.manifest.components.files.get(path) {
-            return Ok(comp.clone());
+        if let Some(component) = self.manifest.components.files.get(path) {
+            return Ok(component.clone());
         }
-
-        let mut matched_component: Option<&str> = None;
+        let mut matched_component = None;
         for rule in &self.manifest.components.rules {
             let pattern = glob::Pattern::new(&rule.path).map_err(|error| {
                 anyhow::anyhow!("invalid components.rules pattern '{}': {error}", rule.path)
@@ -600,9 +442,8 @@ impl CcsBuilder {
                     rule.component
                 );
             }
-            matched_component = Some(&rule.component);
+            matched_component = Some(rule.component.as_str());
         }
-
         Ok(matched_component.unwrap_or("runtime").to_string())
     }
 
@@ -626,7 +467,6 @@ impl CcsBuilder {
         Ok(())
     }
 
-    /// Compute a combined hash for a component
     fn compute_component_hash(&self, files: &[FileEntry]) -> String {
         let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
         for file in files {
@@ -639,319 +479,27 @@ impl CcsBuilder {
     }
 }
 
-fn read_payload_xattrs(path: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
-    let mut attributes = BTreeMap::new();
-    for name in xattr::list(path)? {
-        let name = name.into_string().map_err(|_| {
-            anyhow::anyhow!(
-                "payload entry {} has a non-UTF-8 xattr name",
-                path.display()
-            )
-        })?;
-        let value = xattr::get(path, &name)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "payload xattr {} disappeared while reading {}",
-                name,
-                path.display()
-            )
-        })?;
-        attributes.insert(name, value);
+fn stream_content_authority(source: &ReopenablePayload) -> Result<PayloadContentAuthority> {
+    let mut reader = source.open()?;
+    let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        size = size
+            .checked_add(count as u64)
+            .context("payload source size overflow")?;
     }
-    Ok(attributes)
-}
-
-fn payload_device_numbers(device: u64) -> (u64, u64) {
-    (nix::sys::stat::major(device), nix::sys::stat::minor(device))
+    Ok(PayloadContentAuthority {
+        sha256: hasher.finalize().value,
+        size,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn create_test_manifest() -> CcsManifest {
-        CcsManifest::new_minimal("test-package", "1.0.0")
-    }
-
-    #[test]
-    fn test_builder_empty_dir() {
-        let temp_dir = TempDir::new().unwrap();
-        let manifest = create_test_manifest();
-
-        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
-        let result = builder.build().unwrap();
-
-        assert!(result.files.is_empty());
-        assert!(result.components.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn builder_rejects_an_incomplete_source_walk() {
-        use std::os::unix::fs::PermissionsExt;
-
-        // A privileged process can traverse mode-000 directories, so this
-        // permission-boundary proof applies only when the kernel enforces the
-        // unreadable directory for the current test process.
-        if unsafe { libc::geteuid() } == 0 {
-            return;
-        }
-
-        let temp_dir = TempDir::new().unwrap();
-        fs::write(
-            temp_dir.path().join("visible"),
-            b"must not become a partial package",
-        )
-        .unwrap();
-        let unreadable = temp_dir.path().join("unreadable");
-        fs::create_dir(&unreadable).unwrap();
-        fs::write(unreadable.join("hidden"), b"exact authority").unwrap();
-        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o0)).unwrap();
-
-        let result = CcsBuilder::new(create_test_manifest(), temp_dir.path())
-            .unwrap()
-            .build();
-
-        // Restore access before TempDir cleanup.
-        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
-        let error = result.expect_err("an unreadable subtree must abort the CCS build");
-        assert!(
-            error
-                .to_string()
-                .contains("failed to scan complete CCS source authority"),
-            "{error:#}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn builder_rejects_non_utf8_payload_paths_without_renaming_them() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt;
-
-        let temp_dir = TempDir::new().unwrap();
-        let invalid_name = OsString::from_vec(vec![b'p', b'a', b'y', b'l', b'o', b'a', b'd', 0xff]);
-        fs::write(temp_dir.path().join(invalid_name), b"exact bytes").unwrap();
-
-        let error = CcsBuilder::new(create_test_manifest(), temp_dir.path())
-            .unwrap()
-            .build()
-            .expect_err("a non-UTF-8 payload path must not be signed under a lossy name");
-        assert!(
-            error.to_string().contains("is not valid UTF-8"),
-            "{error:#}"
-        );
-    }
-
-    #[test]
-    fn invalid_policy_configuration_fails_builder_construction() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut manifest = create_test_manifest();
-        manifest.policy.reject_paths = vec!["[".to_string()];
-
-        let error = match CcsBuilder::new(manifest, temp_dir.path()) {
-            Ok(_) => panic!("invalid policy configuration must not create a builder"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            BuilderError::PolicyConfiguration(PolicyError::Config(_))
-        ));
-    }
-
-    #[test]
-    fn builder_always_applies_mandatory_setuid_policy() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = TempDir::new().unwrap();
-        let bin_dir = temp_dir.path().join("usr/bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        let helper = bin_dir.join("helper");
-        fs::write(&helper, b"#!/bin/sh\n").unwrap();
-        fs::set_permissions(&helper, fs::Permissions::from_mode(0o6755)).unwrap();
-
-        let result = CcsBuilder::new(create_test_manifest(), temp_dir.path())
-            .unwrap()
-            .build()
-            .unwrap();
-        let helper = result
-            .files
-            .iter()
-            .find(|entry| entry.path == "/usr/bin/helper")
-            .unwrap();
-        assert_eq!(helper.node.mode & 0o6000, 0);
-    }
-
-    #[test]
-    fn payload_authority_types_reject_unknown_fields() {
-        let file = FileEntry {
-            path: "/usr/bin/example".to_string(),
-            node: PayloadNode::regular(0o755),
-            content: None,
-            component: "runtime".to_string(),
-            chunks: None,
-        };
-        let mut file_value = serde_json::to_value(&file).unwrap();
-        file_value
-            .as_object_mut()
-            .unwrap()
-            .insert("invented_authority".to_string(), serde_json::json!(true));
-        assert!(serde_json::from_value::<FileEntry>(file_value).is_err());
-
-        let component = ComponentData {
-            name: "runtime".to_string(),
-            files: vec![file],
-            hash: "sha256:test".to_string(),
-            size: 0,
-        };
-        let mut component_value = serde_json::to_value(&component).unwrap();
-        component_value
-            .as_object_mut()
-            .unwrap()
-            .insert("invented_authority".to_string(), serde_json::json!(true));
-        assert!(serde_json::from_value::<ComponentData>(component_value).is_err());
-    }
-
-    #[test]
-    fn test_builder_single_file() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create a test file
-        let bin_dir = temp_dir.path().join("usr/bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::write(bin_dir.join("myapp"), b"#!/bin/bash\necho hello").unwrap();
-
-        let manifest = create_test_manifest();
-        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
-        let result = builder.build().unwrap();
-
-        let files = result
-            .files
-            .iter()
-            .filter(|entry| entry.node.kind.is_regular())
-            .collect::<Vec<_>>();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].path, "/usr/bin/myapp");
-        assert_eq!(files[0].component, "runtime");
-    }
-
-    #[test]
-    fn builder_does_not_infer_components_from_payload_paths() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create files in different categories
-        let dirs = [
-            ("usr/bin", "myapp"),
-            ("usr/lib", "libfoo.so.1"),
-            ("usr/include", "foo.h"),
-            ("etc/myapp", "config.conf"),
-            ("usr/share/doc/myapp", "README"),
-        ];
-
-        for (dir, file) in &dirs {
-            let path = temp_dir.path().join(dir);
-            fs::create_dir_all(&path).unwrap();
-            fs::write(path.join(file), b"test content").unwrap();
-        }
-
-        let manifest = create_test_manifest();
-        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
-        let result = builder.build().unwrap();
-
-        let payload_files = result
-            .files
-            .iter()
-            .filter(|entry| entry.node.kind.is_regular())
-            .collect::<Vec<_>>();
-        assert_eq!(payload_files.len(), 5);
-        assert!(
-            payload_files
-                .iter()
-                .all(|entry| entry.component == "runtime")
-        );
-        assert_eq!(result.components.len(), 1);
-        assert!(result.components.contains_key("runtime"));
-    }
-
-    #[test]
-    fn test_builder_file_override() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create a test file
-        let bin_dir = temp_dir.path().join("usr/bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::write(bin_dir.join("helper"), b"helper script").unwrap();
-
-        // Create manifest with override
-        let mut manifest = create_test_manifest();
-        manifest
-            .components
-            .files
-            .insert("/usr/bin/helper".to_string(), "lib".to_string());
-
-        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
-        let result = builder.build().unwrap();
-
-        let helper = result
-            .files
-            .iter()
-            .find(|entry| entry.path == "/usr/bin/helper")
-            .unwrap();
-        assert_eq!(helper.component, "lib");
-    }
-
-    #[test]
-    fn test_builder_symlink() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create a file and symlink
-        let lib_dir = temp_dir.path().join("usr/lib");
-        fs::create_dir_all(&lib_dir).unwrap();
-        fs::write(lib_dir.join("libfoo.so.1.0.0"), b"library content").unwrap();
-
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("libfoo.so.1.0.0", lib_dir.join("libfoo.so.1")).unwrap();
-
-        let manifest = create_test_manifest();
-        let builder = CcsBuilder::new(manifest, temp_dir.path()).unwrap();
-        let result = builder.build().unwrap();
-
-        #[cfg(unix)]
-        {
-            let symlink = result
-                .files
-                .iter()
-                .find(|f| f.path == "/usr/lib/libfoo.so.1")
-                .unwrap();
-            assert_eq!(
-                symlink.node.kind,
-                PayloadNodeKind::Symlink {
-                    target: "libfoo.so.1.0.0".to_string()
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn test_suspicious_executable_component_audit_targets_doc_config_and_data() {
-        let executable = PayloadNode::regular(0o755);
-        for component in ["doc", "config", "data"] {
-            assert!(
-                is_suspicious_component_executable(component, &executable),
-                "{component} executables should be flagged as suspicious"
-            );
-        }
-
-        assert!(!is_suspicious_component_executable("runtime", &executable));
-        assert!(!is_suspicious_component_executable(
-            "doc",
-            &PayloadNode::regular(0o644)
-        ));
-        let mut symlink = PayloadNode::regular(0o755);
-        symlink.kind = PayloadNodeKind::Symlink {
-            target: "target".to_string(),
-        };
-        symlink.mode = libc::S_IFLNK | 0o755;
-        assert!(!is_suspicious_component_executable("doc", &symlink));
-    }
-}
+#[path = "builder/tests.rs"]
+mod tests;

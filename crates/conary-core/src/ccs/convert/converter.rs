@@ -473,7 +473,7 @@ fn build_streaming_result(
         manifest,
         components,
         files,
-        blobs: HashMap::new(),
+        payloads: payloads.to_vec(),
         total_size,
         chunked: false,
         chunk_stats: None,

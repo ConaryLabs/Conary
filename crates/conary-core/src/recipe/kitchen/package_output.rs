@@ -110,10 +110,14 @@ impl Cook<'_> {
         })?;
 
         self.log_line(&format!(
-            "Created CCS package: {} ({} files, {} blobs)",
+            "Created CCS package: {} ({} files, {} payload sources)",
             package_path.display(),
             build_result.files.len(),
-            build_result.blobs.len()
+            build_result
+                .payloads
+                .iter()
+                .filter(|payload| payload.node.kind.is_regular())
+                .count()
         ));
         info!(
             "Cooked: {} ({} files, DNA: {})",

@@ -1,19 +1,23 @@
 // conary-core/src/ccs/policy.rs
-//! Build policy system for CCS packages
+//! Build-policy orchestration for CCS authoring.
 //!
-//! Provides automated quality enforcement during package builds through a
-//! trait-based policy engine. Policies can validate, transform, or reject
-//! files during the build process.
+//! Metadata policies mutate typed file authority in place. Content policies
+//! write replacements into an authoring workspace and return a new path, so
+//! the builder never needs a whole-file byte vector.
 
 use crate::ccs::builder::FileEntry;
 use anyhow::Result;
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// Policy errors
+mod content;
+
+pub use content::{CompressManpagesPolicy, FixShebangsPolicy, StripBinariesPolicy};
+
+/// Policy errors.
 #[derive(Error, Debug)]
 pub enum PolicyError {
     #[error("Policy violation: {policy} - {message}")]
@@ -26,156 +30,130 @@ pub enum PolicyError {
     Execution(String),
 }
 
-/// Result of applying a policy to a file
-#[derive(Debug, Clone)]
+/// Result of applying a policy to one source-backed entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyAction {
-    /// Keep file unchanged
+    /// Keep the current source unchanged.
     Keep,
-    /// Replace file content with new bytes
-    Replace(Vec<u8>),
-    /// Skip this file (remove from package)
+    /// Replace the current source with this disk-backed path.
+    Replace(PathBuf),
+    /// Skip this file.
     Skip,
-    /// Reject the build entirely with error message
+    /// Reject the build.
     Reject(String),
 }
 
-/// Context provided to policies during application
+/// Context provided to policies during application.
 pub struct PolicyContext<'a> {
-    /// Source path of the file on disk
+    /// Current source path. This may be an earlier policy's replacement.
     pub source_path: &'a Path,
-    /// File entry metadata
+    /// Unique destination reserved for this policy invocation.
+    pub replacement_path: &'a Path,
+    /// File-entry metadata.
     pub entry: &'a mut FileEntry,
-    /// File content bytes
-    pub content: &'a [u8],
-    /// All policies configuration
+    /// All policy configuration.
     pub config: &'a BuildPolicyConfig,
 }
 
-/// A build policy that can validate or transform files
+/// A build policy that can validate, transform, or reject one entry.
 pub trait BuildPolicy: Send + Sync {
-    /// Policy name for logging and error messages
     fn name(&self) -> &str;
 
-    /// Apply this policy to a file
-    ///
-    /// Returns a `PolicyAction` indicating what to do with the file:
-    /// - `Keep`: Leave unchanged
-    /// - `Replace(bytes)`: Replace content with new bytes
-    /// - `Skip`: Remove from package
-    /// - `Reject(msg)`: Fail the entire build
-    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction>;
+    /// Apply the policy without materializing the complete content in memory.
+    fn apply(&self, ctx: &mut PolicyContext<'_>) -> Result<PolicyAction>;
 }
 
-/// Policy chain - applies policies in sequence
+/// Ordered policy chain.
 pub struct PolicyChain {
     policies: Vec<Box<dyn BuildPolicy>>,
 }
 
 impl PolicyChain {
-    /// Create an empty policy chain
+    #[must_use]
     pub fn new() -> Self {
         Self {
             policies: Vec::new(),
         }
     }
 
-    /// Create a policy chain from configuration
     pub fn from_config(config: &BuildPolicyConfig) -> std::result::Result<Self, PolicyError> {
         let mut chain = Self::new();
-
-        // Add DenyPaths if configured
         if !config.reject_paths.is_empty() {
             chain.add(Box::new(DenyPathsPolicy::new(&config.reject_paths)?));
         }
-
-        // Always strip setuid/setgid bits from packaged files.
         chain.add(Box::new(StripSetuidPolicy::new()));
-
-        // Add NormalizeTimestamps if configured
         if config.normalize_timestamps {
             chain.add(Box::new(NormalizeTimestampsPolicy::new()));
         }
-
-        // Add StripBinaries if configured
         if config.strip_binaries {
             chain.add(Box::new(StripBinariesPolicy::new()));
         }
-
-        // Add FixShebangs if configured
         if !config.fix_shebangs.is_empty() {
+            if config.fix_shebangs.keys().any(String::is_empty) {
+                return Err(PolicyError::Config(
+                    "fix_shebangs patterns must not be empty".to_string(),
+                ));
+            }
             chain.add(Box::new(FixShebangsPolicy::new(
                 config.fix_shebangs.clone(),
             )));
         }
-
-        // Add CompressManpages if configured
         if config.compress_manpages {
             chain.add(Box::new(CompressManpagesPolicy::new()));
         }
-
         Ok(chain)
     }
 
-    /// Add a policy to the chain
     pub fn add(&mut self, policy: Box<dyn BuildPolicy>) {
         self.policies.push(policy);
     }
 
-    /// Check if the chain is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.policies.is_empty()
     }
 
-    /// Apply all policies to a file entry and content
-    ///
-    /// Returns the final action and potentially modified content
+    /// Apply all policies and return the final source path when replaced.
     pub fn apply(
         &self,
         entry: &mut FileEntry,
-        content: Vec<u8>,
         source_path: &Path,
+        workspace: &Path,
         config: &BuildPolicyConfig,
-    ) -> Result<(PolicyAction, Vec<u8>)> {
-        let mut current_content = content;
-        let mut was_replaced = false;
+    ) -> Result<PolicyAction> {
+        let mut current_source = source_path.to_path_buf();
+        let mut replaced = false;
 
-        for policy in &self.policies {
+        for (index, policy) in self.policies.iter().enumerate() {
+            let replacement_path = workspace.join(format!("{index:04}"));
             let mut ctx = PolicyContext {
-                source_path,
+                source_path: &current_source,
+                replacement_path: &replacement_path,
                 entry,
-                content: &current_content,
                 config,
             };
-
             match policy.apply(&mut ctx)? {
-                PolicyAction::Keep => {
-                    // Continue to next policy
+                PolicyAction::Keep => {}
+                PolicyAction::Replace(path) => {
+                    current_source = path;
+                    replaced = true;
                 }
-                PolicyAction::Replace(new_content) => {
-                    current_content = new_content;
-                    was_replaced = true;
-                    // Continue to next policy with new content
-                }
-                PolicyAction::Skip => {
-                    return Ok((PolicyAction::Skip, current_content));
-                }
-                PolicyAction::Reject(msg) => {
+                PolicyAction::Skip => return Ok(PolicyAction::Skip),
+                PolicyAction::Reject(message) => {
                     return Err(PolicyError::Violation {
                         policy: policy.name().to_string(),
-                        message: msg,
+                        message,
                     }
                     .into());
                 }
             }
         }
 
-        // Signal Replace so the builder knows to rehash the modified content
-        let action = if was_replaced {
-            PolicyAction::Replace(Vec::new())
+        Ok(if replaced {
+            PolicyAction::Replace(current_source)
         } else {
             PolicyAction::Keep
-        };
-        Ok((action, current_content))
+        })
     }
 }
 
@@ -185,39 +163,29 @@ impl Default for PolicyChain {
     }
 }
 
-/// Build policy configuration from ccs.toml
+/// Build-policy configuration from `ccs.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BuildPolicyConfig {
-    /// Paths to reject (glob patterns)
     #[serde(default)]
     pub reject_paths: Vec<String>,
 
-    /// Exact paths where setuid mode bits may be preserved.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_setuid_paths: Vec<String>,
 
-    /// Whether to strip ELF binaries
     #[serde(default)]
     pub strip_binaries: bool,
 
-    /// Shebang replacements (old -> new)
     #[serde(default)]
     pub fix_shebangs: HashMap<String, String>,
 
-    /// Whether to normalize file timestamps
     #[serde(default)]
     pub normalize_timestamps: bool,
 
-    /// Whether to compress man pages
     #[serde(default)]
     pub compress_manpages: bool,
 }
 
-// =============================================================================
-// Policy Implementations
-// =============================================================================
-
-/// Policy to reject files matching forbidden path patterns
+/// Reject paths selected by exact author configuration.
 pub struct DenyPathsPolicy {
     patterns: Vec<Pattern>,
     pattern_strings: Vec<String>,
@@ -225,15 +193,16 @@ pub struct DenyPathsPolicy {
 
 impl DenyPathsPolicy {
     pub fn new(patterns: &[String]) -> std::result::Result<Self, PolicyError> {
-        let mut compiled = Vec::new();
-        for pat in patterns {
-            let pattern = Pattern::new(pat).map_err(|e| {
-                PolicyError::Config(format!("Invalid glob pattern '{}': {}", pat, e))
-            })?;
-            compiled.push(pattern);
-        }
+        let patterns_compiled = patterns
+            .iter()
+            .map(|pattern| {
+                Pattern::new(pattern).map_err(|error| {
+                    PolicyError::Config(format!("Invalid glob pattern '{pattern}': {error}"))
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(Self {
-            patterns: compiled,
+            patterns: patterns_compiled,
             pattern_strings: patterns.to_vec(),
         })
     }
@@ -244,12 +213,12 @@ impl BuildPolicy for DenyPathsPolicy {
         "DenyPaths"
     }
 
-    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
-        for (pattern, pattern_str) in self.patterns.iter().zip(self.pattern_strings.iter()) {
+    fn apply(&self, ctx: &mut PolicyContext<'_>) -> Result<PolicyAction> {
+        for (pattern, pattern_text) in self.patterns.iter().zip(&self.pattern_strings) {
             if pattern.matches(&ctx.entry.path) {
                 return Ok(PolicyAction::Reject(format!(
-                    "path '{}' matches reject pattern '{}'",
-                    ctx.entry.path, pattern_str
+                    "path '{}' matches reject pattern '{pattern_text}'",
+                    ctx.entry.path
                 )));
             }
         }
@@ -257,23 +226,22 @@ impl BuildPolicy for DenyPathsPolicy {
     }
 }
 
-/// Policy to normalize file timestamps for reproducible builds
+/// Reproducible timestamp policy marker.
 pub struct NormalizeTimestampsPolicy {
-    /// The timestamp to use (Unix epoch seconds)
     timestamp: u64,
 }
 
 impl NormalizeTimestampsPolicy {
+    #[must_use]
     pub fn new() -> Self {
-        // Check SOURCE_DATE_EPOCH environment variable (standard for reproducible builds)
         let timestamp = std::env::var("SOURCE_DATE_EPOCH")
             .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(1704067200); // 2024-01-01 00:00:00 UTC
-
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1_704_067_200);
         Self { timestamp }
     }
 
+    #[must_use]
     pub fn timestamp(&self) -> u64 {
         self.timestamp
     }
@@ -290,19 +258,17 @@ impl BuildPolicy for NormalizeTimestampsPolicy {
         "NormalizeTimestamps"
     }
 
-    fn apply(&self, _ctx: &mut PolicyContext) -> Result<PolicyAction> {
-        // Timestamp normalization doesn't modify file content
-        // It's applied at the tar archive level when writing the package
-        // We just return Keep here and the builder handles mtime normalization
+    fn apply(&self, _ctx: &mut PolicyContext<'_>) -> Result<PolicyAction> {
         Ok(PolicyAction::Keep)
     }
 }
 
-/// Policy to strip setuid/setgid bits from packaged files
+/// Always remove setgid and remove setuid unless explicitly allowed.
 #[derive(Default)]
 pub struct StripSetuidPolicy;
 
 impl StripSetuidPolicy {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -313,7 +279,7 @@ impl BuildPolicy for StripSetuidPolicy {
         "StripSetuid"
     }
 
-    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
+    fn apply(&self, ctx: &mut PolicyContext<'_>) -> Result<PolicyAction> {
         let allow_setuid = ctx
             .config
             .allow_setuid_paths
@@ -328,666 +294,6 @@ impl BuildPolicy for StripSetuidPolicy {
     }
 }
 
-/// Policy to strip debug symbols from ELF binaries
-#[derive(Default)]
-pub struct StripBinariesPolicy;
-
-impl StripBinariesPolicy {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Check if content is an ELF binary
-    fn is_elf(content: &[u8]) -> bool {
-        content.len() >= 4 && &content[0..4] == b"\x7fELF"
-    }
-
-    /// Check if file is executable
-    fn is_executable(entry: &FileEntry) -> bool {
-        entry.node.kind.is_regular() && entry.node.mode & 0o111 != 0
-    }
-}
-
-impl BuildPolicy for StripBinariesPolicy {
-    fn name(&self) -> &str {
-        "StripBinaries"
-    }
-
-    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
-        // Only process ELF files that are executable or shared libraries
-        if !Self::is_elf(ctx.content) {
-            return Ok(PolicyAction::Keep);
-        }
-
-        // Skip if not executable and not a .so file
-        if !Self::is_executable(ctx.entry) && !ctx.entry.path.contains(".so") {
-            return Ok(PolicyAction::Keep);
-        }
-
-        // Prefer system strip binary (preserves .note.gnu.build-id and .gnu.hash),
-        // fall back to native Rust implementation if unavailable
-        match strip_elf_with_system_tool(ctx.source_path) {
-            Ok(stripped) => {
-                if stripped.len() < ctx.content.len() {
-                    log::debug!(
-                        "Stripped {} with system strip: {} -> {} bytes",
-                        ctx.entry.path,
-                        ctx.content.len(),
-                        stripped.len()
-                    );
-                    return Ok(PolicyAction::Replace(stripped));
-                }
-                return Ok(PolicyAction::Keep);
-            }
-            Err(_) => {
-                // System strip not available, fall back to native implementation
-            }
-        }
-
-        match strip_elf_binary(ctx.content) {
-            Ok(stripped) => {
-                // Only replace if we actually reduced size
-                if stripped.len() < ctx.content.len() {
-                    log::debug!(
-                        "Stripped {}: {} -> {} bytes (native)",
-                        ctx.entry.path,
-                        ctx.content.len(),
-                        stripped.len()
-                    );
-                    Ok(PolicyAction::Replace(stripped))
-                } else {
-                    Ok(PolicyAction::Keep)
-                }
-            }
-            Err(e) => {
-                // Strip failed, but don't reject - just keep original
-                log::debug!("strip failed for {}: {}", ctx.entry.path, e);
-                Ok(PolicyAction::Keep)
-            }
-        }
-    }
-}
-
-/// Attempt to strip an ELF binary using the system `strip` or `llvm-strip` tool.
-///
-/// This preserves `.note.gnu.build-id` sections (needed for debuginfod) and
-/// `.gnu.hash` sections that the native Rust stripper would remove.
-fn strip_elf_with_system_tool(source_path: &Path) -> std::result::Result<Vec<u8>, String> {
-    // Copy to a temp file so we don't modify the original
-    let temp_file =
-        tempfile::NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
-    std::fs::copy(source_path, temp_file.path())
-        .map_err(|e| format!("Failed to copy for stripping: {}", e))?;
-
-    // Try strip, then llvm-strip
-    let strip_result = std::process::Command::new("strip")
-        .arg("--strip-unneeded")
-        .arg(temp_file.path())
-        .output();
-
-    let success = match strip_result {
-        Ok(output) if output.status.success() => true,
-        _ => {
-            // Try llvm-strip as fallback
-            let llvm_result = std::process::Command::new("llvm-strip")
-                .arg("--strip-unneeded")
-                .arg(temp_file.path())
-                .output();
-            matches!(llvm_result, Ok(output) if output.status.success())
-        }
-    };
-
-    if !success {
-        return Err("No system strip tool available".to_string());
-    }
-
-    std::fs::read(temp_file.path()).map_err(|e| format!("Failed to read stripped binary: {}", e))
-}
-
-/// Strip debug symbols from an ELF binary using native Rust
-///
-/// This implementation removes section headers and debug sections by:
-/// 1. Parsing the ELF structure with goblin
-/// 2. Finding the end of the last loadable segment (PT_LOAD)
-/// 3. Truncating the file to that point
-/// 4. Updating the ELF header to indicate no section headers
-///
-/// This is equivalent to a basic `strip --strip-unneeded` for executables
-/// and shared libraries. It preserves program headers needed for execution.
-fn strip_elf_binary(content: &[u8]) -> std::result::Result<Vec<u8>, String> {
-    use goblin::elf::{Elf, header::*, program_header::PT_LOAD};
-
-    // Parse the ELF file
-    let elf = Elf::parse(content).map_err(|e| format!("Failed to parse ELF: {}", e))?;
-
-    // Only strip executables (ET_EXEC) and shared objects (ET_DYN)
-    // Don't strip relocatable files (ET_REL) as they need section headers
-    if elf.header.e_type != ET_EXEC && elf.header.e_type != ET_DYN {
-        return Err("Not an executable or shared library".to_string());
-    }
-
-    // Find the end of the last loadable segment
-    let mut last_segment_end: u64 = 0;
-    for phdr in &elf.program_headers {
-        if phdr.p_type == PT_LOAD {
-            let segment_end = phdr.p_offset + phdr.p_filesz;
-            if segment_end > last_segment_end {
-                last_segment_end = segment_end;
-            }
-        }
-    }
-
-    // Also need to keep program headers
-    let phdr_end = elf.header.e_phoff + (elf.header.e_phnum as u64 * elf.header.e_phentsize as u64);
-    if phdr_end > last_segment_end {
-        last_segment_end = phdr_end;
-    }
-
-    // Ensure we keep at least the ELF header
-    let elf_header_size = elf.header.e_ehsize as u64;
-    if last_segment_end < elf_header_size {
-        last_segment_end = elf_header_size;
-    }
-
-    // Truncate the binary
-    let truncate_at = last_segment_end as usize;
-    if truncate_at >= content.len() {
-        // Nothing to strip
-        return Err("No sections to strip".to_string());
-    }
-
-    let mut stripped = content[..truncate_at].to_vec();
-
-    // Zero out section header references in the ELF header
-    // This tells the loader there are no section headers
-    // Use the correct byte order based on ELF header endianness
-    if elf.is_64 {
-        // 64-bit ELF: e_shoff at offset 40 (8 bytes), e_shnum at 60 (2 bytes), e_shstrndx at 62 (2 bytes)
-        if stripped.len() >= 64 {
-            if elf.little_endian {
-                stripped[40..48].copy_from_slice(&0u64.to_le_bytes());
-                stripped[60..62].copy_from_slice(&0u16.to_le_bytes());
-                stripped[62..64].copy_from_slice(&0u16.to_le_bytes());
-            } else {
-                stripped[40..48].copy_from_slice(&0u64.to_be_bytes());
-                stripped[60..62].copy_from_slice(&0u16.to_be_bytes());
-                stripped[62..64].copy_from_slice(&0u16.to_be_bytes());
-            }
-        }
-    } else {
-        // 32-bit ELF: e_shoff at offset 32 (4 bytes), e_shnum at 48 (2 bytes), e_shstrndx at 50 (2 bytes)
-        if stripped.len() >= 52 {
-            if elf.little_endian {
-                stripped[32..36].copy_from_slice(&0u32.to_le_bytes());
-                stripped[48..50].copy_from_slice(&0u16.to_le_bytes());
-                stripped[50..52].copy_from_slice(&0u16.to_le_bytes());
-            } else {
-                stripped[32..36].copy_from_slice(&0u32.to_be_bytes());
-                stripped[48..50].copy_from_slice(&0u16.to_be_bytes());
-                stripped[50..52].copy_from_slice(&0u16.to_be_bytes());
-            }
-        }
-    }
-
-    Ok(stripped)
-}
-
-/// Policy to normalize shebangs in scripts
-pub struct FixShebangsPolicy {
-    replacements: HashMap<String, String>,
-}
-
-impl FixShebangsPolicy {
-    pub fn new(replacements: HashMap<String, String>) -> Self {
-        Self { replacements }
-    }
-
-    /// Check if content looks like a script (starts with #!)
-    fn is_script(content: &[u8]) -> bool {
-        content.len() >= 2 && &content[0..2] == b"#!"
-    }
-
-    /// Extract shebang line from content
-    fn extract_shebang(content: &[u8]) -> Option<&[u8]> {
-        if !Self::is_script(content) {
-            return None;
-        }
-        let end = content
-            .iter()
-            .position(|&b| b == b'\n')
-            .unwrap_or(content.len());
-        Some(&content[0..end])
-    }
-}
-
-impl BuildPolicy for FixShebangsPolicy {
-    fn name(&self) -> &str {
-        "FixShebangs"
-    }
-
-    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
-        let Some(shebang_bytes) = Self::extract_shebang(ctx.content) else {
-            return Ok(PolicyAction::Keep);
-        };
-
-        let Ok(shebang) = std::str::from_utf8(shebang_bytes) else {
-            return Ok(PolicyAction::Keep);
-        };
-
-        // Check each replacement pattern
-        for (old, new) in &self.replacements {
-            // Check if shebang contains the old pattern
-            if shebang.contains(old) {
-                let new_shebang = shebang.replace(old, new);
-                let mut new_content = new_shebang.into_bytes();
-                new_content.extend_from_slice(&ctx.content[shebang_bytes.len()..]);
-                return Ok(PolicyAction::Replace(new_content));
-            }
-        }
-
-        Ok(PolicyAction::Keep)
-    }
-}
-
-/// Policy to compress man pages
-#[derive(Default)]
-pub struct CompressManpagesPolicy;
-
-impl CompressManpagesPolicy {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Check if path looks like a man page
-    fn is_manpage(path: &str) -> bool {
-        const MAN_DIRS: &[&str] = &[
-            "/man/", "/man1/", "/man2/", "/man3/", "/man4/", "/man5/", "/man6/", "/man7/", "/man8/",
-        ];
-        const MAN_EXTS: &[&str] = &[".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".n", ".l"];
-
-        if !MAN_DIRS.iter().any(|d| path.contains(d)) {
-            return false;
-        }
-
-        let filename = path.rsplit('/').next().unwrap_or("");
-        MAN_EXTS.iter().any(|ext| filename.ends_with(ext))
-    }
-
-    /// Check if content is already gzipped
-    fn is_gzipped(content: &[u8]) -> bool {
-        content.len() >= 2 && content[0] == 0x1f && content[1] == 0x8b
-    }
-}
-
-impl BuildPolicy for CompressManpagesPolicy {
-    fn name(&self) -> &str {
-        "CompressManpages"
-    }
-
-    fn apply(&self, ctx: &mut PolicyContext) -> Result<PolicyAction> {
-        // Only process man pages
-        if !Self::is_manpage(&ctx.entry.path) {
-            return Ok(PolicyAction::Keep);
-        }
-
-        // Skip if already compressed
-        if Self::is_gzipped(ctx.content) {
-            return Ok(PolicyAction::Keep);
-        }
-
-        // Compress with gzip
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
-        use std::io::Write;
-
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder
-            .write_all(ctx.content)
-            .map_err(|e| PolicyError::Execution(format!("Failed to compress: {}", e)))?;
-        let compressed = encoder
-            .finish()
-            .map_err(|e| PolicyError::Execution(format!("Failed to finish compression: {}", e)))?;
-
-        Ok(PolicyAction::Replace(compressed))
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn make_entry(path: &str, mode: u32) -> FileEntry {
-        FileEntry {
-            path: path.to_string(),
-            node: crate::payload::PayloadNode::regular(mode),
-            content: Some(crate::payload::PayloadContentAuthority {
-                sha256: crate::hash::sha256(&[]),
-                size: 0,
-            }),
-            component: "runtime".to_string(),
-            chunks: None,
-        }
-    }
-
-    #[test]
-    fn test_deny_paths_policy() {
-        let policy =
-            DenyPathsPolicy::new(&["/home/*".to_string(), "/tmp/build*".to_string()]).unwrap();
-
-        // Should reject /home/user/file
-        let mut entry = make_entry("/home/user/file", 0o644);
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/home/user/file"),
-            entry: &mut entry,
-            content: b"test",
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Reject(_)));
-
-        // Should reject /tmp/build123
-        let mut entry = make_entry("/tmp/build123", 0o644);
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/tmp/build123"),
-            entry: &mut entry,
-            content: b"test",
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Reject(_)));
-
-        // Should allow /usr/bin/myapp
-        let mut entry = make_entry("/usr/bin/myapp", 0o755);
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/myapp"),
-            entry: &mut entry,
-            content: b"test",
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Keep));
-    }
-
-    #[test]
-    fn test_fix_shebangs_policy() {
-        let mut replacements = HashMap::new();
-        replacements.insert(
-            "/usr/bin/env python".to_string(),
-            "/usr/bin/python3".to_string(),
-        );
-        let policy = FixShebangsPolicy::new(replacements);
-
-        // Should fix python shebang
-        let mut entry = make_entry("/usr/bin/script.py", 0o755);
-        let content = b"#!/usr/bin/env python\nprint('hello')";
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/script.py"),
-            entry: &mut entry,
-            content,
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        if let PolicyAction::Replace(new_content) = result {
-            assert!(new_content.starts_with(b"#!/usr/bin/python3"));
-        } else {
-            panic!("Expected Replace action");
-        }
-
-        // Should keep bash shebang unchanged
-        let content = b"#!/bin/bash\necho hello";
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/script.sh"),
-            entry: &mut entry,
-            content,
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Keep));
-    }
-
-    #[test]
-    fn test_compress_manpages_policy() {
-        let policy = CompressManpagesPolicy::new();
-
-        // Should compress man page
-        let mut entry = make_entry("/usr/share/man/man1/myapp.1", 0o644);
-        let content = b".TH MYAPP 1\n.SH NAME\nmyapp - test application";
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/share/man/man1/myapp.1"),
-            entry: &mut entry,
-            content,
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        if let PolicyAction::Replace(new_content) = result {
-            // Should be gzipped (magic bytes)
-            assert_eq!(new_content[0], 0x1f);
-            assert_eq!(new_content[1], 0x8b);
-        } else {
-            panic!("Expected Replace action");
-        }
-
-        // Should skip non-man files
-        let mut entry = make_entry("/usr/bin/myapp", 0o755);
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/myapp"),
-            entry: &mut entry,
-            content: b"test",
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Keep));
-    }
-
-    #[test]
-    fn test_normalize_timestamps_policy() {
-        // Test with SOURCE_DATE_EPOCH
-        // SAFETY: We're in a single-threaded test context
-        unsafe { std::env::set_var("SOURCE_DATE_EPOCH", "1700000000") };
-        let policy = NormalizeTimestampsPolicy::new();
-        assert_eq!(policy.timestamp(), 1700000000);
-        // SAFETY: We're in a single-threaded test context
-        unsafe { std::env::remove_var("SOURCE_DATE_EPOCH") };
-
-        // Test without SOURCE_DATE_EPOCH (should use default)
-        let policy = NormalizeTimestampsPolicy::new();
-        assert_eq!(policy.timestamp(), 1704067200); // 2024-01-01
-    }
-
-    #[test]
-    fn test_policy_chain() {
-        let config = BuildPolicyConfig {
-            reject_paths: vec!["/home/*".to_string()],
-            strip_binaries: false,
-            fix_shebangs: HashMap::new(),
-            normalize_timestamps: false,
-            compress_manpages: false,
-            allow_setuid_paths: Vec::new(),
-        };
-
-        let chain = PolicyChain::from_config(&config).unwrap();
-        assert!(!chain.is_empty());
-    }
-
-    #[test]
-    fn test_default_policy_chain_includes_setuid_stripping() {
-        let config = BuildPolicyConfig::default();
-        let chain = PolicyChain::from_config(&config).unwrap();
-        assert!(!chain.is_empty());
-    }
-
-    #[test]
-    fn test_strip_elf_binary_not_elf() {
-        // Non-ELF content should fail
-        let content = b"not an elf file";
-        let result = strip_elf_binary(content);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_strip_elf_binary_real() {
-        // Test with a real system binary (if available)
-        // This test is skipped if the binary doesn't exist
-        let binary_paths = ["/bin/true", "/usr/bin/true", "/bin/ls", "/usr/bin/ls"];
-
-        let content = binary_paths
-            .iter()
-            .find_map(|path| std::fs::read(path).ok());
-
-        let Some(content) = content else {
-            // Skip test if no binary found
-            return;
-        };
-
-        // Verify it's an ELF
-        assert!(content.len() >= 4 && &content[0..4] == b"\x7fELF");
-
-        let result = strip_elf_binary(&content);
-
-        // Strip should either succeed (reducing size) or fail gracefully
-        // Modern binaries are often already stripped, so we accept both outcomes
-        match result {
-            Ok(stripped) => {
-                // If successful, verify the output is valid
-                assert!(
-                    stripped.len() >= 64,
-                    "stripped binary should have ELF header"
-                );
-                assert_eq!(&stripped[0..4], b"\x7fELF", "should still be ELF");
-
-                // Section header offset should be zeroed
-                let shoff = u64::from_le_bytes(stripped[40..48].try_into().unwrap());
-                assert_eq!(shoff, 0, "shoff should be zeroed");
-            }
-            Err(e) => {
-                // Acceptable errors: already stripped, nothing to strip
-                assert!(
-                    e.contains("No sections") || e.contains("Not an executable"),
-                    "unexpected error: {}",
-                    e
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_policy_chain_returns_replace_when_content_modified() {
-        // A policy chain should return Replace (not Keep) when a policy modifies content.
-        // This is critical because the builder uses the action to decide whether to rehash.
-        let mut chain = PolicyChain::new();
-
-        // Add a shebang-fixing policy that will modify the content
-        let mut replacements = HashMap::new();
-        replacements.insert(
-            "/usr/bin/env python".to_string(),
-            "/usr/bin/python3".to_string(),
-        );
-        chain.add(Box::new(FixShebangsPolicy::new(replacements)));
-
-        let mut entry = make_entry("/usr/bin/script.py", 0o755);
-        let content = b"#!/usr/bin/env python\nprint('hello')".to_vec();
-        let config = BuildPolicyConfig::default();
-
-        let (action, new_content) = chain
-            .apply(
-                &mut entry,
-                content,
-                Path::new("/src/usr/bin/script.py"),
-                &config,
-            )
-            .unwrap();
-
-        // Content should have been modified
-        assert!(new_content.starts_with(b"#!/usr/bin/python3"));
-
-        // Action MUST be Replace so the builder knows to rehash
-        assert!(
-            matches!(action, PolicyAction::Replace(_)),
-            "Expected Replace action when content was modified, got Keep"
-        );
-    }
-
-    #[test]
-    fn test_policy_chain_returns_keep_when_content_unmodified() {
-        // When no policy modifies content, the chain should return Keep
-        let mut chain = PolicyChain::new();
-
-        // Add a shebang-fixing policy, but content won't match
-        let mut replacements = HashMap::new();
-        replacements.insert(
-            "/usr/bin/env python".to_string(),
-            "/usr/bin/python3".to_string(),
-        );
-        chain.add(Box::new(FixShebangsPolicy::new(replacements)));
-
-        let mut entry = make_entry("/usr/bin/script.sh", 0o755);
-        let content = b"#!/bin/bash\necho hello".to_vec();
-        let config = BuildPolicyConfig::default();
-
-        let (action, _) = chain
-            .apply(
-                &mut entry,
-                content,
-                Path::new("/src/usr/bin/script.sh"),
-                &config,
-            )
-            .unwrap();
-
-        assert!(
-            matches!(action, PolicyAction::Keep),
-            "Expected Keep action when content was not modified"
-        );
-    }
-
-    #[test]
-    fn test_strip_binaries_policy_non_elf() {
-        let policy = StripBinariesPolicy::new();
-
-        // Non-ELF file should be kept unchanged
-        let mut entry = make_entry("/usr/bin/script", 0o755);
-        let content = b"#!/bin/bash\necho hello";
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/script"),
-            entry: &mut entry,
-            content,
-            config: &BuildPolicyConfig::default(),
-        };
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Keep));
-    }
-
-    #[test]
-    fn test_strip_setuid_policy_masks_setuid_and_setgid_bits() {
-        let policy = StripSetuidPolicy::new();
-        let mut entry = make_entry("/usr/bin/helper", 0o6755);
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/helper"),
-            entry: &mut entry,
-            content: b"#!/bin/sh\necho hi",
-            config: &BuildPolicyConfig::default(),
-        };
-
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Keep));
-        assert_eq!(ctx.entry.node.mode, libc::S_IFREG | 0o755);
-    }
-
-    #[test]
-    fn test_strip_setuid_policy_preserves_explicitly_allowed_setuid_path() {
-        let policy = StripSetuidPolicy::new();
-        let mut entry = make_entry("/usr/bin/helper", 0o4755);
-        let config = BuildPolicyConfig {
-            allow_setuid_paths: vec!["/usr/bin/helper".to_string()],
-            ..BuildPolicyConfig::default()
-        };
-        let mut ctx = PolicyContext {
-            source_path: Path::new("/src/usr/bin/helper"),
-            entry: &mut entry,
-            content: b"#!/bin/sh\necho hi",
-            config: &config,
-        };
-
-        let result = policy.apply(&mut ctx).unwrap();
-        assert!(matches!(result, PolicyAction::Keep));
-        assert_eq!(ctx.entry.node.mode, libc::S_IFREG | 0o4755);
-    }
-}
+#[path = "policy/tests.rs"]
+mod tests;

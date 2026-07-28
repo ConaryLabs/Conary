@@ -28,6 +28,17 @@ pub(crate) fn single_file_build_result_at(
         component: "runtime".to_string(),
         chunks: None,
     };
+    let payload = crate::packages::payload::PackagePayloadFile::new(
+        path.to_string(),
+        entry.node.clone(),
+        entry.content.clone(),
+        Some(
+            crate::packages::payload::ReopenablePayload::from_in_memory_bytes(
+                std::sync::Arc::<[u8]>::from(bytes),
+            ),
+        ),
+    )
+    .unwrap();
     BuildResult {
         manifest,
         components: HashMap::from([(
@@ -40,7 +51,7 @@ pub(crate) fn single_file_build_result_at(
             },
         )]),
         files: vec![entry],
-        blobs: HashMap::from([(hash, bytes.to_vec())]),
+        payloads: vec![payload],
         total_size: bytes.len() as u64,
         chunked: false,
         chunk_stats: None,

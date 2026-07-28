@@ -461,10 +461,6 @@ mod tests {
             .iter()
             .map(|chunk| crate::hash::sha256(chunk))
             .collect::<Vec<_>>();
-        build.blobs.clear();
-        for (hash, chunk) in chunk_hashes.iter().zip(chunks) {
-            build.blobs.insert(hash.clone(), chunk.to_vec());
-        }
         build.files[0].chunks = Some(chunk_hashes.clone());
         build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
         build.chunked = true;

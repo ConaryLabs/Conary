@@ -808,7 +808,8 @@ mod tests {
     #[test]
     fn rejects_truncated_archive_and_aggregate_metadata_without_allocation() {
         let (temp, _, policy, base) = fixture();
-        let bytes = std::fs::read(base).unwrap();
+        let mut bytes = Vec::new();
+        File::open(base).unwrap().read_to_end(&mut bytes).unwrap();
         let truncated = temp.path().join("truncated.ccs");
         let mut output = File::create(&truncated).unwrap();
         output.write_all(&bytes[..bytes.len() / 2]).unwrap();
@@ -864,7 +865,8 @@ mod tests {
         assert!(error_text(&appended_tar, &policy).contains("non-zero data"));
 
         let appended_gzip = temp.path().join("appended-gzip.ccs");
-        let mut bytes = std::fs::read(&base).unwrap();
+        let mut bytes = Vec::new();
+        File::open(&base).unwrap().read_to_end(&mut bytes).unwrap();
         let mut member = GzEncoder::new(Vec::new(), Compression::default());
         member.write_all(b"second member").unwrap();
         bytes.extend(member.finish().unwrap());

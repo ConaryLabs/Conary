@@ -10,7 +10,17 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Arc;
 
+/// Explicit ceiling for legacy test and small-tool in-memory fixture input.
+///
+/// Native authoring and foreign conversion do not use this adapter. It exists
+/// only for callers that already constructed small byte fixtures, immediately
+/// spools those bytes to reopenable files, and delegates to the sole streamed
+/// package writer.
+pub const BOUNDED_MEMORY_FIXTURE_BYTES: u64 = 16 * 1024 * 1024;
+
+#[doc(hidden)]
 pub fn write_v2_ccs_package(
     authority: &crate::ccs::v2::AuthorityDocumentV2,
     payloads_by_path: &std::collections::BTreeMap<String, Vec<u8>>,
@@ -20,19 +30,74 @@ pub fn write_v2_ccs_package(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<()> {
-    write_v2_ccs_package_with_open(
+    use crate::ccs::v2::schema::PackageKindV2;
+    use crate::packages::payload::{PackagePayloadFile, ReopenablePayload};
+
+    let total = payloads_by_path.values().try_fold(0_u64, |total, bytes| {
+        total
+            .checked_add(bytes.len() as u64)
+            .context("bounded in-memory CCS fixture size overflow")
+    })?;
+    if total > BOUNDED_MEMORY_FIXTURE_BYTES {
+        anyhow::bail!(
+            "bounded in-memory CCS fixture input is {} bytes; limit is {} bytes",
+            total,
+            BOUNDED_MEMORY_FIXTURE_BYTES
+        );
+    }
+    let output_parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let spool = Arc::new(
+        tempfile::Builder::new()
+            .prefix(".conary-ccs-memory-fixture-")
+            .tempdir_in(output_parent)?,
+    );
+    let PackageKindV2::Package(package) = &authority.kind else {
+        anyhow::bail!("v2 package writer only writes package payloads");
+    };
+    let mut payloads = Vec::with_capacity(package.files.len());
+    let mut expected_paths = std::collections::HashSet::new();
+    for (index, file) in package.files.iter().enumerate() {
+        let source = if file.node.kind.is_regular() {
+            let bytes = payloads_by_path
+                .get(&file.path)
+                .with_context(|| format!("missing payload for {}", file.path))?;
+            let path = spool.path().join(format!("{index:08}"));
+            fs::write(&path, bytes)?;
+            expected_paths.insert(file.path.as_str());
+            Some(ReopenablePayload::from_spooled_path(
+                path,
+                Arc::clone(&spool),
+            ))
+        } else {
+            None
+        };
+        payloads.push(
+            PackagePayloadFile::new(
+                file.path.clone(),
+                file.node.clone(),
+                file.content.clone(),
+                source,
+            )
+            .map_err(anyhow::Error::from)?,
+        );
+    }
+    if let Some(extra) = payloads_by_path
+        .keys()
+        .find(|path| !expected_paths.contains(path.as_str()))
+    {
+        anyhow::bail!("in-memory fixture carries unsigned payload path {extra}");
+    }
+    write_v2_ccs_package_from_sources(
         authority,
+        &payloads,
         output_path,
         signing_key,
         debug_toml,
         build_attestation,
         foreign_conversion_boundary,
-        |path| {
-            let payload = payloads_by_path
-                .get(path)
-                .with_context(|| format!("missing payload for {path}"))?;
-            Ok(Box::new(std::io::Cursor::new(payload.as_slice())) as Box<dyn std::io::Read>)
-        },
     )
 }
 
@@ -90,7 +155,13 @@ fn write_v2_ccs_package_with_open<'a>(
     // construction rather than by coincidence.
     let census =
         crate::ccs::v2::authority_census(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
-    let temp_dir = tempfile::tempdir()?;
+    let output_parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temp_dir = tempfile::Builder::new()
+        .prefix(".conary-ccs-package-")
+        .tempdir_in(output_parent)?;
     let manifest_cbor = authority.to_cbor()?;
     CCS_BUDGET.admit_encoded_authority(&census, manifest_cbor.len() as u64)?;
     fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
@@ -199,9 +270,9 @@ pub fn write_signed_current_ccs_package(
     })
     .context("project current CCS v2 authority")?;
     let provenance = result.manifest.provenance.as_ref();
-    write_v2_ccs_package(
+    write_v2_ccs_package_from_sources(
         &projected.authority,
-        &projected.payloads_by_path,
+        &projected.payloads,
         output_path,
         signing_key,
         projected.debug_toml.as_deref(),
@@ -222,7 +293,14 @@ pub fn print_build_summary(result: &BuildResult) {
     );
     println!("Total files: {}", result.files.len());
     println!("Total size: {} bytes", result.total_size);
-    println!("Blobs: {} objects", result.blobs.len());
+    println!(
+        "Payload sources: {} regular files",
+        result
+            .payloads
+            .iter()
+            .filter(|payload| payload.node.kind.is_regular())
+            .count()
+    );
 
     if let Some(ref stats) = result.chunk_stats {
         println!();

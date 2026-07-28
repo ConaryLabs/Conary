@@ -269,6 +269,7 @@ fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
         component: "runtime".to_string(),
         chunks: None,
     };
+    let files = vec![file.clone()];
     let result = BuildResult {
         manifest: CcsManifest::new_minimal(PACKAGE_NAME, PACKAGE_VERSION),
         components: HashMap::from([(
@@ -280,8 +281,12 @@ fn write_single_binary_ccs(package_path: &Path, content: Vec<u8>) {
                 size: total_size,
             },
         )]),
-        files: vec![file],
-        blobs: HashMap::from([(hash, content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(hash, content)]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,

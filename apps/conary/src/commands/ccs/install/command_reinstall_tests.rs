@@ -31,7 +31,7 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         manifest: CcsManifest::new_minimal("reinstall-dry-run", "1.0.0"),
         components: HashMap::new(),
         files: Vec::new(),
-        blobs: HashMap::new(),
+        payloads: Vec::new(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

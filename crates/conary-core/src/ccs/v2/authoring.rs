@@ -5,7 +5,7 @@ use crate::ccs::builder::BuildResult;
 use crate::ccs::v2::PackageKindTagV2;
 use crate::repository::dependency_model::RepositoryRequirementGroup;
 use crate::repository::versioning::VersionScheme;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -93,17 +93,18 @@ impl std::fmt::Debug for V2AuthoringInput<'_> {
 #[derive(Debug)]
 pub struct ProjectedV2Package {
     pub authority: AuthorityDocumentV2,
-    pub payloads_by_path: BTreeMap<String, Vec<u8>>,
+    pub payloads: Vec<crate::packages::payload::PackagePayloadFile>,
     pub debug_toml: Option<String>,
 }
 
 pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<ProjectedV2Package> {
-    let payloads_by_path = payloads_by_path(input.build)?;
+    validate_payload_sources(input.build)?;
+    let payloads = input.build.payloads.clone();
     let debug_toml = input.debug_toml.clone();
     let authority = project_build_result_authority_to_v2(input)?;
     Ok(ProjectedV2Package {
         authority,
-        payloads_by_path,
+        payloads,
         debug_toml,
     })
 }
@@ -407,40 +408,32 @@ fn select_default_component(build: &BuildResult) -> Result<String> {
     Ok(default_component)
 }
 
-fn payloads_by_path(build: &BuildResult) -> Result<BTreeMap<String, Vec<u8>>> {
-    let mut payloads = BTreeMap::new();
-    for file in &build.files {
-        if !file.node.kind.is_regular() {
-            continue;
+fn validate_payload_sources(build: &BuildResult) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for payload in &build.payloads {
+        if !seen.insert(payload.path.as_str()) {
+            bail!(
+                "payload source path {} appears more than once",
+                payload.path
+            );
         }
-        let content = file.content.as_ref().with_context(|| {
-            format!(
-                "regular payload node {} has no content authority",
-                file.path
-            )
-        })?;
-        let bytes =
-            if let Some(chunks) = &file.chunks {
-                let mut bytes = Vec::new();
-                for chunk_hash in chunks {
-                    bytes.extend(build.blobs.get(chunk_hash).with_context(|| {
-                        format!("missing chunk {chunk_hash} for {}", file.path)
-                    })?);
-                }
-                bytes
-            } else {
-                build
-                    .blobs
-                    .get(&content.sha256)
-                    .with_context(|| format!("missing payload blob for {}", file.path))?
-                    .clone()
-            };
-        if crate::hash::sha256(&bytes) != content.sha256 || bytes.len() as u64 != content.size {
-            bail!("payload bytes for {} do not match builder hash", file.path);
-        }
-        payloads.insert(file.path.clone(), bytes);
     }
-    Ok(payloads)
+    for file in &build.files {
+        let payload = build.payload(&file.path)?;
+        if payload.node != file.node || payload.content_authority != file.content {
+            bail!(
+                "payload descriptor authority disagrees with build entry {}",
+                file.path
+            );
+        }
+        if file.node.kind.is_regular() != payload.source().is_some() {
+            bail!(
+                "payload source presence disagrees with build entry {}",
+                file.path
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

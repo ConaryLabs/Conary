@@ -76,12 +76,16 @@ async fn ccs_install_respects_manifest_component_selection() {
                 },
             ),
         ]),
-        files,
-        blobs: HashMap::from([
-            (chosen_hash, chosen_content),
-            (skipped_hash, skipped_content),
-            (init_hash, init_content),
-        ]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([
+                (chosen_hash, chosen_content),
+                (skipped_hash, skipped_content),
+                (init_hash, init_content),
+            ]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -186,6 +190,7 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
         reversible: None,
     });
 
+    let files = vec![runtime_file.clone(), devel_file.clone()];
     let result = BuildResult {
         manifest,
         components: HashMap::from([
@@ -208,8 +213,12 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
                 },
             ),
         ]),
-        files: vec![runtime_file, devel_file],
-        blobs: HashMap::from([(runtime_hash, runtime_content), (devel_hash, devel_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(runtime_hash, runtime_content), (devel_hash, devel_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
