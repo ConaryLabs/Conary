@@ -239,6 +239,45 @@ async fn add_static_repo_with(
     .await
 }
 
+/// Add a repository whose format the caller declares, the shape every Remi
+/// consumer uses (`--package-format json --source-profile <profile>`).
+async fn add_repo_with_declared_format(
+    db: &TestDb,
+    url: &str,
+    source_profile: &str,
+) -> anyhow::Result<()> {
+    cmd_repo_add(RepoAddOptions {
+        name: "acme".to_string(),
+        url: url.to_string(),
+        package_format: Some(conary_core::repository::RepositoryFormat::Json),
+        distribution: None,
+        component: None,
+        architecture: None,
+        database: None,
+        db_path: db.db_path.clone(),
+        content_url: None,
+        priority: 50,
+        disabled: false,
+        debian_release_keys: Vec::new(),
+        rpm_metadata_keys: Vec::new(),
+        rpm_metalink: None,
+        rpm_package_keys: Vec::new(),
+        arch_keyring: None,
+        arch_keyring_format: None,
+        arch_master_keys: Vec::new(),
+        arch_packager_key_threshold: None,
+        arch_database_signature: None,
+        default_strategy: Some("remi".to_string()),
+        remi_endpoint: Some(url.to_string()),
+        source_profile: Some(source_profile.to_string()),
+        security_advisory_support: SecurityAdvisorySupport::Unknown,
+        fingerprints: Vec::new(),
+        yes: true,
+        replace: false,
+    })
+    .await
+}
+
 fn assert_no_repo(conn: &Connection, name: &str) {
     assert!(
         Repository::find_by_name(conn, name).unwrap().is_none(),
@@ -457,6 +496,46 @@ async fn static_repo_add_rejects_native_trust_flags_after_probe_without_fingerpr
 
     assert!(err.to_string().contains("native repository trust flags"));
     assert_no_repo(&db.conn(), "acme");
+}
+
+/// A host that answers every path with a 200 body — an SPA fallback, a captive
+/// portal, an error page — makes the identity probe see a `conary-repo.toml`
+/// that is not one. Declaring the package format settles the repository kind
+/// before any of that is fetched, so the probe's answer cannot decide the add.
+#[tokio::test]
+async fn declared_package_format_adds_a_native_repo_whatever_the_identity_probe_would_find() {
+    let db = TestDb::new();
+    let served = tempfile::tempdir().unwrap();
+    std::fs::write(
+        served.path().join("conary-repo.toml"),
+        b"<!doctype html>\n<html lang=\"en\"><head><title>index</title></head></html>\n",
+    )
+    .unwrap();
+    let base_url = format!("file://{}", served.path().display());
+
+    add_repo_with_declared_format(&db, &base_url, "fedora-44")
+        .await
+        .unwrap();
+
+    let repo = repo(&db.conn());
+    assert_eq!(repo.url, base_url);
+    assert_eq!(repo.source_profile.as_deref(), Some("fedora-44"));
+    assert_ne!(repo.default_strategy.as_deref(), Some("static"));
+    assert_eq!(repo.tuf_root_url, None);
+}
+
+/// The probe still owns the undeclared case, so the test above cannot pass by
+/// the probe having been removed.
+#[tokio::test]
+async fn undeclared_package_format_still_reaches_the_identity_probe() {
+    let db = TestDb::new();
+    let fixture = StaticRepoFixture::single_key("acme-static");
+
+    add_static_repo(&db, &fixture, fixture.root_key_ids.clone())
+        .await
+        .unwrap();
+
+    assert_eq!(repo(&db.conn()).default_strategy.as_deref(), Some("static"));
 }
 
 #[test]

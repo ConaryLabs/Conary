@@ -21,6 +21,17 @@ const MAX_STATIC_ROOT_SIZE: u64 = 10 * 1024 * 1024;
 const KEY_ID_HEX_LEN: usize = 64;
 
 pub(crate) async fn try_cmd_repo_add_static(opts: &RepoAddOptions) -> Result<bool> {
+    // `--package-format` is required for non-static repositories and meaningless
+    // for static ones, which declare their own signed metadata contract. When the
+    // caller states the format, the repository kind is settled before any network
+    // access; the identity probe is discovery evidence and must not override it.
+    // Without this, a host that answers every path with a 200 body — an SPA
+    // fallback, a captive portal, an error page — turns `repo add` into a hard
+    // failure on a repository the caller never described as static.
+    if opts.package_format.is_some() {
+        return Ok(false);
+    }
+
     let Some(normalized_base) = normalize_static_repo_base(&opts.url)? else {
         return Ok(false);
     };
