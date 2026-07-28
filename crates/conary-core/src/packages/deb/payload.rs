@@ -853,7 +853,7 @@ fn display_typeflag(entry_type: u8) -> String {
 }
 
 fn data_tar_error(message: impl Into<String>) -> Error {
-    Error::InitError(format!("Failed to parse DEB data.tar: {}", message.into()))
+    Error::ParseError(format!("Failed to parse DEB data.tar: {}", message.into()))
 }
 
 #[cfg(test)]

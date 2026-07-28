@@ -482,10 +482,24 @@ fn spool_content<R: Read>(
     crate::packages::payload::ensure_available_space(spool.root(), size)?;
     let output_path = spool.indexed_path(index);
     let mut output = File::create(&output_path)?;
+    let sha256 = copy_declared_payload(entry, &mut output, size, path)?;
+    output.sync_all()?;
+    Ok((
+        PayloadContentAuthority { sha256, size },
+        spool.source(output_path),
+    ))
+}
+
+fn copy_declared_payload(
+    reader: &mut dyn Read,
+    writer: &mut dyn Write,
+    size: u64,
+    path: &str,
+) -> Result<String> {
     let mut hasher = Hasher::new(HashAlgorithm::Sha256);
     let mut copied = 0_u64;
     let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
-    let mut limited = entry.take(size.saturating_add(1));
+    let mut limited = reader.take(size.saturating_add(1));
     loop {
         let read = limited.read(&mut buffer).map_err(|error| {
             Error::ParseError(format!("read ALPM payload node {path}: {error}"))
@@ -502,7 +516,7 @@ fn spool_content<R: Read>(
             )));
         }
         hasher.update(&buffer[..read]);
-        output.write_all(&buffer[..read])?;
+        writer.write_all(&buffer[..read])?;
     }
     if copied != size {
         return Err(Error::ParseError(format!(
@@ -510,14 +524,7 @@ fn spool_content<R: Read>(
             copied
         )));
     }
-    output.sync_all()?;
-    Ok((
-        PayloadContentAuthority {
-            sha256: hasher.finalize().value,
-            size,
-        },
-        spool.source(output_path),
-    ))
+    Ok(hasher.finalize().value)
 }
 
 fn require_empty_entry<R: Read>(entry: &Entry<'_, R>, path: &str) -> Result<()> {
@@ -595,6 +602,25 @@ mod tests {
             parsed.push(parse_entry(&mut entry, &spool, index)?);
         }
         PackagePayload::new(resolve_hardlinks(parsed)?).to_extracted_in_memory()
+    }
+
+    #[test]
+    fn declared_payload_copy_rejects_shorter_and_longer_bodies() {
+        let mut output = Vec::new();
+        let error =
+            copy_declared_payload(&mut Cursor::new(b"ab"), &mut output, 3, "/short").unwrap_err();
+        assert!(matches!(&error, Error::ParseError(_)));
+        assert!(error.to_string().contains("declares 3 bytes but yields 2"));
+
+        output.clear();
+        let error =
+            copy_declared_payload(&mut Cursor::new(b"abcd"), &mut output, 3, "/long").unwrap_err();
+        assert!(matches!(&error, Error::ParseError(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("declares 3 bytes but yields at least 4")
+        );
     }
 
     #[test]
