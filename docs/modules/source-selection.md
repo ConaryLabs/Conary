@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 17
+last_updated: 2026-07-28
+revision: 18
 summary: Document exact profile-owned source policy, canonical map authority, native repository authority, package identity, and lifecycle handoff
 ---
 
@@ -111,10 +111,15 @@ such as `fedora` and `ubuntu` are not feed IDs. The
 requires the declared profile's package format to match the repository parser.
 Remi
 sync and package fetches translate the stored public ID to the profile-owned
-route slug. Persisted package identity requires the exact public ID; route slugs
-and generic `rpm`/`deb`/`arch` format labels are never accepted as
-source-identity aliases. Native repository sync writes the repository's exact
-profile into every package row and rejects a missing or conflicting profile.
+route slug. Remi sync pages through the sparse name index and incrementally
+stages each fixed-size page of per-package version/provide/requirement
+documents; one final transaction replaces the previous offline-resolution
+snapshot. It never fetches the whole-distribution metadata document or retains
+a distribution-sized package vector. Persisted package identity requires the
+exact public ID; route slugs and generic `rpm`/`deb`/`arch` format labels are
+never accepted as source-identity aliases. Native repository sync writes the
+repository's exact profile into every package row and rejects a missing or
+conflicting profile.
 The superseded
 `data/distros.toml` catalog was deleted in M4d.
 

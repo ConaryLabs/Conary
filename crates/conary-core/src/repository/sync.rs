@@ -30,11 +30,9 @@ use native::{
 #[cfg(test)]
 use remi::remi_sync_row;
 use remi::{
-    fetch_and_persist_canonical_map, fetch_canonical_map_snapshot, fetch_remi_sync_rows,
-    persist_canonical_map, sync_repository_remi,
+    fetch_and_persist_canonical_map, fetch_canonical_map_snapshot, persist_canonical_map,
+    sync_repository_remi, sync_repository_remi_from_db_path,
 };
-#[cfg(test)]
-use types::RemiPackageEntry;
 use types::{
     JsonPackageDelta, JsonRepositorySyncSnapshot, RepositorySyncSnapshot, SyncedPackageRow,
 };
@@ -162,12 +160,6 @@ async fn fetch_repository_sync_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
-    if repo.default_strategy.as_deref() == Some("remi") {
-        return fetch_remi_sync_rows(repo)
-            .await
-            .map(RepositorySyncSnapshot::NativeRows);
-    }
-
     match repo.require_parser_config()?.format() {
         RepositoryFormat::Json => fetch_repository_json_snapshot(repo).await,
         RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora => {
@@ -231,23 +223,27 @@ pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) ->
         );
     }
 
-    let keyring_dir = crate::db::paths::keyring_dir(&db_path.display().to_string());
-    let snapshot = fetch_repository_sync_snapshot(&repo, &keyring_dir).await?;
+    let count = if repo.default_strategy.as_deref() == Some("remi") {
+        sync_repository_remi_from_db_path(db_path.clone(), repo.clone()).await?
+    } else {
+        let keyring_dir = crate::db::paths::keyring_dir(&db_path.display().to_string());
+        let snapshot = fetch_repository_sync_snapshot(&repo, &keyring_dir).await?;
 
-    let persist_repo_id = repo
-        .id
-        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let persist_db_path = db_path.clone();
-    let count = run_blocking_sync(move || {
-        let conn = crate::db::open_fast(&persist_db_path)?;
-        let mut repo = Repository::find_by_id(&conn, persist_repo_id)?.ok_or_else(|| {
-            Error::NotFound(format!(
-                "Repository {persist_repo_id} not found during sync"
-            ))
-        })?;
-        persist_repository_sync_snapshot(&conn, &mut repo, snapshot)
-    })
-    .await?;
+        let persist_repo_id = repo
+            .id
+            .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+        let persist_db_path = db_path.clone();
+        run_blocking_sync(move || {
+            let conn = crate::db::open_fast(&persist_db_path)?;
+            let mut repo = Repository::find_by_id(&conn, persist_repo_id)?.ok_or_else(|| {
+                Error::NotFound(format!(
+                    "Repository {persist_repo_id} not found during sync"
+                ))
+            })?;
+            persist_repository_sync_snapshot(&conn, &mut repo, snapshot)
+        })
+        .await?
+    };
 
     if let Some(ref remi_endpoint) = repo.default_strategy_endpoint {
         match fetch_canonical_map_snapshot(remi_endpoint).await {

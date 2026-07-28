@@ -45,9 +45,22 @@ pub(super) fn persist_synced_package_rows(
     repo_packages: &mut [RepositoryPackage],
     synced_packages: Vec<SyncedPackageRow>,
 ) -> Result<usize> {
+    RepositoryPackage::delete_by_repository(conn, repo_id)?;
+    append_synced_package_rows(conn, repo_packages, synced_packages)
+}
+
+/// Append one bounded batch of normalized package rows.
+///
+/// Callers own replacement/transaction semantics. Sparse Remi sync uses this
+/// with a fixed-size staging page so neither package rows nor their capability
+/// projections accumulate in process memory for the full distribution.
+pub(super) fn append_synced_package_rows(
+    conn: &Connection,
+    repo_packages: &mut [RepositoryPackage],
+    synced_packages: Vec<SyncedPackageRow>,
+) -> Result<usize> {
     let count = synced_packages.len();
 
-    RepositoryPackage::delete_by_repository(conn, repo_id)?;
     RepositoryPackage::batch_insert_with_ids(conn, repo_packages)?;
 
     let mut repo_provides = Vec::new();

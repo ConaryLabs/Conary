@@ -4,8 +4,6 @@ use crate::db::models::{
     RepositoryPackage, RepositoryPackageKey, RepositoryProvide, RepositoryRequirement,
     RepositoryRequirementGroup as DbRequirementGroup,
 };
-use crate::repository::remi_metadata::{RemiProvide, RemiRequirementGroup};
-
 /// A single synced package row with all its normalized capability data.
 #[derive(Debug, Clone)]
 pub(in crate::repository) struct SyncedPackageRow {
@@ -45,24 +43,4 @@ pub(in crate::repository) struct JsonPackageDelta {
     pub(in crate::repository) delta_size: i64,
     pub(in crate::repository) delta_checksum: String,
     pub(in crate::repository) target_size: i64,
-}
-
-/// Response from Remi metadata API (`GET /v1/{distro}/metadata`).
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct RemiMetadataResponse {
-    pub(super) packages: Vec<RemiPackageEntry>,
-}
-
-/// Individual package entry from Remi metadata.
-#[derive(Debug, serde::Deserialize)]
-pub(super) struct RemiPackageEntry {
-    pub(super) name: String,
-    pub(super) version: String,
-    pub(super) release: Option<String>,
-    #[allow(dead_code)] // Present in wire format; not used by sync logic
-    pub(super) converted: bool,
-    pub(super) architecture: Option<String>,
-    pub(super) provides: Vec<RemiProvide>,
-    pub(super) requirement_groups: Vec<RemiRequirementGroup>,
-    pub(super) metadata: Option<serde_json::Value>,
 }

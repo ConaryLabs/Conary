@@ -109,9 +109,8 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
 }
 
 #[test]
-fn test_remi_package_entry_builds_normalized_capabilities() {
-    let entry = RemiPackageEntry {
-        name: "kernel-core".to_string(),
+fn test_remi_sparse_entry_builds_normalized_capabilities() {
+    let entry = RemiSparseVersionEntry {
         version: "6.19.6-200.fc44".to_string(),
         release: None,
         converted: false,
@@ -190,17 +189,20 @@ fn test_remi_package_entry_builds_normalized_capabilities() {
                 }],
             },
         ],
-        metadata: None,
+        size: 4096,
+        content_hash: None,
     };
 
     let row = remi_sync_row(
         7,
         "https://remi.conary.io".to_string(),
         "fedora-44".to_string(),
+        "kernel-core".to_string(),
         entry,
     )
     .unwrap();
 
+    assert_eq!(row.package.size, 4096);
     assert!(row.provides.iter().any(|provide| {
         provide.capability == "kernel-core-uname-r"
             && provide.version.as_deref() == Some("6.19.6-200.fc44.x86_64")
@@ -217,69 +219,6 @@ fn test_remi_package_entry_builds_normalized_capabilities() {
         requirement.capability == "glibc"
             && requirement.version_constraint.as_deref() == Some(">= 2.39")
     }));
-}
-
-#[test]
-fn test_remi_package_entry_marks_trusted_security_advisory() {
-    let entry = RemiPackageEntry {
-        name: "openssl".to_string(),
-        version: "3.2.1-1.fc44".to_string(),
-        release: None,
-        converted: false,
-        architecture: Some("x86_64".to_string()),
-        provides: vec![RemiProvide {
-            capability: "openssl".to_string(),
-            version: Some("3.2.1-1.fc44".to_string()),
-            version_relation: Some(
-                crate::repository::dependency_model::ProvideVersionRelation::Equal,
-            ),
-            kind: "package".to_string(),
-            raw: Some("openssl".to_string()),
-            version_scheme: VersionScheme::Rpm,
-            architecture_qualifier:
-                crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
-        }],
-        requirement_groups: Vec::new(),
-        metadata: Some(json!({
-            "security_advisory": {
-                "id": "FEDORA-2026-0001",
-                "source": "remi",
-                "source_trust": "trusted",
-                "severity": "critical",
-                "cves": ["CVE-2026-0001", "CVE-2026-0002"],
-                "fixed_version": "3.2.1-1.fc44",
-                "url": "https://security.example.test/FEDORA-2026-0001"
-            }
-        })),
-    };
-
-    let row = remi_sync_row(
-        7,
-        "https://remi.conary.io".to_string(),
-        "fedora-44".to_string(),
-        entry,
-    )
-    .unwrap();
-
-    assert!(row.package.is_security_update);
-    assert_eq!(row.package.severity.as_deref(), Some("critical"));
-    assert_eq!(
-        row.package.cve_ids.as_deref(),
-        Some("CVE-2026-0001,CVE-2026-0002")
-    );
-    assert_eq!(row.package.advisory_id.as_deref(), Some("FEDORA-2026-0001"));
-    assert_eq!(
-        row.package.advisory_url.as_deref(),
-        Some("https://security.example.test/FEDORA-2026-0001")
-    );
-
-    let metadata: serde_json::Value =
-        serde_json::from_str(row.package.metadata.as_deref().unwrap()).unwrap();
-    assert_eq!(
-        metadata["security_advisory"]["fixed_version"],
-        "3.2.1-1.fc44"
-    );
-    assert_eq!(metadata["security_advisory"]["source_trust"], "trusted");
 }
 
 #[test]

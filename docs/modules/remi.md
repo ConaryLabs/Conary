@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-27
-revision: 10
-summary: Document Remi source, signing, canonical-map, repository trust, conversion, publication, and serving authority
+last_updated: 2026-07-28
+revision: 11
+summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
 # Remi
@@ -86,6 +86,30 @@ exact-profile handoff from successful refresh results into configured prewarm
 jobs; `apps/remi/src/server/prewarm/scheduler.rs` owns their bounded fair
 execution and complete outcome collection. HTTP handlers only publish events
 and project the shared batch.
+
+## Sparse Client Sync
+
+The Conary `remi` repository strategy consumes only Remi's sparse index. It
+pages through `GET /v1/index/{distro}` in fixed 128-name pages and fetches the
+per-name `GET /v1/index/{distro}/{name}` documents with at most 16 requests in
+flight. Each per-name document carries every version plus the exact normalized
+provides and grouped native requirements required for offline resolution.
+`GET /v1/{distro}/metadata` is not a client-sync fallback.
+
+Each bounded page is written to a disabled staging repository. The previously
+synced repository remains the only enabled snapshot while network and parsing
+work continues. After the declared name total has been consumed, one SQLite
+transaction replaces the old rows, moves the staged rows to the repository,
+links canonical IDs, and advances `last_sync`. A failed fetch, malformed page,
+duplicate exact version identity, or persistence error deletes the stage and
+leaves the prior snapshot unchanged.
+
+The sparse package-list response cap is derived from the endpoint grammar:
+the requested page size, Remi's 256-byte public-name bound, worst-case JSON
+escaping, and the fixed response envelope. Per-package responses have no
+corpus-sized cap; their structural owner is one package name across its
+versions. Distribution growth therefore increases page and request count, not
+the client's retained working set.
 
 ## Durable Repository Signing Authority
 
@@ -204,9 +228,12 @@ or a missing CCS object is data corruption or stale conversion state and
 returns an error or triggers reconversion. It is not converted into a human
 review outcome.
 
-Package detail, metadata, generated indexes, sparse indexes, search, OCI, delta,
-and download routes expose the same sanitized `scriptlets` projection. Program
-bodies and local filesystem paths are not part of that response.
+Package detail, monolithic metadata, generated indexes, search, OCI, delta, and
+download routes expose the sanitized `scriptlets` projection. Sparse index
+documents carry resolution authority—versions, provides, requirements,
+architecture, size, conversion state, and public content hash—rather than the
+diagnostic scriptlet summary. Program bodies and local filesystem paths are
+not part of any public response.
 
 ### Current Converted Artifact Serving
 
