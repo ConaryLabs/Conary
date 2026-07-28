@@ -97,8 +97,10 @@ jobs:
           if [[ "$target" == "site" || "$target" == "both" ]]; then
             home_status="$(curl --retry 5 --retry-delay 2 -sS -o /tmp/conary-home.html -w '%{http_code}' https://conary.io/)"
             [[ "$home_status" == "200" ]] || { echo "conary.io home returned $home_status" >&2; exit 1; }
-            grep -Fq 'Make Linux package state portable, inspectable, and reversible.' /tmp/conary-home.html || {
-              echo "conary.io did not return the committed homepage" >&2
+            marker="$(grep -oE '<h1[^>]*>[^<]+' site/build/index.html | head -1 | sed 's/<[^>]*>//')"
+            [[ -n "$marker" ]] || { echo "could not extract h1 marker from the committed build" >&2; exit 1; }
+            grep -Fq "$marker" /tmp/conary-home.html || {
+              echo "conary.io did not return the committed homepage (missing h1: $marker)" >&2
               exit 1
             }
 
