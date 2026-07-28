@@ -14,9 +14,6 @@ use crate::repository::dependency_model::{DebianMultiArch, RepositoryRequirement
 use crate::repository::versioning::VersionScheme;
 use std::path::{Path, PathBuf};
 
-/// Maximum size for a single file during package extraction (512 MB).
-pub const MAX_EXTRACTION_FILE_SIZE: u64 = 512 * 1024 * 1024;
-
 /// Common metadata shared by all package formats
 ///
 /// This struct contains the core fields that every package format provides.

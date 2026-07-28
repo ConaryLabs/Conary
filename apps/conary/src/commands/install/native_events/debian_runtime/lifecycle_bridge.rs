@@ -11,7 +11,7 @@ use conary_core::packages::deb::debconf::{
     DebconfEngine, DebconfExecution, DebconfSession, DebconfSessionPolicy, DebconfState,
     DebconfTemplateLoadError, DebconfTemplateLoader,
 };
-use conary_core::packages::deb::templates::{MAX_DEBCONF_TEMPLATES_SIZE, parse};
+use conary_core::packages::deb::templates::parse;
 use conary_core::packages::native_abi::DebconfTemplateRecord;
 use conary_core::scriptlet::{
     LifecycleBridgeConfig, LifecycleBridgeEndpoint, LifecycleBridgeHandler,
@@ -279,21 +279,22 @@ impl DebconfTemplateLoader for SelectedRootTemplateLoader {
         if !metadata.is_file() {
             return Err(Self::open_error("selected-root path is not a regular file"));
         }
-        if metadata.len() > MAX_DEBCONF_TEMPLATES_SIZE {
+        let max_templates_size = conary_core::ccs::CCS_BUDGET.max_metadata_bytes;
+        if metadata.len() > max_templates_size {
             return Err(Self::open_error(format!(
-                "template file is {} bytes; maximum is {MAX_DEBCONF_TEMPLATES_SIZE}",
+                "template file is {} bytes; maximum is {max_templates_size}",
                 metadata.len()
             )));
         }
 
         let mut body = Vec::with_capacity(metadata.len() as usize);
         file.by_ref()
-            .take(MAX_DEBCONF_TEMPLATES_SIZE + 1)
+            .take(max_templates_size + 1)
             .read_to_end(&mut body)
             .map_err(|error| Self::open_error(format!("cannot read template file: {error}")))?;
-        if body.len() as u64 > MAX_DEBCONF_TEMPLATES_SIZE {
+        if body.len() as u64 > max_templates_size {
             return Err(Self::open_error(format!(
-                "template file grew beyond the {MAX_DEBCONF_TEMPLATES_SIZE}-byte maximum"
+                "template file grew beyond the {max_templates_size}-byte maximum"
             )));
         }
         parse(&body)

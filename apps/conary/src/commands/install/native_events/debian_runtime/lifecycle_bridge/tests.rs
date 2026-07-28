@@ -237,11 +237,12 @@ fn selected_root_loader_distinguishes_parse_failure() {
 }
 
 #[test]
-fn selected_root_loader_rejects_the_sixteen_mib_plus_one_boundary() {
+fn selected_root_loader_rejects_the_metadata_budget_plus_one_boundary() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("templates");
     let file = std::fs::File::create(&path).unwrap();
-    file.set_len(MAX_DEBCONF_TEMPLATES_SIZE + 1).unwrap();
+    file.set_len(conary_core::ccs::CCS_BUDGET.max_metadata_bytes + 1)
+        .unwrap();
     let mut loader = SelectedRootTemplateLoader::new(root.path()).unwrap();
 
     let error = loader.load(b"/templates").unwrap_err();

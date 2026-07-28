@@ -4,6 +4,7 @@
 //!
 //! Parses .deb packages, which are AR archives containing control and data tarballs
 
+use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
@@ -52,9 +53,6 @@ const CONTROL_TAR_NAMES: &[&str] = &[
 
 const DATA_TAR_NAMES: &[&str] = &["data.tar.gz", "data.tar.xz", "data.tar.zst", "data.tar"];
 
-/// Maximum size for bounded control metadata within a DEB archive (16 MiB).
-pub(super) const MAX_DEB_CONTROL_MEMBER_SIZE: u64 = 16 * 1024 * 1024;
-
 /// Results of single-pass control tarball extraction
 #[derive(Default)]
 struct ControlTarContents {
@@ -66,6 +64,49 @@ struct ControlTarContents {
     config_files: Vec<ConfigFileInfo>,
     /// Whether the package-level debconf templates member was already seen.
     templates_seen: bool,
+}
+
+fn copy_declared_entry(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    declared: u64,
+    label: &str,
+) -> Result<()> {
+    let mut limited = reader.take(declared.saturating_add(1));
+    let mut actual = 0_u64;
+    let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
+    loop {
+        let read = limited
+            .read(&mut buffer)
+            .map_err(|error| Error::ParseError(format!("read {label}: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        actual = actual
+            .checked_add(read as u64)
+            .ok_or_else(|| Error::ParseError(format!("{label} size overflows u64")))?;
+        if actual > declared {
+            return Err(Error::ParseError(format!(
+                "{label} declares {declared} bytes but yields at least {actual}"
+            )));
+        }
+        writer.write_all(&buffer[..read])?;
+    }
+    if actual != declared {
+        return Err(Error::ParseError(format!(
+            "{label} declares {declared} bytes but yields {actual}"
+        )));
+    }
+    Ok(())
+}
+
+fn read_declared_entry(reader: &mut impl Read, declared: u64, label: &str) -> Result<Vec<u8>> {
+    let mut content = Vec::with_capacity(
+        usize::try_from(declared)
+            .map_err(|_| Error::ParseError(format!("{label} exceeds addressable memory")))?,
+    );
+    copy_declared_entry(reader, &mut content, declared, label)?;
+    Ok(content)
 }
 
 /// Debian package representation
@@ -148,9 +189,12 @@ impl DebPackage {
     }
 
     /// Create a decompressor for tar data using magic byte detection
-    fn create_tar_decoder<'a>(tar_data: &'a [u8]) -> Result<Box<dyn Read + 'a>> {
+    fn create_tar_decoder<'a>(
+        tar_data: &'a [u8],
+        bounds: &ArchiveDecodeBounds,
+    ) -> Result<Box<dyn Read + 'a>> {
         let format = CompressionFormat::from_magic_bytes(tar_data);
-        compression::create_decoder_limited(tar_data, format, compression::MAX_DECOMPRESS_SIZE)
+        compression::create_decoder_limited(tar_data, format, bounds.max_metadata_bytes)
             .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))
     }
 
@@ -292,53 +336,37 @@ impl DebPackage {
 
     /// Single-pass extraction of control and data tarballs from the AR archive.
     fn extract_ar_members(path: &str) -> Result<(Vec<u8>, ReopenablePayload)> {
+        let bounds = CCS_BUDGET.archive_decode_bounds()?;
         let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open DEB file: {}", e)))?;
         let mut archive = ar::Archive::new(file);
         let mut control_data: Option<Vec<u8>> = None;
         let mut data_source = None;
-        let mut entries_seen = 0usize;
+        let mut entries_seen = 0_u64;
         while let Some(entry) = archive.next_entry() {
             entries_seen += 1;
-            compression::check_archive_entry_limit(entries_seen, "DEB archive")
-                .map_err(|e| Error::InitError(format!("Failed to read DEB archive: {}", e)))?;
+            bounds.admit_archive_entry("DEB archive entries", entries_seen)?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read AR entry: {}", e)))?;
             let entry_name = String::from_utf8_lossy(entry.header().identifier()).to_string();
             let trimmed = entry_name.trim_end_matches('/');
             if control_data.is_none() && CONTROL_TAR_NAMES.contains(&trimmed) {
                 let entry_size = entry.header().size();
-                if entry_size > MAX_DEB_CONTROL_MEMBER_SIZE {
-                    return Err(Error::InitError(format!(
-                        "DEB archive member too large: {entry_size} bytes"
-                    )));
-                }
-                let mut buf = Vec::new();
-                entry
-                    .read_to_end(&mut buf)
-                    .map_err(|e| Error::InitError(format!("Failed to read control tar: {}", e)))?;
+                bounds.admit_metadata_bytes("DEB compressed control member", entry_size)?;
+                let mut buf = Vec::with_capacity(usize::try_from(entry_size).map_err(|_| {
+                    Error::ParseError(
+                        "DEB compressed control member exceeds addressable memory".to_string(),
+                    )
+                })?);
+                copy_declared_entry(&mut entry, &mut buf, entry_size, "DEB control member")?;
                 control_data = Some(buf);
             } else if data_source.is_none() && DATA_TAR_NAMES.contains(&trimmed) {
                 let entry_size = entry.header().size();
+                bounds.admit_payload_object("DEB compressed data member", entry_size)?;
                 let spool = PayloadSpool::new(entry_size)?;
                 let path = spool.indexed_path(0);
                 let mut output = File::create(&path)?;
-                let mut remaining = entry_size;
-                let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
-                while remaining > 0 {
-                    let requested = usize::try_from(remaining.min(buffer.len() as u64))
-                        .expect("bounded DEB member chunk");
-                    let read = entry.read(&mut buffer[..requested]).map_err(|error| {
-                        Error::InitError(format!("Failed to read data tar: {error}"))
-                    })?;
-                    if read == 0 {
-                        return Err(Error::InitError(format!(
-                            "DEB data tar ended early with {remaining} bytes remaining"
-                        )));
-                    }
-                    output.write_all(&buffer[..read])?;
-                    remaining -= read as u64;
-                }
+                copy_declared_entry(&mut entry, &mut output, entry_size, "DEB data member")?;
                 output.sync_all()?;
                 data_source = Some(spool.source(path));
             }
@@ -358,20 +386,26 @@ impl DebPackage {
     /// Replaces three separate functions that each decompressed and iterated the
     /// control tarball independently. One decompression, one iteration.
     fn parse_control_tar_all(control_data: &[u8]) -> Result<ControlTarContents> {
-        let reader = Self::create_tar_decoder(control_data)?;
+        let bounds = CCS_BUDGET.archive_decode_bounds()?;
+        let reader = Self::create_tar_decoder(control_data, &bounds)?;
         let mut archive = Archive::new(reader);
         let mut contents = ControlTarContents::default();
-        let mut entries_seen = 0usize;
+        let mut entries_seen = 0_u64;
+        let mut metadata_bytes = 0_u64;
 
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?
         {
             entries_seen += 1;
-            compression::check_archive_entry_limit(entries_seen, "DEB control.tar")
-                .map_err(|e| Error::InitError(format!("Failed to read control.tar: {}", e)))?;
+            bounds.admit_archive_entry("DEB control.tar entries", entries_seen)?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
+            metadata_bytes = bounds.add_metadata_bytes(
+                "DEB control.tar metadata",
+                metadata_bytes,
+                entry.size(),
+            )?;
             let entry_path = entry
                 .path()
                 .map_err(|e| Error::InitError(format!("Failed to get entry path: {}", e)))?
@@ -381,35 +415,31 @@ impl DebPackage {
 
             match basename {
                 "control" => {
-                    let mut text = String::new();
-                    entry.read_to_string(&mut text).map_err(|e| {
-                        Error::InitError(format!("Failed to read control file: {}", e))
+                    let declared = entry.size();
+                    let body = read_declared_entry(&mut entry, declared, "DEB control file")?;
+                    let text = String::from_utf8(body).map_err(|error| {
+                        Error::ParseError(format!("DEB control file is not UTF-8: {error}"))
                     })?;
                     contents.control_text = Some(text);
                 }
                 "conffiles" => {
-                    let mut text = String::new();
-                    entry.read_to_string(&mut text).map_err(|error| {
-                        Error::InitError(format!(
-                            "Failed to read DEBIAN/conffiles as UTF-8: {error}"
-                        ))
+                    let declared = entry.size();
+                    let body = read_declared_entry(&mut entry, declared, "DEBIAN/conffiles")?;
+                    let text = String::from_utf8(body).map_err(|error| {
+                        Error::ParseError(format!("DEBIAN/conffiles is not valid UTF-8: {error}"))
                     })?;
                     contents.config_files = Self::parse_conffiles(&text)?;
                 }
                 "config" | "preinst" | "postinst" | "prerm" | "postrm" => {
-                    let mut body = Vec::new();
-                    entry.read_to_end(&mut body).map_err(|e| {
-                        Error::InitError(format!("Failed to read maintainer script: {}", e))
-                    })?;
+                    let declared = entry.size();
+                    let body = read_declared_entry(&mut entry, declared, "DEB maintainer script")?;
                     if let Some(native) = Self::native_abi_from_control_member(basename, &body)? {
                         contents.native_scriptlet_abi.push(native);
                     }
                 }
                 "triggers" => {
-                    let mut body = Vec::new();
-                    entry.read_to_end(&mut body).map_err(|e| {
-                        Error::InitError(format!("Failed to read triggers file: {}", e))
-                    })?;
+                    let declared = entry.size();
+                    let body = read_declared_entry(&mut entry, declared, "DEB triggers file")?;
                     if !body.iter().all(|byte| byte.is_ascii_whitespace()) {
                         contents
                             .native_scriptlet_abi
@@ -429,16 +459,8 @@ impl DebPackage {
                                 .to_string(),
                         ));
                     }
-                    let entry_size = entry.size();
-                    if entry_size > MAX_DEB_CONTROL_MEMBER_SIZE {
-                        return Err(Error::ParseError(format!(
-                            "Invalid DEBIAN/templates: control member is too large: {entry_size} bytes"
-                        )));
-                    }
-                    let mut body = Vec::new();
-                    entry.read_to_end(&mut body).map_err(|error| {
-                        Error::InitError(format!("Failed to read templates file: {error}"))
-                    })?;
+                    let declared = entry.size();
+                    let body = read_declared_entry(&mut entry, declared, "DEBIAN/templates")?;
                     if let Some(templates) = templates::native_abi_entry(body)? {
                         contents.native_scriptlet_abi.push(templates);
                     }

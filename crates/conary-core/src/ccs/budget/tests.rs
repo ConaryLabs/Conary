@@ -415,4 +415,102 @@ fn derived_ceilings_are_stated_in_terms_of_structural_dimensions() {
 
     assert_eq!(budget.max_authority_bytes(), expected);
     assert_eq!(budget.max_archive_entries(), budget.max_files + 256 + 1 + 8);
+
+    let archive = budget.archive_decode_bounds().unwrap();
+    assert_eq!(
+        archive.max_payload_object_bytes,
+        archive.max_total_payload_bytes
+    );
+    assert_eq!(archive.max_metadata_bytes, 512 * 1024 * 1024);
+    assert_eq!(
+        archive.max_decompressed_stream_bytes,
+        archive.max_total_payload_bytes
+            + archive.max_archive_entries * ARCHIVE_ENTRY_ENVELOPE_BYTES
+    );
+}
+
+#[test]
+fn archive_decode_dimensions_fail_one_over_with_typed_diagnostics() {
+    let bounds = CCS_BUDGET.archive_decode_bounds().unwrap();
+
+    let entry_error = bounds
+        .admit_archive_entry("test archive entries", bounds.max_archive_entries + 1)
+        .unwrap_err();
+    assert_eq!(entry_error.dimension, BudgetDimension::ArchiveEntryCount);
+    assert_eq!(entry_error.field, "test archive entries");
+
+    let object_error = bounds
+        .admit_payload_object("test payload object", bounds.max_payload_object_bytes + 1)
+        .unwrap_err();
+    assert_eq!(object_error.dimension, BudgetDimension::PayloadObjectBytes);
+
+    let total_error = bounds
+        .add_payload_bytes("test cumulative payload", bounds.max_total_payload_bytes, 1)
+        .unwrap_err();
+    assert_eq!(total_error.dimension, BudgetDimension::TotalPayloadBytes);
+
+    let metadata_error = bounds
+        .admit_metadata_bytes("test metadata", bounds.max_metadata_bytes + 1)
+        .unwrap_err();
+    assert_eq!(metadata_error.dimension, BudgetDimension::MetadataBytes);
+
+    let stream_error = bounds
+        .admit_decompressed_stream_bytes(
+            "test decompressed stream",
+            bounds.max_decompressed_stream_bytes + 1,
+        )
+        .unwrap_err();
+    assert_eq!(
+        stream_error.dimension,
+        BudgetDimension::DecompressedStreamBytes
+    );
+
+    let spool_error = bounds
+        .admit_spool_reservation("test payload spool", 1025, 1024)
+        .unwrap_err();
+    assert_eq!(spool_error.dimension, BudgetDimension::TotalPayloadBytes);
+    assert_eq!(spool_error.observed, 1025);
+    assert_eq!(spool_error.limit, 1024);
+}
+
+#[test]
+fn archive_decode_dimensions_admit_their_exact_limits() {
+    let bounds = CCS_BUDGET.archive_decode_bounds().unwrap();
+
+    bounds
+        .admit_archive_entry("near-limit archive", bounds.max_archive_entries)
+        .unwrap();
+    assert_eq!(
+        bounds
+            .add_payload_bytes("near-limit payload", 0, bounds.max_total_payload_bytes,)
+            .unwrap(),
+        bounds.max_total_payload_bytes
+    );
+    bounds
+        .admit_metadata_bytes("near-limit metadata", bounds.max_metadata_bytes)
+        .unwrap();
+    bounds
+        .admit_decompressed_stream_bytes(
+            "near-limit decompressed stream",
+            bounds.max_decompressed_stream_bytes,
+        )
+        .unwrap();
+    bounds
+        .admit_spool_reservation(
+            "near-limit spool",
+            bounds.max_total_payload_bytes,
+            bounds.max_total_payload_bytes,
+        )
+        .unwrap();
+}
+
+#[test]
+fn archive_decode_derivation_overflow_is_typed() {
+    let budget = CcsStructuralBudget {
+        max_files: u64::MAX,
+        ..CCS_BUDGET
+    };
+    let error = budget.archive_decode_bounds().unwrap_err();
+    assert_eq!(error.dimension, BudgetDimension::Arithmetic);
+    assert_eq!(error.field, "archive decompressed stream envelope");
 }

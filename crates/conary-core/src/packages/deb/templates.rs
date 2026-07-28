@@ -12,13 +12,6 @@ use crate::packages::native_abi::{
 };
 use std::collections::BTreeSet;
 
-/// Maximum byte length accepted for a debconf templates file.
-///
-/// The runtime `X_LOADTEMPLATEFILE` loader and package control-archive parser
-/// share this bound so a file cannot become valid merely by changing how it
-/// entered the package lifecycle.
-pub const MAX_DEBCONF_TEMPLATES_SIZE: u64 = super::MAX_DEB_CONTROL_MEMBER_SIZE;
-
 pub(crate) fn native_abi_entry(body: Vec<u8>) -> Result<Option<NativeScriptletEntry>> {
     let metadata = parse(&body)?;
     if metadata.records.is_empty() {
@@ -452,7 +445,8 @@ mod tests {
             .set_path("templates")
             .expect("set templates path");
         oversized_header.set_entry_type(tar::EntryType::Regular);
-        oversized_header.set_size(crate::packages::deb::MAX_DEB_CONTROL_MEMBER_SIZE + 1);
+        let max_metadata = crate::ccs::CCS_BUDGET.max_metadata_bytes;
+        oversized_header.set_size(max_metadata + 1);
         oversized_header.set_mode(0o644);
         oversized_header.set_cksum();
         let mut oversized_archive = oversized_header.as_bytes().to_vec();
@@ -461,6 +455,11 @@ mod tests {
             Ok(_) => panic!("oversized templates member must fail"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("too large"), "{error}");
+        let Error::Budget(error) = error else {
+            panic!("expected typed metadata budget refusal");
+        };
+        assert_eq!(error.dimension, crate::ccs::BudgetDimension::MetadataBytes);
+        assert_eq!(error.observed, max_metadata + 1);
+        assert_eq!(error.limit, max_metadata);
     }
 }

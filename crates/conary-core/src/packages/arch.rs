@@ -13,6 +13,7 @@ pub(crate) use alpm_hook::{
     targets_match as alpm_hook_targets_match,
 };
 
+use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
@@ -53,22 +54,30 @@ pub struct ArchPackage {
 
 /// Arch package metadata files that should be skipped during extraction
 const ARCH_METADATA_FILES: &[&str] = &[".PKGINFO", ".MTREE", ".BUILDINFO", ".INSTALL"];
-const MAX_ARCH_CONTROL_SIZE: u64 = 16 * 1024 * 1024;
 
-fn read_control_entry<R: Read>(entry: &mut tar::Entry<'_, R>, label: &str) -> Result<Vec<u8>> {
-    if entry.size() > MAX_ARCH_CONTROL_SIZE {
+fn read_control_entry<R: Read>(
+    entry: &mut tar::Entry<'_, R>,
+    label: &str,
+    bounds: &ArchiveDecodeBounds,
+    metadata_bytes: &mut u64,
+) -> Result<Vec<u8>> {
+    let declared = entry.size();
+    *metadata_bytes =
+        bounds.add_metadata_bytes("ALPM control metadata", *metadata_bytes, declared)?;
+    let mut content = Vec::with_capacity(
+        usize::try_from(declared)
+            .map_err(|_| Error::ParseError(format!("ALPM {label} exceeds addressable memory")))?,
+    );
+    let mut limited = entry.take(declared.saturating_add(1));
+    limited
+        .read_to_end(&mut content)
+        .map_err(|error| Error::ParseError(format!("read ALPM {label}: {error}")))?;
+    let actual = content.len() as u64;
+    if actual != declared {
         return Err(Error::ParseError(format!(
-            "ALPM {label} is {} bytes; maximum is {MAX_ARCH_CONTROL_SIZE}",
-            entry.size()
+            "ALPM {label} declares {declared} bytes but yields {actual}"
         )));
     }
-    let mut content =
-        Vec::with_capacity(usize::try_from(entry.size()).map_err(|_| {
-            Error::ParseError(format!("ALPM {label} cannot be represented in memory"))
-        })?);
-    entry
-        .read_to_end(&mut content)
-        .map_err(|error| Error::InitError(format!("Failed to read {label}: {error}")))?;
     Ok(content)
 }
 
@@ -91,16 +100,44 @@ impl ArchPackage {
     }
 
     /// Open and decompress the package archive
-    fn open_archive(path: &str) -> Result<Archive<Box<dyn Read>>> {
+    fn open_archive(path: &str, bounds: &ArchiveDecodeBounds) -> Result<Archive<Box<dyn Read>>> {
         let mut file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open package file: {}", e)))?;
 
         let format = Self::detect_compression(&mut file)?;
         let reader =
-            compression::create_decoder_limited(file, format, compression::MAX_DECOMPRESS_SIZE)
+            compression::create_decoder_limited(file, format, bounds.max_decompressed_stream_bytes)
                 .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
         Ok(Archive::new(reader))
+    }
+
+    fn required_payload_spool_bytes(path: &str, bounds: &ArchiveDecodeBounds) -> Result<u64> {
+        let mut archive = Self::open_archive(path, bounds)?;
+        let mut entries_seen = 0_u64;
+        let mut required = 0_u64;
+        for entry in archive
+            .entries()
+            .map_err(|error| Error::ParseError(format!("read ALPM archive: {error}")))?
+        {
+            entries_seen += 1;
+            bounds.admit_archive_entry("ALPM archive entries", entries_seen)?;
+            let entry =
+                entry.map_err(|error| Error::ParseError(format!("read ALPM entry: {error}")))?;
+            let path_bytes = entry.path_bytes();
+            let path = std::str::from_utf8(path_bytes.as_ref()).map_err(|error| {
+                Error::ParseError(format!("ALPM archive path is not UTF-8: {error}"))
+            })?;
+            if ARCH_METADATA_FILES.contains(&path) {
+                continue;
+            }
+            required = bounds.add_payload_bytes(
+                "ALPM declared payload bytes",
+                required,
+                payload::declared_spool_bytes(&entry),
+            )?;
+        }
+        Ok(required)
     }
 
     /// Parse .PKGINFO file content
@@ -382,22 +419,26 @@ impl PackageFormat for ArchPackage {
     fn parse(path: &str) -> Result<Self> {
         debug!("Parsing Arch package: {}", path);
 
-        // Single-pass: decompress once and extract all metadata + file list
-        let mut archive = Self::open_archive(path)?;
+        let bounds = CCS_BUDGET.archive_decode_bounds()?;
+        // The first pass reserves exact declared regular payload bytes before
+        // the second pass can create any spool file.
+        let required_spool_bytes = Self::required_payload_spool_bytes(path, &bounds)?;
+        let payload_spool = PayloadSpool::new(required_spool_bytes)?;
+        let mut archive = Self::open_archive(path, &bounds)?;
         let mut pkginfo_content = None;
         let mut install_bytes = None;
         let mut alpm_hook_bytes: Vec<(String, Vec<u8>)> = Vec::new();
         let mut payload_entries = Vec::new();
-        let payload_spool = PayloadSpool::new(0)?;
-        let mut entries_seen = 0usize;
+        let mut entries_seen = 0_u64;
+        let mut declared_payload_bytes = 0_u64;
+        let mut metadata_bytes = 0_u64;
 
         for entry in archive
             .entries()
             .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?
         {
             entries_seen += 1;
-            compression::check_archive_entry_limit(entries_seen, "Arch package archive")
-                .map_err(|e| Error::InitError(format!("Failed to read archive: {}", e)))?;
+            bounds.admit_archive_entry("ALPM archive entries", entries_seen)?;
             let mut entry =
                 entry.map_err(|e| Error::InitError(format!("Failed to read entry: {}", e)))?;
 
@@ -409,32 +450,63 @@ impl PackageFormat for ArchPackage {
 
             match entry_path.as_str() {
                 ".PKGINFO" => {
-                    let content = read_control_entry(&mut entry, ".PKGINFO")?;
+                    let content =
+                        read_control_entry(&mut entry, ".PKGINFO", &bounds, &mut metadata_bytes)?;
                     let content = String::from_utf8(content).map_err(|error| {
                         Error::ParseError(format!(".PKGINFO is not UTF-8: {error}"))
                     })?;
                     pkginfo_content = Some(content);
                 }
                 ".INSTALL" => {
-                    install_bytes = Some(read_control_entry(&mut entry, ".INSTALL")?);
+                    install_bytes = Some(read_control_entry(
+                        &mut entry,
+                        ".INSTALL",
+                        &bounds,
+                        &mut metadata_bytes,
+                    )?);
                 }
                 name if ARCH_METADATA_FILES.contains(&name) => {
-                    // Skip other metadata files (.MTREE, .BUILDINFO)
+                    metadata_bytes = bounds.add_metadata_bytes(
+                        "ALPM control metadata",
+                        metadata_bytes,
+                        entry.size(),
+                    )?;
                 }
                 _ => {
-                    let parsed = payload::parse_entry(&mut entry, &payload_spool, entries_seen)?;
+                    declared_payload_bytes = bounds.add_payload_bytes(
+                        "ALPM declared payload bytes",
+                        declared_payload_bytes,
+                        payload::declared_spool_bytes(&entry),
+                    )?;
+                    let entry_index = usize::try_from(entries_seen).map_err(|_| {
+                        Error::ParseError("ALPM entry index exceeds usize".to_string())
+                    })?;
+                    let parsed = payload::parse_entry(&mut entry, &payload_spool, entry_index)?;
                     // Only the package-owned system hook directory is
                     // source-package ABI. `/etc/pacman.d/hooks` belongs to
                     // the selected target's explicit Conary hook policy.
-                    if alpm_hook::is_package_hook_path(parsed.path())
-                        && let Some(content) =
-                            parsed.read_regular_content_bounded(MAX_ARCH_CONTROL_SIZE)?
-                    {
-                        alpm_hook_bytes.push((parsed.path().to_string(), content));
+                    if alpm_hook::is_package_hook_path(parsed.path()) {
+                        let declared = parsed.regular_content_size().unwrap_or(0);
+                        metadata_bytes = bounds.add_metadata_bytes(
+                            "ALPM hook metadata",
+                            metadata_bytes,
+                            declared,
+                        )?;
+                        if let Some(content) =
+                            parsed.read_regular_content_bounded(bounds.max_metadata_bytes)?
+                        {
+                            alpm_hook_bytes.push((parsed.path().to_string(), content));
+                        }
                     }
                     payload_entries.push(parsed);
                 }
             }
+        }
+        if declared_payload_bytes != required_spool_bytes {
+            return Err(Error::ParseError(format!(
+                "ALPM archive changed between reservation and payload passes: reserved \
+                 {required_spool_bytes} bytes, observed {declared_payload_bytes}"
+            )));
         }
         let payload = PackagePayload::new(payload::resolve_hardlinks(payload_entries)?);
         let files = payload

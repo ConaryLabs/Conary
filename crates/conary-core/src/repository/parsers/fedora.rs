@@ -7,7 +7,7 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, PackageMetadata, RepositoryParser};
-use crate::compression::decompress_auto;
+use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
@@ -302,9 +302,8 @@ impl FedoraParser {
                 location.sha256, actual
             )));
         }
-        let decompressed = decompress_auto(&raw_bytes).map_err(|error| {
-            Error::ParseError(format!("Failed to decompress {}: {}", primary_url, error))
-        })?;
+        let decompressed =
+            decompress_metadata_auto(&raw_bytes, &format!("RPM primary metadata {primary_url}"))?;
         let content = String::from_utf8(decompressed).map_err(|error| {
             Error::ParseError(format!("Invalid UTF-8 in primary.xml: {}", error))
         })?;

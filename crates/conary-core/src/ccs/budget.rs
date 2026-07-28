@@ -13,6 +13,9 @@
 //! with its own typed diagnostic. Byte ceilings are *derived* from those
 //! dimensions: the global ceiling bounds decoder memory before allocation, and
 //! the census ceiling bounds the exact document a specific package may occupy.
+//! Source-package decoders consume [`ArchiveDecodeBounds`], which derives
+//! payload, metadata, entry-count, decompressed-stream, and spool limits from
+//! this same owner instead of maintaining a second package-parser limit table.
 
 use super::v2::schema::{
     AuthorityDocumentV2, FileAuthorityV2, LifecycleAuthorityV2, PackageKindV2,
@@ -45,6 +48,20 @@ const DEBUG_PROJECTION_TEXT_EXPANSION: u64 = 4;
 /// Fixed table headers and comments the TOML projection always writes.
 const DEBUG_PROJECTION_ENVELOPE_BYTES: u64 = 64 * 1024;
 
+/// One tar entry contributes one 512-byte header and at most 511 bytes of
+/// alignment padding. The extra byte also covers the terminal block envelope.
+const ARCHIVE_ENTRY_ENVELOPE_BYTES: u64 = 2 * 512;
+
+/// One payload object may occupy the package's entire payload allowance.
+///
+/// Authoring, conversion, chunking, CAS ingestion, and package writing all
+/// consume reopenable sources with fixed-size buffers; none of those active
+/// paths retain one complete payload object.
+const MAX_TOTAL_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+
+/// Control-plane repository and source-package metadata is decoded in memory.
+const MAX_METADATA_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Every structurally independent way a CCS package can exceed its budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetDimension {
@@ -75,6 +92,7 @@ pub enum BudgetDimension {
     PayloadObjectBytes,
     TotalPayloadBytes,
     ArchiveEntryCount,
+    DecompressedStreamBytes,
     CborNestingDepth,
     Arithmetic,
 }
@@ -109,6 +127,7 @@ impl BudgetDimension {
             Self::PayloadObjectBytes => "payload-object-bytes",
             Self::TotalPayloadBytes => "total-payload-bytes",
             Self::ArchiveEntryCount => "archive-entry-count",
+            Self::DecompressedStreamBytes => "decompressed-stream-bytes",
             Self::CborNestingDepth => "cbor-nesting-depth",
             Self::Arithmetic => "arithmetic",
         }
@@ -202,6 +221,100 @@ pub struct AuthorityCensus {
     pub non_payload_authority_bytes: u64,
 }
 
+/// Source-archive limits derived from [`CcsStructuralBudget`].
+///
+/// The values are a projection of the canonical owner, not an independently
+/// configurable table. Format decoders carry this projection so every refusal
+/// retains the exact [`BudgetDimension`] that was exceeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveDecodeBounds {
+    pub max_archive_entries: u64,
+    pub max_payload_object_bytes: u64,
+    pub max_total_payload_bytes: u64,
+    pub max_metadata_bytes: u64,
+    pub max_decompressed_stream_bytes: u64,
+}
+
+impl ArchiveDecodeBounds {
+    pub fn admit_archive_entry(&self, field: &str, entries_seen: u64) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::ArchiveEntryCount,
+            field,
+            entries_seen,
+            self.max_archive_entries,
+        )
+    }
+
+    pub fn admit_payload_object(&self, field: &str, declared: u64) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::PayloadObjectBytes,
+            field,
+            declared,
+            self.max_payload_object_bytes,
+        )
+    }
+
+    pub fn add_payload_bytes(&self, field: &str, current: u64, declared: u64) -> BudgetResult<u64> {
+        self.admit_payload_object(field, declared)?;
+        let observed = sum(field, [current, declared])?;
+        admit(
+            BudgetDimension::TotalPayloadBytes,
+            field,
+            observed,
+            self.max_total_payload_bytes,
+        )?;
+        Ok(observed)
+    }
+
+    pub fn add_metadata_bytes(
+        &self,
+        field: &str,
+        current: u64,
+        declared: u64,
+    ) -> BudgetResult<u64> {
+        let observed = sum(field, [current, declared])?;
+        admit(
+            BudgetDimension::MetadataBytes,
+            field,
+            observed,
+            self.max_metadata_bytes,
+        )?;
+        Ok(observed)
+    }
+
+    pub fn admit_metadata_bytes(&self, field: &str, observed: u64) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::MetadataBytes,
+            field,
+            observed,
+            self.max_metadata_bytes,
+        )
+    }
+
+    pub fn admit_decompressed_stream_bytes(&self, field: &str, observed: u64) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::DecompressedStreamBytes,
+            field,
+            observed,
+            self.max_decompressed_stream_bytes,
+        )
+    }
+
+    pub fn admit_spool_reservation(
+        &self,
+        field: &str,
+        required: u64,
+        available: u64,
+    ) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::TotalPayloadBytes,
+            field,
+            required,
+            available,
+        )
+    }
+}
+
 /// The canonical CCS v2 budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CcsStructuralBudget {
@@ -226,6 +339,7 @@ pub struct CcsStructuralBudget {
     pub max_attestation_bytes: u64,
     pub max_payload_object_bytes: u64,
     pub max_total_payload_bytes: u64,
+    pub max_metadata_bytes: u64,
     pub max_cbor_nesting_depth: usize,
 }
 
@@ -258,10 +372,37 @@ impl CcsStructuralBudget {
         max_total_xattr_bytes: 64 * 1024 * 1024,
         max_non_payload_authority_bytes: 128 * 1024 * 1024,
         max_attestation_bytes: 4 * 1024 * 1024,
-        max_payload_object_bytes: 512 * 1024 * 1024,
-        max_total_payload_bytes: 64 * 1024 * 1024 * 1024,
+        max_payload_object_bytes: MAX_TOTAL_PAYLOAD_BYTES,
+        max_total_payload_bytes: MAX_TOTAL_PAYLOAD_BYTES,
+        max_metadata_bytes: MAX_METADATA_BYTES,
         max_cbor_nesting_depth: 64,
     };
+
+    /// Derive the complete source-archive decode budget from this owner.
+    ///
+    /// The decompressed-stream ceiling is structural: declared payload plus
+    /// one bounded header/alignment envelope for every admissible entry. Exact
+    /// per-entry, cumulative payload, entry-count, and metadata checks remain
+    /// authoritative; this outer ceiling bounds bytes that are only framing.
+    pub fn archive_decode_bounds(&self) -> BudgetResult<ArchiveDecodeBounds> {
+        let max_archive_entries = self.max_archive_entries();
+        let archive_envelope = product(
+            "archive decompressed stream envelope",
+            max_archive_entries,
+            ARCHIVE_ENTRY_ENVELOPE_BYTES,
+        )?;
+        let max_decompressed_stream_bytes = sum(
+            "archive decompressed stream",
+            [self.max_total_payload_bytes, archive_envelope],
+        )?;
+        Ok(ArchiveDecodeBounds {
+            max_archive_entries,
+            max_payload_object_bytes: self.max_payload_object_bytes,
+            max_total_payload_bytes: self.max_total_payload_bytes,
+            max_metadata_bytes: self.max_metadata_bytes,
+            max_decompressed_stream_bytes,
+        })
+    }
 
     /// Decoder-memory ceiling for signed authority, derived from the structural
     /// dimensions above rather than chosen as a serialized-byte constant.
