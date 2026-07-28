@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 5
+last_updated: 2026-07-29
+revision: 6
 status: active
 current_result: 0/10
 summary: Outcome tracker for Conary's first cross-distro external tester milestone
@@ -35,26 +35,19 @@ but does not count as a completion.
 
 ## Release Gate
 
-The pinned tester release is the verified immutable `v0.13.0` recorded in
-`docs/operations/release-artifact-matrix.md`. Its release gate is complete:
+Release candidate `v0.14.0` is the intended pinned tester release. Its release
+gate remains open until `docs/operations/release-artifact-matrix.md` records:
 
-- annotated tag object `f8298522fd7fe95a4994184ae20c34cf64096818`
-  peels to `6f1429c362ac161f1ef817233e72ee9c9a031c11`;
-- release-build run `30261256730` published the exact seven-asset suite, and
-  independent downloads matched all five checksum entries and every GitHub
-  digest;
-- the detached CCS signature, current 0.13 binary identity, signed forced
-  self-update, deployed release directory, and public self-update endpoint
-  agree;
-- the schema hard cut is explicit: install the 0.13 native package fresh
-  instead of attempting to self-update the incompatible 0.12 CCS parser;
-- deploy-and-proof run `30263948968` installed the immutable RPM, DEB, and
-  Arch packages natively and passed the Cartesian lifecycle on Fedora 44,
-  Ubuntu 26.04 LTS, and Arch;
-- exact-tag Conary sites serve 0.13.0 with a real branded 404, and compatible
-  `remi-v0.8.5` production passes full health with all five sources populated
-  and real conversions for every public profile;
-- signature, SBOM, and provenance statuses are explicit in the release matrix.
+- the annotated tag object and reviewed commit;
+- a terminal exact-tag release-build and the complete seven-asset inventory;
+- matching independent checksums and GitHub digests;
+- detached CCS signature, installed-binary, and self-update proof;
+- exact-tag deployment plus independent endpoint and site verification;
+- native RPM, DEB, and Arch installation and the Cartesian lifecycle proof on
+  Fedora 44, Ubuntu 26.04 LTS, and Arch;
+- compatible `remi-v0.9.0` production identity, schema/source/signing state,
+  full health, and a real public converted CCS artifact;
+- explicit signature, SBOM, and provenance status.
 
 Release proof is not an external-user completion. The result therefore remains
 0/10, and broad outreach remains postponed by the separate cached-history and

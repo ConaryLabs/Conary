@@ -2,7 +2,7 @@
 
 [![Merge validation](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![v0.13.0](https://img.shields.io/badge/version-0.13.0-orange.svg)](CHANGELOG.md)
+[![Release candidate: v0.14.0](https://img.shields.io/badge/release_candidate-v0.14.0-orange.svg)](CHANGELOG.md)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -54,11 +54,11 @@ attach only a reviewed support bundle.
 
 ## Try It
 
-Download the pinned preview release from
-[v0.13.0](https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0), verify
-the package against its published `SHA256SUMS`, and install it only on a VM or
-non-critical host. Release artifact evidence is tracked in
-[docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md).
+Release candidate `v0.14.0` is not tester-authoritative until the
+[release artifact matrix](docs/operations/release-artifact-matrix.md) records
+its exact publication, checksums, deployment, and released-package proof. Do
+not download or install the candidate before that gate opens. Once verified,
+install it only on a VM or non-critical host.
 
 Then choose a source whose package format differs from the host and run the
 complete bounded loop:
@@ -133,7 +133,7 @@ first when the command supports it.
 - Native transaction-history import is not implemented.
 - Non-x86_64 generation boot assets are still reserved.
 - The 0.13 schema hard cut is not readable by the 0.12 CCS self-update parser;
-  install the 0.13 native package fresh instead of attempting that in-place
+  install the 0.14 native package fresh instead of attempting that in-place
   update.
 - SBOM/provenance sidecars are not published for the current preview suite.
 
