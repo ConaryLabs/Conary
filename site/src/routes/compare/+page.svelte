@@ -12,7 +12,7 @@
 
 <PageIntro
 	eyebrow="Trade-off matrix"
-	title="Compare the operating models, not one-word scores."
+	title="Compare the operating models, not the checkmarks."
 	description="Conary is not the mature choice today. Its near-term bet is that RPM, DEB, and Arch packages can retain their source semantics while one engine owns the transaction on any supported Linux target."
 />
 
@@ -301,11 +301,14 @@
 	.definitions-heading h2,
 	.application-heading h2,
 	.details-heading h2,
-	.sources-section h2,
+	.sources-section h2 {
+		margin-bottom: 0;
+		font-size: var(--step-section);
+	}
+
 	.compare-cta h2 {
 		margin-bottom: 0;
-		font-size: clamp(1.8rem, 3.5vw, 3rem);
-		letter-spacing: -0.045em;
+		font-size: var(--step-lead);
 	}
 
 	.matrix-eyebrow {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import BoundaryDiagram from '$lib/components/BoundaryDiagram.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
 	import TerminalFrame from '$lib/components/TerminalFrame.svelte';
 	import { previewRelease } from '$lib/preview-release';
@@ -14,42 +15,65 @@
 	<div class="container grid-12 hero-grid">
 		<div class="hero-copy">
 			<p class="eyebrow">A package system for Linux · {previewRelease.tag}</p>
-			<h1>Install the package you want, not only the format your distro chose.</h1>
+			<h1>An RPM that installs on Ubuntu. A DEB that installs on Fedora.</h1>
 			<p class="hero-lede">
-				Conary carries RPM, Debian, and Arch package semantics across distro
-				boundaries, executes them through typed host capabilities, and owns the
-				resulting transaction, rollback, and system state.
+				Conary keeps each package's exact RPM, Debian, or ALPM semantics, executes
+				them against typed capabilities on the target host, and owns the resulting
+				transaction and rollback — without invoking dnf, apt, or pacman.
 			</p>
 			<div class="button-row hero-actions">
-				<a href="/features/" class="btn btn-primary">Explore the product direction</a>
-				<a href="/install/" class="btn btn-secondary">Try what works today</a>
+				<a href="/install/" class="btn btn-primary">Try what works today</a>
+				<a href="/features/" class="btn btn-secondary">See what is proven</a>
 			</div>
-			<ul class="hero-meta" aria-label="Conary principles">
-				<li>Fedora · Ubuntu · Arch</li>
+			<ul class="hero-meta" aria-label="Supported formats and hosts">
 				<li>RPM · DEB · Arch · CCS</li>
-				<li>Preview available now</li>
+				<li>Fedora 44 · Ubuntu 26.04 · Arch</li>
 			</ul>
 		</div>
 
 		<figure class="hero-art mark-settle">
-			<img
-				src="/brand/conary-authority-rail.svg"
-				alt=""
-				width="820"
-				height="640"
-				aria-hidden="true"
-			/>
-			<div class="authority-labels" aria-hidden="true">
-				<span class="authority-label native"><b>source package ABI</b><small>RPM / Debian / ALPM</small></span>
-				<span class="authority-label tracked"><b>typed target</b><small>capabilities · state</small></span>
-				<span class="authority-label owned"><b>Conary authority</b><small>install · update · rollback</small></span>
-				<span class="authority-motto">preserve semantics · cross the distro boundary</span>
-			</div>
+			<BoundaryDiagram />
 			<figcaption class="visually-hidden">
 				A source package keeps its RPM, Debian, or ALPM semantics while typed
 				target capabilities feed one Conary-owned package transaction.
 			</figcaption>
 		</figure>
+	</div>
+</section>
+
+<section class="section thesis">
+	<div class="container thesis-inner">
+		<div class="thesis-head">
+			<p class="eyebrow">The bet</p>
+			<h2>A package format is a source input, not a wall.</h2>
+		</div>
+
+		<div class="thesis-body">
+			<p>
+				A package belongs to the distribution that built it. If the software you
+				need ships as an RPM and you run Ubuntu, you wait for a Debian maintainer,
+				reach for a container, or change distributions. The work of packaging the
+				same software gets repeated once per ecosystem, and the cost lands on
+				maintainers and on anyone whose distro is not the popular one.
+			</p>
+			<p>
+				Conary's bet is that this boundary is mechanical, not fundamental. RPM,
+				Debian, and ALPM each expose a finite, documented lifecycle ABI. Encode
+				those exactly, express what a host provides as typed capabilities, and a
+				package stops being the property of one distribution — while Conary, not
+				the distro's package manager, owns the transaction and the way back.
+			</p>
+		</div>
+
+		<p class="thesis-claim">
+			Existing distro repositories become source inputs to one package engine.
+		</p>
+
+		<p class="thesis-bound">
+			Today that holds for RPM, DEB, Arch, and CCS packages on Fedora 44, Ubuntu
+			26.04 LTS, and Arch Linux. Everything below is labelled with how far it has
+			actually been proven.
+		</p>
 	</div>
 </section>
 
@@ -223,9 +247,9 @@
 	}
 
 	.hero-grid {
-		min-height: min(820px, calc(100svh - var(--header-height)));
+		min-height: min(760px, calc(100svh - var(--header-height)));
 		align-items: center;
-		padding-block: clamp(4rem, 8vw, 7rem);
+		padding-block: clamp(3rem, 6vw, 5rem);
 	}
 
 	.hero-copy {
@@ -235,18 +259,18 @@
 	}
 
 	.hero h1 {
-		max-width: 10ch;
-		margin-bottom: 1.5rem;
-		font-size: clamp(3.2rem, 5vw, 4.8rem);
-		font-weight: 800;
-		letter-spacing: -0.065em;
+		max-width: 17ch;
+		margin-bottom: 1.4rem;
+		font-size: var(--step-hero);
+		font-weight: 700;
+		letter-spacing: var(--track-hero);
 	}
 
 	.hero-lede {
-		max-width: 60ch;
-		margin-bottom: 2rem;
+		max-width: 54ch;
+		margin-bottom: 1.85rem;
 		color: var(--color-mist);
-		font-size: clamp(1.05rem, 1.7vw, 1.2rem);
+		font-size: clamp(1rem, 1.5vw, 1.12rem);
 		line-height: 1.7;
 	}
 
@@ -406,71 +430,67 @@
 	}
 
 	.hero-art {
-		position: relative;
-		grid-column: 7 / -1;
-		width: min(60vw, 760px);
-		margin: 0 -8vw 0 -2rem;
+		grid-column: 8 / -1;
+		align-self: center;
+		margin: 0;
+		min-width: 0;
 	}
 
-	.hero-art img {
-		width: 100%;
-		height: auto;
+	.thesis {
+		background: var(--color-code-bg);
+		border-bottom: 1px solid var(--color-border);
 	}
 
-	.authority-label {
-		position: absolute;
-		display: flex;
-		flex-direction: column;
-		gap: 0.18rem;
-		font-family: var(--font-mono);
-		line-height: 1.25;
+	.thesis-inner {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+		gap: clamp(2rem, 5vw, 4.5rem);
 	}
 
-	.authority-label b {
+	.thesis-head h2 {
+		max-width: 16ch;
+		margin: 0;
+		font-size: var(--step-lead);
+		font-weight: 700;
+	}
+
+	.thesis-body p {
+		max-width: 62ch;
+		margin: 0 0 1.15rem;
+		color: var(--color-mist);
+		font-size: clamp(1rem, 1.4vw, 1.08rem);
+		line-height: 1.75;
+	}
+
+	.thesis-body p:last-child {
+		margin-bottom: 0;
+	}
+
+	.thesis-claim {
+		grid-column: 1 / -1;
+		max-width: 30ch;
+		margin: clamp(2.5rem, 5vw, 3.75rem) 0 0;
+		padding-left: clamp(1rem, 2vw, 1.5rem);
+		border-left: 3px solid var(--color-orange);
 		color: var(--color-ivory);
-		font-size: clamp(0.62rem, 1.2vw, 0.82rem);
-		font-weight: 500;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
+		font-family: var(--font-display);
+		font-size: var(--step-lead);
+		font-weight: 700;
+		letter-spacing: var(--track-display);
+		line-height: 1.2;
+		text-wrap: balance;
 	}
 
-	.authority-label small {
+	.thesis-bound {
+		grid-column: 1 / -1;
+		max-width: 72ch;
+		/* Indented to the claim's rule: the boundary belongs to the claim above it,
+		   not to the section. */
+		margin: 1.25rem 0 0;
+		padding-left: clamp(1rem, 2vw, 1.5rem);
+		border-left: 3px solid transparent;
 		color: var(--color-muted);
-		font-size: clamp(0.56rem, 1vw, 0.72rem);
-	}
-
-	.authority-label.native {
-		top: 34%;
-		left: 51%;
-	}
-
-	.authority-label.tracked {
-		top: 50%;
-		left: 70%;
-	}
-
-	.authority-label.tracked b {
-		color: var(--color-cyan);
-	}
-
-	.authority-label.owned {
-		top: 62%;
-		left: 70%;
-	}
-
-	.authority-label.owned b {
-		color: var(--color-orange);
-	}
-
-	.authority-motto {
-		position: absolute;
-		bottom: 7%;
-		left: 6%;
-		color: var(--color-muted);
-		font-family: var(--font-mono);
-		font-size: clamp(0.52rem, 1vw, 0.68rem);
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		font-size: 0.92rem;
 	}
 
 	.evaluate-heading {
@@ -619,10 +639,9 @@
 	}
 
 	.cta-box h2 {
-		max-width: 14ch;
+		max-width: 18ch;
 		margin-bottom: 0.75rem;
-		font-size: clamp(2rem, 4vw, 3.5rem);
-		letter-spacing: -0.045em;
+		font-size: var(--step-lead);
 	}
 
 	.cta-box p:last-child {
@@ -647,9 +666,10 @@
 
 		.hero-art {
 			grid-column: 7 / -1;
-			width: 720px;
-			margin-right: -360px;
-			opacity: 0.72;
+		}
+
+		.thesis-inner {
+			grid-template-columns: 1fr;
 		}
 
 		.evaluate-heading,
@@ -682,7 +702,7 @@
 
 		.hero-grid {
 			min-height: auto;
-			padding-top: 4.5rem;
+			padding-top: 2.75rem;
 			padding-bottom: 0;
 		}
 
@@ -698,14 +718,11 @@
 		}
 
 		.hero h1 {
-			max-width: 10ch;
-			font-size: clamp(2.65rem, 12vw, 3.7rem);
+			max-width: 20ch;
 		}
 
 		.hero-art {
-			width: calc(100% + 5rem);
-			margin: 1rem -3rem -2rem -2rem;
-			opacity: 1;
+			margin: 2.5rem 0 0;
 		}
 
 		.evaluate-heading,

@@ -88,11 +88,11 @@
 	}
 
 	.error-content h1 {
-		max-width: 11ch;
+		max-width: 17ch;
 		margin-bottom: 1rem;
-		font-size: clamp(3rem, 7vw, 6rem);
-		font-weight: 800;
-		letter-spacing: -0.065em;
+		font-size: var(--step-hero);
+		font-weight: 700;
+		letter-spacing: var(--track-hero);
 	}
 
 	.error-content > p:not(.eyebrow) {

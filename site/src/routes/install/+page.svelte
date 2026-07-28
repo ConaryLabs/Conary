@@ -283,8 +283,7 @@
 
 	.safety-rail h2 {
 		margin-bottom: 1rem;
-		font-size: 1.5rem;
-		letter-spacing: -0.03em;
+		font-size: var(--step-sub);
 	}
 
 	.safety-rail ul,
@@ -358,8 +357,7 @@
 	.step-heading h2,
 	.contributor-panel h2 {
 		margin-bottom: 0.65rem;
-		font-size: clamp(1.65rem, 3vw, 2.45rem);
-		letter-spacing: -0.04em;
+		font-size: var(--step-section);
 	}
 
 	.step-heading p,

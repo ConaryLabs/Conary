@@ -43,11 +43,11 @@
 	}
 
 	.intro-title h1 {
-		max-width: 12ch;
+		max-width: 19ch;
 		margin-bottom: 0;
-		font-size: clamp(3rem, 5.2vw, 4.8rem);
-		font-weight: 800;
-		letter-spacing: -0.06em;
+		font-size: var(--step-hero);
+		font-weight: 700;
+		letter-spacing: var(--track-hero);
 	}
 
 	.intro-copy {
@@ -76,7 +76,6 @@
 
 		.intro-title h1 {
 			max-width: 100%;
-			font-size: clamp(2.1rem, 10vw, 3.2rem);
 		}
 
 		.intro-copy {
