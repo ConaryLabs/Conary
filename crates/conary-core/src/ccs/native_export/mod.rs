@@ -260,6 +260,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_backed_copy_preserves_bytes_and_computes_debian_md5() {
+        let result = crate::ccs::builder::test_support::minimal_file_build_result(
+            "hello",
+            "1.0.0",
+            b"hello world",
+        );
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let digest = copy_file_content(&result, &result.files[0], output.path()).unwrap();
+
+        assert_eq!(std::fs::read(output.path()).unwrap(), b"hello world");
+        assert_eq!(digest, "5eb63bbbe01eeed093cb22bb8f5acdc3");
+    }
+
+    #[test]
+    fn source_backed_copy_rejects_content_changed_after_authoring() {
+        let source = tempfile::tempdir().unwrap();
+        let source_file = source.path().join("payload");
+        std::fs::write(&source_file, b"signed bytes").unwrap();
+        let result = crate::ccs::builder::CcsBuilder::new(
+            crate::ccs::manifest::CcsManifest::new_minimal("changed", "1.0.0"),
+            source.path(),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        std::fs::write(source_file, b"changed bytes").unwrap();
+        let output = tempfile::NamedTempFile::new().unwrap();
+
+        let error = copy_file_content(&result, &result.files[0], output.path()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("payload source does not match authority")
+        );
+    }
+
+    #[test]
     fn shell_escape_handles_quotes() {
         assert_eq!(shell_escape("it's"), "'it'\\''s'");
     }
@@ -267,7 +304,22 @@ mod tests {
     #[test]
     fn architecture_mapping_remains_format_specific() {
         assert_eq!(arch_for_format(Some("x86_64"), "deb").unwrap(), "amd64");
+        assert_eq!(arch_for_format(Some("aarch64"), "deb").unwrap(), "arm64");
         assert_eq!(arch_for_format(Some("amd64"), "rpm").unwrap(), "x86_64");
         assert!(arch_for_format(Some("all"), "rpm").is_err());
+        assert!(arch_for_format(Some("any"), "rpm").is_err());
+        assert!(arch_for_format(Some("noarch"), "deb").is_err());
+        assert!(arch_for_format(None, "arch").is_err());
+        assert!(arch_for_format(Some("riscv64"), "arch").is_err());
+    }
+
+    #[test]
+    fn loss_report_tracks_unsupported_features() {
+        let mut report = LossReport::default();
+        assert!(report.is_empty());
+
+        report.add_unsupported("merkle tree verification");
+        assert!(!report.is_empty());
+        assert_eq!(report.unsupported_features.len(), 1);
     }
 }
