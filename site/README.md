@@ -13,3 +13,15 @@ separate static site root rather than through Remi's `[web]` frontend mount.
 ```
 
 This is NOT the packages site. For remi.conary.io, see `../web/`.
+
+## Brand tokens and shared assets
+
+The brand palette, font stacks, shared geometry, and the byte-identical logo and
+favicon files are owned by [`../shared/brand/`](../shared/brand/README.md), not
+by this tree. `scripts/sync-brand.sh` materializes them here as `predev`,
+`precheck`, and `prebuild`, so `npm run dev`, `npm run check`, and
+`npm run build` all pick up a change automatically.
+
+Generated paths (`src/brand.generated.css` and the mirrored `static/` files) are
+gitignored. To change a brand fact, edit `shared/brand/`; do not edit the
+generated copies.

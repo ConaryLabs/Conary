@@ -1,18 +1,6 @@
-:root {
-	/* Shared Conary brand */
-	--color-field: #0a1224;
-	--color-layer: #101d30;
-	--color-ivory: #fbf7f0;
-	--color-mist: #bfcbd4;
-	--color-muted: #8b9aa8;
-	--color-cyan: #46c7d3;
-	--color-cyan-bright: #66d5df;
-	--color-orange: #fc6b16;
-	--color-border: #21344a;
-	--color-border-strong: #36516e;
-	--color-control-border: #52718d;
-	--color-code-bg: #07101f;
+@import './brand.generated.css';
 
+:root {
 	/* Package-index semantic aliases */
 	--color-bg: var(--color-field);
 	--color-bg-subtle: #0d192a;
@@ -34,20 +22,12 @@
 	--color-arch: #46c7d3;
 	--color-ubuntu: #fc6b16;
 
-	--font-display: 'Syne', sans-serif;
-	--font-body: 'Outfit', sans-serif;
-	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-	--radius-sm: 4px;
 	--radius-md: 4px;
-	--radius-lg: 10px;
 	--radius-xl: 10px;
 	--shadow-sm: 0 1px 0 rgb(0 0 0 / 25%);
 	--shadow-md: 0 14px 34px rgb(0 0 0 / 18%);
 	--shadow-lg: 0 22px 50px rgb(0 0 0 / 28%);
 	--shadow-glow: none;
-	--max-width: 1240px;
-	--header-height: 4.5rem;
-	--section-space: clamp(4.5rem, 9vw, 7.5rem);
 }
 
 *,
