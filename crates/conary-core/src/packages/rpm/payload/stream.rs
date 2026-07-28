@@ -23,6 +23,7 @@ const MAX_CPIO_NAME_SIZE: u64 = 4096;
 #[derive(Debug)]
 pub(super) struct PayloadMember {
     pub(super) header_index: usize,
+    pub(super) archive_position: usize,
     pub(super) content_size: u64,
     pub(super) sha256: Option<String>,
     pub(super) source: Option<ReopenablePayload>,
@@ -354,8 +355,10 @@ impl<'a> RpmPayloadReader<'a> {
             )));
         }
         self.read_alignment_padding(size, "CPIO content")?;
+        let archive_position = self.members.len();
         self.members.push(PayloadMember {
             header_index: index,
+            archive_position,
             content_size: size,
             sha256,
             source,

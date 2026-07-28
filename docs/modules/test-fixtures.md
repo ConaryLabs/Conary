@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 23
+last_updated: 2026-07-28
+revision: 24
 summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
 ---
 
@@ -40,6 +40,7 @@ Each fixture family should record:
 | `ccs-v2-lifecycle-authoring-proof` | CCS v2 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v2` |
 | `m4d-supported-profile-cutover` | Repository feed profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
 | `native-lifecycle-query-fixtures` | Native lifecycle query surfaces | `cargo test -p conary --test query_scripts` |
+| `rpm-hardlink-transaction` | RPM payload projection and CCS conversion | `cargo test -p conary-core packages::rpm::payload`; `cargo test -p conary --test conversion_integration golden_conversion` |
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
 | `remi-converted-artifact-serving` | Remi conversion persistence and serving | `cargo test -p remi conversion` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
@@ -76,6 +77,37 @@ Each fixture family should record:
   fixture, but neither is expected-output authority. A fixture for an
   missing executable semantic must assert a typed preflight failure before
   payload or database mutation and remain required implementation work.
+
+### rpm-hardlink-transaction
+
+- **Owner:** RPM payload projection:
+  `crates/conary-core/src/packages/rpm/payload/hardlinks.rs`; archive order:
+  `crates/conary-core/src/packages/rpm/payload/stream.rs`; persisted CCS proof:
+  `apps/conary/tests/conversion_integration/authority.rs`.
+- **Purpose:** Prove that RPM hardlink sets group by device/inode, retain
+  archive order, and project the last packaged header-index member as the
+  content-bearing transaction completion and effective inode metadata owner.
+  Per-path header evidence is parsed without requiring invented metadata
+  equality; malformed counts, digest disagreement, conflicting non-authority
+  payload bytes, impossible identities, and missing completion still fail
+  closed.
+- **Fixture source:** Fedora 44
+  `2ping-4.5.1-24.fc44.noarch.rpm` at
+  `crates/conary-core/tests/fixtures/rpm/`, pinned by SHA-256
+  `cf48a9380416daf02e934cbddd15d5356b3b6ea6b5f0824187074b66dd0fe14a`.
+- **Consumes:** RPM hardlink projection unit tests, the pinned parser
+  regression, and the signed CCS golden conversion round-trip.
+- **Fast proof:** `cargo test -p conary-core packages::rpm::payload`.
+- **Medium proof:** `cargo test -p conary-core packages::rpm`;
+  `cargo test -p conary --test conversion_integration golden_conversion`.
+- **Slow proof:** Install the pinned fixture in a disposable Fedora 44 root
+  with native `rpm`, capture `stat` plus `rpm -V`, and compare the observed
+  inode owner metadata with the projected CCS node.
+- **Regeneration:** Replace the binary only with an artifact having the exact
+  pinned checksum, then rerun both parser and conversion gates.
+- **Safety notes:** The fixture is public package data. Native-oracle commands
+  run only in a disposable test image/root; never install it into the host,
+  production Remi, `/conary/data`, or `/etc/conary`.
 
 ### host-executable-interface-fixtures
 

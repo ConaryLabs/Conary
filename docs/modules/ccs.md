@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 48
+last_updated: 2026-07-28
+revision: 49
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
