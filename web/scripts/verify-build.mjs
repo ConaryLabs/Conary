@@ -53,8 +53,6 @@ for (const marker of [
 
 const assets = [
 	'brand/conary-mark.svg',
-	'brand/conary-lockup-horizontal.svg',
-	'brand/conary-authority-rail.svg',
 	'brand/conary-social.svg',
 	'brand/conary-social.png',
 	'favicon.svg',

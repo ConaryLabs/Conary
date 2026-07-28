@@ -1,23 +1,6 @@
+@import './brand.generated.css';
+
 :root {
-	/* Brand */
-	--color-field: #0a1224;
-	--color-layer: #101d30;
-	--color-ivory: #fbf7f0;
-	--color-mist: #bfcbd4;
-	--color-muted: #8b9aa8;
-	--color-cyan: #46c7d3;
-	--color-cyan-bright: #66d5df;
-	--color-orange: #fc6b16;
-	--color-border: #21344a;
-	--color-border-strong: #36516e;
-	--color-control-border: #52718d;
-	--color-code-bg: #07101f;
-
-	/* Typography */
-	--font-display: 'Syne', sans-serif;
-	--font-body: 'Outfit', sans-serif;
-	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-
 	/* Display scale. Four distinct steps so importance is legible at a glance:
 	   hero owns the fold, lead marks the one argument a page is making, section
 	   opens a band, sub sits above a group of cards. */
@@ -30,13 +13,6 @@
 	   display sizes. */
 	--track-display: -0.025em;
 	--track-hero: -0.032em;
-
-	/* Geometry */
-	--radius-sm: 4px;
-	--radius-lg: 10px;
-	--max-width: 1240px;
-	--header-height: 4.5rem;
-	--section-space: clamp(4.5rem, 9vw, 7.5rem);
 }
 
 *,
