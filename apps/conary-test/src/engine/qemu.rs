@@ -143,7 +143,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     // Start draining the console before anything waits on the guest. An
     // undrained pipe blocks QEMU at one kernel pipe buffer and freezes the
     // guest mid-boot; see `console` for the full account.
-    let console = ConsoleCapture::attach(&mut child);
+    let console = ConsoleCapture::attach(&mut child, &config.expect_output);
 
     if let Err(message) = wait_for_ssh(
         &mut child,
@@ -301,6 +301,12 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
 
     if exit_code == 0 {
         for expected in &config.expect_output {
+            // The console reader recorded what it saw live. The retained buffer
+            // is bounded, so a token can be true and absent from the text here;
+            // a live match is the stronger evidence and is checked first.
+            if qemu_output.matched.contains(expected) {
+                continue;
+            }
             if !stdout.contains(expected) && !stderr.contains(expected) {
                 exit_code = 1;
                 if !stderr.is_empty() {
