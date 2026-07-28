@@ -6,8 +6,8 @@ export type PreviewTarget = {
 	installCommand: string;
 };
 
-const version = '0.13.0';
-const tag = 'v0.13.0';
+const version = '0.14.0';
+const tag = 'v0.14.0';
 const releaseUrl = `https://github.com/ConaryLabs/Conary/releases/tag/${tag}`;
 const downloadBaseUrl = `https://github.com/ConaryLabs/Conary/releases/download/${tag}`;
 
@@ -24,22 +24,22 @@ export const previewRelease = {
 			id: 'fedora',
 			name: 'Fedora 44',
 			profile: 'fedora-44',
-			asset: 'conary-0.13.0-1.fc44.x86_64.rpm',
-			installCommand: 'sudo dnf install ./conary-0.13.0-1.fc44.x86_64.rpm'
+			asset: 'conary-0.14.0-1.fc44.x86_64.rpm',
+			installCommand: 'sudo dnf install ./conary-0.14.0-1.fc44.x86_64.rpm'
 		},
 		{
 			id: 'ubuntu',
 			name: 'Ubuntu 26.04 LTS',
 			profile: 'ubuntu-26.04',
-			asset: 'conary_0.13.0-1_amd64.deb',
-			installCommand: 'sudo apt install ./conary_0.13.0-1_amd64.deb'
+			asset: 'conary_0.14.0-1_amd64.deb',
+			installCommand: 'sudo apt install ./conary_0.14.0-1_amd64.deb'
 		},
 		{
 			id: 'arch',
 			name: 'Arch Linux',
 			profile: 'arch',
-			asset: 'conary-0.13.0-1-x86_64.pkg.tar.zst',
-			installCommand: 'sudo pacman -U ./conary-0.13.0-1-x86_64.pkg.tar.zst'
+			asset: 'conary-0.14.0-1-x86_64.pkg.tar.zst',
+			installCommand: 'sudo pacman -U ./conary-0.14.0-1-x86_64.pkg.tar.zst'
 		}
 	] satisfies PreviewTarget[]
 } as const;
