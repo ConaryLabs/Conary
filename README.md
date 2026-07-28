@@ -6,22 +6,24 @@
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
-Conary is an early Linux system manager written in Rust. It can install
-RPM, DEB, Arch, and CCS packages through one source-independent transaction
-model, record package changes as changesets, adopt packages that already exist
-on a Fedora, Ubuntu, or Arch host, and build immutable system generations for
-rollback and image export.
+Conary is a cross-distro package manager for Linux, written in Rust. It
+installs RPM, DEB, Arch, and native CCS packages on Fedora, Ubuntu, and Arch
+hosts: an RPM keeps exact RPM lifecycle and dependency semantics on Ubuntu or
+Arch, a DEB keeps exact Debian semantics on Fedora or Arch, and an Arch
+package keeps exact ALPM semantics on Fedora or Ubuntu — without invoking
+dnf, apt, or pacman.
 
-The primary adoption path is cross-distro package installation: an RPM keeps
-RPM lifecycle and dependency semantics on Ubuntu or Arch, a DEB keeps Debian
-semantics on Fedora or Arch, and an Arch package keeps ALPM semantics on Fedora
-or Ubuntu. Conary owns the resulting install, update, remove, and rollback
-transaction. The source package format defines the package ABI; the target
-supplies an explicitly inventoried set of host capabilities.
+Every change runs through one source-independent atomic transaction model,
+recorded as changesets over content-addressed storage, with immutable system
+generations for rollback and image export.
+The source package format defines the package ABI; Conary owns install,
+update, remove, and rollback; the target supplies an explicitly inventoried
+set of typed host capabilities.
 
-Adoption remains available as a migration bridge for packages already owned by
-dnf, apt, or pacman. Those native package managers are not runtime authority
-for normal Conary-owned package operations.
+The primary adoption path is cross-distro package installation. For packages
+already owned by dnf, apt, or pacman on an existing system, adoption remains
+available as a reversible migration bridge; those native package managers are
+not runtime authority for normal Conary-owned package operations.
 
 Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager))
 from rPath, but this is an independent project. It is not affiliated with,
