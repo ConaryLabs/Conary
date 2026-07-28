@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 48
+last_updated: 2026-07-28
+revision: 49
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -155,6 +155,26 @@ proves that equality, projection retains the target as symlink variant data
 without inventing regular-file content authority. Any mismatched target or
 length still fails, and every other non-regular node must carry zero payload
 bytes.
+
+RPM hardlink projection follows the transaction rule pinned at upstream commit
+`a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.
+[`rpmfilesBuildNLink`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L1380-L1434)
+groups non-ghost regular files with a positive inode solely by the
+`FILEDEVICES`/`FILEINODES` pair and retains each set in header-index order.
+[`rpmfiArchiveHasContent`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L2301-L2318)
+designates the last packaged header-index member as the content-bearing member;
+that designation also completes an all-zero-length set even though it carries
+no data bytes.
+[`fsmMkfile`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc#L197-L237)
+creates the other names with `link(2)` and applies inode metadata once, from
+that completing member's header record. A partial set permitted by
+[`rpmlib(PartialHardlinkSets)`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L995-L997)
+therefore uses the last member actually packaged, while a declared link count
+smaller than the packaged set remains malformed. CCS stores the resulting one
+effective inode node on every path in the set; it does not preserve a parallel
+source-RPM verification database. The adopted-package `--rpm` verification
+path delegates to the installed RPM database, while native Conary verification
+uses the projected node and CAS authority.
 
 **convert/** -- RPM, Debian, and Arch to CCS conversion. Source package parsers
 produce a typed native ABI before conversion: exact lifecycle slots, body

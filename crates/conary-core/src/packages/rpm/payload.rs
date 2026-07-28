@@ -19,9 +19,10 @@ use rpm::{IndexTag, Package};
 use sha1::{Digest as Digest10, Sha1};
 use sha2::{Digest as Digest11, Sha224, Sha256, Sha384, Sha512};
 use sha3::{Sha3_256, Sha3_512};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 
+mod hardlinks;
 mod header;
 mod stream;
 
@@ -64,26 +65,24 @@ pub(super) fn parse_stream(package: &Package, payload: Box<dyn Read>) -> Result<
         ));
     }
 
-    let hardlink_groups = hardlink_groups(&records)?;
+    let hardlink_sets = hardlinks::sets(&records)?;
     let mut group_by_index = HashMap::new();
-    for group in &hardlink_groups {
-        for index in group {
-            group_by_index.insert(*index, group.as_slice());
+    for set in &hardlink_sets {
+        for index in set.member_indexes() {
+            group_by_index.insert(*index, set);
         }
     }
 
     let mut output = Vec::with_capacity(records.len());
-    let mut emitted_hardlink_groups = HashSet::new();
     for (index, record) in records.iter().enumerate() {
         if record.ghost {
             continue;
         }
-        if let Some(group) = group_by_index.get(&index) {
-            let anchor = group[0];
-            if !emitted_hardlink_groups.insert(anchor) {
+        if let Some(set) = group_by_index.get(&index) {
+            if index != set.emission_index() {
                 continue;
             }
-            emit_hardlink_group(group, &records, &mut payload_by_index, &mut output)?;
+            output.extend(set.project(&records, &mut payload_by_index)?);
         } else {
             let member = payload_by_index
                 .remove(&index)
@@ -116,137 +115,6 @@ fn require_cpio_payload(package: &Package) -> Result<()> {
     if format != "cpio" {
         return Err(parse_error(format!(
             "RPM payload format {format:?} is not the documented cpio grammar"
-        )));
-    }
-    Ok(())
-}
-
-fn hardlink_groups(records: &[HeaderRecord]) -> Result<Vec<Vec<usize>>> {
-    let mut groups: BTreeMap<(u32, u32), Vec<usize>> = BTreeMap::new();
-    for (index, record) in records.iter().enumerate() {
-        if !record.ghost && mode_type(record.mode) == libc::S_IFREG && record.inode != 0 {
-            groups
-                .entry((record.device, record.inode))
-                .or_default()
-                .push(index);
-        }
-    }
-    groups
-        .into_values()
-        .filter(|group| group.len() > 1)
-        .map(|group| {
-            for index in &group {
-                if let Some(nlink) = records[*index].nlink {
-                    require_partial_hardlink_count(&records[*index].path, nlink, group.len())?;
-                }
-            }
-            Ok(group)
-        })
-        .collect()
-}
-
-/// RPM's `rpmlib(PartialHardlinkSets)` ABI explicitly permits a package to
-/// contain fewer members than the source inode's link count. It may not claim
-/// fewer links than the members it does contain.
-///
-/// Upstream authority:
-/// <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L995-L997>.
-fn require_partial_hardlink_count(path: &str, declared: u32, packaged: usize) -> Result<()> {
-    if declared as usize >= packaged {
-        return Ok(());
-    }
-    Err(parse_error(format!(
-        "RPM hardlink {path} declares {declared} links but the package contains {packaged} members"
-    )))
-}
-
-fn emit_hardlink_group(
-    group: &[usize],
-    records: &[HeaderRecord],
-    payload_by_index: &mut HashMap<usize, stream::PayloadMember>,
-    output: &mut Vec<PackagePayloadFile>,
-) -> Result<()> {
-    let anchor_index = group[0];
-    let anchor = &records[anchor_index];
-    for index in &group[1..] {
-        require_same_inode_metadata(anchor, &records[*index])?;
-    }
-    let mut effective_content: Option<(u64, String, ReopenablePayload)> = None;
-    for index in group {
-        let member = payload_by_index
-            .remove(index)
-            .expect("payload completeness checked");
-        let sha256 = member
-            .sha256
-            .ok_or_else(|| parse_error("RPM regular hardlink member has no SHA-256 authority"))?;
-        let source = member
-            .source
-            .ok_or_else(|| parse_error("RPM regular hardlink member has no payload source"))?;
-        if member.content_size == 0 {
-            effective_content.get_or_insert((0, sha256, source));
-            continue;
-        }
-        if let Some((size, existing, _)) = &effective_content {
-            if *size != 0 && (*size != member.content_size || existing != &sha256) {
-                return Err(parse_error(format!(
-                    "RPM hardlink group anchored at {} carries conflicting payload bytes",
-                    anchor.path
-                )));
-            }
-            if *size == 0 {
-                effective_content = Some((member.content_size, sha256, source));
-            }
-        } else {
-            effective_content = Some((member.content_size, sha256, source));
-        }
-    }
-    let (size, sha256, source) =
-        effective_content.ok_or_else(|| parse_error("RPM hardlink group has no payload source"))?;
-    require_regular_content(anchor, size, &source)?;
-    let identity = format!("rpm:{}:{}", anchor.device, anchor.inode);
-    let mut anchor_node = source_node(anchor)?;
-    anchor_node.kind = PayloadNodeKind::Regular {
-        hardlink_identity: Some(identity.clone()),
-    };
-    let authority = PayloadContentAuthority { sha256, size };
-    validate_projected(&anchor.path, &anchor_node, Some(&authority))?;
-    output.push(PackagePayloadFile::new(
-        anchor.path.clone(),
-        anchor_node.clone(),
-        Some(authority),
-        Some(source),
-    )?);
-    for index in &group[1..] {
-        let record = &records[*index];
-        let mut node = anchor_node.clone();
-        node.kind = PayloadNodeKind::Hardlink {
-            target: anchor.path.clone(),
-            identity: identity.clone(),
-        };
-        validate_projected(&record.path, &node, None)?;
-        output.push(PackagePayloadFile::new(
-            record.path.clone(),
-            node,
-            None,
-            None,
-        )?);
-    }
-    Ok(())
-}
-
-fn require_same_inode_metadata(anchor: &HeaderRecord, member: &HeaderRecord) -> Result<()> {
-    if anchor.mode != member.mode
-        || anchor.user != member.user
-        || anchor.group != member.group
-        || anchor.mtime != member.mtime
-        || anchor.size != member.size
-        || anchor.digest != member.digest
-        || anchor.caps != member.caps
-        || anchor.ima_signature != member.ima_signature
-    {
-        return Err(parse_error(format!(
-            "RPM hardlink members {} and {} declare different inode metadata",
-            anchor.path, member.path
         )));
     }
     Ok(())
@@ -604,19 +472,11 @@ fn parse_error(message: impl Into<String>) -> Error {
 mod tests {
     use super::{
         RpmFileDigestAlgorithm, apply_capability_operation, digest_hex, parse,
-        parse_file_capabilities, require_partial_hardlink_count,
+        parse_file_capabilities,
     };
     use crate::payload::PayloadNodeKind;
     use rpm::IndexTag;
     use std::io::Cursor;
-
-    #[test]
-    fn partial_hardlink_set_may_omit_source_inode_members() {
-        require_partial_hardlink_count("/usr/bin/tool", 3, 2).expect("partial source hardlink set");
-        let error = require_partial_hardlink_count("/usr/bin/tool", 1, 2)
-            .expect_err("declared count smaller than packaged members");
-        assert!(error.to_string().contains("package contains 2 members"));
-    }
 
     #[test]
     fn sha1_file_digest_uses_rpm_algorithm_code_two_semantics() {
@@ -683,6 +543,78 @@ mod tests {
         assert!(file.content_authority.is_none());
         assert!(file.source().is_none());
         assert!(file.to_extracted_in_memory().unwrap().content.is_empty());
+    }
+
+    #[test]
+    fn pinned_fedora_2ping_projects_rpm_hardlink_transaction_owner() {
+        const FIXTURE: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/rpm/2ping-4.5.1-24.fc44.noarch.rpm"
+        ));
+        assert_eq!(
+            crate::hash::sha256(FIXTURE),
+            "cf48a9380416daf02e934cbddd15d5356b3b6ea6b5f0824187074b66dd0fe14a"
+        );
+        let package = rpm::Package::parse(&mut Cursor::new(FIXTURE)).unwrap();
+        let records = super::header::header_records(&package).unwrap();
+        let first = records
+            .iter()
+            .find(|record| record.path == "/usr/bin/2ping")
+            .unwrap();
+        let owner = records
+            .iter()
+            .find(|record| record.path == "/usr/bin/2ping6")
+            .unwrap();
+        assert_ne!(first.ima_signature, owner.ima_signature);
+
+        let payload = parse(&package).unwrap();
+        let files = payload
+            .files()
+            .iter()
+            .filter(|file| file.path == "/usr/bin/2ping" || file.path == "/usr/bin/2ping6")
+            .collect::<Vec<_>>();
+
+        assert_eq!(files.len(), 2);
+        let projected_owner = files
+            .iter()
+            .find(|file| file.path == "/usr/bin/2ping6")
+            .unwrap();
+        assert_eq!(
+            projected_owner.node.kind,
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some("rpm:1:1".to_string())
+            }
+        );
+        assert_eq!(projected_owner.node.mode, owner.mode);
+        assert_eq!(projected_owner.node.mtime.seconds, i64::from(owner.mtime));
+        assert_eq!(
+            projected_owner.node.xattrs.get("security.ima").unwrap(),
+            &hex::decode(owner.ima_signature.as_ref().unwrap()).unwrap()
+        );
+        assert_eq!(
+            projected_owner.content_authority.as_ref().unwrap(),
+            &crate::payload::PayloadContentAuthority {
+                sha256: "581a92b326b83518a80d3d35411e6d0ed1380969306a39d042d5922dd45528aa"
+                    .to_string(),
+                size: 188
+            }
+        );
+        let linked = files
+            .iter()
+            .find(|file| file.path == "/usr/bin/2ping")
+            .unwrap();
+        assert_eq!(
+            linked.node.kind,
+            PayloadNodeKind::Hardlink {
+                target: "/usr/bin/2ping6".to_string(),
+                identity: "rpm:1:1".to_string()
+            }
+        );
+        assert_eq!(linked.node.mode, projected_owner.node.mode);
+        assert_eq!(linked.node.user, projected_owner.node.user);
+        assert_eq!(linked.node.group, projected_owner.node.group);
+        assert_eq!(linked.node.mtime, projected_owner.node.mtime);
+        assert_eq!(linked.node.xattrs, projected_owner.node.xattrs);
     }
 
     fn main_header_value_offset(bytes: &[u8], header_start: usize, wanted: IndexTag) -> usize {
