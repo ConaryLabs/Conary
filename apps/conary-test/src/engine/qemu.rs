@@ -14,6 +14,10 @@ use tokio::time::{Instant, sleep};
 use crate::config::manifest::{QemuBoot, QemuGuestCopy, QemuImageFormat};
 use crate::container::backend::ExecResult;
 
+mod console;
+
+use console::{CapturedConsole, ConsoleCapture};
+
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
 const GUEST_CONARY_STAGING_PATH: &str = "/tmp/conary-host";
 const GUEST_CONARY_INSTALL_PATH: &str = "/usr/bin/conary";
@@ -136,6 +140,11 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         .spawn()
         .context("failed to launch qemu-system-x86_64")?;
 
+    // Start draining the console before anything waits on the guest. An
+    // undrained pipe blocks QEMU at one kernel pipe buffer and freezes the
+    // guest mid-boot; see `console` for the full account.
+    let console = ConsoleCapture::attach(&mut child);
+
     if let Err(message) = wait_for_ssh(
         &mut child,
         config.ssh_port,
@@ -144,7 +153,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     )
     .await?
     {
-        let output = stop_qemu(child).await?;
+        let output = stop_qemu(child, console).await?;
         return Ok(ExecResult {
             exit_code: 1,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -171,7 +180,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     )
     .await?;
     if readiness.exit_code != 0 {
-        let output = stop_qemu(child).await?;
+        let output = stop_qemu(child, console).await?;
         return Ok(ExecResult {
             exit_code: readiness.exit_code,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -270,7 +279,7 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         }
     }
 
-    let qemu_output = stop_qemu(child).await?;
+    let qemu_output = stop_qemu(child, console).await?;
     let qemu_stdout = String::from_utf8_lossy(&qemu_output.stdout)
         .trim()
         .to_string();
@@ -897,12 +906,14 @@ fn prepare_guest_copy_destination(dest: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn stop_qemu(mut child: Child) -> Result<std::process::Output> {
+/// Kill QEMU and collect what the console readers accumulated.
+///
+/// The readers own the pipes, so `wait_with_output` would see nothing here.
+/// The child is killed first: the readers only finish when the pipes close.
+async fn stop_qemu(mut child: Child, console: ConsoleCapture) -> Result<CapturedConsole> {
     let _ = child.start_kill();
-    child
-        .wait_with_output()
-        .await
-        .context("failed to collect QEMU process output")
+    let _ = child.wait().await;
+    console.finish().await
 }
 
 fn shell_quote(input: &str) -> String {
