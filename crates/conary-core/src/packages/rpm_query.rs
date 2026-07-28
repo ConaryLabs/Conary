@@ -20,6 +20,34 @@ const RPM_PACKAGE_RECORD_FORMAT: &str = "%{NEVRA}\x1e%{NAME}\x1e%{VERSION}\x1e%{
 const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1f]";
 const RPM_OWNER_RECORD_FORMAT: &str = "%{NAME}\x1f";
 
+/// RPM's reserved name for imported public keys.
+///
+/// `rpmkeys --import` stores each trusted key as a header in the same database
+/// as installed packages, under this name, with the key ID as version and its
+/// creation timestamp as release. These records are the keyring, not software:
+/// they own no files and carry no architecture, so no NEVRA can be formed for
+/// them and nothing can be adopted, refreshed, or taken over through one.
+const RPM_PUBLIC_KEY_PSEUDO_PACKAGE: &str = "gpg-pubkey";
+
+/// Whether an RPM database record is a stored public key rather than a package.
+///
+/// Measured on Fedora 44 (`fedora44-guest-v1`), where the distro's own signing
+/// key is imported at install time, so every real Fedora system has at least
+/// one of these:
+///
+/// ```text
+/// gpg-pubkey  NEVRA=<gpg-pubkey-36f612…d9f90a6-6786af3b>  ARCH=<(none)>  (contains no files)
+/// bash        NEVRA=<bash-5.3.9-3.fc44.x86_64>            ARCH=<x86_64>
+/// ```
+///
+/// Both conditions are required. The name alone is RPM's documented reservation
+/// and the missing architecture is the structural consequence; demanding both
+/// means a malformed record still fails loudly instead of being silently
+/// dropped from the inventory.
+fn is_rpm_public_key_record(name: &str, architecture: &str) -> bool {
+    name == RPM_PUBLIC_KEY_PSEUDO_PACKAGE && matches!(architecture, "" | "(none)")
+}
+
 /// Information about an installed RPM package
 #[derive(Debug, Clone)]
 pub struct InstalledRpmInfo {
@@ -108,57 +136,75 @@ fn parse_package_query_records(
     output: &str,
 ) -> Result<Vec<InstalledPackageRecord<InstalledRpmInfo>>> {
     let mut selectors = HashSet::new();
-    output
+    let mut records = Vec::new();
+    for (index, record) in output
         .split('\x1f')
         .filter(|record| !record.is_empty())
         .enumerate()
-        .map(|(index, record)| {
-            let parts = record.split('\x1e').collect::<Vec<_>>();
-            if parts.len() != 14 {
-                return Err(Error::ParseError(format!(
-                    "RPM inventory record {} has {} fields; expected exactly 14",
-                    index + 1,
-                    parts.len()
-                )));
-            }
-            let epoch = match parts[4] {
-                "" | "(none)" => None,
-                value => Some(value.parse::<u64>().map_err(|error| {
-                    Error::ParseError(format!(
-                        "RPM inventory record {} has invalid epoch {value:?}: {error}",
-                        index + 1
-                    ))
-                })?),
-            };
-            let identity = InstalledPackageIdentity::rpm(
-                parts[0], parts[1], epoch, parts[2], parts[3], parts[5],
-            )?;
-            if !selectors.insert(identity.selector().to_string()) {
-                return Err(Error::ConflictError(format!(
-                    "RPM inventory repeated exact NEVRA selector '{}'",
-                    identity.selector()
-                )));
-            }
-            Ok(InstalledPackageRecord {
-                info: InstalledRpmInfo {
-                    name: parts[1].to_string(),
-                    version: parts[2].to_string(),
-                    release: parts[3].to_string(),
-                    epoch,
-                    arch: required_rpm_field(parts[5], index + 1, "ARCH")?,
-                    description: rpm_none_to_option(&parts[6]),
-                    summary: rpm_none_to_option(&parts[7]),
-                    license: rpm_none_to_option(&parts[8]),
-                    url: rpm_none_to_option(&parts[9]),
-                    vendor: rpm_none_to_option(&parts[10]),
-                    source_rpm: rpm_none_to_option(&parts[11]),
-                    build_host: rpm_none_to_option(&parts[12]),
-                    install_time: rpm_none_to_option(&parts[13]),
-                },
-                identity,
-            })
-        })
-        .collect()
+    {
+        if let Some(parsed) = parse_package_query_record(index, record, &mut selectors)? {
+            records.push(parsed);
+        }
+    }
+    Ok(records)
+}
+
+/// Parse one inventory record, or `None` when the record is not a package.
+fn parse_package_query_record(
+    index: usize,
+    record: &str,
+    selectors: &mut HashSet<String>,
+) -> Result<Option<InstalledPackageRecord<InstalledRpmInfo>>> {
+    let parts = record.split('\x1e').collect::<Vec<_>>();
+    if parts.len() != 14 {
+        return Err(Error::ParseError(format!(
+            "RPM inventory record {} has {} fields; expected exactly 14",
+            index + 1,
+            parts.len()
+        )));
+    }
+
+    // The keyring shares the package database but is not part of the inventory.
+    if is_rpm_public_key_record(parts[1], parts[5]) {
+        debug!("skipping RPM public-key record {}", parts[0]);
+        return Ok(None);
+    }
+
+    let epoch = match parts[4] {
+        "" | "(none)" => None,
+        value => Some(value.parse::<u64>().map_err(|error| {
+            Error::ParseError(format!(
+                "RPM inventory record {} has invalid epoch {value:?}: {error}",
+                index + 1
+            ))
+        })?),
+    };
+    let identity =
+        InstalledPackageIdentity::rpm(parts[0], parts[1], epoch, parts[2], parts[3], parts[5])?;
+    if !selectors.insert(identity.selector().to_string()) {
+        return Err(Error::ConflictError(format!(
+            "RPM inventory repeated exact NEVRA selector '{}'",
+            identity.selector()
+        )));
+    }
+    Ok(Some(InstalledPackageRecord {
+        info: InstalledRpmInfo {
+            name: parts[1].to_string(),
+            version: parts[2].to_string(),
+            release: parts[3].to_string(),
+            epoch,
+            arch: required_rpm_field(parts[5], index + 1, "ARCH")?,
+            description: rpm_none_to_option(&parts[6]),
+            summary: rpm_none_to_option(&parts[7]),
+            license: rpm_none_to_option(&parts[8]),
+            url: rpm_none_to_option(&parts[9]),
+            vendor: rpm_none_to_option(&parts[10]),
+            source_rpm: rpm_none_to_option(&parts[11]),
+            build_host: rpm_none_to_option(&parts[12]),
+            install_time: rpm_none_to_option(&parts[13]),
+        },
+        identity,
+    }))
 }
 
 fn required_rpm_field(value: &str, record: usize, field: &str) -> Result<String> {
@@ -534,6 +580,42 @@ mod tests {
             records[1].identity.selector(),
             "fixture-1.2.3-4.fc44.aarch64"
         );
+    }
+
+    /// Every real Fedora system imports the distro signing key at install time,
+    /// so `rpm -qa` always emits at least one keyring record. Adoption failed on
+    /// the whole system because of it:
+    ///
+    /// ```text
+    /// Error: Parse error: installed native package selector
+    /// "gpg-pubkey-36f612dcf27f7d1a48a835e4dbfcf71c6d9f90a6-6786af3b"
+    /// disagrees with its typed identity fields
+    /// ```
+    ///
+    /// The record is verbatim from `fedora44-guest-v1`. It cannot satisfy the
+    /// RPM identity invariant `name-[epoch:]version-release.architecture`,
+    /// because RPM reports its architecture as `(none)` and renders its NEVRA
+    /// without an architecture suffix at all.
+    #[test]
+    fn the_rpm_keyring_is_not_part_of_the_installed_package_inventory() {
+        let key = "gpg-pubkey-36f612dcf27f7d1a48a835e4dbfcf71c6d9f90a6-6786af3b\x1egpg-pubkey\x1e36f612dcf27f7d1a48a835e4dbfcf71c6d9f90a6\x1e6786af3b\x1e(none)\x1e(none)\x1eGnupg public key\x1egpg(Fedora (44))\x1epubkey\x1e(none)\x1e(none)\x1e(none)\x1e(none)\x1e1\x1f";
+        let package = "bash-5.3.9-3.fc44.x86_64\x1ebash\x1e5.3.9\x1e3.fc44\x1e(none)\x1ex86_64\x1edescription\x1esummary\x1eGPLv3\x1ehttps://example.invalid\x1evendor\x1esource.src.rpm\x1ebuilder\x1e1\x1f";
+
+        let records = parse_package_query_records(&format!("{key}{package}")).unwrap();
+
+        assert_eq!(records.len(), 1, "the keyring record must not be inventory");
+        assert_eq!(records[0].info.name, "bash");
+    }
+
+    /// The name alone does not license skipping a record. A `gpg-pubkey` header
+    /// carrying a real architecture is not the keyring shape this recognises,
+    /// and must still be parsed rather than silently vanish from the inventory.
+    #[test]
+    fn only_the_architecture_less_keyring_shape_is_skipped() {
+        assert!(is_rpm_public_key_record("gpg-pubkey", "(none)"));
+        assert!(is_rpm_public_key_record("gpg-pubkey", ""));
+        assert!(!is_rpm_public_key_record("gpg-pubkey", "x86_64"));
+        assert!(!is_rpm_public_key_record("bash", "(none)"));
     }
 
     #[test]
