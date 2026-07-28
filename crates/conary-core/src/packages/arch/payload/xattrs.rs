@@ -195,6 +195,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nonzero_trailing_bits() {
+        // "AB" is 2 chars → one decoded byte plus 4 trailing bits. 'B' makes
+        // those trailing bits 0001, which no encoder output can produce; the
+        // canonical encoding of the decoded byte 0x00 is "AA". Accepting it
+        // would let two distinct encodings alias one value.
+        let err = decode_libarchive_base64(b"AB", "test").expect_err("trailing bits must reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid LIBARCHIVE xattr value"),
+            "expected trailing-bits rejection: {msg}"
+        );
+    }
+
+    #[test]
     fn rejects_trailing_equals_sign() {
         // Trailing '=' anywhere in the input is malformed per RequireNone.
         let err =
