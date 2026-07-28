@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-28
-revision: 24
+revision: 25
 summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
 ---
 
@@ -45,6 +45,7 @@ Each fixture family should record:
 | `remi-converted-artifact-serving` | Remi conversion persistence and serving | `cargo test -p remi conversion` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
 | `qemu-source-image-fixtures` | Bootstrap/QEMU fixture maintenance | `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; `cargo run -p conary-test -- list` |
+| `supported-host-generation-export` | Generation export boot proofs | `cargo test -p conary-core --test supported_host_generation_export_fixture_contract` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
 
 ### foreign-package-lifecycle-contracts
@@ -400,6 +401,49 @@ Each fixture family should record:
   required target lanes and the stable all-lane aggregator context; do not
   weaken either in workflow-only edits.
 
+### supported-host-generation-export
+
+- **Owner:** `apps/conary/tests/fixtures/supported-host-generation-export/`;
+  contract test
+  `crates/conary-core/tests/supported_host_generation_export_fixture_contract.rs`.
+- **Purpose:** Prove that Conary's bootable-image export works from a root
+  assembled entirely by ordinary supported-host installs. It replaced the
+  bootstrap-run export fixture, so bootable export is a generation capability
+  with no bootstrap dependency.
+- **Fixture sources:** `fixture-system.toml`, the Fedora 44 system model the
+  suites apply; `conary-qemu-test-access/`, a CCS package built at test time
+  that ships harness SSH access, a DHCP `.network` file, a tmpfiles fragment
+  recreating openssh's privilege-separation directory on carrier `/var`, and
+  explicit unit-enablement symlinks. The symlinks are produced by
+  `stage-links.sh` rather than checked in, because the harness copies fixtures
+  with `scp -r`, which would materialize a checked-in link as a copy of its
+  target.
+- **Consumes:** Group O `TGE02`
+  (`supported_host_generation_export_boots`) and Group P `TISO01`
+  (`supported_host_generation_iso_export_boots`).
+- **Fast proof:**
+  `cargo test -p conary-core --test supported_host_generation_export_fixture_contract`;
+  `cargo run -p conary-test -- list`.
+- **Medium proof:** `conary ccs build` of `conary-qemu-test-access/` against a
+  substituted stage, then `conary ccs verify` with the fixture trust policy.
+- **Slow proof:**
+  `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`;
+  `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`.
+  Both need a boot lane: a host with `/dev/kvm` and OVMF.
+- **Regeneration:** hand-maintained. The model entries are pinned to real
+  Fedora 44 package facts; changing the set means re-deriving them from Fedora
+  44 headers, not from documentation.
+- **Current evidence:** none yet. The re-based suites have not had a live run,
+  so the fail-forward accumulation path they depend on
+  (`model apply` publishing per entry, every intermediate publication failing,
+  one `generation publish` clearing the debt) is supported by a code trace and
+  by the first bring-up, not by a recorded green run.
+- **Safety notes:** The staged `authorized_keys` carries the
+  `__CONARY_QEMU_TEST_PUBLIC_KEY__` placeholder and is substituted in the guest
+  with the disposable harness key; no real credential belongs in this fixture.
+  The suites assemble into a scratch-disk `--db-path` root and never mutate the
+  guest's live root.
+
 ### qemu-source-image-fixtures
 
 - **Owner:** unprivileged identity/size rotation:
@@ -474,7 +518,6 @@ roots and proof commands before treating them as committed gates:
   `apps/conary/tests/cli_daily_ux.rs`.
 - `conary-test` bootstrap check and smoke fixtures documented in
   `docs/INTEGRATION-TESTING.md`.
-- Generation export and ISO carrier fixtures.
 - Recipe and source-selection fixtures.
 - conaryd daemon job fixtures.
 - Agent/MCP operation fixtures.

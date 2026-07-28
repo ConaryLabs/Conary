@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 7
+last_updated: 2026-07-28
+revision: 8
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "v0.13.0 and remi-v0.8.5 at 6f1429c362ac161f1ef817233e72ee9c9a031c11; post-hard-cut release, deployment, and three-distro artifact proof complete"
 current_milestone: first external tester loop
@@ -41,6 +41,15 @@ The dated 2026-05-21 Group P QEMU run passed ISO generation-carrier,
 provenance-sidecar, copy-back, read-only carrier boot, and writable `/etc`
 overlay proof. These are local x86_64 evidence, not a broad or current
 remote-validation claim.
+
+Bootable-image export is a retained generation capability, not a bootstrap
+capability. Generation keeps raw/qcow2/ISO export with a UEFI QEMU boot proof,
+and that proof now stands on a supported-host fixture: Groups O and P assemble
+a Fedora 44 root from ordinary repository installs on a scratch disk, publish
+it as a generation, export it, and boot the artifact. The bootstrap-run export
+cases and their fixture are gone. The boot lane needs a host with `/dev/kvm`
+and OVMF firmware; remi-dev is the current such host. The re-based suites have
+not yet had a green live run.
 
 ## Milestone 1 Exit Condition
 
@@ -105,7 +114,7 @@ the stated scope, not whether a workstream happens to be active.
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
 | Packaging, static repositories, trust, and self-update | solid | `v0.13.0` has exact tag, hashes, detached signature, current signed self-update, deployment, and native RPM/DEB/Arch installed-binary proof. The intentional 0.12 schema boundary requires a fresh native-package install. No SBOM/provenance sidecars are published or planned. |
 | CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. These share one root cause: the shared package model normalizes source facts at parse time instead of at each consumer's boundary. W5 owns the structural correction. |
-| Generation build and export | limited | Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
+| Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap; the re-based Group O/P suites await their first green live run. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
 | Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. `/health/ready` became evidence bearing in #107 and now fails closed on an absent database or an unrunnable probe; the deployed build predates that change until the next release. |

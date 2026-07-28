@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 60
+last_updated: 2026-07-28
+revision: 61
 summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
 ---
 
@@ -532,7 +532,14 @@ state, image building, bootstrap validation, conaryd route history.
 
 **Interaction gate:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`;
 `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
-when export or boot-carrier behavior changes.
+when export or boot-carrier behavior changes. Both suites now stand on the
+supported-host fixture in
+`apps/conary/tests/fixtures/supported-host-generation-export/`: they assemble a
+Fedora 44 root from ordinary repository installs on a scratch disk, publish it
+with `conary system generation publish`, export it, and boot the artifact under
+UEFI. Bootable-image export is therefore a generation capability with no
+bootstrap dependency. The gate needs a boot lane: any host with `/dev/kvm` and
+OVMF firmware, currently remi-dev.
 
 **Docs to update:** `docs/ARCHITECTURE.md`;
 `docs/roadmaps/development-roadmap.md`;
