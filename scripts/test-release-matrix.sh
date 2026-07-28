@@ -725,6 +725,42 @@ test_check_release_matrix_rejects_missing_live_version_assertion() {
     assert_check_release_matrix_fails "$repo" "live tag preparation must match every owned manifest"
 }
 
+test_check_release_matrix_rejects_merge_validation_production_probes() {
+    local repo
+
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/merge-validation.yml" \
+        '      - name: Explain paused remote validation' \
+        $'      - name: Probe mutable production Remi through the current health script\n        run: ./scripts/remi-health.sh --smoke\n      - name: Explain paused remote validation'
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "mutable production Remi probe in source merge validation"
+
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/merge-validation.yml" \
+        '      - name: Explain paused remote validation' \
+        $'      - name: Probe mutable production Remi directly\n        run: curl -fsS https://remi.conary.io/health\n      - name: Explain paused remote validation'
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "mutable production Remi probe in source merge validation"
+}
+
+test_check_release_matrix_rejects_missing_post_deploy_remi_readiness() {
+    local repo
+
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-and-verify.yml" \
+        '          body=$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)' \
+        '          echo "structured readiness proof removed"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "exact post-deploy Remi liveness and structured readiness proof"
+}
+
 test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane() {
     local repo
     local workflow
@@ -969,6 +1005,8 @@ main() {
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
         test_check_release_matrix_rejects_missing_live_version_assertion
+        test_check_release_matrix_rejects_merge_validation_production_probes
+        test_check_release_matrix_rejects_missing_post_deploy_remi_readiness
         test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane
         test_check_release_matrix_rejects_unproven_namespace_action
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
