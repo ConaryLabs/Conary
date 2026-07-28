@@ -367,7 +367,17 @@ string and depth bounds, aggregate variable-length pools, payload-object
 bounds, and CBOR nesting depth, and byte ceilings are derived from them. The
 writer admits the authority it is about to sign through the same
 `admit_authority` call verification uses, so a package this repository emits is
-readable by construction. `docs/specs/ccs-format-v2.md` owns the contract.
+readable by construction.
+
+Source-package archive decoding derives its entry-count, cumulative payload,
+metadata, decompressed-stream, and spool bounds from that same owner. One
+payload object may consume the full 64 GiB total-payload allowance because
+native authoring, conversion, FastCDC chunking, CAS ingestion, and package
+writing all use fixed-buffer or reopenable streams rather than whole-object
+buffers. Tar decoders enforce declared size per entry, then independently bound
+cumulative payload, archive entries, metadata, and framing overhead; those
+dimensions replace a guessed global decompression ceiling without weakening
+decompression-bomb resistance. `docs/specs/ccs-format-v2.md` owns the contract.
 
 Configuration authority is exact per path. Each `[[config.files]]` declaration
 and its signed v2 projection carries `noreplace`, `ghost`, and
