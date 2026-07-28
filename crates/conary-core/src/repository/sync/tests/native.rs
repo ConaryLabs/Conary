@@ -61,13 +61,7 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
         requirement_groups,
         requirement_group_clauses,
     }];
-    let mut repo_packages: Vec<RepositoryPackage> = synced_packages
-        .iter()
-        .map(|row| row.package.clone())
-        .collect();
-
-    let count =
-        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced_packages).unwrap();
+    let count = persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
     assert_eq!(count, 1);
 
     let stored_packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
@@ -109,12 +103,10 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
 }
 
 #[test]
-fn test_remi_package_entry_builds_normalized_capabilities() {
-    let entry = RemiPackageEntry {
-        name: "kernel-core".to_string(),
+fn test_remi_sparse_entry_builds_normalized_capabilities() {
+    let entry = RemiSparseResolutionVersionEntry {
         version: "6.19.6-200.fc44".to_string(),
         release: None,
-        converted: false,
         architecture: Some("x86_64".to_string()),
         provides: vec![
             RemiProvide {
@@ -190,6 +182,7 @@ fn test_remi_package_entry_builds_normalized_capabilities() {
                 }],
             },
         ],
+        size: 4096,
         metadata: None,
     };
 
@@ -197,10 +190,12 @@ fn test_remi_package_entry_builds_normalized_capabilities() {
         7,
         "https://remi.conary.io".to_string(),
         "fedora-44".to_string(),
+        "kernel-core".to_string(),
         entry,
     )
     .unwrap();
 
+    assert_eq!(row.package.size, 4096);
     assert!(row.provides.iter().any(|provide| {
         provide.capability == "kernel-core-uname-r"
             && provide.version.as_deref() == Some("6.19.6-200.fc44.x86_64")
@@ -220,12 +215,10 @@ fn test_remi_package_entry_builds_normalized_capabilities() {
 }
 
 #[test]
-fn test_remi_package_entry_marks_trusted_security_advisory() {
-    let entry = RemiPackageEntry {
-        name: "openssl".to_string(),
+fn test_remi_sparse_entry_preserves_trusted_security_advisory() {
+    let entry = RemiSparseResolutionVersionEntry {
         version: "3.2.1-1.fc44".to_string(),
         release: None,
-        converted: false,
         architecture: Some("x86_64".to_string()),
         provides: vec![RemiProvide {
             capability: "openssl".to_string(),
@@ -240,6 +233,7 @@ fn test_remi_package_entry_marks_trusted_security_advisory() {
                 crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
         }],
         requirement_groups: Vec::new(),
+        size: 4096,
         metadata: Some(json!({
             "security_advisory": {
                 "id": "FEDORA-2026-0001",
@@ -257,6 +251,7 @@ fn test_remi_package_entry_marks_trusted_security_advisory() {
         7,
         "https://remi.conary.io".to_string(),
         "fedora-44".to_string(),
+        "openssl".to_string(),
         entry,
     )
     .unwrap();
@@ -267,7 +262,10 @@ fn test_remi_package_entry_marks_trusted_security_advisory() {
         row.package.cve_ids.as_deref(),
         Some("CVE-2026-0001,CVE-2026-0002")
     );
-    assert_eq!(row.package.advisory_id.as_deref(), Some("FEDORA-2026-0001"));
+    assert_eq!(
+        row.package.advisory_id.as_deref(),
+        Some("FEDORA-2026-0001")
+    );
     assert_eq!(
         row.package.advisory_url.as_deref(),
         Some("https://security.example.test/FEDORA-2026-0001")
@@ -279,7 +277,10 @@ fn test_remi_package_entry_marks_trusted_security_advisory() {
         metadata["security_advisory"]["fixed_version"],
         "3.2.1-1.fc44"
     );
-    assert_eq!(metadata["security_advisory"]["source_trust"], "trusted");
+    assert_eq!(
+        metadata["security_advisory"]["source_trust"],
+        "trusted"
+    );
 }
 
 #[test]
@@ -444,10 +445,7 @@ fn test_sync_persists_distro_and_version_scheme() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -497,10 +495,7 @@ fn test_sync_persists_debian_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -553,10 +548,7 @@ fn test_sync_persists_arch_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -627,10 +619,7 @@ fn test_sync_persists_requirement_groups_with_alternatives() {
         requirement_groups: req_groups,
         requirement_group_clauses: req_group_clauses,
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -728,10 +717,7 @@ fn test_sync_persists_conditional_requirement_behavior() {
         requirement_groups: req_groups,
         requirement_group_clauses: req_group_clauses,
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     let pkg_id = stored[0].id.unwrap();
