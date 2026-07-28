@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 18
+last_updated: 2026-07-29
+revision: 19
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -295,8 +295,16 @@ old process. That can fail with `Text file busy`.
 - Push the relevant canonical tags to trigger the GitHub release pipeline
 - GitHub Actions builds release artifacts in `release-build` and serializes the
   resolved product metadata into the bundle
+- `merge-validation` proves the current source tree through deterministic
+  source, build, policy, and test checks. It must not probe mutable production
+  endpoints, because production continues to serve the previously deployed
+  release until the candidate passes this gate and is tagged.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
   product behavior locally
+- Within GitHub Actions, `deploy-and-verify` owns live contract proof after it
+  deploys the exact tagged artifact. For Remi this includes both liveness and
+  structured fail-closed readiness; independent production verification still
+  follows the terminal workflow result.
 - `conary-test` is a supported build-and-release track in this phase, but it
   intentionally has no deployment lane
 - `deploy-and-verify` performs protected deployment and verification only for
