@@ -121,15 +121,27 @@ pub fn payloads_from_bounded_memory_for_tests(
     files: &[FileEntry],
     blobs: HashMap<String, Vec<u8>>,
 ) -> Result<Vec<PackagePayloadFile>> {
-    let total = blobs.values().try_fold(0_u64, |total, bytes| {
+    let input_total = blobs.values().try_fold(0_u64, |total, bytes| {
         total
             .checked_add(bytes.len() as u64)
             .context("bounded in-memory CCS fixture size overflow")
     })?;
-    if total > package_writer::BOUNDED_MEMORY_FIXTURE_BYTES {
+    if input_total > package_writer::BOUNDED_MEMORY_FIXTURE_BYTES {
         anyhow::bail!(
             "bounded in-memory CCS fixture input is {} bytes; limit is {} bytes",
-            total,
+            input_total,
+            package_writer::BOUNDED_MEMORY_FIXTURE_BYTES
+        );
+    }
+    let retained_total = files.iter().try_fold(0_u64, |total, file| {
+        total
+            .checked_add(file.content.as_ref().map_or(0, |authority| authority.size))
+            .context("bounded in-memory CCS fixture retained size overflow")
+    })?;
+    if retained_total > package_writer::BOUNDED_MEMORY_FIXTURE_BYTES {
+        anyhow::bail!(
+            "bounded in-memory CCS fixture would retain {} payload bytes; limit is {} bytes",
+            retained_total,
             package_writer::BOUNDED_MEMORY_FIXTURE_BYTES
         );
     }

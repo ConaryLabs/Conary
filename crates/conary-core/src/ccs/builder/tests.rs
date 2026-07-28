@@ -165,6 +165,33 @@ fn chunking_visits_reader_without_retaining_chunk_bytes() {
 }
 
 #[test]
+fn bounded_memory_fixture_rejects_repeated_assembly_over_aggregate_limit() {
+    const FIXTURE_BYTES: usize = 9 * 1024 * 1024;
+    let bytes = vec![0x5a; FIXTURE_BYTES];
+    let hash = crate::hash::sha256(&bytes);
+    let files = ["/first", "/second"]
+        .into_iter()
+        .map(|path| FileEntry {
+            path: path.to_string(),
+            node: crate::payload::PayloadNode::regular(0o644),
+            content: Some(PayloadContentAuthority {
+                sha256: hash.clone(),
+                size: FIXTURE_BYTES as u64,
+            }),
+            component: "runtime".to_string(),
+            chunks: Some(vec![hash.clone()]),
+        })
+        .collect::<Vec<_>>();
+    let error =
+        payloads_from_bounded_memory_for_tests(&files, HashMap::from([(hash, bytes)])).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("would retain 18874368 payload bytes")
+    );
+}
+
+#[test]
 fn builder_preserves_explicit_component_assignment() {
     let source = TempDir::new().unwrap();
     fs::write(source.path().join("helper"), b"helper").unwrap();

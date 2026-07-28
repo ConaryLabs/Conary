@@ -27,7 +27,7 @@ CcsBuilder::new(manifest, source_dir)
      |
   Group files by component -> ComponentData
      |
-  BuildResult { manifest, components, files, blobs, chunk_stats }
+  BuildResult { manifest, components, files, payloads, chunk_stats }
      |
   Sign manifest (Ed25519) -> embed PackageSignature
      |
