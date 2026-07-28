@@ -1,6 +1,8 @@
-// conary-core/src/packages/arch/payload.rs
+// conary-core/src/packages/arch/payload/mod.rs
 
 //! Exact ALPM tar payload parsing.
+
+mod xattrs;
 
 use crate::error::{Error, Result};
 use crate::hash::{HashAlgorithm, Hasher};
@@ -11,11 +13,11 @@ use crate::packages::payload::{
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use tar::{Entry, EntryType};
+use xattrs::{PaxXattrFamily, PaxXattrRecords, decode_libarchive_base64};
 
 pub(super) struct ArchivePayloadEntry {
     path: String,
@@ -332,6 +334,7 @@ fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthorit
     else {
         return Ok(authority);
     };
+    let mut xattr_records = PaxXattrRecords::default();
     for extension in extensions {
         let extension = extension.map_err(|error| {
             Error::ParseError(format!("invalid PAX record for {path}: {error}"))
@@ -345,18 +348,18 @@ fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthorit
             "SCHILY.devmajor" => authority.device_major = Some(parse_decimal(value, key, path)?),
             "SCHILY.devminor" => authority.device_minor = Some(parse_decimal(value, key, path)?),
             "RHT.security.selinux" => {
-                insert_xattr(
-                    &mut authority.xattrs,
+                xattr_records.insert(
                     "security.selinux".to_string(),
+                    PaxXattrFamily::RhtSelinux,
                     value.to_vec(),
                     path,
                 )?;
             }
             _ if key.starts_with("SCHILY.xattr.") => {
                 let name = key.strip_prefix("SCHILY.xattr.").expect("prefix checked");
-                insert_xattr(
-                    &mut authority.xattrs,
+                xattr_records.insert(
                     name.to_string(),
+                    PaxXattrFamily::Schily,
                     value.to_vec(),
                     path,
                 )?;
@@ -371,31 +374,14 @@ fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthorit
                         "LIBARCHIVE xattr name for {path} is not UTF-8: {error}"
                     ))
                 })?;
-                let decoded = BASE64.decode(value).map_err(|error| {
-                    Error::ParseError(format!(
-                        "invalid LIBARCHIVE xattr value for {path}: {error}"
-                    ))
-                })?;
-                insert_xattr(&mut authority.xattrs, name, decoded, path)?;
+                let decoded = decode_libarchive_base64(value, path)?;
+                xattr_records.insert(name, PaxXattrFamily::Libarchive, decoded, path)?;
             }
             _ => {}
         }
     }
+    authority.xattrs = xattr_records.project(path)?;
     Ok(authority)
-}
-
-fn insert_xattr(
-    xattrs: &mut BTreeMap<String, Vec<u8>>,
-    name: String,
-    value: Vec<u8>,
-    path: &str,
-) -> Result<()> {
-    if xattrs.insert(name.clone(), value).is_some() {
-        return Err(Error::ParseError(format!(
-            "duplicate xattr {name} for ALPM payload node {path}"
-        )));
-    }
-    Ok(())
 }
 
 fn parse_pax_timestamp(value: &[u8], path: &str) -> Result<PayloadTimestamp> {
@@ -603,9 +589,16 @@ mod tests {
             .append_pax_extensions([
                 ("mtime", b"-1.25".as_slice()),
                 ("SCHILY.xattr.user.conary", b"exact".as_slice()),
+                // SCHILY and LIBARCHIVE families for the same xattr with
+                // byte-identical values (4 bytes: [1, 2, 3, 4]).
+                // LIBARCHIVE uses unpadded base64 per the writer grammar.
+                (
+                    "SCHILY.xattr.security.capability",
+                    b"\x01\x02\x03\x04".as_slice(),
+                ),
                 (
                     "LIBARCHIVE.xattr.security%2Ecapability",
-                    b"AQIDBA==".as_slice(),
+                    b"AQIDBA".as_slice(),
                 ),
             ])
             .unwrap();
