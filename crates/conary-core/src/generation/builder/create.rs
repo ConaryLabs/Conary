@@ -29,11 +29,11 @@ use crate::generation::root_manifest::{
     CapturedSelectedRoot, build_erofs_image_from_root_manifest, materialize_captured_selected_root,
 };
 
-/// Bootstrap an exact writable selected root from installed database state.
+/// Project an exact writable selected root from installed database state.
 ///
 /// Once a complete current generation artifact exists, callers must
 /// materialize that artifact's typed manifests instead. Database projection is
-/// intentionally only the initial bootstrap bridge.
+/// intentionally only the first-generation path, before any artifact exists.
 pub fn materialize_selected_root_from_db(
     conn: &rusqlite::Connection,
     objects_dir: &Path,

@@ -60,7 +60,7 @@ mod test_support;
 
 pub use automation::{AiSuggestion, AutomationManager, AutomationSummary, PendingAction};
 pub use bootstrap::{
-    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, StageManager, TargetArch, Toolchain,
+    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, StageManager, Toolchain,
     ToolchainKind,
 };
 pub use capability::enforcement::{EnforcementMode, EnforcementPolicy};
@@ -70,6 +70,7 @@ pub use dependencies::{DependencyClass, LanguageDep};
 pub use error::{Error, Result};
 pub use flavor::ArchSpec;
 pub use hash::{Hash, Hasher};
+pub use image::arch::TargetArch;
 pub use label::Label;
 pub use model::parser::{
     AiAssistMode, AutomationCategory, AutomationConfig, AutomationMode, FederationConfig,

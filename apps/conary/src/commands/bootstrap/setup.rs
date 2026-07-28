@@ -3,9 +3,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use conary_core::bootstrap::{
-    Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites, TargetArch,
-};
+use conary_core::bootstrap::{Bootstrap, BootstrapConfig, BootstrapStage, Prerequisites};
+use conary_core::image::arch::TargetArch;
 
 use super::image::cmd_bootstrap_image;
 use super::phases::{

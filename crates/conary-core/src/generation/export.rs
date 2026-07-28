@@ -153,7 +153,7 @@ fn export_raw(
 
     let definitions = staging.path().join("repart.d");
     let plan = crate::image::repart::DiskImagePlan {
-        architecture: crate::bootstrap::TargetArch::X86_64,
+        architecture: crate::image::arch::TargetArch::X86_64,
         esp_staging_dir: esp,
         root_staging_dir: rootfs,
         output_raw: options.output.clone(),

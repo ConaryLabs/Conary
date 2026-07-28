@@ -441,7 +441,7 @@ fn generation_recovery_fails_hard_on_etc_overlay_failures() {
 }
 
 #[test]
-fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() {
+fn dracut_generator_is_the_single_generation_activation_authority() {
     let dracut_generator = fs::read_to_string(workspace_file(
         "packaging/dracut/90conary/conary-generator.sh",
     ))
@@ -452,8 +452,6 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
     let dracut_module =
         fs::read_to_string(workspace_file("packaging/dracut/90conary/module-setup.sh"))
             .expect("failed to read conary dracut module setup");
-    let bootstrap_config = fs::read_to_string(core_source("bootstrap/system_config.rs"))
-        .expect("failed to read bootstrap system config");
 
     assert!(
         dracut_module.contains("install_conary_script \"$moddir/conary-init.sh\" \"/init\""),
@@ -494,19 +492,38 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
         "dracut must hard-fail when root.erofs is absent"
     );
 
-    for (label, source) in [
-        ("dracut generator", dracut_generator.as_str()),
-        ("bootstrap initramfs", bootstrap_config.as_str()),
-    ] {
-        assert!(
-            source.contains("expose_generation_usr"),
-            "{label} must route generation /usr exposure through the shared post-composefs helper"
-        );
-        assert!(
-            source.contains("ensure_root_symlink sbin usr/sbin"),
-            "{label} must ensure /sbin resolves through usr-merge before switch_root"
-        );
-    }
+    assert!(
+        dracut_generator.contains("expose_generation_usr"),
+        "the dracut generator must route generation /usr exposure through the post-composefs helper"
+    );
+    assert!(
+        dracut_generator.contains("ensure_root_symlink sbin usr/sbin"),
+        "the dracut generator must ensure /sbin resolves through usr-merge before switch_root"
+    );
+    assert!(
+        !dracut_init.contains("expose_generation_usr()"),
+        "conary-init must delegate generation activation to /sbin/conary-generator instead of reimplementing /usr exposure"
+    );
+    assert!(
+        dracut_generator.contains("read_kernel_value conary.carrier"),
+        "the dracut generator must read the carrier mode from the kernel command line"
+    );
+    assert!(
+        dracut_generator.contains("ETC_STATE_BASE=\"${SYSROOT}/run/conary/etc-state\""),
+        "a readonly carrier must place the /etc overlay upper under the runtime tmpfs"
+    );
+    assert!(
+        dracut_generator.contains("ETC_STATE_BASE=\"${SYSROOT}/conary/etc-state\""),
+        "a writable carrier must keep the /etc overlay upper on persistent generation state"
+    );
+    assert!(
+        dracut_init.contains("mount_once tmpfs tmpfs \"$SYSROOT/run\""),
+        "conary-init must provide the readonly carrier runtime tmpfs the generator's etc-state depends on"
+    );
+    assert!(
+        dracut_init.contains("mount_once tmpfs tmpfs \"$SYSROOT/var\""),
+        "conary-init must provide a writable /var for readonly carrier roots"
+    );
 }
 
 #[test]
