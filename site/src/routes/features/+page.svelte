@@ -161,7 +161,7 @@
 		<div class="category" id="owned-packages">
 			<div class="category-heading">
 				<span class="category-status limited">available · limited</span>
-				<h2 class="category-title">Conary-owned package capabilities</h2>
+				<h2 class="category-title">Package capabilities Conary owns</h2>
 				<p>Useful package machinery whose policy and adapter boundaries still matter.</p>
 			</div>
 
@@ -448,8 +448,7 @@
 
 	.category-title {
 		margin: 0.8rem 0 0.7rem;
-		font-size: clamp(1.45rem, 2.7vw, 2.15rem);
-		letter-spacing: -0.04em;
+		font-size: var(--step-section);
 	}
 
 	.category-heading > p {
@@ -625,10 +624,9 @@
 	}
 
 	.features-cta h2 {
-		max-width: 17ch;
+		max-width: 20ch;
 		margin-bottom: 0.75rem;
-		font-size: clamp(1.9rem, 4vw, 3.2rem);
-		letter-spacing: -0.045em;
+		font-size: var(--step-lead);
 	}
 
 	.features-cta p:last-child {

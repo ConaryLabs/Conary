@@ -11,7 +11,7 @@
 
 <PageIntro
 	eyebrow="Project context"
-	title="A ground-up take on an old package-manager idea."
+	title="An old packaging idea, rebuilt from scratch."
 	description="Conary takes inspiration from a visionary mid-2000s design, then starts again in Rust with a deliberately narrower public preview and a modern generation model."
 />
 
@@ -336,10 +336,9 @@
 	}
 
 	.contribute-box h2 {
-		max-width: 16ch;
+		max-width: 20ch;
 		margin-bottom: 0.8rem;
-		font-size: clamp(2rem, 4vw, 3.4rem);
-		letter-spacing: -0.05em;
+		font-size: var(--step-lead);
 	}
 
 	.contribute-box p:last-child {

@@ -7,7 +7,7 @@ const pages = [
 		file: 'index.html',
 		title: 'Conary — One reversible package model for Linux',
 		canonical: 'https://conary.io/',
-		marker: 'Install the package you want, not only the format your distro chose.'
+		marker: 'An RPM that installs on Ubuntu. A DEB that installs on Fedora.'
 	},
 	{
 		file: 'features/index.html',
@@ -25,13 +25,13 @@ const pages = [
 		file: 'compare/index.html',
 		title: 'Conary compared with apt, dnf, pacman, and Nix — Conary',
 		canonical: 'https://conary.io/compare/',
-		marker: 'Compare the operating models, not one-word scores.'
+		marker: 'Compare the operating models, not the checkmarks.'
 	},
 	{
 		file: 'about/index.html',
 		title: 'About Conary — Conary',
 		canonical: 'https://conary.io/about/',
-		marker: 'A ground-up take on an old package-manager idea.'
+		marker: 'An old packaging idea, rebuilt from scratch.'
 	}
 ];
 
