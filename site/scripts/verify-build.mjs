@@ -32,6 +32,12 @@ const pages = [
 		title: 'About Conary — Conary',
 		canonical: 'https://conary.io/about/',
 		marker: 'An old packaging idea, rebuilt from scratch.'
+	},
+	{
+		file: 'contact/index.html',
+		title: 'Contact — Conary',
+		canonical: 'https://conary.io/contact/',
+		marker: 'Do not open a public issue for a vulnerability'
 	}
 ];
 
