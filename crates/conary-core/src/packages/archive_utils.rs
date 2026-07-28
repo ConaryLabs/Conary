@@ -2,8 +2,6 @@
 
 use crate::error::Result;
 use crate::filesystem::source_path::SourcePathBytes;
-pub use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
-use tracing::warn;
 
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFREG: u32 = 0o100000;
@@ -27,16 +25,6 @@ pub fn is_regular_file_mode(mode: u32) -> bool {
 pub fn normalize_path(path: &str) -> Result<String> {
     let deployment = SourcePathBytes::from(path).to_deployment_path()?;
     Ok(format!("/{}", deployment.to_utf8()?))
-}
-
-/// Check if file size exceeds limit, warn if so
-pub fn check_file_size(path: &str, size: u64) -> bool {
-    if size > MAX_EXTRACTION_FILE_SIZE {
-        warn!("Skipping oversized file: {} ({} bytes)", path, size);
-        false
-    } else {
-        true
-    }
 }
 
 /// Get file metadata (size and mode) from the filesystem.

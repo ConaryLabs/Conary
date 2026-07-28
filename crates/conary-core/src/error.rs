@@ -113,6 +113,10 @@ pub enum Error {
     #[error("Parse error: {0}")]
     ParseError(String),
 
+    /// Structural or operator-resource budget refusal.
+    #[error(transparent)]
+    Budget(#[from] crate::ccs::BudgetError),
+
     /// Delta operation error
     #[error("Delta operation failed: {0}")]
     DeltaError(String),

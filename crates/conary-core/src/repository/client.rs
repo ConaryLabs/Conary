@@ -5,10 +5,7 @@
 //! Provides a wrapper around reqwest with retry support for
 //! fetching metadata and downloading files.
 
-use crate::compression::{
-    CompressionFormat, MAX_METADATA_DECOMPRESS_SIZE, decompress_auto_with_limit,
-    decompress_with_limit,
-};
+use crate::compression::{CompressionFormat, decompress_metadata, decompress_metadata_auto};
 use crate::error::{Error, Result};
 use crate::repository::error_helpers::ResultExt;
 use crate::repository::error_helpers::http_client_builder_error_message;
@@ -545,8 +542,8 @@ impl RepositoryClient {
         let bytes = self.download_to_bytes(url).await?;
 
         // Auto-detect and decompress
-        let decompressed = decompress_auto_with_limit(&bytes, MAX_METADATA_DECOMPRESS_SIZE)
-            .parse_context(&format!("decompress data from {url}"))?;
+        let decompressed =
+            decompress_metadata_auto(&bytes, &format!("repository metadata from {url}"))?;
 
         debug!(
             "Decompressed {} bytes -> {} bytes",
@@ -580,14 +577,15 @@ impl RepositoryClient {
                     "URL {} has no extension but detected {} compression",
                     url, detected
                 );
-                return decompress_auto_with_limit(&bytes, MAX_METADATA_DECOMPRESS_SIZE)
-                    .map_err(|e| Error::ParseError(format!("Failed to decompress: {}", e)));
+                return decompress_metadata_auto(
+                    &bytes,
+                    &format!("repository metadata from {url}"),
+                );
             }
             return Ok(bytes);
         }
 
-        decompress_with_limit(&bytes, format, MAX_METADATA_DECOMPRESS_SIZE)
-            .map_err(|e| Error::ParseError(format!("Failed to decompress {} data: {}", format, e)))
+        decompress_metadata(&bytes, format, &format!("repository metadata from {url}"))
     }
 
     /// Download a file to the specified path with retry support

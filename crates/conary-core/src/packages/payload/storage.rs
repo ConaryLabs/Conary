@@ -42,11 +42,13 @@ pub fn ensure_available_space(path: &Path, required_bytes: u64) -> Result<()> {
 }
 
 fn ensure_capacity(required_bytes: u64, available_bytes: u64) -> Result<()> {
-    if required_bytes > available_bytes {
-        return Err(Error::IoError(format!(
-            "payload spool requires {required_bytes} bytes, but only {available_bytes} bytes are available"
-        )));
-    }
+    crate::ccs::CCS_BUDGET
+        .archive_decode_bounds()?
+        .admit_spool_reservation(
+            "payload spool available bytes",
+            required_bytes,
+            available_bytes,
+        )?;
     Ok(())
 }
 
@@ -93,6 +95,16 @@ mod tests {
 
         assert_eq!(measured, declared);
         ensure_capacity(measured, declared).unwrap();
-        assert!(ensure_capacity(measured, declared - 1).is_err());
+        let error = ensure_capacity(measured, declared - 1).unwrap_err();
+        let Error::Budget(error) = error else {
+            panic!("expected typed budget refusal");
+        };
+        assert_eq!(
+            error.dimension,
+            crate::ccs::BudgetDimension::TotalPayloadBytes
+        );
+        assert_eq!(error.field, "payload spool available bytes");
+        assert_eq!(error.observed, declared);
+        assert_eq!(error.limit, declared - 1);
     }
 }

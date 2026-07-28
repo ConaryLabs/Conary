@@ -27,9 +27,6 @@ pub enum CompressionError {
     )]
     DecompressionBomb { format: &'static str, limit: u64 },
 
-    #[error("Archive {archive} exceeds {limit} entries (possible archive bomb)")]
-    ArchiveEntryLimit { archive: &'static str, limit: usize },
-
     #[error("Unsupported compression format: {0}")]
     UnsupportedFormat(String),
 }
@@ -165,33 +162,7 @@ pub fn create_decoder_limited<'a, R: Read + 'a>(
     limit: u64,
 ) -> Result<Box<dyn Read + 'a>, CompressionError> {
     let decoder = create_decoder(reader, format)?;
-    Ok(Box::new(decoder.take(limit + 1)))
-}
-
-/// Decompress a byte slice to a Vec
-///
-/// Convenience function that detects format from magic bytes and decompresses.
-pub fn decompress_auto(data: &[u8]) -> Result<Vec<u8>, CompressionError> {
-    let format = CompressionFormat::from_magic_bytes(data);
-    decompress(data, format)
-}
-
-/// Maximum decompressed output size (2 GiB) to guard against decompression bombs.
-pub const MAX_DECOMPRESS_SIZE: u64 = 2 * 1024 * 1024 * 1024;
-
-/// Tighter decompression budget for repository metadata and similar control-plane content.
-pub const MAX_METADATA_DECOMPRESS_SIZE: u64 = 512 * 1024 * 1024;
-
-/// Maximum number of entries allowed in a single archive traversal.
-pub const MAX_ARCHIVE_ENTRIES: usize = 500_000;
-
-/// Decompress a byte slice using the specified format.
-///
-/// Output is capped at `MAX_DECOMPRESS_SIZE` bytes to prevent decompression bombs.
-/// Returns an error if the decompressed output exceeds the limit rather than
-/// silently truncating.
-pub fn decompress(data: &[u8], format: CompressionFormat) -> Result<Vec<u8>, CompressionError> {
-    decompress_with_limit(data, format, MAX_DECOMPRESS_SIZE)
+    Ok(Box::new(decoder.take(limit.saturating_add(1))))
 }
 
 /// Decompress a byte slice with an explicit output limit.
@@ -223,6 +194,44 @@ pub fn decompress_auto_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>, Co
     decompress_with_limit(data, format, limit)
 }
 
+/// Decode bounded in-memory metadata through the shared structural owner.
+pub fn decompress_metadata_auto(data: &[u8], field: &str) -> crate::error::Result<Vec<u8>> {
+    let format = CompressionFormat::from_magic_bytes(data);
+    let bounds = crate::ccs::CCS_BUDGET.archive_decode_bounds()?;
+    decompress_metadata_with_bounds(data, format, field, &bounds)
+}
+
+/// Decode bounded in-memory metadata with an explicit compression format.
+pub fn decompress_metadata(
+    data: &[u8],
+    format: CompressionFormat,
+    field: &str,
+) -> crate::error::Result<Vec<u8>> {
+    let bounds = crate::ccs::CCS_BUDGET.archive_decode_bounds()?;
+    decompress_metadata_with_bounds(data, format, field, &bounds)
+}
+
+fn decompress_metadata_with_bounds(
+    data: &[u8],
+    format: CompressionFormat,
+    field: &str,
+    bounds: &crate::ccs::ArchiveDecodeBounds,
+) -> crate::error::Result<Vec<u8>> {
+    match decompress_with_limit(data, format, bounds.max_metadata_bytes) {
+        Ok(output) => {
+            bounds.admit_metadata_bytes(field, output.len() as u64)?;
+            Ok(output)
+        }
+        Err(CompressionError::DecompressionBomb { .. }) => {
+            bounds.admit_metadata_bytes(field, bounds.max_metadata_bytes.saturating_add(1))?;
+            unreachable!("one-over metadata admission always refuses")
+        }
+        Err(error) => Err(crate::error::Error::ParseError(format!(
+            "failed to decompress {field}: {error}"
+        ))),
+    }
+}
+
 /// Create a decompressing reader, auto-detecting format from data
 ///
 /// Reads the first few bytes to detect the compression format, then returns
@@ -234,20 +243,6 @@ pub fn create_decoder_auto(data: &[u8]) -> Result<Box<dyn Read + '_>, Compressio
 }
 
 /// Reject archives with pathologically large entry counts.
-pub fn check_archive_entry_limit(
-    entries_seen: usize,
-    archive: &'static str,
-) -> Result<(), CompressionError> {
-    if entries_seen > MAX_ARCHIVE_ENTRIES {
-        Err(CompressionError::ArchiveEntryLimit {
-            archive,
-            limit: MAX_ARCHIVE_ENTRIES,
-        })
-    } else {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,7 +326,8 @@ mod tests {
     #[test]
     fn test_decompress_none() {
         let data = b"hello world";
-        let result = decompress(data, CompressionFormat::None).unwrap();
+        let result =
+            decompress_with_limit(data, CompressionFormat::None, data.len() as u64).unwrap();
         assert_eq!(result, data);
     }
 
@@ -342,19 +338,38 @@ mod tests {
             0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xcb, 0x48, 0xcd, 0xc9,
             0xc9, 0x07, 0x00, 0x86, 0xa6, 0x10, 0x36, 0x05, 0x00, 0x00, 0x00,
         ];
-        let result = decompress(gzip_data, CompressionFormat::Gzip).unwrap();
+        let result = decompress_with_limit(gzip_data, CompressionFormat::Gzip, 1024).unwrap();
         assert_eq!(result, b"hello");
     }
 
     #[test]
-    fn test_decompress_auto() {
+    fn metadata_decode_uses_the_typed_metadata_dimension() {
         // Minimal gzip of "hello"
         let gzip_data: &[u8] = &[
             0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xcb, 0x48, 0xcd, 0xc9,
             0xc9, 0x07, 0x00, 0x86, 0xa6, 0x10, 0x36, 0x05, 0x00, 0x00, 0x00,
         ];
-        let result = decompress_auto(gzip_data).unwrap();
-        assert_eq!(result, b"hello");
+        let bounds = crate::ccs::ArchiveDecodeBounds {
+            max_archive_entries: 1,
+            max_payload_object_bytes: 4,
+            max_total_payload_bytes: 4,
+            max_metadata_bytes: 4,
+            max_decompressed_stream_bytes: 1024,
+        };
+        let error = decompress_metadata_with_bounds(
+            gzip_data,
+            CompressionFormat::Gzip,
+            "test repository metadata",
+            &bounds,
+        )
+        .unwrap_err();
+        let crate::error::Error::Budget(error) = error else {
+            panic!("expected typed budget refusal");
+        };
+        assert_eq!(error.dimension, crate::ccs::BudgetDimension::MetadataBytes);
+        assert_eq!(error.field, "test repository metadata");
+        assert_eq!(error.observed, 5);
+        assert_eq!(error.limit, 4);
     }
 
     #[test]
@@ -370,18 +385,6 @@ mod tests {
             CompressionError::DecompressionBomb {
                 format: "gzip",
                 limit: 512
-            }
-        ));
-    }
-
-    #[test]
-    fn test_check_archive_entry_limit_rejects_too_many_entries() {
-        let err = check_archive_entry_limit(MAX_ARCHIVE_ENTRIES + 1, "test archive").unwrap_err();
-        assert!(matches!(
-            err,
-            CompressionError::ArchiveEntryLimit {
-                archive: "test archive",
-                limit: MAX_ARCHIVE_ENTRIES,
             }
         ));
     }

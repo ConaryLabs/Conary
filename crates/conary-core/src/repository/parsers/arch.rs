@@ -6,7 +6,7 @@
 //! in a custom text format with %FIELD% markers.
 
 use super::{ChecksumType, PackageMetadata, RepositoryParser};
-use crate::compression::decompress_auto;
+use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
@@ -73,9 +73,7 @@ impl ArchParser {
             }
             Err(error) => return Err(error),
         }
-        decompress_auto(&raw_bytes).map_err(|error| {
-            Error::ParseError(format!("Failed to decompress {}: {}", db_url, error))
-        })
+        decompress_metadata_auto(&raw_bytes, &format!("Arch repository database {db_url}"))
     }
 
     /// Parse a desc file from the tarball

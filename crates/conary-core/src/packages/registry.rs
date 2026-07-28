@@ -5,6 +5,7 @@
 //! Provides centralized identification and parsing from package-owned format
 //! markers. File names and extensions are never format authority.
 
+use crate::ccs::CCS_BUDGET;
 use crate::compression::{self, CompressionFormat};
 use crate::error::{Error, Result};
 use crate::packages::traits::PackageFormat;
@@ -69,13 +70,13 @@ pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
 }
 
 fn has_debian_binary_member(path: &Path) -> Result<bool> {
+    let bounds = CCS_BUDGET.archive_decode_bounds()?;
     let file = File::open(path)?;
     let mut archive = ar::Archive::new(file);
-    let mut entries_seen = 0_usize;
+    let mut entries_seen = 0_u64;
     while let Some(entry) = archive.next_entry() {
         entries_seen += 1;
-        compression::check_archive_entry_limit(entries_seen, "Debian package")
-            .map_err(|error| Error::InitError(error.to_string()))?;
+        bounds.admit_archive_entry("Debian package entries", entries_seen)?;
         let mut entry = entry?;
         let identifier = String::from_utf8_lossy(entry.header().identifier());
         if identifier.trim_end_matches('/') != "debian-binary" {
@@ -92,17 +93,23 @@ fn has_debian_binary_member(path: &Path) -> Result<bool> {
 }
 
 fn has_arch_pkginfo(path: &Path, format: CompressionFormat) -> Result<bool> {
+    let bounds = CCS_BUDGET.archive_decode_bounds()?;
     let file = File::open(path)?;
     let reader =
-        compression::create_decoder_limited(file, format, compression::MAX_DECOMPRESS_SIZE)
+        compression::create_decoder_limited(file, format, bounds.max_decompressed_stream_bytes)
             .map_err(|error| Error::InitError(error.to_string()))?;
     let mut archive = tar::Archive::new(reader);
-    let mut entries_seen = 0_usize;
+    let mut entries_seen = 0_u64;
+    let mut declared_payload_bytes = 0_u64;
     for entry in archive.entries()? {
         entries_seen += 1;
-        compression::check_archive_entry_limit(entries_seen, "ALPM package")
-            .map_err(|error| Error::InitError(error.to_string()))?;
+        bounds.admit_archive_entry("ALPM package entries", entries_seen)?;
         let entry = entry?;
+        declared_payload_bytes = bounds.add_payload_bytes(
+            "ALPM package declared bytes",
+            declared_payload_bytes,
+            entry.size(),
+        )?;
         let path = entry.path()?;
         if path == Path::new(".PKGINFO") || path == Path::new("./.PKGINFO") {
             return Ok(entry.header().entry_type().is_file());

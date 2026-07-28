@@ -4,6 +4,7 @@
 
 use super::header::HeaderRecord;
 use super::{mode_type, parse_error};
+use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression::{self, CompressionFormat};
 use crate::error::Result;
 use crate::packages::archive_utils::normalize_path;
@@ -18,7 +19,6 @@ const CPIO_NEWC_MAGIC: &[u8; 6] = b"070701";
 const CPIO_CRC_MAGIC: &[u8; 6] = b"070702";
 const CPIO_STRIPPED_MAGIC: &[u8; 6] = b"07070X";
 const CPIO_TRAILER: &str = "TRAILER!!!";
-const MAX_CPIO_NAME_SIZE: u64 = 4096;
 
 #[derive(Debug)]
 pub(super) struct PayloadMember {
@@ -46,13 +46,18 @@ enum RpmPayloadCompressor {
 }
 
 pub(super) fn required_spool_bytes(records: &[HeaderRecord]) -> Result<u64> {
+    let bounds = CCS_BUDGET.archive_decode_bounds()?;
     records
         .iter()
         .filter(|record| !record.ghost && mode_type(record.mode) == libc::S_IFREG)
         .try_fold(0_u64, |total, record| {
-            total
-                .checked_add(record.size)
-                .ok_or_else(|| parse_error("RPM payload spool-size arithmetic overflow"))
+            bounds
+                .add_payload_bytes(
+                    "RPM header declared regular payload bytes",
+                    total,
+                    record.size,
+                )
+                .map_err(Into::into)
         })
 }
 
@@ -62,9 +67,14 @@ pub(super) fn parse_members<'a>(
     records: &'a [HeaderRecord],
     spool: &'a PayloadSpool,
 ) -> Result<Vec<PayloadMember>> {
+    let bounds = CCS_BUDGET.archive_decode_bounds()?;
+    bounds.admit_archive_entry(
+        "RPM payload header entries",
+        records.iter().filter(|record| !record.ghost).count() as u64,
+    )?;
     let compressor = payload_compressor(package)?;
     let reader = payload_decoder(payload, compressor)?;
-    RpmPayloadReader::new(reader, records, spool).read_all()
+    RpmPayloadReader::new(reader, records, spool, bounds).read_all()
 }
 
 fn payload_compressor(package: &Package) -> Result<RpmPayloadCompressor> {
@@ -128,6 +138,7 @@ struct RpmPayloadReader<'a> {
     flavor: Option<ArchiveFlavor>,
     standard_path_indexes: HashMap<&'a str, usize>,
     total_content: u64,
+    bounds: ArchiveDecodeBounds,
 }
 
 impl<'a> RpmPayloadReader<'a> {
@@ -135,6 +146,7 @@ impl<'a> RpmPayloadReader<'a> {
         reader: Box<dyn Read + 'a>,
         records: &'a [HeaderRecord],
         spool: &'a PayloadSpool,
+        bounds: ArchiveDecodeBounds,
     ) -> Self {
         Self {
             reader,
@@ -150,6 +162,7 @@ impl<'a> RpmPayloadReader<'a> {
                 .map(|(index, record)| (record.path.as_str(), index))
                 .collect(),
             total_content: 0,
+            bounds,
         }
     }
 
@@ -243,9 +256,10 @@ impl<'a> RpmPayloadReader<'a> {
         let _rdev_minor = self.read_hex_u32("rdev minor")?;
         let name_size = u64::from(self.read_hex_u32("name size")?);
         let checksum = self.read_hex_u32("checksum")?;
-        if name_size == 0 || name_size > MAX_CPIO_NAME_SIZE {
+        let max_name_size = CCS_BUDGET.max_path_bytes.saturating_add(1);
+        if name_size == 0 || name_size > max_name_size {
             return Err(parse_error(format!(
-                "RPM CPIO name size {name_size} is outside 1..={MAX_CPIO_NAME_SIZE}"
+                "RPM CPIO name size {name_size} is outside 1..={max_name_size}"
             )));
         }
         let mut name = vec![0_u8; name_size as usize];
@@ -295,16 +309,19 @@ impl<'a> RpmPayloadReader<'a> {
         size: u64,
         expected_crc: Option<u32>,
     ) -> Result<()> {
+        self.bounds
+            .admit_archive_entry("RPM CPIO entries", self.members.len() as u64 + 1)?;
         if !self.seen.insert(index) {
             return Err(parse_error(format!(
                 "RPM payload repeats header path {}",
                 self.records[index].path
             )));
         }
-        self.total_content = self
-            .total_content
-            .checked_add(size)
-            .ok_or_else(|| parse_error("RPM payload cumulative content size overflow"))?;
+        self.total_content = self.bounds.add_payload_bytes(
+            "RPM CPIO declared payload bytes",
+            self.total_content,
+            size,
+        )?;
         let record = &self.records[index];
         let (source, sha256, actual_crc) = match mode_type(record.mode) {
             libc::S_IFREG => {
@@ -544,7 +561,12 @@ mod tests {
             Some(std::str::from_utf8(target).unwrap()),
         )];
         let spool = PayloadSpool::new(0).unwrap();
-        let mut reader = RpmPayloadReader::new(Box::new(io::Cursor::new(target)), &symlink, &spool);
+        let mut reader = RpmPayloadReader::new(
+            Box::new(io::Cursor::new(target)),
+            &symlink,
+            &spool,
+            CCS_BUDGET.archive_decode_bounds().unwrap(),
+        );
         let error = reader
             .read_member_content(0, target.len() as u64 - 1, None)
             .unwrap_err();
@@ -556,7 +578,12 @@ mod tests {
         );
 
         let directory = [header_record(libc::S_IFDIR | 0o755, 0, None)];
-        let mut reader = RpmPayloadReader::new(Box::new(io::Cursor::new(b"x")), &directory, &spool);
+        let mut reader = RpmPayloadReader::new(
+            Box::new(io::Cursor::new(b"x")),
+            &directory,
+            &spool,
+            CCS_BUDGET.archive_decode_bounds().unwrap(),
+        );
         let error = reader.read_member_content(0, 1, None).unwrap_err();
         assert!(
             error.to_string().contains(

@@ -1,6 +1,6 @@
 // conary-core/src/packages/cpio.rs
 
-use crate::compression::{MAX_ARCHIVE_ENTRIES, MAX_DECOMPRESS_SIZE};
+use crate::ccs::CCS_BUDGET;
 use std::io::{self, Read};
 
 /// CPIO New ASCII Format (newc) header size
@@ -9,11 +9,6 @@ const HEADER_SIZE: usize = 110;
 const MAGIC_NEWC: &[u8] = b"070701";
 /// Magic string for CRC format
 const MAGIC_CRC: &[u8] = b"070702";
-/// Maximum allowed filename length in bytes (4 KiB)
-const MAX_NAME_SIZE: u64 = 4096;
-/// Maximum allowed file content size in bytes (512 MB)
-const MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
-
 /// Extracted CPIO entry metadata
 #[derive(Debug, Clone)]
 pub struct CpioEntry {
@@ -34,23 +29,40 @@ pub struct CpioEntry {
 /// A reader for CPIO (New ASCII) archives
 pub struct CpioReader<R: Read> {
     reader: R,
-    entries_seen: usize,
+    entries_seen: u64,
     total_content_size: u64,
-    max_entries: usize,
+    max_entries: u64,
+    max_name_size: u64,
+    max_file_size: u64,
     max_total_content_size: u64,
 }
 
 impl<R: Read> CpioReader<R> {
-    pub fn new(reader: R) -> Self {
-        Self::with_limits(reader, MAX_ARCHIVE_ENTRIES, MAX_DECOMPRESS_SIZE)
+    pub fn new(reader: R) -> crate::error::Result<Self> {
+        let bounds = CCS_BUDGET.archive_decode_bounds()?;
+        Ok(Self::with_limits(
+            reader,
+            bounds.max_archive_entries,
+            CCS_BUDGET.max_path_bytes.saturating_add(1),
+            bounds.max_payload_object_bytes,
+            bounds.max_total_payload_bytes,
+        ))
     }
 
-    fn with_limits(reader: R, max_entries: usize, max_total_content_size: u64) -> Self {
+    fn with_limits(
+        reader: R,
+        max_entries: u64,
+        max_name_size: u64,
+        max_file_size: u64,
+        max_total_content_size: u64,
+    ) -> Self {
         Self {
             reader,
             entries_seen: 0,
             total_content_size: 0,
             max_entries,
+            max_name_size,
+            max_file_size,
             max_total_content_size,
         }
     }
@@ -108,10 +120,13 @@ impl<R: Read> CpioReader<R> {
         let check = parse_hex_u32(102, 8)?;
 
         // Guard against unreasonable filename sizes
-        if namesize == 0 || namesize > MAX_NAME_SIZE {
+        if namesize == 0 || namesize > self.max_name_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("CPIO entry name size {namesize} is outside 1..={MAX_NAME_SIZE}"),
+                format!(
+                    "CPIO entry name size {namesize} is outside 1..={}",
+                    self.max_name_size
+                ),
             ));
         }
 
@@ -173,10 +188,13 @@ impl<R: Read> CpioReader<R> {
         }
 
         // Guard against unreasonable file content sizes
-        if filesize > MAX_FILE_SIZE {
+        if filesize > self.max_file_size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("CPIO entry file size {filesize} exceeds maximum {MAX_FILE_SIZE}"),
+                format!(
+                    "CPIO entry file size {filesize} exceeds maximum {}",
+                    self.max_file_size
+                ),
             ));
         }
 
@@ -284,7 +302,7 @@ mod tests {
     fn reject_oversized_name() {
         // namesize = 0x2000 = 8192 > MAX_NAME_SIZE (4096)
         let data = make_header("00002000", "00000000");
-        let mut reader = CpioReader::new(data.as_slice());
+        let mut reader = CpioReader::new(data.as_slice()).unwrap();
         let err = reader.next_entry().unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(
@@ -295,11 +313,17 @@ mod tests {
 
     #[test]
     fn reject_oversized_file_content() {
-        // namesize = 2 (one char + NUL), filesize = 0xFFFFFFFF (~4 GiB, > MAX_FILE_SIZE)
+        // Exercise a one-over file bound without allocating its declared body.
         let mut data = make_header("00000002", "FFFFFFFF");
         // Append filename "a\0" (2 bytes) + 2 bytes padding to align to 4
         data.extend_from_slice(b"a\0\0\0");
-        let mut reader = CpioReader::new(data.as_slice());
+        let mut reader = CpioReader::with_limits(
+            data.as_slice(),
+            u64::MAX,
+            CCS_BUDGET.max_path_bytes + 1,
+            u64::from(u32::MAX) - 1,
+            u64::MAX,
+        );
         let err = reader.next_entry().unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(
@@ -316,7 +340,7 @@ mod tests {
         data.extend_from_slice(b"hello\0");
         // file content "abc" = 3 bytes + 1 byte padding
         data.extend_from_slice(b"abc\0");
-        let mut reader = CpioReader::new(data.as_slice());
+        let mut reader = CpioReader::new(data.as_slice()).unwrap();
         let entry = reader.next_entry().unwrap().unwrap();
         assert_eq!(entry.0.name, "hello");
         assert_eq!(entry.0.size, 3);
@@ -346,7 +370,7 @@ mod tests {
         append_entry(&mut data, "two", b"b");
         append_entry(&mut data, "TRAILER!!!", b"");
 
-        let mut reader = CpioReader::with_limits(data.as_slice(), 1, u64::MAX);
+        let mut reader = CpioReader::with_limits(data.as_slice(), 1, u64::MAX, u64::MAX, u64::MAX);
         assert!(reader.next_entry().unwrap().is_some());
         let err = reader.next_entry().unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
@@ -363,7 +387,7 @@ mod tests {
         append_entry(&mut data, "two", b"def");
         append_entry(&mut data, "TRAILER!!!", b"");
 
-        let mut reader = CpioReader::with_limits(data.as_slice(), usize::MAX, 5);
+        let mut reader = CpioReader::with_limits(data.as_slice(), u64::MAX, u64::MAX, u64::MAX, 5);
         assert!(reader.next_entry().unwrap().is_some());
         let err = reader.next_entry().unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);

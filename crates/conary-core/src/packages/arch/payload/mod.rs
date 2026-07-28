@@ -33,6 +33,12 @@ impl ArchivePayloadEntry {
         &self.path
     }
 
+    pub(super) fn regular_content_size(&self) -> Option<u64> {
+        self.content_authority
+            .as_ref()
+            .map(|authority| authority.size)
+    }
+
     pub(super) fn read_regular_content_bounded(&self, limit: u64) -> Result<Option<Vec<u8>>> {
         if !self.node.kind.is_regular() {
             return Ok(None);
@@ -59,6 +65,14 @@ impl ArchivePayloadEntry {
             .open()?
             .read_to_end(&mut content)?;
         Ok(Some(content))
+    }
+}
+
+pub(super) fn declared_spool_bytes<R: Read>(entry: &Entry<'_, R>) -> u64 {
+    match entry.header().entry_type() {
+        EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => entry.size(),
+        EntryType::Link if entry.size() != 0 => entry.size(),
+        _ => 0,
     }
 }
 
@@ -471,8 +485,9 @@ fn spool_content<R: Read>(
     let mut hasher = Hasher::new(HashAlgorithm::Sha256);
     let mut copied = 0_u64;
     let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
+    let mut limited = entry.take(size.saturating_add(1));
     loop {
-        let read = entry.read(&mut buffer).map_err(|error| {
+        let read = limited.read(&mut buffer).map_err(|error| {
             Error::ParseError(format!("read ALPM payload node {path}: {error}"))
         })?;
         if read == 0 {

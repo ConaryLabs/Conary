@@ -7,11 +7,11 @@
 //! GNU sparse, and unknown entry types. Keeping this parser explicit prevents
 //! the generic tar library from silently applying unsupported extensions.
 
+use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression;
 use crate::error::{Error, Result};
 use crate::hash::{HashAlgorithm, Hasher};
 use crate::packages::archive_utils::normalize_path;
-use crate::packages::common::MAX_EXTRACTION_FILE_SIZE;
 use crate::packages::payload::{
     PAYLOAD_IO_BUFFER_SIZE, PackagePayload, PackagePayloadFile, PayloadSpool, ReopenablePayload,
 };
@@ -87,7 +87,8 @@ struct ParsedEntry {
 
 #[cfg(test)]
 pub(super) fn parse_package_files(data_tar_data: &[u8]) -> Result<Vec<PackageFile>> {
-    parse_reader(open_bytes_decoder(data_tar_data)?, None).map(|entries| {
+    let bounds = CCS_BUDGET.archive_decode_bounds()?;
+    parse_reader(open_bytes_decoder(data_tar_data, &bounds)?, None, &bounds).map(|entries| {
         entries
             .into_iter()
             .map(|entry| PackageFile {
@@ -106,19 +107,15 @@ pub(super) fn extract_files(data_tar_data: &[u8]) -> Result<Vec<ExtractedFile>> 
 }
 
 pub(super) fn parse_package_payload(data_tar: &ReopenablePayload) -> Result<PackagePayload> {
-    let metadata = parse_reader(open_source_decoder(data_tar)?, None)?;
-    let required_bytes = metadata.iter().try_fold(0_u64, |total, entry| {
-        total.checked_add(
-            entry
-                .content_authority
-                .as_ref()
-                .map_or(0, |authority| authority.size),
-        )
-    });
-    let required_bytes =
-        required_bytes.ok_or_else(|| data_tar_error("DEB payload-size arithmetic overflow"))?;
+    let bounds = CCS_BUDGET.archive_decode_bounds()?;
+    let metadata = parse_reader(open_source_decoder(data_tar, &bounds)?, None, &bounds)?;
+    let required_bytes = required_spool_bytes(&metadata, &bounds)?;
     let spool = PayloadSpool::new(required_bytes)?;
-    let parsed = parse_reader(open_source_decoder(data_tar)?, Some(&spool))?;
+    let parsed = parse_reader(
+        open_source_decoder(data_tar, &bounds)?,
+        Some(&spool),
+        &bounds,
+    )?;
     if metadata.len() != parsed.len()
         || metadata.iter().zip(&parsed).any(|(first, second)| {
             first.path != second.path
@@ -144,31 +141,59 @@ pub(super) fn parse_package_payload(data_tar: &ReopenablePayload) -> Result<Pack
         .map(PackagePayload::new)
 }
 
+fn required_spool_bytes(entries: &[ParsedEntry], bounds: &ArchiveDecodeBounds) -> Result<u64> {
+    entries.iter().try_fold(0_u64, |total, entry| {
+        bounds
+            .add_payload_bytes(
+                "DEB data.tar declared payload bytes",
+                total,
+                entry
+                    .content_authority
+                    .as_ref()
+                    .map_or(0, |authority| authority.size),
+            )
+            .map_err(Into::into)
+    })
+}
+
 #[cfg(test)]
-fn open_bytes_decoder(data: &[u8]) -> Result<Box<dyn Read + '_>> {
+fn open_bytes_decoder<'a>(
+    data: &'a [u8],
+    bounds: &ArchiveDecodeBounds,
+) -> Result<Box<dyn Read + 'a>> {
     let format = crate::compression::CompressionFormat::from_magic_bytes(data);
-    compression::create_decoder_limited(data, format, compression::MAX_DECOMPRESS_SIZE)
+    compression::create_decoder_limited(data, format, bounds.max_decompressed_stream_bytes)
         .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))
 }
 
-fn open_source_decoder(source: &ReopenablePayload) -> Result<Box<dyn Read>> {
+fn open_source_decoder(
+    source: &ReopenablePayload,
+    bounds: &ArchiveDecodeBounds,
+) -> Result<Box<dyn Read>> {
     let mut probe = source.open()?;
     let mut magic = [0_u8; 8];
     let read = probe.read(&mut magic)?;
     let format = crate::compression::CompressionFormat::from_magic_bytes(&magic[..read]);
-    compression::create_decoder_limited(source.open()?, format, compression::MAX_DECOMPRESS_SIZE)
-        .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))
+    compression::create_decoder_limited(
+        source.open()?,
+        format,
+        bounds.max_decompressed_stream_bytes,
+    )
+    .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))
 }
 
 fn parse_reader(
     mut reader: Box<dyn Read + '_>,
     spool: Option<&PayloadSpool>,
+    bounds: &ArchiveDecodeBounds,
 ) -> Result<Vec<ParsedEntry>> {
     let mut entries = Vec::<ParsedEntry>::new();
     let mut paths = BTreeSet::<String>::new();
     let mut pending_long_name: Option<Vec<u8>> = None;
     let mut pending_long_link: Option<Vec<u8>> = None;
-    let mut entries_seen = 0usize;
+    let mut entries_seen = 0_u64;
+    let mut declared_payload_bytes = 0_u64;
+    let mut metadata_bytes = 0_u64;
     let mut archive_root_seen = false;
 
     while let Some(block) = read_header_block(&mut reader)? {
@@ -176,13 +201,18 @@ fn parse_reader(
             break;
         }
         entries_seen += 1;
-        compression::check_archive_entry_limit(entries_seen, "DEB data.tar")
-            .map_err(|error| data_tar_error(error.to_string()))?;
+        bounds.admit_archive_entry("DEB data.tar entries", entries_seen)?;
 
         let mut header = decode_header(&block)?;
         match header.entry_type {
             TYPE_GNU_LONG_NAME | TYPE_GNU_LONG_LINK => {
-                let value = read_long_value(&mut reader, header.size, header.entry_type)?;
+                let value = read_long_value(
+                    &mut reader,
+                    header.size,
+                    header.entry_type,
+                    bounds,
+                    &mut metadata_bytes,
+                )?;
                 if header.entry_type == TYPE_GNU_LONG_NAME {
                     pending_long_name = Some(value);
                 } else {
@@ -236,6 +266,11 @@ fn parse_reader(
         let mut source = None;
         let kind = match header.entry_type {
             TYPE_REGULAR_OLD | TYPE_REGULAR if !directory_from_trailing_slash => {
+                declared_payload_bytes = bounds.add_payload_bytes(
+                    "DEB data.tar declared payload bytes",
+                    declared_payload_bytes,
+                    header.size,
+                )?;
                 let (authority, payload_source) =
                     read_regular_content(&mut reader, &path, header.size, spool, entries.len())?;
                 content_authority = Some(authority);
@@ -678,21 +713,23 @@ fn read_header_block(reader: &mut dyn Read) -> Result<Option<[u8; TAR_BLOCK_SIZE
     Ok(Some(block))
 }
 
-fn read_long_value(reader: &mut dyn Read, size: u64, entry_type: u8) -> Result<Vec<u8>> {
-    if size > MAX_EXTRACTION_FILE_SIZE {
-        return Err(data_tar_error(format!(
-            "GNU long {} record exceeds the {} byte extraction limit",
-            if entry_type == TYPE_GNU_LONG_NAME {
-                "name"
-            } else {
-                "link"
-            },
-            MAX_EXTRACTION_FILE_SIZE
-        )));
-    }
+fn read_long_value(
+    reader: &mut dyn Read,
+    size: u64,
+    entry_type: u8,
+    bounds: &ArchiveDecodeBounds,
+    metadata_bytes: &mut u64,
+) -> Result<Vec<u8>> {
+    let label = if entry_type == TYPE_GNU_LONG_NAME {
+        "GNU long-name payload"
+    } else {
+        "GNU long-link payload"
+    };
+    *metadata_bytes =
+        bounds.add_metadata_bytes("DEB data.tar path metadata", *metadata_bytes, size)?;
     let mut value = vec![0u8; size as usize];
-    read_exact(reader, &mut value, "GNU long-name payload")?;
-    discard_padding(reader, size)?;
+    read_exact(reader, &mut value, label)?;
+    discard_padding(reader, size, label)?;
     value.truncate(
         value
             .iter()
@@ -704,7 +741,7 @@ fn read_long_value(reader: &mut dyn Read, size: u64, entry_type: u8) -> Result<V
 
 fn read_regular_content(
     reader: &mut dyn Read,
-    _path: &str,
+    path: &str,
     size: u64,
     spool: Option<&PayloadSpool>,
     index: usize,
@@ -728,7 +765,7 @@ fn read_regular_content(
         }
         remaining -= chunk_size as u64;
     }
-    discard_padding(reader, size)?;
+    discard_padding(reader, size, &format!("regular payload {path:?}"))?;
     if let Some((file, _)) = &mut output {
         file.sync_all()?;
     }
@@ -747,10 +784,16 @@ fn read_regular_content(
     ))
 }
 
-fn discard_padding(reader: &mut dyn Read, size: u64) -> Result<()> {
+fn discard_padding(reader: &mut dyn Read, size: u64, description: &str) -> Result<()> {
     let padding = (TAR_BLOCK_SIZE as u64 - size % TAR_BLOCK_SIZE as u64) % TAR_BLOCK_SIZE as u64;
     let mut bytes = [0u8; TAR_BLOCK_SIZE];
-    read_exact(reader, &mut bytes[..padding as usize], "tar entry padding")
+    read_exact(reader, &mut bytes[..padding as usize], "tar entry padding")?;
+    if bytes[..padding as usize].iter().any(|byte| *byte != 0) {
+        return Err(data_tar_error(format!(
+            "{description} declares {size} bytes but carries nonzero bytes in its padding"
+        )));
+    }
+    Ok(())
 }
 
 fn read_exact(reader: &mut dyn Read, bytes: &mut [u8], description: &str) -> Result<()> {
