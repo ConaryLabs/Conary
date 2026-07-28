@@ -599,7 +599,7 @@ fn require_known_directory(path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::write_v2_ccs_package;
+    use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
     use flate2::Compression;
     use flate2::read::GzDecoder as ReadGzDecoder;
@@ -625,7 +625,10 @@ mod tests {
         let authority = crate::ccs::v2::test_support::package_authority_with_one_file("stream");
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
         let signer = SigningKeyPair::generate();
-        write_v2_ccs_package(&authority, &payloads, &path, &signer, None, None, None).unwrap();
+        write_v2_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, &signer, None, None, None,
+        )
+        .unwrap();
         let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
 
         let mut archive = Archive::new(ReadGzDecoder::new(File::open(&path).unwrap()));

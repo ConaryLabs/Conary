@@ -12,16 +12,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Explicit ceiling for legacy test and small-tool in-memory fixture input.
+/// Explicit ceiling for test-only in-memory fixture input.
 ///
 /// Native authoring and foreign conversion do not use this adapter. It exists
-/// only for callers that already constructed small byte fixtures, immediately
+/// only for tests that already constructed small byte fixtures, immediately
 /// spools those bytes to reopenable files, and delegates to the sole streamed
 /// package writer.
-pub const BOUNDED_MEMORY_FIXTURE_BYTES: u64 = 16 * 1024 * 1024;
+pub(super) const BOUNDED_MEMORY_FIXTURE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[doc(hidden)]
-pub fn write_v2_ccs_package(
+pub fn write_v2_ccs_package_from_bounded_memory_for_tests(
     authority: &crate::ccs::v2::AuthorityDocumentV2,
     payloads_by_path: &std::collections::BTreeMap<String, Vec<u8>>,
     output_path: &Path,
@@ -421,7 +421,7 @@ mod tests {
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
         let key = crate::ccs::signing::SigningKeyPair::generate();
 
-        write_v2_ccs_package(
+        write_v2_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &path,
@@ -451,7 +451,10 @@ mod tests {
         let authority = crate::ccs::v2::test_support::package_authority_with_one_file("nodup");
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
         let key = crate::ccs::signing::SigningKeyPair::generate();
-        write_v2_ccs_package(&authority, &payloads, &path, &key, None, None, None).unwrap();
+        write_v2_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, &key, None, None, None,
+        )
+        .unwrap();
 
         let mut archive =
             tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&path).unwrap()));

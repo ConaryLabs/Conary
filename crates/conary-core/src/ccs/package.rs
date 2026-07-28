@@ -458,7 +458,7 @@ license = "MIT"
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
         let signing_key = SigningKeyPair::generate();
 
-        let error = crate::ccs::builder::write_v2_ccs_package(
+        let error = crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,
@@ -581,7 +581,7 @@ license = "MIT"
         let authority = crate::ccs::v2::test_support::package_authority_with_one_file("adapter-v2");
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
         let key = crate::ccs::signing::SigningKeyPair::generate();
-        crate::ccs::builder::write_v2_ccs_package(
+        crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
             &authority, &payloads, &path, &key, None, None, None,
         )
         .unwrap();

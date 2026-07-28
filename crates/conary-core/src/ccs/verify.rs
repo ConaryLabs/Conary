@@ -315,7 +315,7 @@ pub fn print_result(result: &VerifiedCcsArchive) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::write_v2_ccs_package;
+    use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
 
     fn package(signer: &SigningKeyPair) -> (tempfile::TempDir, std::path::PathBuf, TrustPolicy) {
@@ -323,7 +323,10 @@ mod tests {
         let path = temp.path().join("verified.ccs");
         let authority = crate::ccs::v2::test_support::package_authority_with_one_file("verified");
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-        write_v2_ccs_package(&authority, &payloads, &path, signer, None, None, None).unwrap();
+        write_v2_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, signer, None, None, None,
+        )
+        .unwrap();
         let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
         (temp, path, policy)
     }

@@ -1,7 +1,7 @@
 // conary-core/src/ccs/archive_reader/tests.rs
 
 use super::*;
-use crate::ccs::builder::write_v2_ccs_package;
+use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
 use crate::ccs::signing::SigningKeyPair;
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -13,7 +13,7 @@ fn current_package() -> (tempfile::TempDir, std::path::PathBuf) {
     let path = temp.path().join("current.ccs");
     let authority = crate::ccs::v2::test_support::package_authority_with_one_file("current");
     let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    write_v2_ccs_package(
+    write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &path,

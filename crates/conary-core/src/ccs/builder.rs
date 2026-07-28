@@ -22,8 +22,8 @@ mod package_writer;
 mod source;
 
 pub use package_writer::{
-    print_build_summary, write_signed_current_ccs_package, write_v2_ccs_package,
-    write_v2_ccs_package_from_sources,
+    print_build_summary, write_signed_current_ccs_package,
+    write_v2_ccs_package_from_bounded_memory_for_tests, write_v2_ccs_package_from_sources,
 };
 
 #[cfg(test)]

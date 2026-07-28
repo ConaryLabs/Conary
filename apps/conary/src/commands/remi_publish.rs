@@ -83,7 +83,7 @@ mod tests {
         let payload = b"hello world\n".to_vec();
         let authority = minimal_v2_authority_for_preflight("hello", &payload);
         let payloads = std::collections::BTreeMap::from([("/usr/bin/hello".to_string(), payload)]);
-        conary_core::ccs::builder::write_v2_ccs_package(
+        conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,

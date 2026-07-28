@@ -254,7 +254,7 @@ mod tests {
         canonical_json_hash, compute_v2_content_identity, compute_v2_file_merkle_root,
         sign_build_attestation,
     };
-    use conary_core::ccs::builder::write_v2_ccs_package;
+    use conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
     use conary_core::ccs::signing::SigningKeyPair;
     use conary_core::ccs::v2::schema::{
         AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
@@ -841,7 +841,7 @@ mod tests {
         };
         let envelope = sign_build_attestation(payload, signer).unwrap();
         let package_path = temp.path().join("release.ccs");
-        write_v2_ccs_package(
+        write_v2_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,
@@ -922,7 +922,7 @@ mod tests {
             debug_toml_sha256: None,
         };
         let package_path = temp.path().join("local-dev.ccs");
-        write_v2_ccs_package(
+        write_v2_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,
