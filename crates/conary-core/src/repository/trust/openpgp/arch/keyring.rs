@@ -28,11 +28,6 @@ use super::super::super::{ArchKeyringFormat, ArchKeyringTrust};
 const CERTIFICATE_MEMBER: &str = "usr/share/pacman/keyrings/archlinux.gpg";
 const REVOKED_MEMBER: &str = "usr/share/pacman/keyrings/archlinux-revoked";
 
-const MAX_KEYRING_PACKAGE_OUTPUT: u64 = 64 * 1024 * 1024;
-const MAX_KEYRING_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_REVOKED_BYTES: u64 = 1024 * 1024;
-const MAX_KEYRING_PACKAGE_ENTRIES: usize = 4096;
-
 /// Fingerprints pacman disables in the populated keyring.
 ///
 /// `NotCarried` is not "no revocations by default": it records that the
@@ -118,10 +113,11 @@ struct AlpmKeyringMembers {
 }
 
 fn extract_alpm_members(source: &[u8]) -> Result<AlpmKeyringMembers> {
+    let bounds = crate::ccs::CCS_BUDGET.archive_decode_bounds()?;
     let decoder = crate::compression::create_decoder_limited(
         Cursor::new(source),
         crate::compression::CompressionFormat::Zstd,
-        MAX_KEYRING_PACKAGE_OUTPUT,
+        bounds.max_decompressed_stream_bytes,
     )
     .map_err(|error| {
         Error::ParseError(format!(
@@ -130,32 +126,30 @@ fn extract_alpm_members(source: &[u8]) -> Result<AlpmKeyringMembers> {
     })?;
     let mut archive = tar::Archive::new(decoder);
     let mut members = AlpmKeyringMembers::default();
-    for (index, entry) in archive
-        .entries()
-        .map_err(|error| {
-            Error::ParseError(format!("failed to read Arch keyring ALPM package: {error}"))
-        })?
-        .enumerate()
-    {
-        if index >= MAX_KEYRING_PACKAGE_ENTRIES {
-            return Err(Error::ParseError(format!(
-                "Arch keyring ALPM package exceeds {MAX_KEYRING_PACKAGE_ENTRIES} entries"
-            )));
-        }
+    let mut entries_seen = 0_u64;
+    let mut metadata_bytes = 0_u64;
+    for entry in archive.entries().map_err(|error| {
+        Error::ParseError(format!("failed to read Arch keyring ALPM package: {error}"))
+    })? {
+        entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+            Error::ParseError("Arch keyring ALPM entry count overflows u64".to_string())
+        })?;
+        bounds.admit_archive_entry("Arch keyring ALPM entries", entries_seen)?;
         let entry = entry.map_err(|error| {
             Error::ParseError(format!("failed to read Arch keyring ALPM member: {error}"))
         })?;
+        metadata_bytes = bounds.add_metadata_bytes(
+            "Arch keyring ALPM metadata",
+            metadata_bytes,
+            entry.size(),
+        )?;
         let path = entry.path().map_err(|error| {
             Error::ParseError(format!("invalid Arch keyring ALPM member path: {error}"))
         })?;
-        let (slot, member, limit) = if path.as_ref() == Path::new(CERTIFICATE_MEMBER) {
-            (
-                &mut members.certificates,
-                CERTIFICATE_MEMBER,
-                MAX_KEYRING_BYTES,
-            )
+        let (slot, member) = if path.as_ref() == Path::new(CERTIFICATE_MEMBER) {
+            (&mut members.certificates, CERTIFICATE_MEMBER)
         } else if path.as_ref() == Path::new(REVOKED_MEMBER) {
-            (&mut members.revoked, REVOKED_MEMBER, MAX_REVOKED_BYTES)
+            (&mut members.revoked, REVOKED_MEMBER)
         } else {
             continue;
         };
@@ -164,29 +158,35 @@ fn extract_alpm_members(source: &[u8]) -> Result<AlpmKeyringMembers> {
                 "Arch keyring ALPM package repeats exact member '{member}'"
             )));
         }
-        *slot = Some(read_member(entry, member, limit)?);
+        *slot = Some(read_member(entry, member)?);
     }
     Ok(members)
 }
 
-fn read_member<R: Read>(entry: tar::Entry<'_, R>, member: &str, limit: u64) -> Result<Vec<u8>> {
+fn read_member<R: Read>(entry: tar::Entry<'_, R>, member: &str) -> Result<Vec<u8>> {
     if !entry.header().entry_type().is_file() {
         return Err(Error::ParseError(format!(
             "Arch keyring ALPM member '{member}' is not a regular file"
         )));
     }
-    let mut bytes = Vec::new();
+    let declared = entry.size();
+    let mut bytes = Vec::with_capacity(usize::try_from(declared).map_err(|_| {
+        Error::ParseError(format!(
+            "Arch keyring ALPM member '{member}' exceeds addressable memory"
+        ))
+    })?);
     entry
-        .take(limit + 1)
+        .take(declared.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| {
             Error::ParseError(format!(
                 "failed to read Arch keyring ALPM member '{member}': {error}"
             ))
         })?;
-    if bytes.len() as u64 > limit {
+    let actual = bytes.len() as u64;
+    if actual != declared {
         return Err(Error::ParseError(format!(
-            "Arch keyring ALPM member '{member}' exceeds {limit} bytes"
+            "Arch keyring ALPM member '{member}' declares {declared} bytes but yields {actual}"
         )));
     }
     Ok(bytes)

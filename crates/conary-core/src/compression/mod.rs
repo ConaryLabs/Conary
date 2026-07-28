@@ -242,7 +242,6 @@ pub fn create_decoder_auto(data: &[u8]) -> Result<Box<dyn Read + '_>, Compressio
     create_decoder(data, format)
 }
 
-/// Reject archives with pathologically large entry counts.
 #[cfg(test)]
 mod tests {
     use super::*;
