@@ -189,6 +189,34 @@ Conary is a virtual Rust workspace:
 For the maintained architecture map, see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Scale And Verification
+
+Conary is a single-maintainer project, so the verification layer carries the
+weight that a team's review would otherwise carry.
+
+| | |
+| --- | --- |
+| First-party Rust | 447,093 lines across 1,225 files, 8-crate workspace, edition 2024, Rust 1.96+ |
+| Unit tests | 5,499 `#[test]` and `#[tokio::test]` functions |
+| Integration tests | 324 tests in 29 suites across 4 phases |
+| Test targets | Real Fedora 44, Ubuntu 26.04 LTS, and Arch VMs driven by `apps/conary-test` |
+| CI | 7 GitHub Actions workflows: merge validation, PR gate, release build, release-artifact proof, deploy-and-verify, site deploy, scheduled ops |
+| Lint gate | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check` |
+
+Two of those deserve specific mention:
+
+- **Cross-distro proof runs on real hosts, not mocks.** The integration harness
+  boots Fedora, Ubuntu, and Arch VMs and exercises the same RPM, DEB, Arch, and
+  CCS pipeline on each, because the claim being tested is that a package keeps
+  its source semantics on a host whose native format differs. A mocked target
+  cannot prove that.
+- **Documentation claims are gated by CI.** `scripts/check-doc-truth.sh` fails
+  the build when this README, the roadmap, the module docs, or the public
+  websites claim something the code does not do. Release tags, install-command
+  forms, and preview boundaries are all checked against the source tree. The
+  cost of that is real: changing a public claim means changing the code or the
+  check, not the prose.
+
 ## Build From Source
 
 Conary requires Rust 1.96+ on Linux.
