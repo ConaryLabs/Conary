@@ -474,6 +474,37 @@ fn archive_decode_dimensions_fail_one_over_with_typed_diagnostics() {
 }
 
 #[test]
+fn archive_decode_dimensions_admit_their_exact_limits() {
+    let bounds = CCS_BUDGET.archive_decode_bounds().unwrap();
+
+    bounds
+        .admit_archive_entry("near-limit archive", bounds.max_archive_entries)
+        .unwrap();
+    assert_eq!(
+        bounds
+            .add_payload_bytes("near-limit payload", 0, bounds.max_total_payload_bytes,)
+            .unwrap(),
+        bounds.max_total_payload_bytes
+    );
+    bounds
+        .admit_metadata_bytes("near-limit metadata", bounds.max_metadata_bytes)
+        .unwrap();
+    bounds
+        .admit_decompressed_stream_bytes(
+            "near-limit decompressed stream",
+            bounds.max_decompressed_stream_bytes,
+        )
+        .unwrap();
+    bounds
+        .admit_spool_reservation(
+            "near-limit spool",
+            bounds.max_total_payload_bytes,
+            bounds.max_total_payload_bytes,
+        )
+        .unwrap();
+}
+
+#[test]
 fn archive_decode_derivation_overflow_is_typed() {
     let budget = CcsStructuralBudget {
         max_files: u64::MAX,

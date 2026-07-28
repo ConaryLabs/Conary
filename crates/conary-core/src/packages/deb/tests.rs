@@ -5,6 +5,30 @@ use crate::packages::traits::{
     DebMaintainerMode, DebTriggerAwaitMode, DebTriggerDirective, NativeArgumentValue,
     NativeLifecyclePath, NativeScriptletKind, NativeScriptletMetadata, NativeStdinContract,
 };
+use std::io::Cursor;
+
+#[test]
+fn declared_member_copy_rejects_shorter_and_longer_bodies() {
+    let mut output = Vec::new();
+    let shorter =
+        copy_declared_entry(&mut Cursor::new(b"ab"), &mut output, 3, "test member").unwrap_err();
+    assert!(matches!(&shorter, Error::ParseError(_)));
+    assert!(
+        shorter
+            .to_string()
+            .contains("declares 3 bytes but yields 2")
+    );
+
+    output.clear();
+    let longer =
+        copy_declared_entry(&mut Cursor::new(b"abcd"), &mut output, 3, "test member").unwrap_err();
+    assert!(matches!(&longer, Error::ParseError(_)));
+    assert!(
+        longer
+            .to_string()
+            .contains("declares 3 bytes but yields at least 4")
+    );
+}
 
 #[test]
 fn test_control_parsing() {
