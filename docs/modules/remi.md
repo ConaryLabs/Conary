@@ -111,17 +111,29 @@ Each bounded page is written to a disabled staging repository. The previously
 synced repository remains the only enabled snapshot while network and parsing
 work continues. After the declared name total has been consumed, one SQLite
 transaction replaces the old rows, moves the staged rows to the repository,
-links canonical IDs, and advances `last_sync`. A failed fetch, malformed page,
-duplicate exact version identity, or persistence error deletes the stage and
-leaves the prior snapshot unchanged.
+links canonical IDs, and advances `last_sync`. A fetch, parsing, duplicate
+identity, or persistence error returned to the running command removes its
+stage and leaves the prior enabled snapshot unchanged.
+
+Sparse pages do not yet carry a server-state revision. Stable totals and global
+name ordering detect structural drift, but a same-count or content-only Remi
+update can currently span requests. Process termination can also leave a
+disabled stage because in-process error cleanup is not crash recovery.
+[Issue #163](https://github.com/ConaryLabs/Conary/issues/163) owns the typed
+server revision plus the durable per-repository lease required to reject mixed
+page sets, serialize publication, and prove an abandoned stage before cleanup.
 
 The fixed name page is the structural owner of distribution scaling:
 distribution growth increases page count, not the retained metadata set or
 HTTP request count within one page. Relation collections remain exact native
-semantics and are never truncated to satisfy a guessed byte ceiling. The
-client validates stable totals, global name ordering, page identity, non-empty
-version sets, and unique version/release/architecture identities before a
-page enters the staging repository.
+semantics and are never truncated to satisfy a guessed byte ceiling. The name
+page does not yet structurally bound independently growing version, relation,
+expression, or metadata cardinality; [issue
+#164](https://github.com/ConaryLabs/Conary/issues/164) owns typed sub-page
+continuation plus streaming server/client processing. The client validates
+stable totals, global name ordering, page identity, non-empty version sets, and
+unique version/release/architecture identities before a page enters the
+staging repository.
 
 ## Durable Repository Signing Authority
 

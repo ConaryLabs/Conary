@@ -15,7 +15,9 @@ use crate::repository::dependency_model::{
 };
 use crate::repository::metadata::PackageSecurityAdvisoryMetadata;
 use crate::repository::package_relation::validate_native_relation;
-use crate::repository::remi_metadata::RemiSparseResolutionVersionEntry;
+use crate::repository::remi_metadata::{
+    REMI_SPARSE_MIN_PACKAGE_SIZE, RemiSparseResolutionVersionEntry,
+};
 use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -48,6 +50,16 @@ pub(super) fn remi_sync_row(
         size,
         metadata,
     } = entry;
+    if version.is_empty() {
+        return Err(Error::ConfigError(format!(
+            "Remi sparse entry for '{name}' has an empty package version"
+        )));
+    }
+    if size < REMI_SPARSE_MIN_PACKAGE_SIZE {
+        return Err(Error::ConfigError(format!(
+            "Remi sparse entry for '{name}' version '{version}' has non-downloadable size {size}"
+        )));
+    }
     let profile = crate::repository::supported_profiles::profile_for_remi_target(&distro)
         .ok_or_else(|| Error::ConfigError(format!("unsupported Remi target: {distro}")))?;
     let route_slug = profile.remi_route_slug();
@@ -161,8 +173,14 @@ pub(super) fn remi_sync_row(
     let mut requirement_groups = Vec::with_capacity(wire_requirement_groups.len());
     let mut requirement_group_clauses = Vec::with_capacity(wire_requirement_groups.len());
     for (group_index, wire_group) in wire_requirement_groups.into_iter().enumerate() {
-        let group_token =
-            i64::try_from(group_index + 1).expect("Remi requirement group count cannot exceed i64");
+        let group_token = group_index
+            .checked_add(1)
+            .and_then(|token| i64::try_from(token).ok())
+            .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "Remi sparse entry for '{name}' has too many requirement groups"
+                ))
+            })?;
         validate_remi_relation_group(&wire_group, scheme)?;
         let mut group = DbRequirementGroup::new(
             0,
@@ -305,12 +323,8 @@ fn append_remi_sync_page(
     for row in &mut rows {
         row.package.repository_id = stage.staging_repository_id;
     }
-    let mut packages = rows
-        .iter()
-        .map(|row| row.package.clone())
-        .collect::<Vec<_>>();
     let tx = conn.unchecked_transaction()?;
-    let count = append_synced_package_rows(&tx, &mut packages, rows)?;
+    let count = append_synced_package_rows(&tx, rows)?;
     tx.commit()?;
     Ok(count)
 }
@@ -558,6 +572,34 @@ mod tests {
     }
 
     #[test]
+    fn remi_sync_row_rejects_non_downloadable_package_identity() {
+        let mut empty_version =
+            remi_entry_for_tests("qemu-img", "2:10.1.0-7.fc44", VersionScheme::Rpm);
+        empty_version.version.clear();
+        let error = remi_sync_row(
+            7,
+            "http://remi.test".to_string(),
+            "fedora-44".to_string(),
+            "qemu-img".to_string(),
+            empty_version,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("empty package version"));
+
+        let mut zero_size = remi_entry_for_tests("qemu-img", "2:10.1.0-7.fc44", VersionScheme::Rpm);
+        zero_size.size = 0;
+        let error = remi_sync_row(
+            7,
+            "http://remi.test".to_string(),
+            "fedora-44".to_string(),
+            "qemu-img".to_string(),
+            zero_size,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("non-downloadable size 0"));
+    }
+
+    #[test]
     fn remi_sync_row_preserves_release_and_exact_download_url() {
         let row = remi_sync_row(
             7,
@@ -691,8 +733,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut packages = vec![row.package.clone()];
-        append_synced_package_rows(&conn, &mut packages, vec![row]).unwrap();
+        append_synced_package_rows(&conn, vec![row]).unwrap();
 
         let package = RepositoryPackage::find_by_repository(&conn, repository_id)
             .unwrap()

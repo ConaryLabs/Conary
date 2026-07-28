@@ -701,11 +701,7 @@ fn persist_repository_sync_snapshot(
 ) -> Result<usize> {
     match snapshot {
         RepositorySyncSnapshot::NativeRows(synced_packages) => {
-            let mut repo_packages: Vec<RepositoryPackage> = synced_packages
-                .iter()
-                .map(|row| row.package.clone())
-                .collect();
-            persist_native_sync_rows(conn, repo, &mut repo_packages, synced_packages)
+            persist_native_sync_rows(conn, repo, synced_packages)
         }
         RepositorySyncSnapshot::StaticRows {
             packages,
@@ -719,12 +715,7 @@ fn persist_repository_sync_snapshot(
 
             let tx = conn.unchecked_transaction()?;
 
-            let mut repo_packages = snapshot
-                .packages
-                .iter()
-                .map(|row| row.package.clone())
-                .collect::<Vec<_>>();
-            persist_synced_package_rows(&tx, repo_id, &mut repo_packages, snapshot.packages)?;
+            persist_synced_package_rows(&tx, repo_id, snapshot.packages)?;
 
             let mut delta_count = 0;
             for delta in snapshot.deltas {
@@ -769,14 +760,9 @@ fn persist_static_sync_rows(
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
     let count = synced_packages.len();
-    let mut repo_packages: Vec<RepositoryPackage> = synced_packages
-        .iter()
-        .map(|row| row.package.clone())
-        .collect();
-
     let tx = conn.unchecked_transaction()?;
 
-    persist_synced_package_rows(&tx, repo_id, &mut repo_packages, synced_packages)?;
+    persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     replace_package_keys_for_repository(&tx, repo_id, &package_keys)?;
     link_canonical_ids(&tx, repo_id)?;
 

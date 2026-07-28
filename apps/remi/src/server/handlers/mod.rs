@@ -168,20 +168,8 @@ pub fn supported_route_slugs() -> Vec<String> {
 /// Validate a package or distro name: no path traversal, no null bytes, reasonable length
 #[allow(clippy::result_large_err)]
 pub fn validate_name(name: &str) -> Result<(), Response> {
-    if name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Name must not be empty").into_response());
-    }
-    if name.len() > conary_core::repository::remi_metadata::REMI_SPARSE_NAME_MAX_BYTES {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Name exceeds the public repository wire limit",
-        )
-            .into_response());
-    }
-    if name.contains('/') || name.contains("..") || name.contains('\0') {
-        return Err((StatusCode::BAD_REQUEST, "Name contains invalid characters").into_response());
-    }
-    Ok(())
+    conary_core::repository::remi_metadata::validate_remi_public_name(name)
+        .map_err(|reason| (StatusCode::BAD_REQUEST, reason).into_response())
 }
 
 #[allow(clippy::result_large_err)]

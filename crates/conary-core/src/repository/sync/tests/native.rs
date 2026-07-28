@@ -61,13 +61,7 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
         requirement_groups,
         requirement_group_clauses,
     }];
-    let mut repo_packages: Vec<RepositoryPackage> = synced_packages
-        .iter()
-        .map(|row| row.package.clone())
-        .collect();
-
-    let count =
-        persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced_packages).unwrap();
+    let count = persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
     assert_eq!(count, 1);
 
     let stored_packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
@@ -451,10 +445,7 @@ fn test_sync_persists_distro_and_version_scheme() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -504,10 +495,7 @@ fn test_sync_persists_debian_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -560,10 +548,7 @@ fn test_sync_persists_arch_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -634,10 +619,7 @@ fn test_sync_persists_requirement_groups_with_alternatives() {
         requirement_groups: req_groups,
         requirement_group_clauses: req_group_clauses,
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -735,10 +717,7 @@ fn test_sync_persists_conditional_requirement_behavior() {
         requirement_groups: req_groups,
         requirement_group_clauses: req_group_clauses,
     }];
-    let mut repo_packages: Vec<RepositoryPackage> =
-        synced.iter().map(|row| row.package.clone()).collect();
-
-    persist_native_sync_rows(&conn, &mut repo, &mut repo_packages, synced).unwrap();
+    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     let pkg_id = stored[0].id.unwrap();

@@ -7,6 +7,7 @@ use crate::repository::dependency_model::{ProvideArchitectureQualifier, ProvideV
 use crate::repository::distro::version_scheme_from_db;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, Row, params};
+use std::collections::BTreeSet;
 use std::io;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,26 +148,41 @@ impl RepositoryProvide {
         if repository_package_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = repository_package_ids
+        let package_ids = repository_package_ids
             .iter()
-            .enumerate()
-            .map(|(index, _)| format!("?{}", index + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
-                    version_scheme, architecture_qualifier_kind, architecture
-             FROM repository_provides
-             WHERE repository_package_id IN ({placeholders})
-             ORDER BY repository_package_id, capability, version"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(
-                rusqlite::params_from_iter(repository_package_ids.iter()),
-                Self::from_row,
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let batch_size = super::sqlite_variable_batch_size(conn)?;
+        let mut rows = Vec::new();
+        for package_ids in package_ids.chunks(batch_size) {
+            let placeholders = (1..=package_ids.len())
+                .map(|index| format!("?{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
+                        version_scheme, architecture_qualifier_kind, architecture
+                 FROM repository_provides
+                 WHERE repository_package_id IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            rows.extend(
+                stmt.query_map(
+                    rusqlite::params_from_iter(package_ids.iter()),
+                    Self::from_row,
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
+        }
+        rows.sort_by(|left, right| {
+            (left.repository_package_id, &left.capability, &left.version).cmp(&(
+                right.repository_package_id,
+                &right.capability,
+                &right.version,
+            ))
+        });
         Ok(rows)
     }
 
@@ -462,6 +478,50 @@ mod tests {
         let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].version_scheme, VersionScheme::Rpm);
+    }
+
+    #[test]
+    fn multi_package_lookup_chunks_at_the_runtime_sqlite_variable_limit() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+        for package_id in 2..=5 {
+            conn.execute(
+                "INSERT INTO repository_packages
+                 (id, repository_id, name, version, checksum, size, download_url, version_scheme)
+                 VALUES (?1, 1, ?2, '1.0', 'sha256:test', 1, ?3, 'rpm')",
+                params![
+                    package_id,
+                    format!("pkg-{package_id}"),
+                    format!("https://example.test/pkg-{package_id}")
+                ],
+            )
+            .unwrap();
+        }
+        for package_id in 1..=5 {
+            let mut provide = RepositoryProvide::new(
+                package_id,
+                format!("cap-{package_id}"),
+                None,
+                "package".to_string(),
+                None,
+                VersionScheme::Rpm,
+            );
+            provide.insert(&conn).unwrap();
+        }
+        conn.set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 2)
+            .unwrap();
+
+        let found =
+            RepositoryProvide::find_by_repository_packages(&conn, &[5, 4, 3, 2, 1, 1]).unwrap();
+
+        assert_eq!(found.len(), 5);
+        assert_eq!(
+            found
+                .iter()
+                .map(|provide| provide.repository_package_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
     }
 
     #[test]

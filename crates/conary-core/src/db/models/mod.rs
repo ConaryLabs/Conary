@@ -129,6 +129,25 @@ pub use trigger_engine::TriggerEngine;
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};
 pub use try_session::{CreateTrySession, TrySession, TrySessionMode, TrySessionStatus};
 
+/// Return the connection's authoritative SQLite bind-variable limit as a
+/// non-zero Rust batch size.
+///
+/// Multi-package model queries chunk against the runtime connection limit
+/// instead of assuming the compile-time default used by one SQLite build.
+pub(super) fn sqlite_variable_batch_size(
+    conn: &rusqlite::Connection,
+) -> crate::error::Result<usize> {
+    let limit = conn.limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER)?;
+    usize::try_from(limit)
+        .ok()
+        .filter(|limit| *limit > 0)
+        .ok_or_else(|| {
+            crate::error::Error::InitError(
+                "SQLite reported a non-positive bind-variable limit".to_string(),
+            )
+        })
+}
+
 /// Format a byte count as a human-readable size string.
 ///
 /// Delegates to [`crate::util::format_size`].

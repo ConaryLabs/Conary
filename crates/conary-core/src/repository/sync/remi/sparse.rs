@@ -6,8 +6,8 @@ use crate::db::models::Repository;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::remi_metadata::{
-    REMI_SPARSE_NAME_MAX_BYTES, REMI_SPARSE_SYNC_PAGE_SIZE, RemiSparsePackagePage,
-    RemiSparseResolutionEntry,
+    REMI_SPARSE_SYNC_PAGE_SIZE, RemiSparsePackagePage, RemiSparseResolutionEntry,
+    validate_remi_public_name,
 };
 use crate::repository::retry::{RetryConfig, with_retry_async};
 use std::collections::HashSet;
@@ -88,8 +88,17 @@ impl RemiSparseSync {
     ) -> Result<Vec<SyncedPackageRow>> {
         self.validate_page(&page)?;
 
+        let page_total = page.total;
         let page_name_count = page.packages.len();
         let page_last_name = page.packages.last().map(|entry| entry.name.clone());
+        let next_names_seen = self
+            .names_seen
+            .checked_add(page_name_count)
+            .ok_or_else(|| Error::ParseError("Remi sparse package count overflow".to_string()))?;
+        let next_page = self
+            .next_page
+            .checked_add(1)
+            .ok_or_else(|| Error::ParseError("Remi sparse page counter overflow".to_string()))?;
         let mut rows = Vec::new();
         for entry in page.packages {
             let requested_name = entry.name.clone();
@@ -116,16 +125,14 @@ impl RemiSparseSync {
             }
         }
 
-        self.names_seen = self
-            .names_seen
-            .checked_add(page_name_count)
-            .ok_or_else(|| Error::ParseError("Remi sparse package count overflow".to_string()))?;
+        self.names_seen = next_names_seen;
+        self.expected_total_names.get_or_insert(page_total);
         self.last_name = page_last_name.or(self.last_name.take());
-        self.next_page += 1;
+        self.next_page = next_page;
         Ok(rows)
     }
 
-    fn validate_page(&mut self, page: &RemiSparsePackagePage) -> Result<()> {
+    fn validate_page(&self, page: &RemiSparsePackagePage) -> Result<()> {
         if page.distro != self.route_slug {
             return Err(Error::ParseError(format!(
                 "Remi sparse page distro '{}' disagrees with requested route '{}'",
@@ -152,7 +159,6 @@ impl RemiSparseSync {
                     page.total
                 )));
             }
-            None => self.expected_total_names = Some(page.total),
             _ => {}
         }
         if page.packages.is_empty() && self.names_seen < page.total {
@@ -208,17 +214,11 @@ fn validate_sparse_entry(
 }
 
 fn validate_sparse_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > REMI_SPARSE_NAME_MAX_BYTES
-        || name.contains('/')
-        || name.contains("..")
-        || name.contains('\0')
-    {
-        return Err(Error::ParseError(format!(
-            "Remi sparse page contains invalid package name {name:?}"
-        )));
-    }
-    Ok(())
+    validate_remi_public_name(name).map_err(|reason| {
+        Error::ParseError(format!(
+            "Remi sparse page contains invalid package name {name:?}: {reason}"
+        ))
+    })
 }
 
 pub(super) async fn fetch_sparse_page_with_retry(
@@ -369,5 +369,20 @@ mod tests {
             .consume_page(test_page(1, 2, Vec::new()))
             .unwrap_err();
         assert!(error.to_string().contains("ended after 0 of 2"));
+    }
+
+    #[test]
+    fn page_validation_rejects_page_counter_overflow_without_advancing_state() {
+        let mut sync = test_sync();
+        sync.next_page = usize::MAX;
+        let error = sync
+            .consume_page(test_page(usize::MAX, 1, vec![test_entry("alpha")]))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("page counter overflow"));
+        assert_eq!(sync.next_page, usize::MAX);
+        assert_eq!(sync.names_seen, 0);
+        assert_eq!(sync.expected_total_names, None);
+        assert_eq!(sync.last_name, None);
     }
 }

@@ -18,7 +18,6 @@ use super::{current_timestamp, link_canonical_ids};
 pub(super) fn persist_native_sync_rows(
     conn: &Connection,
     repo: &mut Repository,
-    repo_packages: &mut [RepositoryPackage],
     synced_packages: Vec<SyncedPackageRow>,
 ) -> Result<usize> {
     let repo_id = repo
@@ -28,7 +27,7 @@ pub(super) fn persist_native_sync_rows(
 
     let tx = conn.unchecked_transaction()?;
 
-    persist_synced_package_rows(&tx, repo_id, repo_packages, synced_packages)?;
+    persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     link_canonical_ids(&tx, repo_id)?;
 
     repo.last_sync = Some(current_timestamp());
@@ -42,11 +41,10 @@ pub(super) fn persist_native_sync_rows(
 pub(super) fn persist_synced_package_rows(
     conn: &Connection,
     repo_id: i64,
-    repo_packages: &mut [RepositoryPackage],
     synced_packages: Vec<SyncedPackageRow>,
 ) -> Result<usize> {
     RepositoryPackage::delete_by_repository(conn, repo_id)?;
-    append_synced_package_rows(conn, repo_packages, synced_packages)
+    append_synced_package_rows(conn, synced_packages)
 }
 
 /// Append one bounded batch of normalized package rows.
@@ -56,12 +54,24 @@ pub(super) fn persist_synced_package_rows(
 /// projections accumulate in process memory for the full distribution.
 pub(super) fn append_synced_package_rows(
     conn: &Connection,
-    repo_packages: &mut [RepositoryPackage],
     synced_packages: Vec<SyncedPackageRow>,
 ) -> Result<usize> {
     let count = synced_packages.len();
+    for (index, row) in synced_packages.iter().enumerate() {
+        if row.requirement_groups.len() != row.requirement_group_clauses.len() {
+            return Err(Error::InitError(format!(
+                "normalized repository row {index} has {} requirement groups but {} clause batches",
+                row.requirement_groups.len(),
+                row.requirement_group_clauses.len()
+            )));
+        }
+    }
 
-    RepositoryPackage::batch_insert_with_ids(conn, repo_packages)?;
+    let mut repo_packages = synced_packages
+        .iter()
+        .map(|row| row.package.clone())
+        .collect::<Vec<_>>();
+    RepositoryPackage::batch_insert_with_ids(conn, &mut repo_packages)?;
 
     let mut repo_provides = Vec::new();
     let mut all_groups: Vec<DbRequirementGroup> = Vec::new();
@@ -222,4 +232,59 @@ pub(in crate::repository) fn convert_requirement_groups(
     }
 
     (db_groups, clause_batches)
+}
+
+#[cfg(test)]
+mod append_tests {
+    use super::*;
+    use crate::db::testing::create_test_db;
+    use crate::repository::versioning::VersionScheme;
+
+    fn package(name: &str) -> RepositoryPackage {
+        RepositoryPackage::new(
+            1,
+            name.to_string(),
+            "1".to_string(),
+            VersionScheme::Rpm,
+            "checksum".to_string(),
+            1,
+            format!("https://repo.test/{name}"),
+        )
+    }
+
+    fn synced(package: RepositoryPackage) -> SyncedPackageRow {
+        SyncedPackageRow {
+            package,
+            provides: Vec::new(),
+            requirement_groups: Vec::new(),
+            requirement_group_clauses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn append_rejects_group_and_clause_batch_mismatch_before_writing() {
+        let (_temp, conn) = create_test_db();
+        let package = package("alpha");
+        let mut row = synced(package);
+        row.requirement_groups.push(DbRequirementGroup::new(
+            0,
+            "depends".to_string(),
+            "hard".to_string(),
+            r#"{"kind":"all","items":[]}"#.to_string(),
+        ));
+
+        let error = append_synced_package_rows(&conn, vec![row]).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("1 requirement groups but 0 clause batches")
+        );
+        let stored: i64 = conn
+            .query_row("SELECT COUNT(*) FROM repository_packages", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, 0);
+    }
 }
