@@ -55,11 +55,15 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
                 size: total_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([
-            (file_hash.clone(), content.clone()),
-            (init_hash, init_content),
-        ]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([
+                (file_hash.clone(), content.clone()),
+                (init_hash, init_content),
+            ]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,
@@ -153,8 +157,12 @@ async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
                 size: total_size,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size,
         chunked: false,
         chunk_stats: None,
@@ -226,8 +234,12 @@ async fn ccs_install_persists_manifest_provides() {
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash.clone(), init_content.clone())]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash.clone(), init_content.clone())]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -317,8 +329,12 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash.clone(), init_content.clone())]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash.clone(), init_content.clone())]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -372,7 +388,7 @@ async fn ccs_install_registers_metadata_only_package_without_files() {
         manifest: CcsManifest::new_minimal("metadata-only", "1.0.0"),
         components: HashMap::new(),
         files: Vec::new(),
-        blobs: HashMap::new(),
+        payloads: Vec::new(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -465,8 +481,12 @@ async fn ccs_install_does_not_infer_ldconfig_trigger_from_library_path() {
                 },
             ),
         ]),
-        files,
-        blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

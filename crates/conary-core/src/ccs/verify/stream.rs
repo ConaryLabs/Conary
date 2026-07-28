@@ -599,7 +599,7 @@ fn require_known_directory(path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::write_v2_ccs_package;
+    use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
     use flate2::Compression;
     use flate2::read::GzDecoder as ReadGzDecoder;
@@ -625,7 +625,10 @@ mod tests {
         let authority = crate::ccs::v2::test_support::package_authority_with_one_file("stream");
         let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
         let signer = SigningKeyPair::generate();
-        write_v2_ccs_package(&authority, &payloads, &path, &signer, None, None, None).unwrap();
+        write_v2_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, &signer, None, None, None,
+        )
+        .unwrap();
         let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
 
         let mut archive = Archive::new(ReadGzDecoder::new(File::open(&path).unwrap()));
@@ -808,7 +811,8 @@ mod tests {
     #[test]
     fn rejects_truncated_archive_and_aggregate_metadata_without_allocation() {
         let (temp, _, policy, base) = fixture();
-        let bytes = std::fs::read(base).unwrap();
+        let mut bytes = Vec::new();
+        File::open(base).unwrap().read_to_end(&mut bytes).unwrap();
         let truncated = temp.path().join("truncated.ccs");
         let mut output = File::create(&truncated).unwrap();
         output.write_all(&bytes[..bytes.len() / 2]).unwrap();
@@ -864,7 +868,8 @@ mod tests {
         assert!(error_text(&appended_tar, &policy).contains("non-zero data"));
 
         let appended_gzip = temp.path().join("appended-gzip.ccs");
-        let mut bytes = std::fs::read(&base).unwrap();
+        let mut bytes = Vec::new();
+        File::open(&base).unwrap().read_to_end(&mut bytes).unwrap();
         let mut member = GzEncoder::new(Vec::new(), Compression::default());
         member.write_all(b"second member").unwrap();
         bytes.extend(member.finish().unwrap());

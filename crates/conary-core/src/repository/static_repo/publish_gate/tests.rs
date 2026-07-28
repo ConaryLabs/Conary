@@ -115,7 +115,7 @@ fn artifact_gate_accepts_attested_v2_package() {
         &signer,
         STATIC_PUBLISH_POLICY_DIGEST_V1,
     );
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -152,7 +152,7 @@ fn artifact_gate_does_not_require_command_risk_diagnostics() {
     envelope.payload.build_command_risk_report_hash.clear();
     envelope.payload.command_risk_classifier_version.clear();
     let envelope = sign_build_attestation(envelope.payload, &signer).unwrap();
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -189,7 +189,7 @@ fn artifact_gate_candidate_returns_verified_v2_package_for_native_intake() {
         &signer,
         STATIC_PUBLISH_POLICY_DIGEST_V1,
     );
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -225,7 +225,7 @@ fn artifact_gate_rejects_local_dev_v2_package() {
     let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("local-dev");
     authority.provenance.hardening_level = Some("host".to_string());
     let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,

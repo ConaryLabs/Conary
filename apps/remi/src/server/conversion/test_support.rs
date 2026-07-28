@@ -167,7 +167,7 @@ pub(super) fn make_conversion_result(package_path: Option<std::path::PathBuf>) -
         manifest,
         components: std::collections::HashMap::new(),
         files: Vec::<FileEntry>::new(),
-        blobs: std::collections::HashMap::new(),
+        payloads: Vec::new(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

@@ -233,8 +233,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
         match &file.node.kind {
             PayloadNodeKind::Regular { .. } => {
-                let content = super::get_file_content(file, &result.blobs)?;
-                fs::write(&dest_path, &content)?;
+                let content_md5 = super::copy_file_content(result, file, &dest_path)?;
 
                 // Set permissions
                 let mut perms = fs::metadata(&dest_path)?.permissions();
@@ -242,7 +241,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 fs::set_permissions(&dest_path, perms)?;
 
                 // Add to md5sums using the already-computed relative path.
-                md5sums.push(format!("{}  {}", compute_md5(&content), rel_path));
+                md5sums.push(format!("{}  {}", content_md5, rel_path));
             }
             PayloadNodeKind::Symlink { target } => {
                 #[cfg(unix)]
@@ -362,12 +361,6 @@ fn set_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Compute MD5 hash of content (for md5sums file)
-fn compute_md5(content: &[u8]) -> String {
-    use md5::{Digest, Md5};
-    hex::encode(Md5::digest(content))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,7 +378,7 @@ mod tests {
             manifest,
             components: HashMap::new(),
             files: vec![],
-            blobs: HashMap::new(),
+            payloads: Vec::new(),
             total_size: 0,
             chunked: false,
             chunk_stats: None,
@@ -449,17 +442,5 @@ mod tests {
 
         assert!(post.contains("echo installed > /var/lib/myapp/installed"));
         assert!(pre_remove.contains("echo removed > /var/lib/myapp/removed"));
-    }
-
-    #[test]
-    fn test_compute_md5() {
-        // Known MD5 hash of "hello world\n"
-        let content = b"hello world\n";
-        let hash = compute_md5(content);
-        assert_eq!(hash, "6f5902ac237024bdd0c176cb93063dc4");
-
-        // Empty content
-        let empty_hash = compute_md5(b"");
-        assert_eq!(empty_hash, "d41d8cd98f00b204e9800998ecf8427e");
     }
 }

@@ -329,8 +329,12 @@ fn test_parent_upgrade_marks_built_derived_package_stale_via_install_cli() {
                 size: (binary_content.len() + config_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(binary_hash, binary_content), (config_hash, config_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(binary_hash, binary_content), (config_hash, config_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

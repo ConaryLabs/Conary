@@ -124,7 +124,10 @@ commands.
 - CCS authoring, conversion, native package contracts, and repository feed
   profiles:
   `docs/modules/feature-ownership.md` slugs `ccs`, `packaging`, and `profiles`,
-  plus `docs/modules/ccs.md` and `docs/modules/recipe.md`. Debian lifecycle
+  plus `docs/modules/ccs.md` and `docs/modules/recipe.md`. Native authoring
+  content flow starts in `crates/conary-core/src/ccs/builder.rs`,
+  `builder/source.rs`, `policy/content.rs`, and `builder/package_writer.rs`.
+  Debian lifecycle
   service-helper argv grammar starts in
   `crates/conary-core/src/packages/deb/lifecycle_helpers.rs` and its focused
   child modules. The selected-root namespace, capability, and seccomp contract

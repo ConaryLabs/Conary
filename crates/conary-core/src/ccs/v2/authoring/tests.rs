@@ -6,6 +6,7 @@ use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
     RepositoryRequirementKind,
 };
+use std::io::Read;
 
 fn config_file(path: &str, noreplace: bool) -> crate::packages::traits::ConfigFileInfo {
     crate::packages::traits::ConfigFileInfo {
@@ -54,7 +55,12 @@ fn projection_builds_complete_local_dev_package_authority() {
         Some("host")
     );
     assert!(projected.authority.components["runtime"].default);
-    assert!(projected.payloads_by_path.contains_key("/hello"));
+    assert!(
+        projected
+            .payloads
+            .iter()
+            .any(|payload| payload.path == "/hello")
+    );
 }
 
 #[test]
@@ -85,7 +91,7 @@ fn projection_gives_payloadless_packages_an_explicit_empty_default_component() {
     let mut build = test_support::minimal_file_build_result("empty", "0.1.0", b"discarded");
     build.files.clear();
     build.components.clear();
-    build.blobs.clear();
+    build.payloads.clear();
     build.total_size = 0;
 
     let projected = project_build_result_to_v2(V2AuthoringInput {
@@ -99,7 +105,7 @@ fn projection_gives_payloadless_packages_an_explicit_empty_default_component() {
     assert!(runtime.default);
     assert_eq!(runtime.file_count, 0);
     assert_eq!(runtime.total_size, 0);
-    assert!(projected.payloads_by_path.is_empty());
+    assert!(projected.payloads.is_empty());
 }
 
 #[test]
@@ -125,7 +131,7 @@ fn projection_rejects_ambiguous_or_missing_default_component_authority() {
 }
 
 #[test]
-fn projection_reconstructs_payload_from_chunk_blobs() {
+fn projection_preserves_reopenable_payload_when_chunk_metadata_is_present() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
     build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
@@ -135,10 +141,6 @@ fn projection_reconstructs_payload_from_chunk_blobs() {
         .iter()
         .map(|chunk| crate::hash::sha256(chunk))
         .collect::<Vec<_>>();
-    build.blobs.clear();
-    for (hash, bytes) in chunk_hashes.iter().zip(chunks) {
-        build.blobs.insert(hash.clone(), bytes);
-    }
     build.files[0].chunks = Some(chunk_hashes.clone());
     build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
     build.chunked = true;
@@ -150,7 +152,13 @@ fn projection_reconstructs_payload_from_chunk_blobs() {
     })
     .unwrap();
 
-    assert_eq!(projected.payloads_by_path["/hello"], b"hello\n");
+    let mut bytes = Vec::new();
+    projected.payloads[0]
+        .open_content()
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"hello\n");
 }
 
 #[test]

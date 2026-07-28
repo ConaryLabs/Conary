@@ -406,6 +406,7 @@ fn write_single_payload_ccs(package_path: &Path, signing_key: &SigningKeyPair) {
         libc: "gnu".to_string(),
         abi: None,
     });
+    let files = vec![file.clone()];
     let result = BuildResult {
         manifest,
         components: HashMap::from([(
@@ -417,8 +418,12 @@ fn write_single_payload_ccs(package_path: &Path, signing_key: &SigningKeyPair) {
                 size: content_size,
             },
         )]),
-        files: vec![file],
-        blobs: HashMap::from([(hash, content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(hash, content)]),
+        )
+        .unwrap(),
         total_size: content_size,
         chunked: false,
         chunk_stats: None,

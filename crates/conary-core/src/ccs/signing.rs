@@ -11,8 +11,7 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core_06::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::ErrorKind;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -329,6 +328,7 @@ pub fn load_public_key(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use tempfile::TempDir;
 
     #[test]
@@ -408,10 +408,10 @@ mod tests {
         let loaded = SigningKeyPair::load_from_file(&private_path).unwrap();
         assert_eq!(loaded.public_key_base64(), replacement_public);
         assert_eq!(loaded.key_id(), Some("replacement-key"));
-        assert_eq!(
-            fs::read(&stale_temp_path).unwrap(),
-            b"stale temp from earlier implementation"
-        );
+        let mut stale_temp = fs::File::open(&stale_temp_path).unwrap();
+        let mut stale_contents = Vec::new();
+        stale_temp.read_to_end(&mut stale_contents).unwrap();
+        assert_eq!(stale_contents, b"stale temp from earlier implementation");
     }
 
     #[test]

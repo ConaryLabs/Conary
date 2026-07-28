@@ -2,7 +2,7 @@
 
 mod common;
 
-use conary_core::ccs::builder::write_v2_ccs_package;
+use conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::ccs::v2::schema::{
     AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
@@ -117,7 +117,7 @@ fn write_unsigned_v2_package(package_path: &Path) {
 fn write_signed_v2_package(package_path: &Path, signer: &SigningKeyPair) {
     let authority = signed_v2_authority();
     let payloads = BTreeMap::from([("/usr/bin/hello".to_string(), b"hello world\n".to_vec())]);
-    write_v2_ccs_package(
+    write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         package_path,

@@ -27,7 +27,7 @@ CcsBuilder::new(manifest, source_dir)
      |
   Group files by component -> ComponentData
      |
-  BuildResult { manifest, components, files, blobs, chunk_stats }
+  BuildResult { manifest, components, files, payloads, chunk_stats }
      |
   Sign manifest (Ed25519) -> embed PackageSignature
      |
@@ -41,8 +41,8 @@ CcsBuilder::new(manifest, source_dir)
 | `CcsManifest` | manifest.rs | Root ccs.toml structure (package, provides, requires, hooks, policy, etc.) |
 | `ManifestProvenance` | manifest_provenance.rs | Provenance DTOs embedded by the root manifest, including hermetic evidence, build attestations, and foreign conversion boundaries |
 | `BuildAttestationEnvelope` | attestation.rs | Signed M2 release-publish attestation payload and verification helpers |
-| `CcsBuilder` | builder.rs | Builds a CCS package from manifest + source directory |
-| `BuildResult` | builder.rs | Output: manifest, components, files, blobs, total_size |
+| `CcsBuilder` | builder.rs + builder/source.rs | Describes a CCS package from filesystem metadata and reopenable payload sources |
+| `BuildResult` | builder.rs | Output: manifest, components, files, reopenable payload sources, total_size |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v2_projection.rs | Project verified signed v2 authority into install-time package data |
 | `AuthorityDocumentV2` | v2/schema.rs | Signed CCS v2 native package authority |
@@ -128,6 +128,13 @@ files, documentation, or configuration ownership from path spelling.
 Overlapping rules that select different component names are invalid. Foreign
 packages without an explicit Conary component contract likewise remain one
 lossless `runtime` component.
+
+Native payload content is source-backed throughout authoring.
+`builder/source.rs` owns filesystem enumeration and reopenable source
+descriptors, `policy/content.rs` owns disk-backed streaming transforms, and
+`builder/package_writer.rs` reopens those sources for signed CCS emission.
+Authoring hashes and chunks fixed-buffer streams; it does not retain complete
+files, chunks, or package payloads in memory.
 
 ### Exact payload authority
 
@@ -272,7 +279,9 @@ surfaces.
 
 Native v2 authoring from `ccs.toml` starts in
 `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`
-for command ergonomics and local-dev state, and
+for command ergonomics and local-dev state,
+`crates/conary-core/src/ccs/{builder.rs,builder/source.rs,policy/content.rs,builder/package_writer.rs}`
+for source-backed collection, policy transforms, and archive emission, and
 `crates/conary-core/src/ccs/v2/authoring.rs` for projection from `BuildResult`
 into signed v2 authority. `crates/conary-core/src/ccs/v2/lifecycle.rs` owns the
 exact bidirectional projection between manifest lifecycle declarations, signed

@@ -63,7 +63,7 @@ fn project_form_attestation_reemits_v2_package_as_v2() {
     let package_path = temp.path().join("project-v2.ccs");
     let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("project-v2");
     authority.provenance.hermetic_evidence_hash = Some(evidence_hash);
-    crate::ccs::builder::write_v2_ccs_package(
+    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &crate::ccs::v2::test_support::one_file_payloads_for_tests(),
         &package_path,

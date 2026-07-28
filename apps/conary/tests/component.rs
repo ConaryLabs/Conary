@@ -88,6 +88,11 @@ fn ccs_archive_preserves_exact_author_component_membership() {
         remove_on_upgrade: false,
     }];
 
+    let files = vec![
+        runtime_file.clone(),
+        config_file.clone(),
+        devel_file.clone(),
+    ];
     let result = BuildResult {
         manifest,
         components: HashMap::from([
@@ -119,12 +124,16 @@ fn ccs_archive_preserves_exact_author_component_membership() {
                 },
             ),
         ]),
-        files: vec![runtime_file, config_file, devel_file],
-        blobs: HashMap::from([
-            (conary_core::hash::sha256(&runtime_content), runtime_content),
-            (conary_core::hash::sha256(&config_content), config_content),
-            (conary_core::hash::sha256(&devel_content), devel_content),
-        ]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([
+                (conary_core::hash::sha256(&runtime_content), runtime_content),
+                (conary_core::hash::sha256(&config_content), config_content),
+                (conary_core::hash::sha256(&devel_content), devel_content),
+            ]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

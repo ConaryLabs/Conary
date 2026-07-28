@@ -304,8 +304,12 @@ pub(super) mod test_support {
                     size: total_size,
                 },
             )]),
-            files,
-            blobs: HashMap::from([(tool_hash, tool_content), (init_hash, init_content)]),
+            files: files.clone(),
+            payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+                &files,
+                HashMap::from([(tool_hash, tool_content), (init_hash, init_content)]),
+            )
+            .unwrap(),
             total_size,
             chunked: false,
             chunk_stats: None,

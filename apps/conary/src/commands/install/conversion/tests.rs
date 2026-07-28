@@ -240,8 +240,12 @@ fn write_runtime_ccs_package(
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -278,8 +282,12 @@ fn write_runtime_signed_ccs_package(
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -772,8 +780,12 @@ async fn converted_ccs_install_rejects_symlink_child_payload() {
                 size: (child_content.len() + init_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(child_hash, child_content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(child_hash, child_content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -859,8 +871,12 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
                 size: (child_content.len() + init_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(child_hash, child_content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(child_hash, child_content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,

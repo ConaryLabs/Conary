@@ -58,8 +58,12 @@ async fn ccs_install_persists_pre_remove_hook() {
                 size: (content.len() + init_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
@@ -138,8 +142,12 @@ async fn ccs_install_rolls_back_after_post_install_error() {
                 size: (content.len() + init_content.len()) as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(hash, content), (init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(hash, content), (init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 5 + init_file
             .content
             .as_ref()
@@ -233,8 +241,12 @@ async fn ccs_install_discards_pre_hook_directories_when_post_hook_fails() {
                 size: file_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(file_hash, file_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(file_hash, file_content)]),
+        )
+        .unwrap(),
         total_size: 7,
         chunked: false,
         chunk_stats: None,

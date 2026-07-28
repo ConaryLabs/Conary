@@ -129,8 +129,12 @@ fn write_converted_directory_package(
                 size: init_content.len() as u64,
             },
         )]),
-        files,
-        blobs: HashMap::from([(init_hash, init_content)]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(init_hash, init_content)]),
+        )
+        .unwrap(),
         total_size: 0,
         chunked: false,
         chunk_stats: None,
