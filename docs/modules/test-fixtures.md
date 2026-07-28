@@ -473,12 +473,25 @@ Each fixture family should record:
   final `CONARY_ROOT` partition and ext4 filesystem without mounting it,
   replaces only `/root/.ssh/authorized_keys`, verifies the inserted public
   key, compresses the new qcow2, and runs `qemu-img check` before promotion.
+- **Active image:** `minimal-boot-v5` — `minimal-boot-v4` with the build host's
+  `libseccomp.so.2` and glibc runtime set copied into `/usr/lib`, because the
+  staged `conary` binary is built on a rolling host whose glibc is newer than
+  the frozen guest's. It keeps v4's `conaryos-test-key-v4` identity and 20 GiB
+  root. **v5 has no published artifact**; it exists only in a local
+  `~/.cache/conary-test/` cache, so an empty-cache host cannot run the phase-3
+  QEMU suites. Injecting host libraries into a frozen guest is a stopgap, not a
+  contract: issue #153 records the decision to re-base the guest images on
+  Fedora 44 and decouple the staged binary from the host glibc.
 - **Current evidence:** the 2026-07-16 Fedora 44 Group O local KVM run passed
-  all five cases against `minimal-boot-v4`; a focused recompiled-harness TGE01
-  rerun also passed with the `conaryos-test-key-v4` cache/artifact name. Remi
+  all five cases against `minimal-boot-v4`, the version the suites targeted at
+  the time; a focused recompiled-harness TGE01 rerun also passed with the
+  `conaryos-test-key-v4` cache/artifact name. Remi
   serves the v4 image and private/public disposable test-key artifacts from its
   public test-artifact path; an isolated cache downloaded the image and private
-  key with matching hashes and passed TGE01 under KVM in 63,320 ms.
+  key with matching hashes and passed TGE01 under KVM in 63,320 ms. v5's own
+  proof is the pre- and post-reboot execution of the exact staged `conary`
+  binary inside the guest recorded on #153; no suite run against v5 is recorded
+  here yet.
 - **Safety notes:** Never overwrite the source image. Keep the generated
   private key mode `0600`; it is a disposable test credential, not a Remi,
   federation, release-signing, or operator identity. Publish image/key

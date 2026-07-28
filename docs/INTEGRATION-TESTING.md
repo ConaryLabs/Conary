@@ -78,8 +78,25 @@ export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
 guest SSH access, exported-image boot, and generation file-capability xattr
 preservation. Group P adds the focused ISO generation-carrier path:
 
+The active source fixture for the phase-3 QEMU suites is `minimal-boot-v5`.
+It is `minimal-boot-v4` with the build host's `libseccomp.so.2` and glibc
+runtime set (`ld-linux-x86-64.so.2`, `libc`, `libm`, `libmvec`, `libpthread`,
+`libdl`, `librt`, `libutil`, `libresolv`, `libnss_files`, `libnss_dns`) copied
+into `/usr/lib`, because the staged `conary` binary is built on a rolling host
+whose glibc is newer than the frozen guest's. It keeps the v4 disposable
+`conaryos-test-key-v4` identity and the 20 GiB root. **v5 is a stopgap and has
+no published artifact**: it exists only in a local `~/.cache/conary-test/`
+cache, so a host with an empty cache cannot run these suites until either v5 is
+published or the re-base lands. Library injection into a frozen guest is a
+workaround, not a contract; issue #153 records the decision to re-base the QEMU
+guest images on Fedora 44 and to decouple the staged binary from the host
+glibc, which removes the drift instead of patching around it.
+
+Historical evidence below predates that retarget and was recorded against
+`minimal-boot-v4`.
+
 Current 2026-07-16 W1 Group O local KVM evidence is green. The source fixture
-is `minimal-boot-v4`, expanded to 20 GiB for full CAS adoption and paired with
+was `minimal-boot-v4`, expanded to 20 GiB for full CAS adoption and paired with
 the versioned disposable `conaryos-test-key-v4` identity. The runner discovers
 Fedora's `/usr/share/edk2/x64/OVMF_CODE.4m.fd`, attaches OVMF as read-only
 pflash, fails when no supported firmware exists, and waits for the systemd boot
@@ -709,7 +726,7 @@ guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
 ```toml
 [[test.step]]
 [test.step.qemu_boot]
-image = "minimal-boot-v4"
+image = "minimal-boot-v5"
 scratch_disk_mb = 65536
 local_image_path = "/tmp/conary-generation-export/generated.qcow2"
 copy_to_guest = [

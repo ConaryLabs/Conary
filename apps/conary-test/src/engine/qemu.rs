@@ -33,8 +33,10 @@ const OVMF_CODE_PATHS: &[&str] = &[
 
 /// Versioned filename for the active conaryOS test SSH private key.
 ///
-/// Keep this aligned with the active `minimal-boot-vN` fixture so a cached key
-/// from an older image cannot silently survive an identity rotation.
+/// Bump this whenever the fixture rotates its SSH identity, so a cached key
+/// from an older image cannot silently survive the rotation. It tracks the
+/// identity, not the image version: `minimal-boot-v5` patches v4's libraries
+/// in place and inherits v4's authorized key, so it stays on `-v4`.
 const TEST_SSH_KEY_NAME: &str = "conaryos-test-key-v4";
 
 struct ScratchDisk {
