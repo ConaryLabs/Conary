@@ -319,3 +319,50 @@ fn arch_native_abi_defers_shell_syntax_to_the_configured_runtime() {
     assert_eq!(entries[0].native_slot, "pre_install");
     assert_eq!(entries[0].body.bytes, install);
 }
+
+/// Pinned arp-scan fixture carries `security.capability` in both
+/// `LIBARCHIVE.xattr` (unpadded base64) and `SCHILY.xattr` (raw) families
+/// with identical 20-byte v2 capability blobs.  After projection the parsed
+/// node must carry exactly one `security.capability` equal to the SCHILY raw
+/// bytes.
+#[test]
+fn pinned_arp_scan_fixture_dual_family_xattr_projects_one_capability() {
+    const FIXTURE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/arch/arp-scan-1.10.0-5-x86_64.pkg.tar.zst"
+    ));
+    assert_eq!(
+        crate::hash::sha256(FIXTURE),
+        "add946b61066f95020d51470ae263ffaf660614417c9db3f835037ba106c0e8c"
+    );
+
+    let mut temp = tempfile::NamedTempFile::new().unwrap();
+    temp.write_all(FIXTURE).unwrap();
+    let path = temp.path().to_str().unwrap().to_string();
+
+    let package = ArchPackage::parse(&path).unwrap();
+    let files = package.files();
+
+    let arp_scan = files
+        .iter()
+        .find(|f| f.path == "/usr/bin/arp-scan")
+        .expect("arp-scan binary must be in payload");
+
+    // One security.capability xattr projected from dual-family agreement.
+    let caps = arp_scan
+        .node
+        .xattrs
+        .get("security.capability")
+        .expect("security.capability must be projected");
+    assert_eq!(caps.len(), 20, "v2 capability blob must be 20 bytes");
+    // The SCHILY raw value from the fixture:
+    // 00000002 0020 0000000000000000000000000000
+    let expected: Vec<u8> = vec![
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    assert_eq!(
+        *caps, expected,
+        "projected capability must equal SCHILY raw bytes"
+    );
+}
