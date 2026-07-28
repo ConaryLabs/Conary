@@ -117,7 +117,26 @@ The source QEMU image for Groups N and O must already include the runtime
 generation toolchain (`cpio`, `dracut`, `depmod`, `systemd-repart`, `qemu-img`,
 FAT/ext4 mkfs tools, and composefs inspection tools as needed). Group P uses the
 same source fixture and provisions ISO helper packages through Conary when
-`xorriso`/`mtools` are absent before it assembles the generation. The focused
+`xorriso`/`mtools` are absent before it assembles the generation.
+
+A step with `stage_conary = true` copies the host-built `conary` into the guest,
+which couples the guest to the build host's glibc and to a matching
+`libseccomp.so.2`. `scripts/build-static-conary.sh` removes that coupling: it
+builds a static libseccomp for musl once, caches it, and produces a
+statically linked `conary` for `x86_64-unknown-linux-musl` that runs on any
+guest. Point the harness at it with `CONARY_HOST_BIN`. The build is debug
+profile and the binary is a test-staging artifact, not a release artifact.
+
+`scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
+Fedora Cloud Base qcow2 plus provisioning, and `bash
+scripts/test-build-qemu-guest-image.sh` is its fast proof. It exists because the
+active `minimal-boot-*` fixtures are conaryOS artifacts of the bootstrap
+pipeline and have no regeneration path once that pipeline is removed. The
+manifests still name the `minimal-boot-*` images; pointing them at a
+Fedora-based image is a separate change, so treat the builder as the
+regeneration path rather than as the fixture the suites currently boot. See
+`docs/modules/test-fixtures.md` under `qemu-source-image-fixtures` for the
+image contract and the identity/size rotation helper. The focused
 2026-05-21 KVM run passed the superseded bootstrap-run form of `TISO01`: it
 exported that generation to ISO, copied the ISO and provenance sidecar back to
 `target/local-validation/group-p-iso-export/`, booted the ISO with

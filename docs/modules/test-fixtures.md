@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-28
-revision: 25
-summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
+revision: 26
+summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof, the public v4 QEMU image contract, and the Fedora-based QEMU guest image regeneration path
 ---
 
 # Test Fixtures And Proof Maps
@@ -446,7 +446,8 @@ Each fixture family should record:
 
 ### qemu-source-image-fixtures
 
-- **Owner:** unprivileged identity/size rotation:
+- **Owner:** image construction: `scripts/build-qemu-guest-image.sh`;
+  unprivileged identity/size rotation:
   `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU execution and
   download cache: `apps/conary-test/src/engine/qemu.rs`.
 - **Purpose:** Keep a versioned, generation-builder-ready qcow2 source image
@@ -458,7 +459,8 @@ Each fixture family should record:
   are the Phase 3 QEMU manifests under
   `apps/conary/tests/integration/remi/manifests/`.
 - **Consumes:** Groups N, O, and P plus composefs modernization QEMU steps.
-- **Fast proof:** `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`;
+- **Fast proof:** `bash scripts/test-build-qemu-guest-image.sh`;
+  `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`;
   `scripts/bootstrap-vm/rotate-qemu-test-identity.sh --help`;
   `cargo run -p conary-test -- list`;
   `cargo test -p conary-test suite_inventory`.
@@ -467,12 +469,30 @@ Each fixture family should record:
   `systemd-repart`, `qemu-img`, ext4/FAT mkfs helpers, `composefs-info`, and
   `/usr/lib/dracut`.
 - **Slow proof:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`.
-- **Regeneration:** Start from the prior immutable qcow2 and choose new output
-  paths; for the 2026-07-15 v4 rotation, pass `--disk-size-gib 20` so full
-  adoption has CAS headroom. The helper relocates GPT backup data, grows the
-  final `CONARY_ROOT` partition and ext4 filesystem without mounting it,
-  replaces only `/root/.ssh/authorized_keys`, verifies the inserted public
-  key, compresses the new qcow2, and runs `qemu-img check` before promotion.
+- **Regeneration:** `scripts/build-qemu-guest-image.sh --output PATH
+  --private-key PATH` builds a guest image from scratch. It downloads a pinned
+  official Fedora Cloud Base qcow2, verifies it against a pinned SHA-256, grows
+  it to `--disk-size-gib` (default 20, the CAS headroom full adoption needs),
+  opens root SSH for the supplied disposable identity through a NoCloud seed,
+  installs the generation toolchain and the running kernel's driver packages at
+  their exact NEVRA, runs the phase-3 manifests' own preflight inside the guest,
+  disables cloud-init, boots once more without the seed, and finishes with
+  `qemu-img check` plus a compressing convert.
+  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh` remains the in-place
+  identity/size rotation for an existing image: it starts from the prior
+  immutable qcow2, relocates GPT backup data, grows the final `CONARY_ROOT`
+  partition and ext4 filesystem without mounting it, replaces only
+  `/root/.ssh/authorized_keys`, verifies the inserted public key, compresses the
+  new qcow2, and runs `qemu-img check` before promotion.
+- **Image lineage:** the `minimal-boot-v1` through `minimal-boot-v5` images are
+  conaryOS artifacts produced by the bootstrap pipeline; `minimal-boot-v5`
+  additionally carries host libraries injected by hand to keep a
+  glibc-linked staged binary running. Neither the lineage nor that patch has a
+  regeneration path once the bootstrap pipeline is removed, which is why
+  `scripts/build-qemu-guest-image.sh` exists. Fedora 44 is the base because the
+  phase-3 rotation runs `--distro fedora44`, the generation builder shells out
+  to Fedora-native `dracut`, and the supported-host export fixture assembles a
+  Fedora 44 root.
 - **Current evidence:** the 2026-07-16 Fedora 44 Group O local KVM run passed
   all five cases against `minimal-boot-v4`; a focused recompiled-harness TGE01
   rerun also passed with the `conaryos-test-key-v4` cache/artifact name. Remi
