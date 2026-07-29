@@ -135,6 +135,10 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     qemu.stdin(Stdio::null());
     qemu.stdout(Stdio::piped());
     qemu.stderr(Stdio::piped());
+    // Every path after spawn may fail while preparing or talking to the guest.
+    // Dropping the child on one of those paths must terminate the VM rather
+    // than leave a detached QEMU process behind.
+    qemu.kill_on_drop(true);
 
     let mut child = qemu
         .spawn()

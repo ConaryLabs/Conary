@@ -16,6 +16,7 @@
 //! from the end.
 
 use std::collections::{BTreeSet, VecDeque};
+use std::io;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -34,6 +35,11 @@ const HEAD_BYTES: usize = MAX_CAPTURED_BYTES / 2;
 const TAIL_BYTES: usize = MAX_CAPTURED_BYTES - HEAD_BYTES;
 
 const READ_CHUNK_BYTES: usize = 8 * 1024;
+
+/// A newline-free guest stream is malformed console output. Keep its pending
+/// line bounded independently from the retained head-and-tail log, and fail the
+/// test instead of silently discarding token-matching authority.
+const MAX_PENDING_LINE_BYTES: usize = MAX_CAPTURED_BYTES;
 
 /// A stream's retained head, retained tail, and the count between them.
 struct BoundedLog {
@@ -112,8 +118,8 @@ impl TokenMatcher {
 
 /// Readers draining a spawned QEMU process's stdout and stderr.
 pub(super) struct ConsoleCapture {
-    stdout: Option<JoinHandle<Vec<u8>>>,
-    stderr: Option<JoinHandle<Vec<u8>>>,
+    stdout: Option<JoinHandle<io::Result<Vec<u8>>>>,
+    stderr: Option<JoinHandle<io::Result<Vec<u8>>>>,
     matcher: Arc<Mutex<TokenMatcher>>,
 }
 
@@ -169,16 +175,17 @@ impl ConsoleCapture {
     }
 }
 
-async fn join(handle: Option<JoinHandle<Vec<u8>>>, stream: &str) -> Result<Vec<u8>> {
+async fn join(handle: Option<JoinHandle<io::Result<Vec<u8>>>>, stream: &str) -> Result<Vec<u8>> {
     match handle {
         Some(handle) => handle
             .await
-            .with_context(|| format!("QEMU console {stream} reader panicked")),
+            .with_context(|| format!("QEMU console {stream} reader panicked"))?
+            .with_context(|| format!("QEMU console {stream} read failed")),
         None => Ok(Vec::new()),
     }
 }
 
-async fn drain<R>(pipe: &mut R, matcher: Arc<Mutex<TokenMatcher>>) -> Vec<u8>
+async fn drain<R>(pipe: &mut R, matcher: Arc<Mutex<TokenMatcher>>) -> io::Result<Vec<u8>>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -198,13 +205,19 @@ where
                         observe(&matcher, &line);
                         line.clear();
                     } else {
+                        if line.len() == MAX_PENDING_LINE_BYTES {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "console line exceeds {MAX_PENDING_LINE_BYTES} bytes without a newline"
+                                ),
+                            ));
+                        }
                         line.push(byte);
                     }
                 }
             }
-            // A read error ends the capture; the process outcome is reported
-            // separately and losing the console must not fail the test run.
-            Err(_) => break,
+            Err(error) => return Err(error),
         }
     }
     // A guest that powers off without a trailing newline still emitted its last
@@ -212,7 +225,7 @@ where
     if !line.is_empty() {
         observe(&matcher, &line);
     }
-    log.into_bytes()
+    Ok(log.into_bytes())
 }
 
 fn observe(matcher: &Arc<Mutex<TokenMatcher>>, line: &[u8]) {
@@ -372,6 +385,54 @@ mod tests {
 
         assert_eq!(console.stdout, b"hello console");
         assert_eq!(console.stderr, b"to stderr");
+    }
+
+    #[tokio::test]
+    async fn a_newline_free_stream_is_bounded_and_fails_loudly() {
+        let matcher = Arc::new(Mutex::new(TokenMatcher::default()));
+        let mut reader =
+            tokio::io::repeat(b'x').take((MAX_PENDING_LINE_BYTES as u64).saturating_add(1));
+
+        let error = drain(&mut reader, matcher).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("without a newline"));
+    }
+
+    struct ReadErrorAfterPrefix {
+        emitted_prefix: bool,
+    }
+
+    impl tokio::io::AsyncRead for ReadErrorAfterPrefix {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            if !self.emitted_prefix {
+                buffer.put_slice(b"partial console");
+                self.emitted_prefix = true;
+                return std::task::Poll::Ready(Ok(()));
+            }
+
+            std::task::Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "injected console read failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_console_read_error_cannot_be_mistaken_for_clean_eof() {
+        let matcher = Arc::new(Mutex::new(TokenMatcher::default()));
+        let mut reader = ReadErrorAfterPrefix {
+            emitted_prefix: false,
+        };
+
+        let error = drain(&mut reader, matcher).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(error.to_string().contains("injected console read failure"));
     }
 
     #[test]

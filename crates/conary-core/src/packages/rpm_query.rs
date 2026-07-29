@@ -164,12 +164,6 @@ fn parse_package_query_record(
         )));
     }
 
-    // The keyring shares the package database but is not part of the inventory.
-    if is_rpm_public_key_record(parts[1], parts[5]) {
-        debug!("skipping RPM public-key record {}", parts[0]);
-        return Ok(None);
-    }
-
     let epoch = match parts[4] {
         "" | "(none)" => None,
         value => Some(value.parse::<u64>().map_err(|error| {
@@ -179,6 +173,16 @@ fn parse_package_query_record(
             ))
         })?),
     };
+
+    // The keyring shares the package database but is not part of the inventory.
+    // Classify it only after validating the same typed fields that distinguish
+    // a real key record from malformed inventory output.
+    if is_rpm_public_key_record(parts[1], parts[5]) {
+        validate_rpm_public_key_record(index + 1, &parts, epoch)?;
+        debug!("skipping RPM public-key record {}", parts[0]);
+        return Ok(None);
+    }
+
     let identity =
         InstalledPackageIdentity::rpm(parts[0], parts[1], epoch, parts[2], parts[3], parts[5])?;
     if !selectors.insert(identity.selector().to_string()) {
@@ -205,6 +209,30 @@ fn parse_package_query_record(
         },
         identity,
     }))
+}
+
+fn validate_rpm_public_key_record(
+    record_number: usize,
+    parts: &[&str],
+    epoch: Option<u64>,
+) -> Result<()> {
+    let name = required_rpm_field(parts[1], record_number, "NAME")?;
+    let version = required_rpm_field(parts[2], record_number, "VERSION")?;
+    let release = required_rpm_field(parts[3], record_number, "RELEASE")?;
+    if epoch.is_some() {
+        return Err(Error::ParseError(format!(
+            "RPM public-key record {record_number} unexpectedly declares an epoch"
+        )));
+    }
+
+    let expected_nevra = format!("{name}-{version}-{release}");
+    if parts[0] != expected_nevra {
+        return Err(Error::ParseError(format!(
+            "RPM public-key record {record_number} NEVRA {:?} disagrees with its typed identity fields; expected {expected_nevra:?}",
+            parts[0]
+        )));
+    }
+    Ok(())
 }
 
 fn required_rpm_field(value: &str, record: usize, field: &str) -> Result<String> {
@@ -616,6 +644,15 @@ mod tests {
         assert!(is_rpm_public_key_record("gpg-pubkey", ""));
         assert!(!is_rpm_public_key_record("gpg-pubkey", "x86_64"));
         assert!(!is_rpm_public_key_record("bash", "(none)"));
+    }
+
+    #[test]
+    fn malformed_rpm_keyring_records_fail_before_classification() {
+        let malformed_epoch = "gpg-pubkey-keyid-created\x1egpg-pubkey\x1ekeyid\x1ecreated\x1enot-an-epoch\x1e(none)\x1edescription\x1esummary\x1epubkey\x1e(none)\x1e(none)\x1e(none)\x1e(none)\x1e1\x1f";
+        let mismatched_nevra = "gpg-pubkey-wrong-created\x1egpg-pubkey\x1ekeyid\x1ecreated\x1e(none)\x1e(none)\x1edescription\x1esummary\x1epubkey\x1e(none)\x1e(none)\x1e(none)\x1e(none)\x1e1\x1f";
+
+        assert!(parse_package_query_records(malformed_epoch).is_err());
+        assert!(parse_package_query_records(mismatched_nevra).is_err());
     }
 
     #[test]

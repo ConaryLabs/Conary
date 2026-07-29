@@ -126,7 +126,7 @@ fn resolve_runtime_boot_asset_sources_with_tools_and_policy(
     cpio: &Path,
     initramfs_policy: InitramfsPolicy,
 ) -> crate::Result<RuntimeBootAssetSources> {
-    let system_root = system_root_for_boot_root(boot_root);
+    let system_root = system_root_for_boot_root(boot_root)?;
     let mut candidate_releases = Vec::new();
     collect_boot_kernel_releases(boot_root, &mut candidate_releases)?;
     collect_module_kernel_releases(&system_root, &mut candidate_releases)?;

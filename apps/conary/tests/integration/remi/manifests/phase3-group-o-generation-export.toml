@@ -134,7 +134,7 @@ copy_to_guest = [
     { source = "/tmp/conary-generation-export/installed-runtime-generation.txt", dest = "/tmp/expected-generation" },
 ]
 commands = [
-    "EXPECTED=$(cat /tmp/expected-generation); grep -q \"conary.generation=$EXPECTED\" /proc/cmdline",
+    "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/.conary-artifact.json",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/cas-manifest.json",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/boot-assets/manifest.json",
@@ -210,7 +210,7 @@ copy_to_guest = [
     { source = "/tmp/conary-generation-export/group-o-cap-baseline-generation.txt", dest = "/tmp/expected-generation" },
 ]
 commands = [
-    "EXPECTED=$(cat /tmp/expected-generation); grep -q \"conary.generation=$EXPECTED\" /proc/cmdline",
+    "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$EXPECTED\" || test \"$TARGET\" = \"$EXPECTED\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$EXPECTED\"",
     "test -x /usr/bin/group-o-cap-demo",
     "if command -v getcap >/dev/null 2>&1; then OUT=$(getcap -n /usr/bin/group-o-cap-demo 2>/dev/null || true); printf '%s\\n' \"$OUT\"; test -z \"$OUT\"; elif command -v getfattr >/dev/null 2>&1; then ! getfattr --only-values -n security.capability /usr/bin/group-o-cap-demo >/tmp/group-o-cap.bin 2>/dev/null; elif command -v attr >/dev/null 2>&1; then ! attr -q -g security.capability /usr/bin/group-o-cap-demo >/tmp/group-o-cap.bin 2>/dev/null; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import os,sys; raise SystemExit(0 if \"security.capability\" not in os.listxattr(sys.argv[1]) else 1)' /usr/bin/group-o-cap-demo; else echo 'missing capability inspection helper' >&2; exit 1; fi",
@@ -234,7 +234,7 @@ copy_to_guest = [
     { source = "/tmp/conary-generation-export/group-o-cap-enabled-generation.txt", dest = "/tmp/expected-generation" },
 ]
 commands = [
-    "EXPECTED=$(cat /tmp/expected-generation); grep -q \"conary.generation=$EXPECTED\" /proc/cmdline",
+    "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$EXPECTED\" || test \"$TARGET\" = \"$EXPECTED\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$EXPECTED\"",
     "test -x /usr/bin/group-o-cap-demo",
     "if command -v getcap >/dev/null 2>&1; then OUT=$(getcap -n /usr/bin/group-o-cap-demo 2>/dev/null || true); printf '%s\\n' \"$OUT\"; printf '%s\\n' \"$OUT\" | grep -Eq 'cap_net_bind_service=ep'; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import os,sys; expected=bytes.fromhex(\"0100000200040000000000000000000000000000\"); actual=os.getxattr(sys.argv[1], \"security.capability\"); raise SystemExit(0 if actual == expected else 1)' /usr/bin/group-o-cap-demo; elif command -v getfattr >/dev/null 2>&1 && command -v od >/dev/null 2>&1; then getfattr --only-values -n security.capability /usr/bin/group-o-cap-demo 2>/dev/null | od -An -tx1 -v | tr -d ' \\n' | grep -qx '0100000200040000000000000000000000000000'; elif command -v attr >/dev/null 2>&1 && command -v od >/dev/null 2>&1; then attr -q -g security.capability /usr/bin/group-o-cap-demo 2>/dev/null | od -An -tx1 -v | tr -d ' \\n' | grep -qx '0100000200040000000000000000000000000000'; else echo 'missing capability inspection helper' >&2; exit 1; fi",
@@ -315,7 +315,7 @@ copy_to_guest = [
     { source = "/tmp/conary-generation-export/supported-host-generation.txt", dest = "/tmp/expected-generation" },
 ]
 commands = [
-    "EXPECTED=$(cat /tmp/expected-generation); grep -q \"conary.generation=$EXPECTED\" /proc/cmdline",
+    "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/.conary-artifact.json",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/cas-manifest.json",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/boot-assets/manifest.json",

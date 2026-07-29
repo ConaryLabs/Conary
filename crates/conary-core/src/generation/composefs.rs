@@ -9,6 +9,7 @@
 use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
 use tracing::debug;
@@ -31,6 +32,13 @@ const COMPOSEFS_HELPER_CANDIDATES: &[&str] = &[
     "/bin/mount.composefs",
 ];
 
+const MODPROBE_CANDIDATES: &[&str] = &[
+    "/usr/sbin/modprobe",
+    "/usr/bin/modprobe",
+    "/sbin/modprobe",
+    "/bin/modprobe",
+];
+
 /// Filesystems the composefs mount path needs from the kernel.
 const REQUIRED_COMPOSEFS_FILESYSTEMS: &[&str] = &["overlay", "erofs"];
 
@@ -46,65 +54,57 @@ fn registered_filesystems(proc_filesystems: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Whether the running kernel can mount `fs_name`, whether or not it has
-/// already loaded the module for it.
+/// Whether the running kernel can mount `fs_name`.
 ///
-/// Registration is the wrong question. A kernel that ships `erofs.ko` mounts
-/// erofs perfectly well — `mount(2)` autoloads the module on first use — so
-/// asking `/proc/filesystems` alone reports a stock Fedora 44 host as lacking
-/// support it plainly has, and refuses a generation build that would have
-/// worked. The kernel's own module set is the owner of that fact, so a
-/// loadable module counts as support. This deliberately does not load anything:
-/// establishing a capability must not require taking a privileged action.
-fn kernel_can_mount(fs_name: &str, registered: &[&str], modules_dep: Option<&str>) -> bool {
+/// Registration is authoritative when the filesystem is already built in or
+/// loaded. Otherwise the preflight asks kmod to perform the same module load
+/// that the later mount would request and requires the filesystem to appear in
+/// `/proc/filesystems`. A text module index is discovery evidence, not proof
+/// that the module file and dependencies exist or that this kernel accepts it.
+fn kernel_can_mount(
+    fs_name: &str,
+    registered: &[&str],
+    load_and_confirm: &impl Fn(&str) -> bool,
+) -> bool {
     if registered.contains(&fs_name) {
         return true;
     }
 
-    // modules.dep lines are `path/to/module.ko[.compression]: deps...`; match on
-    // the module's own file stem so a dependency mention never counts as one.
-    modules_dep.is_some_and(|contents| {
-        contents.lines().any(|line| {
-            line.split(':')
-                .next()
-                .map(Path::new)
-                .and_then(module_stem)
-                .is_some_and(|stem| stem == fs_name)
-        })
-    })
+    load_and_confirm(fs_name)
 }
 
-/// Strip `.ko` and any compression suffix from a module path's file name.
-fn module_stem(path: &Path) -> Option<String> {
-    let mut name = path.file_name()?.to_str()?;
-    for suffix in [".xz", ".zst", ".gz"] {
-        name = name.strip_suffix(suffix).unwrap_or(name);
+fn load_and_confirm_running_filesystem(fs_name: &str) -> bool {
+    let Some(modprobe) = MODPROBE_CANDIDATES
+        .iter()
+        .map(Path::new)
+        .find(|candidate| candidate.is_file())
+    else {
+        return false;
+    };
+    let loaded = Command::new(modprobe)
+        .args(["--quiet", "--", fs_name])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !loaded {
+        return false;
     }
-    Some(name.strip_suffix(".ko")?.to_string())
+
+    std::fs::read_to_string("/proc/filesystems")
+        .ok()
+        .is_some_and(|contents| registered_filesystems(&contents).contains(&fs_name))
 }
 
-/// Where the running kernel's modules live.
-const MODULES_ROOT: &str = "/lib/modules";
-
-/// Read the running kernel's `modules.dep`, if it has one.
-///
-/// A kernel with everything built in has no modules tree, which is why absence
-/// is not an error: registration already answered the question in that case.
-fn running_kernel_modules_dep() -> Option<String> {
-    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()?;
-    std::fs::read_to_string(
-        Path::new(MODULES_ROOT)
-            .join(release.trim())
-            .join("modules.dep"),
-    )
-    .ok()
-}
-
-fn has_required_composefs_filesystems(proc_filesystems: &str, modules_dep: Option<&str>) -> bool {
+fn has_required_composefs_filesystems(
+    proc_filesystems: &str,
+    load_and_confirm: &impl Fn(&str) -> bool,
+) -> bool {
     let registered = registered_filesystems(proc_filesystems);
     REQUIRED_COMPOSEFS_FILESYSTEMS
         .iter()
-        .all(|fs_name| kernel_can_mount(fs_name, &registered, modules_dep))
+        .all(|fs_name| kernel_can_mount(fs_name, &registered, load_and_confirm))
 }
 
 fn find_mount_composefs_in_path_with_fallbacks(
@@ -141,14 +141,14 @@ fn has_loop_device_support() -> bool {
 
 fn check_composefs_runtime_support(
     proc_filesystems: &str,
-    modules_dep: Option<&str>,
+    load_and_confirm: &impl Fn(&str) -> bool,
     path_env: Option<&OsStr>,
     loop_device_available: bool,
 ) -> std::result::Result<PathBuf, String> {
-    if !has_required_composefs_filesystems(proc_filesystems, modules_dep) {
+    if !has_required_composefs_filesystems(proc_filesystems, load_and_confirm) {
         return Err(
-            "running kernel can neither mount nor load overlayfs and/or EROFS, which composefs \
-             mounts require"
+            "running kernel did not register overlayfs and/or EROFS, and loading the missing \
+             filesystem module through kmod failed"
                 .to_string(),
         );
     }
@@ -168,6 +168,8 @@ fn check_composefs_runtime_support(
 /// Check if the running kernel/userspace can support composefs mounts.
 ///
 /// Modern composefs uses EROFS under the hood (not a separate filesystem type).
+/// Missing filesystem modules are loaded through kmod so the answer comes from
+/// the running kernel rather than from a stale module index.
 /// A truthful runtime therefore requires:
 /// - EROFS support in the running kernel
 /// - overlayfs support in the running kernel
@@ -182,7 +184,7 @@ pub fn supports_composefs() -> bool {
 
     check_composefs_runtime_support(
         &proc_filesystems,
-        running_kernel_modules_dep().as_deref(),
+        &load_and_confirm_running_filesystem,
         std::env::var_os("PATH").as_deref(),
         has_loop_device_support(),
     )
@@ -256,7 +258,7 @@ pub fn preflight_composefs(cas_dir: &Path) -> Result<ComposefsCaps> {
     })?;
     let mount_helper = check_composefs_runtime_support(
         &proc_filesystems,
-        running_kernel_modules_dep().as_deref(),
+        &load_and_confirm_running_filesystem,
         std::env::var_os("PATH").as_deref(),
         has_loop_device_support(),
     )
@@ -300,7 +302,7 @@ mod tests {
         assert!(
             check_composefs_runtime_support(
                 "nodev\toverlay\nnodev\terofs\n",
-                None,
+                &|_| false,
                 Some(helper_dir.path().as_os_str()),
                 true,
             )
@@ -309,7 +311,7 @@ mod tests {
 
         let err = check_composefs_runtime_support(
             "nodev\terofs\n",
-            None,
+            &|_| false,
             Some(helper_dir.path().as_os_str()),
             true,
         )
@@ -325,26 +327,21 @@ mod tests {
     ///
     /// Real evidence from `fedora44-guest-v1`, kernel 6.19.10-300.fc44.x86_64:
     /// `/proc/filesystems` matched neither name, `lsmod` showed neither loaded,
-    /// both `.ko.xz` files were present, and `modprobe erofs overlay` then made
-    /// both appear.
+    /// `modprobe erofs overlay` made both appear. The module load is the
+    /// authority: a stale text index must not make this gate pass.
     #[test]
     fn a_kernel_shipping_erofs_and_overlay_as_modules_supports_composefs() {
-        let modules_dep = "kernel/fs/erofs/erofs.ko.xz:\n\
-                           kernel/fs/overlayfs/overlay.ko.xz:\n";
-
         assert!(has_required_composefs_filesystems(
             "nodev\tproc\nnodev\ttmpfs\next4\n",
-            Some(modules_dep),
+            &|fs_name| matches!(fs_name, "erofs" | "overlay"),
         ));
     }
 
     #[test]
     fn a_kernel_with_neither_registered_nor_loadable_does_not_support_composefs() {
-        let modules_dep = "kernel/fs/xfs/xfs.ko.xz:\n";
-
         assert!(!has_required_composefs_filesystems(
             "nodev\tproc\next4\n",
-            Some(modules_dep),
+            &|_| false,
         ));
     }
 
@@ -353,20 +350,22 @@ mod tests {
     fn a_kernel_with_both_built_in_supports_composefs_without_a_modules_tree() {
         assert!(has_required_composefs_filesystems(
             "nodev\toverlay\nerofs\n",
-            None,
+            &|_| false,
         ));
     }
 
-    /// A module named only as another module's dependency is not that module.
     #[test]
-    fn a_dependency_mention_is_not_the_module_itself() {
-        let modules_dep = "kernel/fs/overlayfs/overlay.ko.xz: kernel/fs/erofs/erofs.ko.xz\n";
+    fn registered_filesystems_do_not_trigger_module_loading() {
+        let requested = std::cell::Cell::new(0);
 
-        assert!(kernel_can_mount("overlay", &[], Some(modules_dep)));
-        assert!(
-            !kernel_can_mount("erofs", &[], Some(modules_dep)),
-            "erofs appears only to the right of the colon, as a dependency"
-        );
+        assert!(has_required_composefs_filesystems(
+            "nodev\toverlay\nerofs\n",
+            &|_| {
+                requested.set(requested.get() + 1);
+                false
+            },
+        ));
+        assert_eq!(requested.get(), 0);
     }
 
     #[test]
@@ -388,7 +387,7 @@ mod tests {
 
         let err = check_composefs_runtime_support(
             "nodev\toverlay\nnodev\terofs\n",
-            None,
+            &|_| false,
             Some(helper_dir.path().as_os_str()),
             false,
         )

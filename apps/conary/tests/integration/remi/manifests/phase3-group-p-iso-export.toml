@@ -96,9 +96,9 @@ copy_to_guest = [
     { source = "target/local-validation/group-p-iso-export/supported-host-generation.txt", dest = "/tmp/expected-generation" },
 ]
 commands = [
-    "EXPECTED=$(cat /tmp/expected-generation); grep -q \"conary.generation=$EXPECTED\" /proc/cmdline",
-    "grep -q 'conary.carrier=readonly' /proc/cmdline",
-    "grep -q 'rootfstype=iso9660' /proc/cmdline",
+    "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
+    "tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- 'conary.carrier=readonly'",
+    "tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- 'rootfstype=iso9660'",
     "EXPECTED=$(cat /tmp/expected-generation); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$EXPECTED\" || test \"$TARGET\" = \"$EXPECTED\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/.conary-artifact.json",
     "EXPECTED=$(cat /tmp/expected-generation); test -f /conary/generations/$EXPECTED/cas-manifest.json",
