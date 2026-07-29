@@ -20,7 +20,10 @@ use super::open_db;
 #[cfg(test)]
 use anyhow::Context;
 use anyhow::{Result, anyhow};
-use conary_core::db::models::{PackageResolution, Repository, RepositoryPackage};
+use conary_core::db::models::{
+    PackageResolution, Repository, RepositoryPackage, RepositoryPackageKey,
+    RepositoryPackageKeyStatus,
+};
 use conary_core::db::paths::objects_dir;
 #[cfg(test)]
 use conary_core::filesystem::CasStore;

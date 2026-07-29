@@ -436,6 +436,38 @@ fn repo_add_accepts_exact_public_source_profile() {
 }
 
 #[test]
+fn repo_add_accepts_repeatable_self_hosted_ccs_package_keys() {
+    let cli = parse_cli([
+        "conary",
+        "repo",
+        "add",
+        "remi-fedora",
+        "https://remi.example.invalid",
+        "--default-strategy",
+        "remi",
+        "--remi-endpoint",
+        "https://remi.example.invalid",
+        "--ccs-package-key",
+        "/keys/targets-current.public",
+        "--ccs-package-key",
+        "/keys/targets-next.public",
+        "--source-profile",
+        "fedora-44",
+    ])
+    .unwrap();
+    let Some(Commands::Repo(RepoCommands::Add { args })) = cli.command else {
+        panic!("expected repo add command");
+    };
+    assert_eq!(
+        args.ccs_package_keys,
+        [
+            std::path::PathBuf::from("/keys/targets-current.public"),
+            std::path::PathBuf::from("/keys/targets-next.public"),
+        ]
+    );
+}
+
+#[test]
 fn repo_add_rejects_internal_source_route_slug_at_parse_time() {
     assert!(
         parse_cli([

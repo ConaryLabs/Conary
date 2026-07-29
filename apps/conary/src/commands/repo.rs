@@ -1,16 +1,23 @@
 // src/commands/repo.rs
 //! Repository management commands
 
+mod authority;
+#[cfg(test)]
+mod authority_tests;
+
 use super::open_db;
-use anyhow::Result;
-use conary_core::db::models::SecurityAdvisorySupport;
+use anyhow::{Context, Result};
+use conary_core::db::models::{RepositoryPackageKey, SecurityAdvisorySupport};
 use conary_core::repository::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, OpenPgpTrustRoot,
     RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
 };
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
+
+use authority::resolve_ccs_package_authority;
 
 /// Options for adding a new repository
 pub struct RepoAddOptions {
@@ -39,6 +46,7 @@ pub struct RepoAddOptions {
     pub replace: bool,
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
+    pub ccs_package_keys: Vec<PathBuf>,
     pub source_profile: Option<String>,
     pub security_advisory_support: SecurityAdvisorySupport,
 }
@@ -53,6 +61,9 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         && opts.remi_endpoint.is_none()
     {
         anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
+    }
+    if !opts.ccs_package_keys.is_empty() && opts.default_strategy.as_deref() != Some("remi") {
+        anyhow::bail!("--ccs-package-key requires --default-strategy=remi");
     }
 
     let supplied_profile = opts
@@ -110,6 +121,12 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
             package_format.as_str()
         );
     }
+    let package_authority = resolve_ccs_package_authority(
+        opts.default_strategy.as_deref(),
+        opts.remi_endpoint.as_deref(),
+        profile.id(),
+        &opts.ccs_package_keys,
+    )?;
     let parser_config = exact_parser_config(
         package_format,
         opts.distribution,
@@ -132,7 +149,8 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
 
     let db_path = opts.db_path;
 
-    let conn = open_db(&db_path)?;
+    let mut conn = open_db(&db_path)?;
+    let tx = conn.transaction()?;
 
     // Create the repository with all settings
     let mut repo = conary_core::db::models::Repository::new(opts.name, opts.url);
@@ -148,7 +166,7 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     repo.source_profile = Some(profile.id().to_string());
     repo.security_advisory_support = opts.security_advisory_support;
 
-    if let Err(error) = repo.insert(&conn) {
+    if let Err(error) = repo.insert(&tx) {
         if matches!(&error, conary_core::Error::ConflictError(_)) {
             return Err(anyhow::Error::new(conary_core::Error::ConflictError(
                 format!(
@@ -163,6 +181,28 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
             error
         ));
     }
+    let repository_id = repo
+        .id
+        .context("new repository has no ID after successful insertion")?;
+    let package_authority_rows = package_authority
+        .iter()
+        .map(|key| RepositoryPackageKey {
+            repository_id,
+            public_key: key.public_key.clone(),
+            key_id: key.key_id.clone(),
+            status: key.status.clone(),
+            synced_at: None,
+        })
+        .collect::<Vec<_>>();
+    if !package_authority_rows.is_empty() {
+        RepositoryPackageKey::reconcile_for_repository_in_transaction(
+            &tx,
+            repository_id,
+            &package_authority_rows,
+        )
+        .context("persist verified CCS package authority")?;
+    }
+    tx.commit()?;
 
     println!("Added repository: {}", repo.name);
     println!("  Metadata URL: {}", repo.url);
@@ -179,6 +219,11 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     );
     if let Some(policy) = repo.trust_policy.as_ref() {
         println!("  Repository Trust: {}", describe_trust_policy(policy));
+    } else if !package_authority_rows.is_empty() {
+        println!(
+            "  Repository Trust: {} pinned CCS package key(s)",
+            package_authority_rows.len()
+        );
     } else {
         println!("  Repository Trust: typed JSON/Remi authority");
     }
@@ -685,6 +730,7 @@ mod tests {
             replace: false,
             default_strategy: Some("remi".to_string()),
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
+            ccs_package_keys: Vec::new(),
             source_profile: Some("fedora".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Unknown,
         })
@@ -729,6 +775,7 @@ mod tests {
             replace: false,
             default_strategy: None,
             remi_endpoint: None,
+            ccs_package_keys: Vec::new(),
             source_profile: Some("fedora-44".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Supported,
         })

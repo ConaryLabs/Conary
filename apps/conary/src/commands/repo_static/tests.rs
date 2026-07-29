@@ -230,6 +230,7 @@ async fn add_static_repo_with(
         arch_database_signature: None,
         default_strategy: None,
         remi_endpoint: None,
+        ccs_package_keys: Vec::new(),
         source_profile: source_profile.map(str::to_string),
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints,
@@ -246,6 +247,13 @@ async fn add_repo_with_declared_format(
     url: &str,
     source_profile: &str,
 ) -> anyhow::Result<()> {
+    let authority_dir = tempfile::tempdir().unwrap();
+    let private_key = authority_dir.path().join("targets.private");
+    let public_key = authority_dir.path().join("targets.public");
+    conary_core::ccs::signing::SigningKeyPair::generate()
+        .with_key_id("targets")
+        .save_to_files(&private_key, &public_key)
+        .unwrap();
     cmd_repo_add(RepoAddOptions {
         name: "acme".to_string(),
         url: url.to_string(),
@@ -269,6 +277,7 @@ async fn add_repo_with_declared_format(
         arch_database_signature: None,
         default_strategy: Some("remi".to_string()),
         remi_endpoint: Some(url.to_string()),
+        ccs_package_keys: vec![public_key],
         source_profile: Some(source_profile.to_string()),
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints: Vec::new(),
@@ -821,6 +830,7 @@ async fn static_identity_probe_error_does_not_fall_back_to_native_add() {
         arch_database_signature: None,
         default_strategy: None,
         remi_endpoint: None,
+        ccs_package_keys: Vec::new(),
         source_profile: None,
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints: Vec::new(),

@@ -6,8 +6,7 @@
 //! including native format support for Arch, Debian, and Fedora repositories.
 
 use crate::db::models::{
-    PackageDelta, Repository, RepositoryPackage, RepositoryPackageKey, RepositoryPackageKeyStatus,
-    RepositoryProvide,
+    PackageDelta, Repository, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,
 };
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -763,7 +762,7 @@ fn persist_static_sync_rows(
     let tx = conn.unchecked_transaction()?;
 
     persist_synced_package_rows(&tx, repo_id, synced_packages)?;
-    replace_package_keys_for_repository(&tx, repo_id, &package_keys)?;
+    RepositoryPackageKey::replace_for_repository_in_transaction(&tx, repo_id, &package_keys)?;
     link_canonical_ids(&tx, repo_id)?;
 
     repo.last_sync = Some(current_timestamp());
@@ -772,62 +771,6 @@ fn persist_static_sync_rows(
     tx.commit()?;
 
     Ok(count)
-}
-
-fn replace_package_keys_for_repository(
-    conn: &Connection,
-    repository_id: i64,
-    keys: &[RepositoryPackageKey],
-) -> Result<()> {
-    for key in keys {
-        if key.repository_id != repository_id {
-            return Err(Error::InternalError(format!(
-                "repository_id mismatch for repository package key: expected {repository_id}, got {}",
-                key.repository_id
-            )));
-        }
-    }
-
-    conn.execute(
-        "DELETE FROM repository_package_keys WHERE repository_id = ?1",
-        [repository_id],
-    )?;
-
-    let mut insert_with_default_synced_at = conn.prepare(
-        "INSERT INTO repository_package_keys (repository_id, public_key, key_id, status)
-         VALUES (?1, ?2, ?3, ?4)",
-    )?;
-    let mut insert_with_synced_at = conn.prepare(
-        "INSERT INTO repository_package_keys
-            (repository_id, public_key, key_id, status, synced_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-    )?;
-
-    for key in keys {
-        let status = match key.status {
-            RepositoryPackageKeyStatus::Active => "active",
-            RepositoryPackageKeyStatus::Retired => "retired",
-        };
-
-        if let Some(synced_at) = &key.synced_at {
-            insert_with_synced_at.execute(params![
-                key.repository_id,
-                &key.public_key,
-                &key.key_id,
-                status,
-                synced_at,
-            ])?;
-        } else {
-            insert_with_default_synced_at.execute(params![
-                key.repository_id,
-                &key.public_key,
-                &key.key_id,
-                status,
-            ])?;
-        }
-    }
-
-    Ok(())
 }
 
 /// Synchronize a repository whose declared metadata contract is Conary JSON.

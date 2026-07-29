@@ -21,6 +21,7 @@ pub mod mirror_health;
 pub mod mirror_selector;
 pub mod registry;
 pub mod remi;
+pub mod remi_authority;
 pub mod remi_metadata;
 pub mod resolution;
 pub mod retry;
