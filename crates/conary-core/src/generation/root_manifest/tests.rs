@@ -231,6 +231,53 @@ fn selected_root_round_trip_preserves_typed_tree_and_omits_ephemeral_domains() {
 }
 
 #[test]
+fn hardlink_identities_are_stable_across_inode_reallocation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let destination = temp.path().join("destination");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    std::fs::create_dir_all(source.join("usr/bin")).unwrap();
+
+    // Create the lexically later group first so source inode order is the
+    // opposite of materialization order.
+    std::fs::write(source.join("usr/bin/zeta"), b"zeta").unwrap();
+    std::fs::hard_link(
+        source.join("usr/bin/zeta"),
+        source.join("usr/bin/zeta-link"),
+    )
+    .unwrap();
+    std::fs::write(source.join("usr/bin/alpha"), b"alpha").unwrap();
+    std::fs::hard_link(
+        source.join("usr/bin/alpha"),
+        source.join("usr/bin/alpha-link"),
+    )
+    .unwrap();
+
+    let captured = scan_selected_root(&source, &cas).unwrap();
+    let identities = captured
+        .generation
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.node.source.kind {
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some(identity),
+            } => Some((entry.path.as_str(), identity.as_str())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities,
+        [
+            ("/usr/bin/alpha", "selected-root:hardlink:1"),
+            ("/usr/bin/zeta", "selected-root:hardlink:2"),
+        ]
+    );
+
+    materialize_captured_selected_root(&captured, &cas, &destination).unwrap();
+    assert_eq!(scan_selected_root(&destination, &cas).unwrap(), captured);
+}
+
+#[test]
 fn config_state_projection_removes_exactly_one_etc_prefix() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source");

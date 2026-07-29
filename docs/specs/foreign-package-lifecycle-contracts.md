@@ -499,16 +499,19 @@ selected-root capture after every native package capture succeeds. Existing
 package anchors and claims retain ownership. Only retained paths with no
 package owner are assigned to one typed `CapturedRoot` authority, which
 generation construction consumes alongside other complete payload sources.
-The capture preserves global hardlink topology and exact numeric ownership,
-mode/type, timestamps, symlink targets, CAS content, and xattrs. Its finite
-domain contract retains immutable paths plus `/etc`, `/var`, and `/srv`, while
-excluding `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/home`, `/root`, `/mnt`,
-`/media`, and Conary's own normalized runtime/database subtrees. Runtime
-and database exclusions cover both lexical and resolved authority so aliases
-cannot reintroduce self-capture, and a runtime root resolving to `/` fails
-closed. Runtime generation collection therefore has no source-package-manager
-or source-database dependency. `CapturedRoot` is migration-continuity input,
-not package install/update/remove ownership. A complete capture refuses stale
+Each node is captured through a bounded, pointwise-stable descriptor window
+while the tree is walked; hardlink topology is derived from those captured
+snapshots rather than from metadata staged before content capture. The capture
+preserves global hardlink topology and exact numeric ownership, mode/type,
+timestamps, symlink targets, CAS content, and xattrs. Its finite domain contract
+retains immutable paths plus `/etc`, `/var`, and `/srv`, while excluding
+`/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/home`, `/root`, `/mnt`, `/media`,
+and Conary's own normalized runtime/database subtrees. Runtime and database
+exclusions cover both lexical and resolved authority so aliases cannot
+reintroduce self-capture, and a runtime root resolving to `/` fails closed.
+Runtime generation collection therefore has no source-package-manager or
+source-database dependency. `CapturedRoot` is migration-continuity input, not
+package install/update/remove ownership. A complete capture refuses stale
 `AdoptedTrack` identities absent from the current native inventory rather than
 letting metadata-only ownership suppress their paths from the generation.
 

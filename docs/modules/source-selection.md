@@ -387,15 +387,16 @@ selected-generation handoff.
 
 Complete, unfiltered `conary system adopt --system --full` additionally scans
 the selected root once, after all native package payload captures succeed. The
-scan uses the same finite publication domains as generation construction:
-`/etc` is config state, `/var` and `/srv` are mutable state, and other retained
-top-level paths are immutable generation input. `/proc`, `/sys`, `/dev`,
-`/run`, `/tmp`, `/home`, `/root`, `/mnt`, and `/media` are the exact
-ephemeral/API/device/user domains and are never captured. Conary's own runtime
-root and database directory are explicit normalized exclusions under both
-their lexical and resolved paths, so path aliases cannot make the CAS or
-database inputs to their own capture. A runtime root resolving to `/` fails
-closed.
+scan captures each walked node through a bounded pointwise-stable descriptor
+window, then derives global hardlink topology from the captured snapshots. It
+uses the same finite publication domains as generation construction: `/etc` is
+config state, `/var` and `/srv` are mutable state, and other retained top-level
+paths are immutable generation input. `/proc`, `/sys`, `/dev`, `/run`, `/tmp`,
+`/home`, `/root`, `/mnt`, and `/media` are the exact ephemeral/API/device/user
+domains and are never captured. Conary's own runtime root and database
+directory are explicit normalized exclusions under both their lexical and
+resolved paths, so path aliases cannot make the CAS or database inputs to their
+own capture. A runtime root resolving to `/` fails closed.
 
 Persisted package file anchors and directory claims partition that exact scan.
 Package-owned paths retain their owner and claim graph while their materialized
