@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 34
+last_updated: 2026-07-29
+revision: 35
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -383,6 +383,12 @@ regular-file content authority all survive. Immutable content and mutable
 state reference the same SHA-256 CAS used by package payloads. Generation,
 retry, bootstrap EROFS, and try-session materialization consume those typed
 manifests rather than reconstructing lifecycle effects from package rows.
+Generation-local config projection removes exactly one `/etc` prefix when it
+materializes the overlay upper; `/var` and `/srv` entries cannot enter that
+upper. Boot-carrier export copies both manifests, reconstructs `/var` and
+`/srv`, and seeds the same `/etc` upper from verified, manifest-listed CAS
+objects. A read-only carrier may copy that seed to tmpfs for runtime writes,
+but the copied seed is not a second state authority.
 
 A generation-aware root mutation records a typed selected-root publication
 debt and durably installs its cumulative candidate before committing the
@@ -406,6 +412,27 @@ internal transaction graph expose no script-suppression option. A dry run may
 plan and report lifecycle without executing it because it performs no mutation;
 an applied transaction must execute the complete typed graph or fail before its
 first mutation.
+
+### Source Root Ownership Anchors
+
+The selected root is the transaction container and cannot also be a package
+payload path. An RPM may nevertheless declare that root in its source file
+table as `DIRNAMES="/"` plus an empty `BASENAMES` value. RPM's pinned
+[`fsmFsPath`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc#L71-L82)
+and
+[`rpmfnFindFN`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L388-L435)
+contracts establish that header identity and its standard-CPIO association.
+
+The RPM parser retains the exact root entry long enough to prove parallel
+header-array validity, uniqueness, archive association, zero declared size,
+zero payload content, and completeness. It accepts only an unflagged directory
+without a digest, link target, file capabilities, IMA signature, or device-node
+identity.
+Conversion then consumes the source ownership anchor without creating a CCS
+payload node, installed file row, directory claim, or remove authority for
+`/`. Every non-root path still must become one canonical below-root deployment
+path through the shared source-path authority; the root exception cannot
+normalize another spelling into mutation authority.
 
 ### Shared Directory Ownership And Materialization
 
@@ -453,6 +480,12 @@ claim-aware payload view rather than treating the anchor as the sole owner.
 
 Rollback captures directory claims and the independently materialized node
 before any package in a single or batch transaction mutates the selected root.
+It resolves only the package path's existing selected-root ancestor symlinks
+before applying the finite publication-domain contract. Thus a native spelling
+such as `/var/run/example` retains its package ownership identity while its
+effective `/run/example` materialization is excluded as ephemeral; aliases
+into non-ephemeral domains still require exact captured nodes. Missing
+non-ephemeral nodes and escaping or looping aliases fail before mutation.
 Restoration first rebuilds all package bases, then all anchors, then all claims,
 so cross-package and cyclic claim graphs do not depend on insertion order.
 Additive RPM or CCS metadata changes restore the prior materialized node even

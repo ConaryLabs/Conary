@@ -33,6 +33,13 @@ pub(super) fn parse_stream(package: &Package, payload: Box<dyn Read>) -> Result<
     let records = header_records(package)?;
     let spool = PayloadSpool::new(stream::required_spool_bytes(&records)?)?;
     let members = stream::parse_members(package, payload, &records, &spool)?;
+    project_records(&records, members)
+}
+
+fn project_records(
+    records: &[HeaderRecord],
+    members: Vec<stream::PayloadMember>,
+) -> Result<PackagePayload> {
     let mut payload_by_index = HashMap::with_capacity(members.len());
     for member in members {
         let header_index = member.header_index;
@@ -65,7 +72,7 @@ pub(super) fn parse_stream(package: &Package, payload: Box<dyn Read>) -> Result<
         ));
     }
 
-    let hardlink_sets = hardlinks::sets(&records)?;
+    let hardlink_sets = hardlinks::sets(records)?;
     let mut group_by_index = HashMap::new();
     for set in &hardlink_sets {
         for index in set.member_indexes() {
@@ -78,11 +85,17 @@ pub(super) fn parse_stream(package: &Package, payload: Box<dyn Read>) -> Result<
         if record.ghost {
             continue;
         }
+        if record.is_root_anchor() {
+            payload_by_index
+                .remove(&index)
+                .expect("payload completeness checked");
+            continue;
+        }
         if let Some(set) = group_by_index.get(&index) {
             if index != set.emission_index() {
                 continue;
             }
-            output.extend(set.project(&records, &mut payload_by_index)?);
+            output.extend(set.project(records, &mut payload_by_index)?);
         } else {
             let member = payload_by_index
                 .remove(&index)
@@ -471,8 +484,8 @@ fn parse_error(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        RpmFileDigestAlgorithm, apply_capability_operation, digest_hex, parse,
-        parse_file_capabilities,
+        HeaderRecord, RpmFileDigestAlgorithm, apply_capability_operation, digest_hex, parse,
+        parse_file_capabilities, project_records,
     };
     use crate::payload::PayloadNodeKind;
     use rpm::IndexTag;
@@ -543,6 +556,42 @@ mod tests {
         assert!(file.content_authority.is_none());
         assert!(file.source().is_none());
         assert!(file.to_extracted_in_memory().unwrap().content.is_empty());
+    }
+
+    #[test]
+    fn rpm_root_anchor_is_consumed_without_becoming_payload_authority() {
+        let records = [HeaderRecord {
+            path: "/".to_string(),
+            path_kind: super::header::HeaderPathKind::RootAnchor,
+            mode: libc::S_IFDIR | 0o555,
+            user: "root".to_string(),
+            group: "root".to_string(),
+            mtime: 1,
+            size: 0,
+            ghost: false,
+            digest: None,
+            link_target: None,
+            caps: None,
+            ima_signature: None,
+            device: 1,
+            inode: 1,
+            rdev: 0,
+            nlink: Some(1),
+        }];
+        let members = vec![super::stream::PayloadMember {
+            header_index: 0,
+            archive_position: 0,
+            content_size: 0,
+            sha256: None,
+            source: None,
+        }];
+
+        let payload = project_records(&records, members).unwrap();
+
+        assert!(
+            payload.files().is_empty(),
+            "the selected root is a container boundary, not RPM payload mutation authority"
+        );
     }
 
     #[test]

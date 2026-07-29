@@ -231,7 +231,7 @@ fn seed_generation_mutable_state(
     }
     std::fs::create_dir_all(&state_root)?;
     let cas = conary_core::filesystem::CasStore::new(runtime_root.objects_dir())?;
-    conary_core::generation::root_manifest::materialize_state_root(
+    conary_core::generation::root_manifest::materialize_config_state_upper(
         &artifact.mutable_state,
         &cas,
         &state_root,

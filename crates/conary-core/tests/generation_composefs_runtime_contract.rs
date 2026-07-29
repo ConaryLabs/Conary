@@ -491,6 +491,23 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
         dracut_generator.contains("[ -f \"$EROFS_IMG\" ] ||"),
         "dracut must hard-fail when root.erofs is absent"
     );
+    assert!(
+        dracut_generator.contains("ETC_LOWER=\"${SYSROOT}/conary/etc-lower\""),
+        "generations without immutable /etc need one explicit empty overlay lower"
+    );
+    assert!(
+        dracut_generator.contains("cp -a \"$ETC_STATE_SEED\" \"$ETC_STATE_RUNTIME\""),
+        "readonly carriers must seed their tmpfs upper from exported config-state authority"
+    );
+    assert!(
+        dracut_generator.contains("if [ ! -d \"$ETC_STATE_SEED\" ]; then")
+            && dracut_generator.contains("if [ ! -d \"$ETC_UPPER\" ]; then"),
+        "boot must fail closed instead of creating an empty /etc upper when typed state is absent"
+    );
+    assert!(
+        dracut_module.contains("inst_multiple -o blkid cp grep"),
+        "the initramfs must carry the copy tool required for readonly config-state seeding"
+    );
 
     assert!(
         dracut_generator.contains("expose_generation_usr"),

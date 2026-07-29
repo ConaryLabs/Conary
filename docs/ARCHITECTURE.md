@@ -421,9 +421,9 @@ Generation-aware package mutation
        |
  Generation N (immutable, verified)
        |
-  conary system generation export --format raw|qcow2
+  conary system generation export --format raw|qcow2|iso
        |
-  validated self-contained artifact contract -> staged ESP/rootfs -> systemd-repart
+  validated manifests + CAS -> exact config/mutable-state projection -> staged ESP/rootfs
 ```
 
 ### Generation Lifecycle
@@ -432,11 +432,18 @@ Generation-aware package mutation
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
 3. **Record**: Capture exact immutable and mutable-state manifests, persist the selected-root candidate, and record recoverable publication debt before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
-5. **Materialize state**: Seed the generation-local mutable-state tree from its exact manifest, then apply the ordered typed config transactions
+5. **Materialize state**: Project `/etc/...` manifest paths into the generation-local `/etc` overlay upper without retaining the `/etc` prefix, then apply the ordered typed config transactions; `/var` and `/srv` remain live mutable-root state
 6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
 7. **Recover**: Under the runtime mutation lock, resume at the persisted phase and replay each remaining idempotent effect. A matching `/conary/current` link proves only link publication; it never implies configuration projection or database backup completion
 8. **Compensate**: Rollback records a new exact compensating selected root and removes terminal candidates
 9. **GC**: Remove old generations only after retaining every recoverable publication candidate and its typed CAS roots
+
+Raw, qcow2, and ISO export copy both typed manifests and their manifest-listed
+CAS objects. Export reconstructs `/var` and `/srv` in the carrier root and
+projects `/etc` into `/conary/etc-state/<generation>` above one explicit empty
+lower directory. Read-only carriers copy that seeded config upper to runtime
+tmpfs before mounting it, so writability never replaces or bypasses the
+artifact's typed state authority.
 
 ### Generation Module (`crates/conary-core/src/generation/`)
 

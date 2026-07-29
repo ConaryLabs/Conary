@@ -5,7 +5,13 @@ use crate::generation::artifact::{
     ArtifactWriteInputs, BootAssetsManifest, CasObjectRef, write_generation_artifact,
 };
 use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+use crate::generation::root_manifest::{
+    GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, MutableStateManifest,
+};
 use crate::generation::test_support::write_root_manifests_with_objects;
+use crate::payload::{
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -121,6 +127,21 @@ impl Fixture {
 
         let cas_object = write_cas_object(&objects_dir, b"hello");
         write_root_manifests_with_objects(&generation_dir, std::slice::from_ref(&cas_object));
+        let state_object = write_cas_object(&objects_dir, b"captured mutable state");
+        MutableStateManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            entries: vec![
+                state_directory("/etc"),
+                state_regular("/etc/conary-export.conf", &state_object),
+                state_directory("/srv"),
+                state_regular("/srv/conary-export-state", &state_object),
+                state_directory("/var"),
+                state_directory("/var/lib"),
+                state_regular("/var/lib/conary-export-state", &state_object),
+            ],
+        }
+        .write_to(&generation_dir)
+        .unwrap();
         let boot_assets = BootAssetsManifest {
             version: 1,
             generation: 7,
@@ -173,6 +194,40 @@ impl Fixture {
     }
 }
 
+fn state_directory(path: &str) -> GenerationRootEntry {
+    let mut node = PayloadNode::regular(0o755);
+    node.kind = PayloadNodeKind::Directory;
+    node.mode = libc::S_IFDIR | 0o755;
+    set_test_process_ownership(&mut node);
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
+        content: None,
+    }
+}
+
+fn state_regular(path: &str, object: &CasObjectRef) -> GenerationRootEntry {
+    let mut node = PayloadNode::regular(0o640);
+    set_test_process_ownership(&mut node);
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
+        content: Some(PayloadContentAuthority {
+            sha256: object.sha256.clone(),
+            size: object.size,
+        }),
+    }
+}
+
+fn set_test_process_ownership(node: &mut PayloadNode) {
+    node.user = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::geteuid() }),
+    };
+    node.group = PayloadIdentity::Numeric {
+        id: u64::from(unsafe { libc::getegid() }),
+    };
+}
+
 #[test]
 fn rootfs_projection_creates_runtime_tree() {
     let fixture = Fixture::new();
@@ -186,8 +241,23 @@ fn rootfs_projection_creates_runtime_tree() {
     assert!(gen_dir.join(".conary-gen.json").is_file());
     assert!(gen_dir.join(".conary-artifact.json").is_file());
     assert!(gen_dir.join("cas-manifest.json").is_file());
+    assert!(gen_dir.join("generation-root.json").is_file());
+    assert!(gen_dir.join("mutable-state.json").is_file());
     assert!(gen_dir.join("boot-assets/manifest.json").is_file());
-    assert!(staging.join("conary/etc-state").is_dir());
+    assert_eq!(
+        std::fs::read(staging.join("conary/etc-state/7/conary-export.conf")).unwrap(),
+        b"captured mutable state"
+    );
+    assert!(!staging.join("conary/etc-state/7/etc").exists());
+    assert_eq!(
+        std::fs::read(staging.join("var/lib/conary-export-state")).unwrap(),
+        b"captured mutable state"
+    );
+    assert_eq!(
+        std::fs::read(staging.join("srv/conary-export-state")).unwrap(),
+        b"captured mutable state"
+    );
+    assert!(staging.join("conary/etc-lower").is_dir());
     assert!(staging.join("conary/mnt").is_dir());
     assert!(staging.join("usr").is_dir());
     assert!(staging.join("etc").is_dir());
@@ -225,11 +295,13 @@ fn rootfs_projection_copies_only_manifest_listed_cas_objects() {
     project_generation_rootfs(&artifact, &staging).unwrap();
 
     let objects = staging.join("conary/objects");
-    assert!(
-        crate::filesystem::object_path(&objects, &artifact.cas_objects[0].sha256)
-            .unwrap()
-            .is_file()
-    );
+    for object in &artifact.cas_objects {
+        assert!(
+            crate::filesystem::object_path(&objects, &object.sha256)
+                .unwrap()
+                .is_file()
+        );
+    }
     assert!(
         !crate::filesystem::object_path(&objects, &extra.sha256)
             .unwrap()

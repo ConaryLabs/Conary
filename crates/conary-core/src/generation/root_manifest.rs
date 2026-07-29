@@ -14,7 +14,8 @@ use std::path::{Component, Path};
 pub use composefs::build_erofs_image_from_root_manifest;
 pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
-    materialize_generation_root, materialize_state_root, overlay_payload_entries,
+    materialize_config_state_upper, materialize_generation_root, materialize_state_root,
+    overlay_payload_entries,
 };
 pub use scan::{
     capture_existing_payload_node, capture_root_node, scan_payload_tree, scan_selected_root,
@@ -339,6 +340,12 @@ fn validate_hardlinks(entries: &[GenerationRootEntry]) -> crate::Result<()> {
                     return Err(crate::Error::InvalidPath(format!(
                         "hardlink {} identity {identity:?} targets {}, expected {}",
                         entry.path, target, primary.path
+                    )));
+                }
+                if classify_root_path(&entry.path)? != classify_root_path(&primary.path)? {
+                    return Err(crate::Error::InvalidPath(format!(
+                        "hardlink group crosses generation publication domains at {}",
+                        primary.path
                     )));
                 }
                 if entry.node.source.mode != primary.node.source.mode

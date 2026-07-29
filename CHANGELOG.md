@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.9.1] - 2026-07-29
+
+### Fixed
+- classify selected-root alias domains (#180)
+- preserve root ownership anchors (#178)
+- use DNF5 installed-reason contract (#172)
+- publish immutable test artifacts (#171)
+
 ## [remi-v0.9.0] - 2026-07-29
 
 ### Added
