@@ -539,6 +539,41 @@ mod tests {
     }
 
     #[test]
+    fn a_present_but_failing_dnf5_remains_the_authority() {
+        let mut calls = Vec::new();
+
+        let error = query_user_installed_with(|authority, command, args| {
+            calls.push((
+                authority,
+                command.to_string(),
+                args.iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect::<Vec<_>>(),
+            ));
+            Err(InstallReasonAuthorityError::CommandFailed {
+                authority,
+                command: command.to_string(),
+                status: Some(2),
+                stderr: "invalid selector composition".to_string(),
+            })
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstallReasonAuthorityError::CommandFailed {
+                authority: "DNF5",
+                status: Some(2),
+                ..
+            }
+        ));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "DNF5");
+        assert_eq!(calls[0].1, "dnf5");
+        assert_eq!(calls[0].2, DNF5_USER_INSTALLED_ARGS);
+    }
+
+    #[test]
     fn test_installed_rpm_info_full_version() {
         let info = InstalledRpmInfo {
             name: "test".to_string(),
