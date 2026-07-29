@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::capability::CapabilityDeclaration;
+use crate::ccs::manifest::FileCapability;
 use crate::payload::{PayloadContentAuthority, PayloadNode};
 use crate::repository::dependency_model::{
     DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
@@ -26,6 +27,13 @@ pub struct AuthorityDocumentV2 {
     pub relations: Vec<RepositoryRequirementGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<CapabilityDeclaration>,
+    /// Exact Linux file capability declarations bound to signed package files.
+    ///
+    /// Debug TOML is never install authority; authored declarations are
+    /// canonicalized into this signed field and verified before projection
+    /// back into the install manifest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_capabilities: Vec<FileCapability>,
     #[serde(default)]
     pub components: BTreeMap<String, ComponentAuthorityV2>,
     #[serde(default)]
@@ -473,6 +481,7 @@ impl AuthorityDocumentV2 {
             requirements: Vec::new(),
             relations: Vec::new(),
             capabilities: None,
+            file_capabilities: Vec::new(),
             components: BTreeMap::new(),
             lifecycle: LifecycleAuthorityV2::default(),
             provenance: ProvenanceAuthorityV2 {
@@ -537,6 +546,24 @@ mod tests {
         let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
 
         assert_eq!(decoded.capabilities, authority.capabilities);
+        super::super::validation::validate_authority(&decoded).unwrap();
+    }
+
+    #[test]
+    fn file_capabilities_round_trip_in_signed_v2_authority() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("file-capable");
+        authority.file_capabilities = vec![FileCapability {
+            path: "/usr/bin/hello".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+
+        let bytes = authority.to_cbor().unwrap();
+        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
+
+        assert_eq!(decoded.file_capabilities, authority.file_capabilities);
         super::super::validation::validate_authority(&decoded).unwrap();
     }
 

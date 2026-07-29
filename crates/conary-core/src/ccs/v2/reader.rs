@@ -326,6 +326,36 @@ description = "hello"
     }
 
     #[test]
+    fn rejects_file_capability_authority_added_after_signing() {
+        let mut authority =
+            crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("capability-tamper");
+        let signed_raw = authority.to_cbor().unwrap();
+        let key = SigningKeyPair::generate();
+        let signature = key.sign(&signed_raw);
+        let policy = TrustPolicy::strict(vec![signature.public_key.clone()]);
+        authority.file_capabilities = vec![crate::ccs::manifest::FileCapability {
+            path: "/usr/bin/hello".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let tampered_raw = authority.to_cbor().unwrap();
+
+        let error = read_authority_document(
+            &tampered_raw,
+            Some(&serde_json::to_string(&signature).unwrap()),
+            None,
+            None,
+            None,
+            &policy,
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("verify CCS v2 MANIFEST signature"));
+    }
+
+    #[test]
     fn rejects_unsupported_signature_algorithms() {
         let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("algo");
         let raw = authority.to_cbor().unwrap();

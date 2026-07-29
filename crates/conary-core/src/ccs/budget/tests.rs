@@ -1,6 +1,7 @@
 // conary-core/src/ccs/budget/tests.rs
 
 use super::*;
+use crate::ccs::manifest::FileCapability;
 use crate::ccs::v2::schema::{
     ComponentAuthorityV2, ConfigAuthorityV2, ConfigSemanticsV2, ConflictPolicyV2,
     LifecycleScriptExecutionV2, LifecycleScriptV2, PackageDataV2,
@@ -338,6 +339,49 @@ fn near_limit_values_on_each_dimension_stay_admissible() {
     CCS_BUDGET
         .admit_encoded_authority(&census, authority.to_cbor().unwrap().len() as u64)
         .unwrap();
+}
+
+#[test]
+fn signed_file_capabilities_are_structurally_budgeted() {
+    let mut authority = AuthorityDocumentV2::package_for_tests("file-capable-budget");
+    authority.file_capabilities = vec![FileCapability {
+        path: "/usr/bin/hello".to_string(),
+        capabilities: vec!["cap_net_bind_service".to_string()],
+        permitted: true,
+        effective: true,
+        inheritable: false,
+    }];
+
+    let census = CCS_BUDGET.admit_authority(&authority).unwrap();
+
+    assert_eq!(census.file_capabilities, 1);
+    CCS_BUDGET
+        .admit_encoded_authority(&census, authority.to_cbor().unwrap().len() as u64)
+        .unwrap();
+
+    let count_budget = CcsStructuralBudget {
+        max_file_capabilities: 0,
+        ..CCS_BUDGET
+    };
+    assert_eq!(
+        count_budget
+            .admit_authority(&authority)
+            .unwrap_err()
+            .dimension,
+        BudgetDimension::FileCapabilityCount
+    );
+
+    let name_budget = CcsStructuralBudget {
+        max_file_capability_names: 0,
+        ..CCS_BUDGET
+    };
+    assert_eq!(
+        name_budget
+            .admit_authority(&authority)
+            .unwrap_err()
+            .dimension,
+        BudgetDimension::FileCapabilityNameCount
+    );
 }
 
 #[test]

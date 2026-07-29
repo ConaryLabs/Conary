@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 6
+revision: 7
 summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
 ---
 
@@ -60,6 +60,8 @@ contains:
 - exact payload paths, node variants, content digests and sizes, component
   ownership, per-path config semantics (`noreplace`, `ghost`, and
   `remove_on_upgrade`), and conflict policy;
+- canonical Linux file-capability declarations bound to exact signed regular
+  payload paths;
 - source-independent declarative lifecycle plus any converted package's exact
   native lifecycle ABI;
 - provenance identities and hashes for hermetic evidence, build attestations,
@@ -95,8 +97,9 @@ architecture qualifier, and either no version authority or a paired typed
 relation and version boundary. RPM may use all five ordered relations; Debian,
 Arch, and Conary providers may use only equality. The package self-provider is
 exact equality with the signed package version. Package version is never a
-fallback for a missing provider version. Requirements, relations, and this
-complete provider authority all participate in CCS content identity.
+fallback for a missing provider version. Requirements, relations, complete
+provider authority, package capability declarations, and file-capability
+declarations all participate in CCS content identity.
 
 An ordinary config declaration identifies exactly one signed regular-file or
 symlink payload whose `FileAuthorityV2.config` repeats the same semantics.
@@ -104,6 +107,14 @@ RPM ghost config and Debian remove-on-upgrade declarations are package
 authority without incoming payload and require the corresponding signed native
 source contract. Verified package construction projects these exact
 declarations into the package transaction interface.
+
+Each file-capability declaration names exactly one signed regular payload file
+and carries a non-empty, canonical list of Linux capability names plus the
+permitted, effective, and inheritable sets. Declaration paths are unique and
+canonically ordered. Missing targets, non-regular targets, duplicate paths or
+capability names, and debug-TOML disagreement are rejected before package
+construction. Verified installation projects only this signed field; it never
+recovers capability authority from `MANIFEST.toml` or from payload xattrs.
 
 `ConflictPolicyV2::Replace` and `PackagePolicyV2.allow_host_mutation = true`
 are rejected until typed transaction consumers implement them. Signed fields
@@ -134,8 +145,8 @@ limit table and no fixed serialized-byte ceiling on `MANIFEST`.
 The budget states explicit dimensions, each with its own typed diagnostic:
 
 - counts: payload nodes, payload objects, components, config declarations,
-  provides, requirement groups, relation groups, lifecycle entries, and archive
-  entries;
+  file-capability declarations and names, provides, requirement groups,
+  relation groups, lifecycle entries, and archive entries;
 - per-item lengths: install-path bytes and path-component depth, identifier
   bytes, link-target bytes, xattr count, xattr name and value bytes, and
   lifecycle script body bytes;

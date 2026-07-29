@@ -430,6 +430,61 @@ arch = "noarch"
     }
 
     #[test]
+    fn signed_v2_file_capabilities_round_trip_to_verified_install_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("src");
+        fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
+        fs::write(source_dir.join("usr/bin/server"), b"#!/bin/sh\n").unwrap();
+        let manifest = CcsManifest::parse(
+            r#"
+[package]
+name = "file-capable"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "file capability fixture"
+license = "MIT"
+
+[package.platform]
+arch = "noarch"
+
+[[file_capabilities]]
+path = "/usr/bin/server"
+capabilities = ["cap_net_bind_service"]
+permitted = true
+effective = true
+inheritable = false
+"#,
+        )
+        .unwrap();
+        let result = CcsBuilder::new(manifest, &source_dir)
+            .unwrap()
+            .build()
+            .unwrap();
+        let package_path = temp.path().join("file-capable.ccs");
+        let signing_key = SigningKeyPair::generate();
+        write_signed_current_ccs_package(&result, &package_path, &signing_key, false).unwrap();
+
+        let verification = verify_test_package(&package_path, &signing_key);
+        let package =
+            CcsPackage::from_verified_archive(package_path.to_str().unwrap(), &verification)
+                .unwrap();
+
+        assert_eq!(verification.authority().file_capabilities.len(), 1);
+        assert_eq!(
+            package.manifest().file_capabilities,
+            verification.authority().file_capabilities
+        );
+        assert_eq!(
+            package.manifest().file_capabilities[0]
+                .to_setcap_spec()
+                .unwrap(),
+            "cap_net_bind_service=+ep"
+        );
+    }
+
+    #[test]
     fn test_extract_rejects_truncated_content() {
         let (_temp, package_path, signing_key) = build_test_package();
         let corrupted_path = package_path.with_file_name("truncated.ccs");

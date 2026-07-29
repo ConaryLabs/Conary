@@ -27,7 +27,7 @@ use crate::repository::{
     requirement::validate_requirement_group,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use thiserror::Error;
 
@@ -293,8 +293,15 @@ impl CcsManifest {
                 ManifestError::Invalid(format!("invalid package relation authority: {error}"))
             })?;
         }
+        let mut file_capability_paths = BTreeSet::new();
         for capability in &self.file_capabilities {
             capability.validate()?;
+            if !file_capability_paths.insert(capability.path.as_str()) {
+                return Err(ManifestError::Invalid(format!(
+                    "file_capabilities path '{}' is declared more than once",
+                    capability.path
+                )));
+            }
         }
         if let Some(capabilities) = &self.capabilities {
             capabilities

@@ -24,6 +24,7 @@ pub(super) fn install_manifest_from_v2(
     manifest.requirements = authority.requirements.clone();
     manifest.relations = authority.relations.clone();
     manifest.capabilities = authority.capabilities.clone();
+    manifest.file_capabilities = authority.file_capabilities.clone();
     manifest.config.files = config_files_from_v2_authority(authority)?;
 
     crate::ccs::v2::lifecycle::apply_authority_to_manifest(&authority.lifecycle, &mut manifest)
@@ -177,5 +178,22 @@ mod tests {
         let manifest = install_manifest_from_v2(&authority, None, None).unwrap();
 
         assert_eq!(manifest.capabilities, Some(declaration));
+    }
+
+    #[test]
+    fn verified_v2_file_capabilities_are_preserved_in_the_install_projection() {
+        let mut authority = AuthorityDocumentV2::package_for_tests("file-capability-projection");
+        let declaration = crate::ccs::manifest::FileCapability {
+            path: "/usr/bin/hello".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        };
+        authority.file_capabilities = vec![declaration.clone()];
+
+        let manifest = install_manifest_from_v2(&authority, None, None).unwrap();
+
+        assert_eq!(manifest.file_capabilities, vec![declaration]);
     }
 }
