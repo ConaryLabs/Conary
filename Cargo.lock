@@ -994,7 +994,7 @@ checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "conary"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "conary-bootstrap"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "tokio",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "conary-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "alpm-types",
  "anyhow",
@@ -4857,7 +4857,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "remi"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-stream",

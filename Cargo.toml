@@ -17,7 +17,7 @@ rust-s3 = { path = "third_party/rust-s3-0.37.2-patched" }
 
 [workspace.dependencies]
 # Database
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "limits"] }
 
 # Error handling
 thiserror = "2.0"

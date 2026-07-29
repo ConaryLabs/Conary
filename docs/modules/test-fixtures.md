@@ -518,9 +518,12 @@ Each fixture family should record:
   `conary system init` on the retired schema described above.
 - **Safety notes:** Never overwrite the source image. Keep the generated
   private key mode `0600`; it is a disposable test credential, not a Remi,
-  federation, release-signing, or operator identity. Publish image/key
-  replacements only through the authenticated Remi admin test-artifact route,
-  and update every active manifest to one version before accepting the gate.
+  federation, release-signing, or operator identity. Publish small image/key
+  replacements through the authenticated Remi admin test-artifact route, or
+  large images through the digest-pinned, immutable
+  `conary-remi-deploy publish-test-artifact` operation after authenticated SSH
+  staging. Update every active manifest to one version before accepting the
+  gate.
 
 ## How To Use This Map
 

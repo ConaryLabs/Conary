@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-27
-revision: 10
-summary: Document Remi source, signing, canonical-map, repository trust, conversion, publication, and serving authority
+last_updated: 2026-07-28
+revision: 11
+summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
 # Remi
@@ -86,6 +86,54 @@ exact-profile handoff from successful refresh results into configured prewarm
 jobs; `apps/remi/src/server/prewarm/scheduler.rs` owns their bounded fair
 execution and complete outcome collection. HTTP handlers only publish events
 and project the shared batch.
+
+## Sparse Client Sync
+
+The Conary `remi` repository strategy consumes only Remi's sparse index. It
+pages through
+`GET /v1/index/{distro}?page=N&per_page=128&include=versions`. The typed
+expansion returns one resolution-only document per name, including every
+version plus the exact normalized provides and grouped native requirements
+needed for offline resolution, together with persisted package metadata such
+as explicitly trusted security advisories. Conversion-cache state, diagnostic
+scriptlet summaries, and content hashes stay on other public projections
+because sync does not consume them.
+`GET /v1/{distro}/metadata` is not a client-sync fallback.
+
+Remi opens SQLite once for each HTTP page, selects all visible package/version
+rows for the page together, and batch-loads their normalized provides and
+requirement groups. Historical zero-sized discovery placeholders are excluded
+by one shared wire threshold used by the name count, name page, bulk page, and
+per-name lookup; every listed name is therefore fetchable and `total` counts
+that exact set.
+
+Each bounded page is written to a disabled staging repository. The previously
+synced repository remains the only enabled snapshot while network and parsing
+work continues. After the declared name total has been consumed, one SQLite
+transaction replaces the old rows, moves the staged rows to the repository,
+links canonical IDs, and advances `last_sync`. A fetch, parsing, duplicate
+identity, or persistence error returned to the running command removes its
+stage and leaves the prior enabled snapshot unchanged.
+
+Sparse pages do not yet carry a server-state revision. Stable totals and global
+name ordering detect structural drift, but a same-count or content-only Remi
+update can currently span requests. Process termination can also leave a
+disabled stage because in-process error cleanup is not crash recovery.
+[Issue #163](https://github.com/ConaryLabs/Conary/issues/163) owns the typed
+server revision plus the durable per-repository lease required to reject mixed
+page sets, serialize publication, and prove an abandoned stage before cleanup.
+
+The fixed name page is the structural owner of distribution scaling:
+distribution growth increases page count, not the retained metadata set or
+HTTP request count within one page. Relation collections remain exact native
+semantics and are never truncated to satisfy a guessed byte ceiling. The name
+page does not yet structurally bound independently growing version, relation,
+expression, or metadata cardinality; [issue
+#164](https://github.com/ConaryLabs/Conary/issues/164) owns typed sub-page
+continuation plus streaming server/client processing. The client validates
+stable totals, global name ordering, page identity, non-empty version sets, and
+unique version/release/architecture identities before a page enters the
+staging repository.
 
 ## Durable Repository Signing Authority
 
@@ -204,9 +252,12 @@ or a missing CCS object is data corruption or stale conversion state and
 returns an error or triggers reconversion. It is not converted into a human
 review outcome.
 
-Package detail, metadata, generated indexes, sparse indexes, search, OCI, delta,
-and download routes expose the same sanitized `scriptlets` projection. Program
-bodies and local filesystem paths are not part of that response.
+Package detail, monolithic metadata, generated indexes, search, OCI, delta, and
+download routes expose the sanitized `scriptlets` projection. Sparse index
+documents carry resolution authority—versions, provides, requirements,
+architecture, size, persisted package metadata, conversion state, and public
+content hash—rather than the diagnostic scriptlet summary. Program bodies and
+local filesystem paths are not part of any public response.
 
 ### Current Converted Artifact Serving
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 18
+last_updated: 2026-07-29
+revision: 19
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -167,6 +167,13 @@ not cover the task or when you are debugging the underlying service path itself.
   files into `/conary/releases/<version>`. The helper copies that verified
   checksum file as release evidence, refuses symlinked trust inputs, and
   requires `<artifact>.ccs.sig` whenever a staged `.ccs` artifact is present.
+- Large QEMU fixtures use the helper's bounded
+  `publish-test-artifact <filename> <sha256> <staged-file>` operation after
+  authenticated SSH staging under `/tmp`. It accepts only a plain basename and
+  regular file, enforces Remi's 8 GiB limit, verifies the caller-pinned digest
+  before publication, and creates an immutable `/conary/test-artifacts/`
+  target atomically. Repeating the exact publication is idempotent; a
+  same-name, different-digest replacement fails closed.
 - Bootstrap or repair deploy access once from an existing privileged shell with
   `sudo scripts/install-remi-deploy-access.sh`. It installs
   `deploy/remi-deploy-helper.sh` to `/usr/local/sbin/conary-remi-deploy`,
@@ -295,8 +302,16 @@ old process. That can fail with `Text file busy`.
 - Push the relevant canonical tags to trigger the GitHub release pipeline
 - GitHub Actions builds release artifacts in `release-build` and serializes the
   resolved product metadata into the bundle
+- `merge-validation` proves the current source tree through deterministic
+  source, build, policy, and test checks. It must not probe mutable production
+  endpoints, because production continues to serve the previously deployed
+  release until the candidate passes this gate and is tagged.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
   product behavior locally
+- Within GitHub Actions, `deploy-and-verify` owns live contract proof after it
+  deploys the exact tagged artifact. For Remi this includes both liveness and
+  structured fail-closed readiness; independent production verification still
+  follows the terminal workflow result.
 - `conary-test` is a supported build-and-release track in this phase, but it
   intentionally has no deployment lane
 - `deploy-and-verify` performs protected deployment and verification only for

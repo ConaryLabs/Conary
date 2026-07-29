@@ -19,6 +19,7 @@ usage:
   conary-remi-deploy deploy-conary <version> <staging-dir>
   conary-remi-deploy deploy-remi <version> <bundle.tar.gz> <repositories.toml> <max-concurrent>
   conary-remi-deploy deploy-site <site|web> <staging-dir>
+  conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
   conary-remi-deploy inspect-remi [--require-repopulated]
   conary-remi-deploy verify-access
@@ -63,6 +64,12 @@ validate_site_target() {
         site|web) ;;
         *) die "invalid site target: $target" ;;
     esac
+}
+
+validate_artifact_filename() {
+    local filename="$1"
+    [[ "$filename" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] ||
+        die "invalid test-artifact filename: $filename"
 }
 
 real_tmp_path() {
@@ -313,6 +320,71 @@ deploy_site() {
     rmdir "$parent" 2>/dev/null || true
 }
 
+publish_test_artifact() {
+    local filename="$1"
+    local expected_sha="$2"
+    local source_arg="$3"
+    local source
+    validate_artifact_filename "$filename"
+    validate_sha256 "$expected_sha"
+    [[ ! -L "$source_arg" ]] ||
+        die "test-artifact source must not be a symlink: $source_arg"
+    source="$(real_tmp_path "$source_arg")"
+    [[ -f "$source" && ! -L "$source" ]] ||
+        die "test-artifact source is not a plain file: $source"
+
+    local size actual_sha conary_root artifact_root target next
+    size="$(stat -c '%s' "$source")"
+    (( size > 0 )) || die "test artifact must not be empty"
+    (( size <= 8 * 1024 * 1024 * 1024 )) ||
+        die "test artifact exceeds the 8 GiB publication limit"
+    actual_sha="$(sha256sum "$source" | cut -d ' ' -f 1)"
+    [[ "$actual_sha" == "$expected_sha" ]] || die "test-artifact SHA-256 mismatch"
+
+    conary_root="$(root_path /conary)"
+    artifact_root="$(root_path /conary/test-artifacts)"
+    target="${artifact_root}/${filename}"
+    next="${artifact_root}/.${filename}.next.$$"
+    install_owned_dir 0750 "$conary_root"
+    if [[ -e "$artifact_root" || -L "$artifact_root" ]]; then
+        [[ -d "$artifact_root" && ! -L "$artifact_root" ]] ||
+            die "test-artifact root is not a plain directory: $artifact_root"
+    else
+        install_owned_dir 0755 "$artifact_root"
+    fi
+
+    if [[ -e "$target" || -L "$target" ]]; then
+        [[ -f "$target" && ! -L "$target" ]] ||
+            die "published test-artifact target is not a plain file: $target"
+        actual_sha="$(sha256sum "$target" | cut -d ' ' -f 1)"
+        [[ "$actual_sha" == "$expected_sha" ]] ||
+            die "immutable test-artifact target already exists with a different SHA-256: $target"
+        rm -f "$source"
+        printf 'Test artifact already published: %s sha256=%s size=%s\n' \
+            "$filename" "$expected_sha" "$size"
+        return
+    fi
+
+    trap 'rm -f "$next"' EXIT
+    install_owned_file 0644 "$source" "$next"
+    actual_sha="$(sha256sum "$next" | cut -d ' ' -f 1)"
+    [[ "$actual_sha" == "$expected_sha" ]] ||
+        die "staged test-artifact changed during publication"
+
+    if ! ln "$next" "$target"; then
+        [[ -f "$target" && ! -L "$target" ]] ||
+            die "test-artifact target appeared during publication: $target"
+        actual_sha="$(sha256sum "$target" | cut -d ' ' -f 1)"
+        [[ "$actual_sha" == "$expected_sha" ]] ||
+            die "immutable test-artifact target raced with a different SHA-256: $target"
+    fi
+    rm -f "$next" "$source"
+    trap - EXIT
+
+    printf 'Published test artifact: %s sha256=%s size=%s\n' \
+        "$filename" "$expected_sha" "$size"
+}
+
 install_helper() {
     local expected_sha="$1"
     local source
@@ -364,6 +436,10 @@ case "${1:-}" in
     deploy-site)
         [[ $# -eq 3 ]] || usage
         deploy_site "$2" "$3"
+        ;;
+    publish-test-artifact)
+        [[ $# -eq 4 ]] || usage
+        publish_test_artifact "$2" "$3" "$4"
         ;;
     install-helper)
         [[ $# -eq 3 ]] || usage

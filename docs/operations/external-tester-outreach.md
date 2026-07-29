@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-07-27
-revision: 5
+last_updated: 2026-07-29
+revision: 6
 status: postponed
-target_release: v0.13.0
+target_release: v0.14.0
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
 ---
 
@@ -11,15 +11,16 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > **POSTPONED; NO NEW DATE IS ASSIGNED:** the current qualifying milestone is
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
-> differed from the host's native format. Release `v0.13.0` is now the
-> published and verified tester baseline. Do not publish the copy below until
-> the separate external cached-history and venue-eligibility gates are closed.
+> differed from the host's native format. Release candidate `v0.14.0` is not
+> yet publication or tester authority. Do not publish the copy below until its
+> release proof and the separate external cached-history and venue-eligibility
+> gates are closed.
 
-`v0.13.0` is the pinned release for this packet. The release artifact matrix
-records its published tag, checksums, signature, installed-binary proof, live
-deployment, and released-package cross-distro lifecycle. The maintainer assigns
-fresh dates only after the remaining external gates close, then posts manually
-and remains available to answer comments.
+`v0.14.0` is the target release for this packet. It becomes pinned only after
+the release artifact matrix records its published tag, checksums, signature,
+installed-binary proof, live deployment, and released-package cross-distro
+lifecycle. The maintainer assigns fresh dates only after every remaining gate
+closes, then posts manually and remains available to answer comments.
 
 ## Show HN Submission
 
@@ -69,10 +70,10 @@ the executor enforcement contract automatically. Unsupported requirements fail
 before mutation; there is no capability-approval bypass.
 
 Agent-assisted walkthrough, including download and checksum verification:
-https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
 
 Pinned release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
 
 Privacy-safe feedback form:
 https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md
@@ -111,13 +112,13 @@ The pinned guide asks an agent to preflight a disposable supported VM, verify
 the release checksum, select a source format different from the host format,
 explain the complete dry-run, ask before live mutations, keep a private
 transcript, and draft privacy-safe feedback:
-https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
 
 Repository:
 https://github.com/ConaryLabs/Conary
 
 Pinned release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
 
 I'm interested both in product defects and in whether repo-owned instructions
 make Codex useful as a supervised systems-test operator. Exact failures,
@@ -149,11 +150,11 @@ contracts while owning the transaction and rollback on the target.
 The guide tells Claude Code to confirm a disposable supported VM, verify the
 pinned release checksum, inspect the complete dry-run, ask before every live
 mutation, keep a private transcript, and draft privacy-safe feedback:
-https://github.com/ConaryLabs/Conary/blob/v0.13.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
 
 Repository and pinned release:
 https://github.com/ConaryLabs/Conary
-https://github.com/ConaryLabs/Conary/releases/tag/v0.13.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
 
 The useful feedback is where a source-native contract fails, whether Conary
 explains it precisely, whether install/update/remove behave consistently, and
@@ -184,13 +185,13 @@ failed attempts are useful evidence.
   reports as non-qualifying historical evidence.
 - [x] Rewrite the venue copy around the cross-distro package loop.
 - [x] Retire the passed 2026-07-20 through 2026-07-22 dates.
-- [x] Publish immutable `v0.13.0` with RPM, DEB, Arch, CCS, checksums, and the
+- [ ] Publish immutable `v0.14.0` with RPM, DEB, Arch, CCS, checksums, and the
   required signature and installed-binary evidence.
-- [x] Record exact cross-distro install/query/update-preview/remove proof for
+- [ ] Record exact cross-distro install/query/update-preview/remove proof for
   the released binary on supported hosts.
-- [x] Deploy the exact release sites and independently verify live status and
+- [ ] Deploy the exact release sites and independently verify live status and
   body claims.
-- [x] Update the release artifact matrix and milestone tracker with exact
+- [ ] Update the release artifact matrix and milestone tracker with exact
   release, deployment, and Remi population evidence.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.

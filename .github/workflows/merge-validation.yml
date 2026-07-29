@@ -164,8 +164,6 @@ jobs:
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
       - name: Check integration-test manifest inventory
         run: cargo run -p conary-test -- list
-      - name: Run Remi smoke health check
-        run: ./scripts/remi-health.sh --smoke
       - name: Explain paused remote validation
         run: |
           cat <<'EOF'

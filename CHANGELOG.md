@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.9.0] - 2026-07-29
+
+### Added
+- add typed result vocabulary for the just-works gate (#114)
+
+### Fixed
+- sync Remi through bounded sparse pages (#161)
+- derive archive decode bounds from the structural owner (#134)
+- stream native authoring instead of buffering whole packages (#136)
+- decode pax xattrs with libarchive's exact writer grammar (#128)
+- derive hardlink metadata from transaction rule (#126)
+- replace the fixed authority ceiling with a shared structural budget (#120)
+- match pacman's authenticated Arch key semantics (#119)
+- decide traversal on exact bytes, not character class (#115)
+- make serving readiness evidence bearing (#113)
+
+## [v0.14.0] - 2026-07-29
+
+### Added
+- add typed result vocabulary for the just-works gate (#114)
+
+### Changed
+- give brand tokens and shared assets one owner (#144)
+
+### Fixed
+- sync Remi through bounded sparse pages (#161)
+- derive archive decode bounds from the structural owner (#134)
+- stream native authoring instead of buffering whole packages (#136)
+- decode pax xattrs with libarchive's exact writer grammar (#128)
+- derive hardlink metadata from transaction rule (#126)
+- replace the fixed authority ceiling with a shared structural budget (#120)
+- match pacman's authenticated Arch key semantics (#119)
+- decide traversal on exact bytes, not character class (#115)
+- make serving readiness evidence bearing (#113)
+
 ## [remi-v0.8.5] - 2026-07-27
 
 ### Fixed
