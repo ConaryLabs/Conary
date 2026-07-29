@@ -292,7 +292,9 @@ mod integration_tests {
     use crate::db::models::{SystemState, Trove, TroveType};
     use crate::filesystem::CasStore;
     use crate::generation::builder::build_generation_from_db_with_boot_root;
-    use crate::generation::builder::test_support::insert_regular_file_with_parents;
+    use crate::generation::builder::test_support::{
+        insert_regular_file_with_parents, persist_test_host_capabilities,
+    };
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
@@ -303,6 +305,7 @@ mod integration_tests {
         let db_path = tmp.path().join("db.sqlite3");
         crate::db::init(&db_path).unwrap();
         let conn = crate::db::open(&db_path).unwrap();
+        persist_test_host_capabilities(&conn);
         (tmp, conn)
     }
 
@@ -470,6 +473,7 @@ mod tests {
             cas_base_rel: "../../objects",
             cas_verification: CasObjectVerification::AlreadyVerified,
             boot_assets,
+            carrier_capabilities: Default::default(),
         })
         .unwrap();
 

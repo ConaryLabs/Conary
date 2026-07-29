@@ -19,7 +19,8 @@ pub(super) fn write_bootstrap_run_generation_artifact(
     use conary_core::filesystem::CasStore;
     use conary_core::generation::artifact::{
         ArtifactWriteInputs, BootAssetSources, CasObjectRef, CasObjectVerification,
-        deduplicate_sort_cas_objects, stage_boot_assets, write_generation_artifact,
+        GenerationCarrierCapabilities, deduplicate_sort_cas_objects, stage_boot_assets,
+        write_generation_artifact,
     };
     use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 
@@ -88,6 +89,8 @@ pub(super) fn write_bootstrap_run_generation_artifact(
         .len();
     let erofs_size = i64::try_from(erofs_size)
         .context("root.erofs is too large to record in generation metadata")?;
+    let carrier_capabilities = GenerationCarrierCapabilities::from_generation_root(&root_manifest)
+        .context("Failed to project bootstrap-run target carrier capabilities")?;
     let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
         generation_dir: gen_dir,
         generation: 1,
@@ -96,6 +99,7 @@ pub(super) fn write_bootstrap_run_generation_artifact(
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::Deep,
         boot_assets,
+        carrier_capabilities,
     })
     .context("Failed to write bootstrap-run generation artifact")?;
 
@@ -353,8 +357,19 @@ mod tests {
             let bytes = format!("fake initramfs input: {rel}\n").into_bytes();
             write_source_file(&source_root, rel, &bytes);
         }
-        let (root, entries) =
+        let (root, mut entries) =
             scan_payload_tree(&source_root, &cas, derivation_id).expect("exact root scan");
+        entries
+            .iter_mut()
+            .find(|entry| entry.path == "/usr")
+            .expect("captured /usr")
+            .node
+            .source
+            .xattrs
+            .insert(
+                "security.selinux".to_string(),
+                b"system_u:object_r:usr_t:s0\0".to_vec(),
+            );
         GenerationRootManifest {
             version: GENERATION_ROOT_MANIFEST_VERSION,
             root,
@@ -397,8 +412,17 @@ mod tests {
         )
         .expect("artifact writer");
 
-        conary_core::generation::artifact::load_generation_artifact(&gen_dir)
+        let artifact = conary_core::generation::artifact::load_generation_artifact(&gen_dir)
             .expect("load generated artifact");
+        assert_eq!(
+            artifact
+                .artifact_manifest
+                .carrier_capabilities
+                .immutable_backing_security
+                .expect("captured target carrier security")
+                .xattr_value,
+            b"system_u:object_r:usr_t:s0\0"
+        );
         assert!(gen_dir.join(".conary-artifact.json").is_file());
         assert!(gen_dir.join("cas-manifest.json").is_file());
         assert!(gen_dir.join("boot-assets/manifest.json").is_file());

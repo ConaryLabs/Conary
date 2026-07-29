@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 35
+revision: 36
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -69,7 +69,7 @@ text. Supporting another Linux environment means satisfying or implementing
 the same capability contracts and proof fixtures, not creating
 RPM-to-that-distro, DEB-to-that-distro, or Arch-to-that-distro code paths.
 
-The current host-inventory schema is version 3 and is persisted under
+The current host-inventory schema is version 4 and is persisted under
 `system.host-capability-inventory` by `conary system init`. Its structural
 contract records the active init interface and exact `systemctl`,
 `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and `ldconfig` command
@@ -82,8 +82,12 @@ for `--version` is not a capability. Probe processes receive a fixed sanitized
 environment, bounded output, a five-second deadline, and a private process
 group that Conary kills on timeout. Each inventory field accepts only its exact
 command contract, and the systemd operation set must be exactly the offline or
-live-manager shape discovered at initialization. The inventory does not contain
-a distro, release, source package manager, or pairwise compatibility selector.
+live-manager shape discovered at initialization. The version-4 document also
+records the opaque `security.selinux` value of the target `/usr` node when
+present, for use as immutable carrier-backing authority. It does not parse that
+value or derive one from a distro, path, policy name, source package manager, or
+pairwise compatibility selector. A version-3 inventory must be replaced by
+rerunning `conary system init`.
 
 The typed tmpfiles contract preserves type, path, mode, user, group, age, and
 argument as seven required strings. Conary parses only the documented type
@@ -388,7 +392,21 @@ materializes the overlay upper; `/var` and `/srv` entries cannot enter that
 upper. Boot-carrier export copies both manifests, reconstructs `/var` and
 `/srv`, and seeds the same `/etc` upper from verified, manifest-listed CAS
 objects. A read-only carrier may copy that seed to tmpfs for runtime writes,
-but the copied seed is not a second state authority.
+but the copied seed is not a second state authority. Export also restores the
+verified root node and manifest-owned `/usr`, `/etc`, and `/boot` mountpoint
+metadata. A carrier's partition topology is distinct from the selected root's
+source-host topology: its boot entry disables source-`fstab` generation and,
+for writable disks, declares the carrier ESP by partition label. Export does
+not rewrite the signed `/etc/fstab` seed to accomplish that projection.
+Generation artifact manifest v3 seals the versioned target carrier-capability
+projection. Export restores every required root symlink from its exact logical
+manifest metadata, then applies the sealed opaque target value only to regular
+files and directories in the copied carrier CAS subtree. The logical composefs
+node and its external immutable backing object remain distinct security
+subjects with distinct authorities. A generation with artifact manifest v2
+must be rebuilt; export does not guess missing carrier authority. A bootstrap
+target that is not running yet projects the same fact from its exact captured
+`/usr` manifest node instead of inspecting or inheriting the build host.
 
 A generation-aware root mutation records a typed selected-root publication
 debt and durably installs its cumulative candidate before committing the
@@ -1278,6 +1296,9 @@ Current ownership:
 - generation capture/materializer and debt:
   `crates/conary-core/src/generation/root_manifest.rs`,
   `crates/conary-core/src/generation/root_manifest/`,
+  `crates/conary-core/src/generation/builder/carrier_capabilities.rs`,
+  `crates/conary-core/src/generation/artifact.rs`,
+  `crates/conary-core/src/generation/export.rs`,
   `apps/conary/src/commands/generation/selected_root.rs`,
   `apps/conary/src/commands/generation/config_transaction.rs`, and
   `apps/conary/src/commands/generation/publication.rs`;

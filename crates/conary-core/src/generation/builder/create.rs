@@ -9,6 +9,7 @@ use super::GenerationActivation;
 use super::boot_assets::{
     resolve_generation_boot_asset_sources, stage_runtime_boot_assets_from_sources,
 };
+use super::carrier_capabilities::generation_carrier_capabilities;
 use super::cas::{cas_objects_from_manifests, verify_runtime_generation_cas_object_presence};
 use super::root_validation::validate_runtime_generation_root_is_self_contained;
 use super::runtime_inputs;
@@ -304,6 +305,7 @@ fn build_generation_from_runtime_inputs(
         architecture,
         &boot_asset_sources,
     )?;
+    let carrier_capabilities = generation_carrier_capabilities(conn)?;
     let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
         generation_dir: &gen_dir,
         generation: gen_number,
@@ -312,6 +314,7 @@ fn build_generation_from_runtime_inputs(
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
+        carrier_capabilities,
     })?;
 
     // Step 6: Create system state snapshot at the reserved number -- only
@@ -373,7 +376,7 @@ fn build_generation_from_runtime_inputs(
 mod tests {
     use super::super::test_support::{
         assert_cas_size_mismatch_error, assert_missing_cas_object_error,
-        insert_regular_file_with_parents,
+        insert_regular_file_with_parents, persist_test_host_capabilities,
         runtime_generation_db_with_missing_regular_file_cas_object,
         runtime_generation_db_with_wrong_sized_regular_file_cas_object,
     };
@@ -403,6 +406,16 @@ mod tests {
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
+        let immutable_backing_security = crate::ccs::ImmutableBackingSecurity {
+            mechanism: crate::ccs::ImmutableBackingSecurityMechanism::Selinux,
+            xattr_value: b"system_u:object_r:usr_t:s0\0".to_vec(),
+        };
+        crate::ccs::HostCapabilityInventory {
+            immutable_backing_security: Some(immutable_backing_security.clone()),
+            ..crate::ccs::HostCapabilityInventory::default()
+        }
+        .persist(&conn)
+        .unwrap();
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
@@ -446,7 +459,14 @@ mod tests {
         let metadata = GenerationMetadata::read_from(&gen_dir).unwrap();
         assert!(metadata.artifact_manifest_sha256.is_some());
         assert_eq!(metadata.kernel_version.as_deref(), Some("6.19.8-conary"));
-        crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+        let artifact = crate::generation::artifact::load_generation_artifact(&gen_dir).unwrap();
+        assert_eq!(
+            artifact
+                .artifact_manifest
+                .carrier_capabilities
+                .immutable_backing_security,
+            Some(immutable_backing_security)
+        );
     }
 
     #[cfg(feature = "composefs-rs")]
@@ -467,6 +487,7 @@ mod tests {
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
+        persist_test_host_capabilities(&conn);
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),
@@ -600,6 +621,7 @@ mod tests {
         let hello_hash = cas.store(b"hello").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
+        persist_test_host_capabilities(&conn);
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),

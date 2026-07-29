@@ -82,6 +82,10 @@ pub(super) fn ccs_symlink(
 }
 
 pub(super) fn stage_test_boot_assets(root: &std::path::Path) {
+    let conn = conary_core::db::open(root.join("conary.db")).unwrap();
+    crate::commands::test_helpers::persist_test_host_capabilities(&conn);
+    drop(conn);
+
     let kernel_version = "test-kernel";
     let boot_root = root.join("boot");
     std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();

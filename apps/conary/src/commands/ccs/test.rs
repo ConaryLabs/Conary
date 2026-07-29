@@ -126,6 +126,7 @@ esac
             ExecutableInterface::probe_ldconfig(ldconfig)
                 .context("probe isolated ldconfig contract")?,
         ),
+        immutable_backing_security: None,
     };
     let conn = conary_core::db::open(db_path).context("open isolated test database")?;
     inventory
