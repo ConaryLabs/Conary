@@ -421,7 +421,7 @@ Generation-aware package mutation
        |
  Generation N (immutable, verified)
        |
-  conary system generation export --format raw|qcow2
+  conary system generation export --format raw|qcow2|iso
        |
   validated manifests + CAS -> exact config/mutable-state projection -> staged ESP/rootfs
 ```
