@@ -421,7 +421,8 @@ pub(crate) fn materialize(
     let result = (|| -> Result<()> {
         // The exact mutable-state manifest is seeded at the unpublished
         // generation path before config decisions are applied. Preserve that
-        // `/etc`, `/var`, and `/srv` authority as the base of the overlay.
+        // `/etc` authority as the base of the config overlay. `/var` and
+        // `/srv` remain owned by their live mutable roots.
         if final_upper.is_dir() {
             copy_overlay_tree(&final_upper, &stage)?;
         }
