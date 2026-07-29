@@ -17,7 +17,8 @@ use conary_core::db::models::{
     ProvideEntry, Trove, TroveType,
 };
 use conary_core::packages::{
-    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledFileAbsencePolicy, InstalledPackageIdentity, SystemPackageManager, dpkg_query,
+    pacman_query, rpm_query,
 };
 use conary_core::repository::dependency_model::RepositoryRequirementGroup;
 use std::collections::HashSet;
@@ -38,7 +39,7 @@ fn parse_package_pattern(field: &str, pattern: Option<&str>) -> Result<Option<gl
         .transpose()
 }
 
-/// File info tuple: (path, size, mode, digest, user, group, link_target)
+/// File info tuple: (path, size, mode, digest, user, group, link_target, absence policy)
 pub type FileInfoTuple = (
     String,
     i64,
@@ -47,6 +48,7 @@ pub type FileInfoTuple = (
     Option<String>,
     Option<String>,
     Option<String>,
+    InstalledFileAbsencePolicy,
 );
 
 #[derive(Debug)]
@@ -557,6 +559,7 @@ fn query_pm_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileI
                 f.user,
                 f.group,
                 f.link_target,
+                f.absence_policy,
             )
         })
         .collect())

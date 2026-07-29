@@ -12,6 +12,7 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, ProvideEntry,
     Trove, TroveType,
 };
+use conary_core::packages::InstalledFileAbsencePolicy;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -151,6 +152,7 @@ fn collect_live_root_file_info(root: &Path) -> Result<Vec<FileInfoTuple>> {
             Some("root".to_string()),
             Some("root".to_string()),
             link_target,
+            InstalledFileAbsencePolicy::Required,
         ));
     }
 

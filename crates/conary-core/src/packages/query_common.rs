@@ -3,6 +3,26 @@
 
 use crate::packages::InstalledPackageIdentity;
 
+/// Native package-manager authority for a file record that is absent on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstalledFileAbsencePolicy {
+    /// The native record describes required live payload.
+    Required,
+    /// RPM `%ghost` ownership may describe a path with no payload.
+    RpmGhost,
+    /// RPM `%config(missingok)` permits the installed path to be absent.
+    RpmMissingOk,
+    /// The RPM record carries both `%ghost` and `missingok`.
+    RpmGhostAndMissingOk,
+}
+
+impl InstalledFileAbsencePolicy {
+    #[must_use]
+    pub const fn permits_absence(self) -> bool {
+        !matches!(self, Self::Required)
+    }
+}
+
 /// Information about a single installed file from a native package manager.
 #[derive(Debug, Clone)]
 pub struct InstalledFileInfo {
@@ -14,6 +34,7 @@ pub struct InstalledFileInfo {
     pub group: Option<String>,
     pub link_target: Option<String>,
     pub mtime: Option<i64>, // RPM provides this, others don't
+    pub absence_policy: InstalledFileAbsencePolicy,
 }
 
 /// One exact installed native-manager record and its manager-specific metadata.

@@ -41,24 +41,31 @@ fn generation_root_has_init_entrypoint(manifest: &GenerationRootManifest) -> boo
         .collect::<HashSet<_>>();
 
     resolve_virtual_path("/sbin/init", &symlinks)
-        .is_some_and(|resolved| executable_paths.contains(&resolved))
+        .is_ok_and(|resolved| executable_paths.contains(&resolved))
 }
 
-fn resolve_virtual_path(path: &str, symlinks: &HashMap<String, String>) -> Option<String> {
-    let mut current = normalize_virtual_path(path, "/")?;
+pub(super) fn resolve_virtual_path(
+    path: &str,
+    symlinks: &HashMap<String, String>,
+) -> crate::Result<String> {
+    let mut current = normalize_virtual_path(path, "/").ok_or_else(|| {
+        crate::Error::InvalidPath(format!("virtual path escapes the generation root: {path}"))
+    })?;
     for _ in 0..40 {
-        let Some(next) = rewrite_first_symlink_component(&current, symlinks) else {
-            return Some(current);
+        let Some(next) = rewrite_first_symlink_component(&current, symlinks)? else {
+            return Ok(current);
         };
         current = next;
     }
-    None
+    Err(crate::Error::InvalidPath(format!(
+        "virtual path exceeds 40 manifest symlink edges: {path}"
+    )))
 }
 
 fn rewrite_first_symlink_component(
     path: &str,
     symlinks: &HashMap<String, String>,
-) -> Option<String> {
+) -> crate::Result<Option<String>> {
     let components = path
         .trim_start_matches('/')
         .split('/')
@@ -70,16 +77,26 @@ fn rewrite_first_symlink_component(
             continue;
         };
         let base = parent_virtual_path(&prefix);
-        let mut rewritten = normalize_virtual_path(target, &base)?;
+        let mut rewritten = normalize_virtual_path(target, &base).ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "manifest symlink {prefix} target {target:?} escapes the generation root"
+            ))
+        })?;
         for component in &components[index + 1..] {
             if rewritten != "/" {
                 rewritten.push('/');
             }
             rewritten.push_str(component);
         }
-        return normalize_virtual_path(&rewritten, "/");
+        return normalize_virtual_path(&rewritten, "/")
+            .map(Some)
+            .ok_or_else(|| {
+                crate::Error::InvalidPath(format!(
+                    "manifest symlink {prefix} rewrites {path} outside the generation root"
+                ))
+            });
     }
-    None
+    Ok(None)
 }
 
 fn normalize_virtual_path(path: &str, base: &str) -> Option<String> {
@@ -143,6 +160,28 @@ mod tests {
             regular("/usr/sbin/init", 0o755),
         ]);
         assert!(!generation_root_has_init_entrypoint(&manifest));
+    }
+
+    #[test]
+    fn virtual_path_resolution_rejects_escape_and_loops() {
+        let escape = HashMap::from([("/lib".to_string(), "../../outside".to_string())]);
+        let error = resolve_virtual_path("/lib/modules", &escape).unwrap_err();
+        assert!(
+            error.to_string().contains("escapes the generation root"),
+            "{error}"
+        );
+
+        let cycle = HashMap::from([
+            ("/first".to_string(), "/second".to_string()),
+            ("/second".to_string(), "/first".to_string()),
+        ]);
+        let error = resolve_virtual_path("/first/tool", &cycle).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds 40 manifest symlink edges"),
+            "{error}"
+        );
     }
 
     fn manifest(entries: Vec<GenerationRootEntry>) -> GenerationRootManifest {

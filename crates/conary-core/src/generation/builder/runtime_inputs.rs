@@ -2,18 +2,21 @@
 
 //! Exact projection of installed payload authority into generation artifacts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::ccs::manifest::FileCapability;
 use crate::db::models::{DirectoryClaim, FileEntry, InstallSource, InstalledFileCapability, Trove};
 use crate::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
-    MutableStateManifest, RootPathDomain, capture_root_node, classify_root_path,
+    MutableStateManifest, RootPathDomain, capture_existing_payload_node, capture_root_node,
+    classify_root_path,
 };
 use crate::payload::PayloadNodeKind;
 
 use super::file_capabilities::{SECURITY_CAPABILITY_XATTR, encode_security_capability_xattr};
+
+mod aliases;
 
 type RuntimeXattrs = BTreeMap<String, Vec<u8>>;
 type CapabilityTargetKey = (i64, String);
@@ -72,6 +75,7 @@ pub(super) fn collect_runtime_generation_inputs(
         .filter(|trove| trove.install_source == InstallSource::AdoptedTrack)
         .count();
     let mut capability_xattrs = collect_runtime_capability_xattrs(conn, &trove_map, &files)?;
+    let mut runtime_entries = Vec::new();
     let mut immutable_entries = Vec::new();
     let mut state_entries = Vec::new();
 
@@ -99,11 +103,6 @@ pub(super) fn collect_runtime_generation_inputs(
             continue;
         };
 
-        let domain = classify_root_path(&file.path)?;
-        if domain == RootPathDomain::EphemeralMountOrUser {
-            continue;
-        }
-
         let mut entry = GenerationRootEntry {
             path: file.path,
             node: file.node,
@@ -115,6 +114,14 @@ pub(super) fn collect_runtime_generation_inputs(
         entry
             .validate()
             .map_err(|error| runtime_input_error(package_name, &entry.path, error.to_string()))?;
+        runtime_entries.push(entry);
+    }
+
+    for entry in aliases::canonicalize_runtime_alias_paths(runtime_entries)? {
+        let domain = classify_root_path(&entry.path)?;
+        if domain == RootPathDomain::EphemeralMountOrUser {
+            continue;
+        }
         match domain {
             RootPathDomain::Immutable => immutable_entries.push(entry),
             RootPathDomain::ConfigState | RootPathDomain::MutableState => {
@@ -123,6 +130,11 @@ pub(super) fn collect_runtime_generation_inputs(
             RootPathDomain::EphemeralMountOrUser => unreachable!("handled above"),
         }
     }
+    add_exact_selected_root_parent_closure(
+        &mut immutable_entries,
+        &mut state_entries,
+        selected_root,
+    )?;
     immutable_entries.sort_by(|left, right| left.path.cmp(&right.path));
     state_entries.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -143,6 +155,98 @@ pub(super) fn collect_runtime_generation_inputs(
         state,
         adopted_track_count,
     })
+}
+
+/// Close package-owned inputs over exact live parent-directory structure.
+///
+/// Native tooling may create a structural parent that no package claims. Such
+/// a node belongs in the generation tree, but not in removable package
+/// ownership. Capture it from the selected root instead of inventing metadata
+/// or weakening the manifest's explicit-parent contract.
+fn add_exact_selected_root_parent_closure(
+    immutable_entries: &mut Vec<GenerationRootEntry>,
+    state_entries: &mut Vec<GenerationRootEntry>,
+    selected_root: &Path,
+) -> crate::Result<()> {
+    let entry_paths = immutable_entries
+        .iter()
+        .chain(state_entries.iter())
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let present = immutable_entries
+        .iter()
+        .chain(state_entries.iter())
+        .map(|entry| (entry.path.clone(), entry.node.source.kind.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut missing = BTreeSet::new();
+
+    for entry_path in &entry_paths {
+        let mut parent = Path::new(entry_path).parent();
+        while let Some(parent_path) = parent {
+            if parent_path == Path::new("/") {
+                break;
+            }
+            let parent_text = parent_path.to_str().ok_or_else(|| {
+                crate::Error::InvalidPath(format!(
+                    "runtime generation parent for {} is not UTF-8",
+                    entry_path
+                ))
+            })?;
+            match present.get(parent_text) {
+                Some(kind) if matches!(kind, PayloadNodeKind::Directory) => {}
+                Some(kind) => {
+                    return Err(crate::Error::InvalidPath(format!(
+                        "runtime generation path {} has non-directory parent {} ({})",
+                        entry_path,
+                        parent_text,
+                        payload_kind_name(kind)
+                    )));
+                }
+                None => {
+                    missing.insert(parent_text.to_string());
+                }
+            }
+            parent = parent_path.parent();
+        }
+    }
+
+    for virtual_path in missing {
+        let relative = virtual_path.strip_prefix('/').ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "runtime generation parent is not absolute: {virtual_path}"
+            ))
+        })?;
+        let live_path = selected_root.join(relative);
+        let node = capture_existing_payload_node(&live_path).map_err(|error| {
+            crate::Error::InvalidPath(format!(
+                "runtime generation cannot capture exact selected-root parent {virtual_path}: {error}"
+            ))
+        })?;
+        if !matches!(node.source.kind, PayloadNodeKind::Directory) {
+            return Err(crate::Error::InvalidPath(format!(
+                "runtime generation selected-root parent {virtual_path} is {}, not a directory",
+                payload_kind_name(&node.source.kind)
+            )));
+        }
+        let entry = GenerationRootEntry {
+            path: virtual_path,
+            node,
+            content: None,
+        };
+        match classify_root_path(&entry.path)? {
+            RootPathDomain::Immutable => immutable_entries.push(entry),
+            RootPathDomain::ConfigState | RootPathDomain::MutableState => {
+                state_entries.push(entry);
+            }
+            RootPathDomain::EphemeralMountOrUser => {
+                return Err(crate::Error::InvalidPath(format!(
+                    "generation-authoritative path requires parent {} in the ephemeral/user domain",
+                    entry.path
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_runtime_capability_xattrs(
@@ -287,6 +391,8 @@ fn capability_input_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
     use crate::db::models::{DirectoryClaimAnchorPolicy, FileEntry, Trove, TroveType};
     use crate::db::testing::create_test_db;
     use crate::payload::{
@@ -378,6 +484,101 @@ mod tests {
     }
 
     #[test]
+    fn exact_live_parent_directories_close_immutable_inputs() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        std::fs::create_dir_all(root.path().join("boot/loader/entries")).unwrap();
+        std::fs::set_permissions(
+            root.path().join("boot/loader"),
+            std::fs::Permissions::from_mode(0o711),
+        )
+        .unwrap();
+        let troves = vec![trove(1, "bootloader", InstallSource::AdoptedFull)];
+        let files = vec![directory("/boot", 1), directory("/boot/loader/entries", 1)];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/boot", "/boot/loader", "/boot/loader/entries"]
+        );
+        let parent = inputs
+            .generation
+            .entries
+            .iter()
+            .find(|entry| entry.path == "/boot/loader")
+            .unwrap();
+        assert!(matches!(
+            parent.node.source.kind,
+            PayloadNodeKind::Directory
+        ));
+        assert_eq!(parent.node.source.mode & 0o7777, 0o711);
+        assert!(parent.content.is_none());
+    }
+
+    #[test]
+    fn exact_live_parent_directories_follow_the_child_state_domain() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        std::fs::create_dir_all(root.path().join("etc/runtime")).unwrap();
+        let troves = vec![trove(1, "runtime", InstallSource::AdoptedFull)];
+        let files = vec![regular("/etc/runtime/config", b"state", 1)];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert!(inputs.generation.entries.is_empty());
+        assert_eq!(
+            inputs
+                .state
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/etc", "/etc/runtime", "/etc/runtime/config"]
+        );
+    }
+
+    #[test]
+    fn absent_exact_live_parent_directory_is_rejected() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "runtime", InstallSource::AdoptedFull)];
+        let files = vec![regular("/opt/missing/tool", b"tool", 1)];
+
+        let error =
+            collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot capture exact selected-root parent /opt")
+        );
+    }
+
+    #[test]
+    fn non_directory_exact_live_parent_is_rejected() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        std::fs::write(root.path().join("opt"), b"not a directory").unwrap();
+        let troves = vec![trove(1, "runtime", InstallSource::AdoptedFull)];
+        let files = vec![regular("/opt/tool", b"tool", 1)];
+
+        let error =
+            collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("selected-root parent /opt is regular, not a directory")
+        );
+    }
+
+    #[test]
     fn special_nodes_remain_typed_generation_inputs() {
         let (_tmp, conn) = create_test_db();
         let root = selected_root();
@@ -415,6 +616,168 @@ mod tests {
                 .entries
                 .iter()
                 .all(|entry| entry.path != "/lib64")
+        );
+    }
+
+    #[test]
+    fn descendants_of_owned_usr_merge_links_use_materialized_paths() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "filesystem", InstallSource::AdoptedFull)];
+        let files = vec![
+            symlink("/lib", "usr/lib", 1),
+            directory("/lib/modules", 1),
+            directory("/usr", 1),
+            directory("/usr/lib", 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/lib", "/usr", "/usr/lib", "/usr/lib/modules"]
+        );
+    }
+
+    #[test]
+    fn nested_owned_symlink_ancestors_resolve_from_exact_manifest_authority() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "filesystem", InstallSource::AdoptedFull)];
+        let files = vec![
+            symlink("/alias", "real", 1),
+            symlink("/alias/link", "nested", 1),
+            regular("/alias/link/tool", b"tool", 1),
+            directory("/real", 1),
+            directory("/real/nested", 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "/alias",
+                "/real",
+                "/real/link",
+                "/real/nested",
+                "/real/nested/tool"
+            ]
+        );
+    }
+
+    #[test]
+    fn equivalent_alias_and_materialized_authority_coalesce() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "filesystem", InstallSource::AdoptedFull)];
+        let files = vec![
+            symlink("/lib", "usr/lib", 1),
+            directory("/lib/modules", 1),
+            directory("/usr", 1),
+            directory("/usr/lib", 1),
+            directory("/usr/lib/modules", 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .filter(|entry| entry.path == "/usr/lib/modules")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn conflicting_alias_and_materialized_authority_is_rejected() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "filesystem", InstallSource::AdoptedFull)];
+        let mut alias_directory = directory("/lib/modules", 1);
+        alias_directory.node.source.mode = libc::S_IFDIR | 0o700;
+        let files = vec![
+            symlink("/lib", "usr/lib", 1),
+            alias_directory,
+            directory("/usr", 1),
+            directory("/usr/lib", 1),
+            directory("/usr/lib/modules", 1),
+        ];
+
+        let error =
+            collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("with conflicting exact payload authority")
+        );
+    }
+
+    #[test]
+    fn alias_projection_reclassifies_the_materialized_path_domain() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "configuration", InstallSource::AdoptedFull)];
+        let files = vec![
+            symlink("/configuration", "etc", 1),
+            regular("/configuration/app.conf", b"state", 1),
+            directory("/etc", 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/configuration"]
+        );
+        assert_eq!(
+            inputs
+                .state
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/etc", "/etc/app.conf"]
+        );
+    }
+
+    #[test]
+    fn alias_projection_rejects_manifest_symlink_escape() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "filesystem", InstallSource::AdoptedFull)];
+        let files = vec![
+            symlink("/lib", "../../outside", 1),
+            directory("/lib/modules", 1),
+        ];
+
+        let error =
+            collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot resolve exact manifest symlink ancestry"),
+            "{error}"
         );
     }
 

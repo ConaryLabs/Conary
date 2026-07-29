@@ -8,6 +8,7 @@ use crate::repository::distro::version_scheme_from_db;
 use crate::repository::requirement::validate_requirement_group;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, Row, params};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledRequirementGroup {
@@ -68,8 +69,11 @@ impl InstalledRequirementGroup {
         version_scheme: VersionScheme,
         requirements: &[RepositoryRequirementGroup],
     ) -> Result<()> {
+        let mut inserted = HashSet::new();
         for requirement in requirements {
-            Self::from_group(trove_id, version_scheme, requirement.clone())?.insert(conn)?;
+            if inserted.insert(requirement) {
+                Self::from_group(trove_id, version_scheme, requirement.clone())?.insert(conn)?;
+            }
         }
         Ok(())
     }
@@ -242,5 +246,42 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].requirement, requirement);
         assert_eq!(stored[0].kind, RepositoryRequirementKind::Depends);
+    }
+
+    #[test]
+    fn repeated_requirement_facts_persist_once_in_first_seen_order() {
+        let (_temp, conn) = create_test_db();
+        let mut trove = Trove::new(
+            "repeated-requirements".to_string(),
+            "1-1".to_string(),
+            TroveType::Package,
+            VersionScheme::Rpm,
+        );
+        let trove_id = trove.insert(&conn).unwrap();
+        let first = parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "/bin/sh",
+        )
+        .unwrap();
+        let second = parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "systemd-units",
+        )
+        .unwrap();
+
+        InstalledRequirementGroup::insert_groups(
+            &conn,
+            trove_id,
+            VersionScheme::Rpm,
+            &[first.clone(), second.clone(), first.clone()],
+        )
+        .unwrap();
+
+        let stored = InstalledRequirementGroup::find_by_trove(&conn, trove_id).unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].requirement, first);
+        assert_eq!(stored[1].requirement, second);
     }
 }

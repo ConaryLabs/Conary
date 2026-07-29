@@ -8,16 +8,20 @@
 use crate::error::{Error, Result};
 use crate::packages::InstalledPackageIdentity;
 use crate::packages::install_reason::{InstallReasonAuthorityError, query_package_names};
-use crate::packages::query_common::{InstalledFileInfo, InstalledPackageRecord, run_query_command};
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
-use crate::repository::requirement::parse_native_requirement;
-use crate::repository::versioning::VersionScheme;
+use crate::packages::query_common::{
+    InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord, run_query_command,
+};
+use crate::packages::rpm::decode_rpm_requirement;
+use crate::repository::dependency_model::RepositoryRequirementGroup;
+use rpm::{DependencyFlags, FileFlags};
 use std::collections::HashSet;
 use std::process::Command;
 use tracing::debug;
 
 const RPM_PACKAGE_RECORD_FORMAT: &str = "%{NEVRA}\x1e%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f";
-const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1f]";
+const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1e%{FILEFLAGS:hex}\x1f]";
+const RPM_REQUIREMENT_RECORD_FORMAT: &str =
+    "[%{REQUIRENAME}\x1e%{REQUIREFLAGS:hex}\x1e%{REQUIREVERSION}\x1f]";
 const RPM_OWNER_RECORD_FORMAT: &str = "%{NAME}\x1f";
 const DNF5_USER_INSTALLED_ARGS: &[&str] = &[
     "--setopt=disable_excludes=*",
@@ -301,9 +305,9 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
         .enumerate()
         .map(|(index, record)| {
             let parts = record.split('\x1e').collect::<Vec<_>>();
-            if parts.len() != 8 {
+            if parts.len() != 9 {
                 return Err(Error::ParseError(format!(
-                    "RPM file record {} has {} fields; expected exactly 8",
+                    "RPM file record {} has {} fields; expected exactly 9",
                     index + 1,
                     parts.len()
                 )));
@@ -352,6 +356,23 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
             })?;
             let user = required_rpm_field(parts[5], index + 1, "FILEUSERNAME")?;
             let group = required_rpm_field(parts[6], index + 1, "FILEGROUPNAME")?;
+            let flags = u32::from_str_radix(parts[8], 16).map_err(|error| {
+                Error::ParseError(format!(
+                    "RPM file record {} has invalid hexadecimal flags {:?}: {error}",
+                    index + 1,
+                    parts[8]
+                ))
+            })?;
+            let flags = FileFlags::from_bits_retain(flags);
+            let absence_policy = match (
+                flags.contains(FileFlags::GHOST),
+                flags.contains(FileFlags::MISSINGOK),
+            ) {
+                (false, false) => InstalledFileAbsencePolicy::Required,
+                (true, false) => InstalledFileAbsencePolicy::RpmGhost,
+                (false, true) => InstalledFileAbsencePolicy::RpmMissingOk,
+                (true, true) => InstalledFileAbsencePolicy::RpmGhostAndMissingOk,
+            };
             Ok(InstalledFileInfo {
                 path: parts[0].to_string(),
                 size,
@@ -361,6 +382,7 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
                 group: Some(group),
                 link_target: rpm_none_to_option(&parts[7]),
                 mtime: Some(mtime),
+                absence_policy,
             })
         })
         .collect()
@@ -369,7 +391,7 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
 /// Query RPM's complete installed `Requires` entries as exact typed groups.
 pub fn query_package_requirement_groups(name: &str) -> Result<Vec<RepositoryRequirementGroup>> {
     let output = Command::new("rpm")
-        .args(["-qR", name])
+        .args(["-q", name, "--queryformat", RPM_REQUIREMENT_RECORD_FORMAT])
         .env("LC_ALL", "C")
         .output()
         .map_err(|error| Error::InitError(format!("Failed to run rpm: {error}")))?;
@@ -379,19 +401,42 @@ pub fn query_package_requirement_groups(name: &str) -> Result<Vec<RepositoryRequ
         )));
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|error| Error::ParseError(format!("rpm -qR output is not UTF-8: {error}")))?
-        .lines()
-        .map(str::trim)
-        .filter(|requirement| !requirement.is_empty())
-        .map(|requirement| {
-            parse_native_requirement(
-                RepositoryRequirementKind::Depends,
-                VersionScheme::Rpm,
-                requirement,
-            )
-            .map_err(Error::ParseError)
+    let stdout = String::from_utf8(output.stdout).map_err(|error| {
+        Error::ParseError(format!("rpm requirement output is not UTF-8: {error}"))
+    })?;
+    parse_rpm_requirement_records(&stdout)
+}
+
+fn parse_rpm_requirement_records(output: &str) -> Result<Vec<RepositoryRequirementGroup>> {
+    output
+        .split('\x1f')
+        .filter(|record| !record.is_empty())
+        .enumerate()
+        .map(|(index, record)| {
+            let parts = record.split('\x1e').collect::<Vec<_>>();
+            if parts.len() != 3 {
+                return Err(Error::ParseError(format!(
+                    "RPM requirement record {} has {} fields; expected exactly 3",
+                    index + 1,
+                    parts.len()
+                )));
+            }
+            if parts[0].is_empty() {
+                return Err(Error::ParseError(format!(
+                    "RPM requirement record {} has an empty name",
+                    index + 1
+                )));
+            }
+            let flags = u32::from_str_radix(parts[1], 16).map_err(|error| {
+                Error::ParseError(format!(
+                    "RPM requirement record {} has invalid hexadecimal flags {:?}: {error}",
+                    index + 1,
+                    parts[1]
+                ))
+            })?;
+            decode_rpm_requirement(parts[0], parts[2], DependencyFlags::from_bits_retain(flags))
         })
+        .filter_map(|result| result.transpose())
         .collect()
 }
 
@@ -538,6 +583,44 @@ fn parse_owner_records(output: &str) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_requirement_records_decode_typed_flags_and_canonicalize_empty_epoch() {
+        let output = concat!(
+            "device-mapper-libs\x1e8\x1e:1.02.212-2.fc44\x1f",
+            "/bin/sh\x1e0\x1e\x1f",
+        );
+
+        let requirements = parse_rpm_requirement_records(output).unwrap();
+
+        assert_eq!(requirements.len(), 2);
+        assert_eq!(requirements[0].alternatives[0].name, "device-mapper-libs");
+        assert_eq!(
+            requirements[0].alternatives[0]
+                .version_constraint
+                .as_deref(),
+            Some("= 1.02.212-2.fc44")
+        );
+        assert_eq!(requirements[1].alternatives[0].name, "/bin/sh");
+        assert!(requirements[1].alternatives[0].version_constraint.is_none());
+    }
+
+    #[test]
+    fn installed_requirement_records_reject_misaligned_or_malformed_header_arrays() {
+        assert!(parse_rpm_requirement_records("name\x1e0\x1f").is_err());
+        assert!(parse_rpm_requirement_records("\x1e0\x1e\x1f").is_err());
+        assert!(parse_rpm_requirement_records("name\x1enot-hex\x1e\x1f").is_err());
+    }
+
+    #[test]
+    fn installed_and_artifact_requirements_share_rich_dependency_decoding() {
+        let output = "((feature-a with feature-b) if engine else fallback)\x1e8000000\x1e\x1f";
+        let requirements = parse_rpm_requirement_records(output).unwrap();
+
+        assert_eq!(requirements.len(), 1);
+        assert!(requirements[0].expression.is_conditional());
+        assert_eq!(requirements[0].alternatives.len(), 4);
+    }
 
     #[test]
     fn test_is_rpm_available() {
@@ -769,8 +852,8 @@ mod tests {
     #[test]
     fn file_query_uses_exact_parallel_array_records() {
         let records = parse_rpm_file_records(
-            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1f\
-             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1f",
+            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1e0\x1f\
+             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e40\x1f",
         )
         .unwrap();
 
@@ -780,12 +863,33 @@ mod tests {
         assert_eq!(records[1].path, "/usr/share/fixture data");
         assert!(records[1].digest.is_none());
         assert_eq!(records[1].mode, 0o40755);
+        assert_eq!(
+            records[0].absence_policy,
+            InstalledFileAbsencePolicy::Required
+        );
+        assert_eq!(
+            records[1].absence_policy,
+            InstalledFileAbsencePolicy::RpmGhost
+        );
 
         let zero_digest = parse_rpm_file_records(
-            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1f",
+            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1e48\x1f",
         )
         .unwrap();
         assert_eq!(zero_digest[0].digest.as_deref(), Some("00000000"));
+        assert_eq!(
+            zero_digest[0].absence_policy,
+            InstalledFileAbsencePolicy::RpmGhostAndMissingOk
+        );
+
+        let missing_ok = parse_rpm_file_records(
+            "/etc/optional\x1e1\x1e1700000002\x1e00000000\x1e0100644\x1eroot\x1eroot\x1e\x1e8\x1f",
+        )
+        .unwrap();
+        assert_eq!(
+            missing_ok[0].absence_policy,
+            InstalledFileAbsencePolicy::RpmMissingOk
+        );
     }
 
     #[test]
@@ -793,7 +897,13 @@ mod tests {
         assert!(parse_rpm_file_records("/usr/bin/fixture\x1e42\x1f").is_err());
         assert!(
             parse_rpm_file_records(
-                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1f"
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1f"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_rpm_file_records(
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1enot-hex\x1f"
             )
             .is_err()
         );
