@@ -74,7 +74,7 @@ mod tests {
     };
     use conary_core::hash::sha256;
     use conary_core::payload::{
-        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
     };
     use std::path::Path;
     use tempfile::TempDir;
@@ -96,35 +96,83 @@ mod tests {
     }
 
     fn write_root_manifests(generation_dir: &Path, object: &CasObjectRef) {
-        let mut root = PayloadNode::regular(0o755);
-        root.kind = PayloadNodeKind::Directory;
-        root.mode = libc::S_IFDIR | 0o755;
-        let root = ResolvedPayloadNode::from_numeric_source(root).unwrap();
+        let root = fixture_directory_node();
+        let mut entries = vec![
+            GenerationRootEntry {
+                path: "/boot".to_string(),
+                node: root.clone(),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/objects".to_string(),
+                node: root.clone(),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: format!("/objects/{}", object.sha256),
+                node: resolved_fixture_node(PayloadNode::regular(0o644)),
+                content: Some(PayloadContentAuthority {
+                    sha256: object.sha256.clone(),
+                    size: object.size,
+                }),
+            },
+            GenerationRootEntry {
+                path: "/usr".to_string(),
+                node: root.clone(),
+                content: None,
+            },
+        ];
+        entries.extend(conary_core::generation::metadata::ROOT_SYMLINKS.iter().map(
+            |(path, target)| GenerationRootEntry {
+                path: format!("/{path}"),
+                node: fixture_symlink_node(target),
+                content: None,
+            },
+        ));
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
         GenerationRootManifest {
             version: GENERATION_ROOT_MANIFEST_VERSION,
             root: root.clone(),
-            entries: vec![
-                GenerationRootEntry {
-                    path: "/objects".to_string(),
-                    node: root,
-                    content: None,
-                },
-                GenerationRootEntry {
-                    path: format!("/objects/{}", object.sha256),
-                    node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644))
-                        .unwrap(),
-                    content: Some(PayloadContentAuthority {
-                        sha256: object.sha256.clone(),
-                        size: object.size,
-                    }),
-                },
-            ],
+            entries,
         }
         .write_to(generation_dir)
         .unwrap();
-        MutableStateManifest::empty()
-            .write_to(generation_dir)
-            .unwrap();
+        MutableStateManifest {
+            version: GENERATION_ROOT_MANIFEST_VERSION,
+            entries: vec![GenerationRootEntry {
+                path: "/etc".to_string(),
+                node: root,
+                content: None,
+            }],
+        }
+        .write_to(generation_dir)
+        .unwrap();
+    }
+
+    fn fixture_directory_node() -> ResolvedPayloadNode {
+        let mut node = PayloadNode::regular(0o755);
+        node.kind = PayloadNodeKind::Directory;
+        node.mode = libc::S_IFDIR | 0o755;
+        resolved_fixture_node(node)
+    }
+
+    fn fixture_symlink_node(target: &str) -> ResolvedPayloadNode {
+        let mut node = PayloadNode::regular(0o777);
+        node.kind = PayloadNodeKind::Symlink {
+            target: target.to_string(),
+        };
+        node.mode = libc::S_IFLNK | 0o777;
+        resolved_fixture_node(node)
+    }
+
+    fn resolved_fixture_node(mut node: PayloadNode) -> ResolvedPayloadNode {
+        node.user = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::geteuid() }),
+        };
+        node.group = PayloadIdentity::Numeric {
+            id: u64::from(unsafe { libc::getegid() }),
+        };
+        ResolvedPayloadNode::from_numeric_source(node).unwrap()
     }
 
     impl ExportFixture {
@@ -164,6 +212,7 @@ mod tests {
                 cas_base_rel: "../../objects",
                 cas_verification: CasObjectVerification::Deep,
                 boot_assets,
+                carrier_capabilities: Default::default(),
             })
             .unwrap();
             GenerationMetadata {

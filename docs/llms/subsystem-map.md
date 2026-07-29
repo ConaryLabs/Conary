@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-27
-revision: 55
-summary: Route exact Remi signing, serialized selected-root mutation, typed rollback lineage, canonical-map authority, typed generation GC, exact release authority, and subsystem proof through current feature owners.
+last_updated: 2026-07-29
+revision: 56
+summary: Route exact Remi signing, serialized selected-root mutation, typed rollback lineage, canonical-map authority, carrier security, generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -110,6 +110,10 @@ commands.
 - Generation, bootstrap, and QEMU proof:
   `docs/modules/feature-ownership.md` slugs `generation` and `bootstrap`, plus
   `crates/conary-core/src/generation/root_manifest.rs`,
+  `crates/conary-core/src/generation/builder/carrier_capabilities.rs`,
+  `crates/conary-core/src/generation/artifact.rs`,
+  `crates/conary-core/src/generation/export.rs`,
+  `crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`,
   `crates/conary-core/src/activation/systemd.rs`,
   `crates/conary-core/src/activation/systemd/grammar.rs`,
   `crates/conary-core/src/activation/security_policy.rs`,

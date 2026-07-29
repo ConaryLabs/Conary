@@ -6,14 +6,21 @@ use crate::generation::artifact::{
 };
 use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 use crate::generation::root_manifest::{
-    GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, MutableStateManifest,
+    GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
+    MutableStateManifest,
 };
 use crate::generation::test_support::write_root_manifests_with_objects;
 use crate::payload::{
-    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
+    ResolvedPayloadNode,
 };
 use sha2::{Digest, Sha256};
+use std::os::unix::fs::MetadataExt;
 use tempfile::TempDir;
+
+const TEST_METADATA_XATTR: &str = "user.conary-export-metadata";
+const SOURCE_FSTAB: &[u8] =
+    b"UUID=source-root / btrfs defaults,subvol=root 0 1\nUUID=source-root /var btrfs defaults,subvol=var 0 0\n";
 
 struct Fixture {
     _tmp: TempDir,
@@ -127,12 +134,51 @@ impl Fixture {
 
         let cas_object = write_cas_object(&objects_dir, b"hello");
         write_root_manifests_with_objects(&generation_dir, std::slice::from_ref(&cas_object));
+        let mut root_manifest = GenerationRootManifest::read_from(&generation_dir).unwrap();
+        root_manifest.root = directory_node(0o751, 1, b"root");
+        root_manifest.entries.extend([
+            GenerationRootEntry {
+                path: "/boot".to_string(),
+                node: directory_node(0o752, 2, b"boot"),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr".to_string(),
+                node: directory_node(0o753, 3, b"usr"),
+                content: None,
+            },
+        ]);
+        root_manifest
+            .entries
+            .extend(
+                ROOT_SYMLINKS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (path, target))| {
+                        root_symlink_entry(
+                            &format!("/{path}"),
+                            target,
+                            u32::try_from(index).unwrap() + 10,
+                        )
+                    }),
+            );
+        root_manifest
+            .entries
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        root_manifest.write_to(&generation_dir).unwrap();
+
         let state_object = write_cas_object(&objects_dir, b"captured mutable state");
+        let fstab_object = write_cas_object(&objects_dir, SOURCE_FSTAB);
         MutableStateManifest {
             version: GENERATION_ROOT_MANIFEST_VERSION,
             entries: vec![
-                state_directory("/etc"),
+                GenerationRootEntry {
+                    path: "/etc".to_string(),
+                    node: directory_node(0o754, 4, b"etc"),
+                    content: None,
+                },
                 state_regular("/etc/conary-export.conf", &state_object),
+                state_regular("/etc/fstab", &fstab_object),
                 state_directory("/srv"),
                 state_regular("/srv/conary-export-state", &state_object),
                 state_directory("/var"),
@@ -163,13 +209,14 @@ impl Fixture {
             cas_base_rel: "../../objects",
             cas_verification: crate::generation::artifact::CasObjectVerification::Deep,
             boot_assets,
+            carrier_capabilities: Default::default(),
         })
         .unwrap();
         GenerationMetadata {
             generation: 7,
             format: GENERATION_FORMAT.to_string(),
             erofs_size: Some(10),
-            cas_objects_referenced: Some(1),
+            cas_objects_referenced: Some(3),
             fsverity_enabled: false,
             erofs_verity_digest: None,
             artifact_manifest_sha256: Some(artifact_digest),
@@ -195,15 +242,51 @@ impl Fixture {
 }
 
 fn state_directory(path: &str) -> GenerationRootEntry {
-    let mut node = PayloadNode::regular(0o755);
-    node.kind = PayloadNodeKind::Directory;
-    node.mode = libc::S_IFDIR | 0o755;
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: directory_node(0o755, 5, path.as_bytes()),
+        content: None,
+    }
+}
+
+fn root_symlink_entry(
+    path: &str,
+    target: &str,
+    timestamp_discriminator: u32,
+) -> GenerationRootEntry {
+    let mut node = PayloadNode::regular(0o777);
+    node.kind = PayloadNodeKind::Symlink {
+        target: target.to_string(),
+    };
+    node.mode = libc::S_IFLNK | 0o777;
+    node.mtime = PayloadTimestamp {
+        seconds: 1_700_000_000 + i64::from(timestamp_discriminator),
+        nanoseconds: timestamp_discriminator,
+    };
     set_test_process_ownership(&mut node);
     GenerationRootEntry {
         path: path.to_string(),
         node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
         content: None,
     }
+}
+
+fn directory_node(
+    permissions: u32,
+    timestamp_discriminator: u32,
+    marker: &[u8],
+) -> ResolvedPayloadNode {
+    let mut node = PayloadNode::regular(permissions);
+    node.kind = PayloadNodeKind::Directory;
+    node.mode = libc::S_IFDIR | permissions;
+    node.mtime = PayloadTimestamp {
+        seconds: 1_700_000_000 + i64::from(timestamp_discriminator),
+        nanoseconds: timestamp_discriminator,
+    };
+    node.xattrs
+        .insert(TEST_METADATA_XATTR.to_string(), marker.to_vec());
+    set_test_process_ownership(&mut node);
+    ResolvedPayloadNode::from_numeric_source(node).unwrap()
 }
 
 fn state_regular(path: &str, object: &CasObjectRef) -> GenerationRootEntry {
@@ -262,6 +345,47 @@ fn rootfs_projection_creates_runtime_tree() {
     assert!(staging.join("usr").is_dir());
     assert!(staging.join("etc").is_dir());
     assert!(staging.join("boot").is_dir());
+    assert_eq!(
+        std::fs::read(staging.join("conary/etc-state/7/fstab")).unwrap(),
+        SOURCE_FSTAB
+    );
+    assert_projected_metadata(&staging, &artifact.generation_root.root);
+    assert_projected_metadata(
+        &staging.join("usr"),
+        carrier_mountpoint_node(&artifact, "/usr").unwrap(),
+    );
+    assert_projected_metadata(
+        &staging.join("boot"),
+        carrier_mountpoint_node(&artifact, "/boot").unwrap(),
+    );
+    assert_projected_metadata(
+        &staging.join("etc"),
+        carrier_mountpoint_node(&artifact, "/etc").unwrap(),
+    );
+    assert_projected_metadata(
+        &staging.join("conary/etc-state/7"),
+        carrier_mountpoint_node(&artifact, "/etc").unwrap(),
+    );
+}
+
+fn assert_projected_metadata(path: &Path, expected: &ResolvedPayloadNode) {
+    let metadata = std::fs::symlink_metadata(path).unwrap();
+    assert_eq!(metadata.mode(), expected.source.mode);
+    assert_eq!(u64::from(metadata.uid()), expected.uid);
+    assert_eq!(u64::from(metadata.gid()), expected.gid);
+    assert_eq!(metadata.mtime(), expected.source.mtime.seconds);
+    assert_eq!(
+        u32::try_from(metadata.mtime_nsec()).unwrap(),
+        expected.source.mtime.nanoseconds
+    );
+    assert_eq!(
+        xattr::get(path, TEST_METADATA_XATTR).unwrap().as_deref(),
+        expected
+            .source
+            .xattrs
+            .get(TEST_METADATA_XATTR)
+            .map(Vec::as_slice)
+    );
 }
 
 #[cfg(unix)]
@@ -282,7 +406,41 @@ fn rootfs_projection_creates_current_and_usr_merge_symlinks() {
             std::fs::read_link(staging.join(link)).unwrap(),
             PathBuf::from(target)
         );
+        let expected = carrier_root_symlink_node(&artifact, &format!("/{link}"), target).unwrap();
+        let metadata = std::fs::symlink_metadata(staging.join(link)).unwrap();
+        assert_eq!(metadata.mode(), expected.source.mode);
+        assert_eq!(u64::from(metadata.uid()), expected.uid);
+        assert_eq!(u64::from(metadata.gid()), expected.gid);
+        assert_eq!(metadata.mtime(), expected.source.mtime.seconds);
+        assert_eq!(
+            u32::try_from(metadata.mtime_nsec()).unwrap(),
+            expected.source.mtime.nanoseconds
+        );
     }
+}
+
+#[test]
+fn rootfs_projection_applies_authenticated_immutable_backing_security() {
+    let fixture = Fixture::new();
+    let mut artifact = fixture.artifact();
+    let capability = crate::ccs::ImmutableBackingSecurity {
+        mechanism: crate::ccs::ImmutableBackingSecurityMechanism::Selinux,
+        xattr_value: b"system_u:object_r:usr_t:s0\0".to_vec(),
+    };
+    artifact
+        .artifact_manifest
+        .carrier_capabilities
+        .immutable_backing_security = Some(capability.clone());
+    let staging = fixture._tmp.path().join("rootfs-security");
+    let mut observed = None;
+
+    project_generation_rootfs_with_security_apply(&artifact, &staging, |actual, objects_dest| {
+        observed = Some((actual.clone(), objects_dest.to_path_buf()));
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(observed, Some((capability, staging.join("conary/objects"))));
 }
 
 #[test]
@@ -310,6 +468,46 @@ fn rootfs_projection_copies_only_manifest_listed_cas_objects() {
 }
 
 #[test]
+fn rootfs_projection_rejects_missing_mountpoint_metadata_before_staging() {
+    let fixture = Fixture::new();
+    let mut artifact = fixture.artifact();
+    artifact
+        .generation_root
+        .entries
+        .retain(|entry| entry.path != "/boot");
+    let staging = fixture._tmp.path().join("rootfs-missing-boot-authority");
+
+    let error = project_generation_rootfs(&artifact, &staging).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("missing exact carrier mountpoint metadata for /boot")
+    );
+    assert!(!staging.exists());
+}
+
+#[test]
+fn rootfs_projection_rejects_missing_root_symlink_metadata_before_staging() {
+    let fixture = Fixture::new();
+    let mut artifact = fixture.artifact();
+    artifact
+        .generation_root
+        .entries
+        .retain(|entry| entry.path != "/lib64");
+    let staging = fixture._tmp.path().join("rootfs-missing-lib64-authority");
+
+    let error = project_generation_rootfs(&artifact, &staging).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("missing exact carrier root-symlink metadata for /lib64")
+    );
+    assert!(!staging.exists());
+}
+
+#[test]
 fn esp_projection_writes_systemd_boot_contract() {
     let fixture = Fixture::new();
     let artifact = fixture.artifact();
@@ -331,6 +529,8 @@ fn esp_projection_writes_systemd_boot_contract() {
     assert!(bls.contains("root=PARTLABEL=CONARY_ROOT"));
     assert!(bls.contains("rootfstype=ext4"));
     assert!(bls.contains(" rw "));
+    assert!(bls.contains(" fstab=no "));
+    assert!(bls.contains("systemd.mount-extra=PARTLABEL=CONARY_ESP:/boot:vfat:defaults,noatime"));
     assert!(bls.contains("conary.generation=7"));
     assert!(bls.contains("console=tty0"));
     assert!(bls.contains("console=ttyS0"));
@@ -353,6 +553,8 @@ fn iso_esp_projection_writes_readonly_carrier_boot_contract() {
     assert!(bls.contains("root=LABEL=CONARY_ISO"));
     assert!(bls.contains("rootfstype=iso9660"));
     assert!(bls.contains(" ro "));
+    assert!(bls.contains(" fstab=no "));
+    assert!(!bls.contains("systemd.mount-extra="));
     assert!(bls.contains("conary.generation=7"));
     assert!(bls.contains("conary.carrier=readonly"));
     assert!(bls.contains("systemd.mask=boot.mount"));

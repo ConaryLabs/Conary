@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-26
-revision: 36
-summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, typed generation GC, and service boundaries
+last_updated: 2026-07-29
+revision: 37
+summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -423,7 +423,7 @@ Generation-aware package mutation
        |
   conary system generation export --format raw|qcow2|iso
        |
-  validated manifests + CAS -> exact config/mutable-state projection -> staged ESP/rootfs
+  validated manifests + carrier capabilities + CAS -> exact state/security projection -> staged ESP/rootfs
 ```
 
 ### Generation Lifecycle
@@ -443,7 +443,30 @@ CAS objects. Export reconstructs `/var` and `/srv` in the carrier root and
 projects `/etc` into `/conary/etc-state/<generation>` above one explicit empty
 lower directory. Read-only carriers copy that seeded config upper to runtime
 tmpfs before mounting it, so writability never replaces or bypasses the
-artifact's typed state authority.
+artifact's typed state authority. Carrier projection restores the verified
+generation-root metadata on `/` and the exact manifest metadata on `/usr`,
+`/etc`, `/boot`, and each root symlink; the disk backend excludes only `/boot/`
+contents so it does not replace the signed mountpoint with a default directory.
+Boot entries disable source-`fstab` generation because a self-contained carrier
+owns a new partition topology. Writable carriers declare their `CONARY_ESP`
+mount through the boot contract, while the original `/etc/fstab` bytes remain
+part of the unchanged mutable-state seed.
+
+Generation build also seals a versioned carrier-capability projection from the
+persisted target inventory into artifact manifest v3. Host-inventory document
+version 4 captures the target `/usr` node's exact opaque `security.selinux`
+value when that xattr is present; absence or an unsupported xattr facility is
+an explicit `None`, while any other probe failure aborts initialization.
+Export applies a sealed value only to regular files and directories in the
+copied carrier CAS subtree. Composefs logical nodes retain their own exact
+manifest xattrs; this separate target-supplied value authorizes the external
+immutable objects that back their bytes. Conary does not parse the context or
+select it from a distro, path, policy name, or built-in label table.
+Host-inventory document version 3 must be replaced by rerunning
+`conary system init`, and artifact manifest v2 generations must be rebuilt
+before export. For a bootstrap target that is not running yet, the exact
+captured `/usr` manifest node supplies the same target fact; bootstrap artifact
+writers may not substitute the build host's context or an empty default.
 
 ### Generation Module (`crates/conary-core/src/generation/`)
 
@@ -455,7 +478,8 @@ selected-root candidate; there is no database-snapshot publication fallback.
 Submodules: builder.rs (public
 generation-builder hub),
 builder/create.rs and builder/rebuild.rs (generation creation and recovery
-rebuild orchestration), builder/boot_assets.rs, builder/initramfs.rs,
+rebuild orchestration), builder/carrier_capabilities.rs (persisted target
+capability projection), builder/boot_assets.rs, builder/initramfs.rs,
 builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
 materialization support), builder/root_validation.rs and
 builder/runtime_inputs.rs (self-contained runtime input validation), and
@@ -469,7 +493,9 @@ composefs.rs (runtime feature detection). Exact config policy and persisted
 snapshot types live in `crates/conary-core/src/config_transaction.rs`;
 `apps/conary/src/commands/generation/config_transaction.rs` captures live
 identities and atomically materializes generation-local `/etc` uppers. There is
-no generic hash-conflict/manual-merge path.
+no generic hash-conflict/manual-merge path. Target immutable-backing security
+discovery and application live in
+`crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`.
 
 ### composefs Integration
 

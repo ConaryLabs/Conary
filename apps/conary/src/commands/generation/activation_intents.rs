@@ -276,7 +276,10 @@ fn resolve_booted_systemctl(conn: &Connection) -> Result<std::path::PathBuf> {
 
 fn resolve_booted_systemctl_with(
     conn: &Connection,
-    discover: impl FnOnce() -> HostCapabilityInventory,
+    discover: impl FnOnce() -> std::result::Result<
+        HostCapabilityInventory,
+        conary_core::ccs::HostCapabilityInventoryError,
+    >,
 ) -> Result<std::path::PathBuf> {
     if let Ok(inventory) = HostCapabilityInventory::load_required(conn)
         && let Some(executable) = inventory.live_systemctl_path()
@@ -284,7 +287,8 @@ fn resolve_booted_systemctl_with(
         return Ok(executable.to_path_buf());
     }
 
-    let refreshed = discover();
+    let refreshed = discover()
+        .context("failed to discover refreshed booted-generation host capability inventory")?;
     let executable = refreshed
         .live_systemctl_path()
         .map(Path::to_path_buf)
@@ -505,7 +509,7 @@ mod tests {
 
         let (_current_tools, current_executable) = write_test_systemctl();
         let refreshed = test_systemd_inventory(current_executable.clone());
-        let resolved = resolve_booted_systemctl_with(&conn, || refreshed.clone()).unwrap();
+        let resolved = resolve_booted_systemctl_with(&conn, || Ok(refreshed.clone())).unwrap();
 
         assert_eq!(resolved, current_executable);
         let stored = HostCapabilityInventory::load_required(&conn).unwrap();

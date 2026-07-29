@@ -140,6 +140,7 @@ fn seed_selected_root(db_path: &Path, uid: u32, gid: u32) {
     .insert(&conn)
     .unwrap();
     conary_core::ccs::HostCapabilityInventory::discover()
+        .unwrap()
         .persist(&conn)
         .unwrap();
     let selected_root = tempfile::tempdir().unwrap();

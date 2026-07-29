@@ -1,6 +1,7 @@
 // conary/src/commands/system/init.rs
 
 use super::*;
+use anyhow::Context;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
 const REMI_ENDPOINT: &str = "https://remi.conary.io";
@@ -128,7 +129,8 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
 
     let mut conn = open_db(db_path)?;
     info!("Adding default repositories...");
-    let host_capabilities = conary_core::ccs::HostCapabilityInventory::discover();
+    let host_capabilities = conary_core::ccs::HostCapabilityInventory::discover()
+        .context("could not discover typed host capability inventory")?;
 
     // Collect messages inside the transaction; print after commit to avoid
     // interleaving output with a potential rollback log.

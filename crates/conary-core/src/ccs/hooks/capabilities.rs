@@ -13,15 +13,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+#[path = "capabilities/filesystem_security.rs"]
+mod filesystem_security;
 #[path = "capabilities/interface_contract.rs"]
 mod interface_contract;
 
+pub use filesystem_security::{
+    ImmutableBackingSecurity, ImmutableBackingSecurityError, ImmutableBackingSecurityMechanism,
+};
 use interface_contract::systemd_manager_responds;
 pub use interface_contract::{
     ExecutableInterface, HostExecutableContract, HostExecutableImplementation,
 };
 
-pub const HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION: u32 = 3;
+pub const HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION: u32 = 4;
 pub const HOST_CAPABILITY_INVENTORY_SETTING: &str = "system.host-capability-inventory";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +121,8 @@ pub struct HostCapabilityInventory {
     pub sysctl: Option<ExecutableInterface>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ldconfig: Option<ExecutableInterface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub immutable_backing_security: Option<ImmutableBackingSecurity>,
 }
 
 impl Default for HostCapabilityInventory {
@@ -128,6 +135,7 @@ impl Default for HostCapabilityInventory {
             tmpfiles: None,
             sysctl: None,
             ldconfig: None,
+            immutable_backing_security: None,
         }
     }
 }
@@ -135,13 +143,23 @@ impl Default for HostCapabilityInventory {
 impl HostCapabilityInventory {
     /// Discover exact command interfaces and the active init manager without
     /// consulting a distro name, release file, package manager, or source feed.
-    pub fn discover() -> Self {
-        Self::discover_in_paths(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
+    pub fn discover() -> Result<Self, HostCapabilityInventoryError> {
+        let immutable_backing_security = ImmutableBackingSecurity::probe(Path::new("/usr"))?;
+        Ok(Self::discover_in_paths_with_security(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            immutable_backing_security,
         ))
     }
 
+    #[cfg(test)]
     fn discover_in_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self::discover_in_paths_with_security(paths, None)
+    }
+
+    fn discover_in_paths_with_security(
+        paths: impl IntoIterator<Item = PathBuf>,
+        immutable_backing_security: Option<ImmutableBackingSecurity>,
+    ) -> Self {
         let paths = paths.into_iter().collect::<Vec<_>>();
         let systemd_booted = Path::new("/run/systemd/system").is_dir();
         let systemd = discover_candidate("systemctl", &paths)
@@ -180,6 +198,7 @@ impl HostCapabilityInventory {
                 .and_then(ExecutableInterface::probe_sysctl),
             ldconfig: discover_candidate("ldconfig", &paths)
                 .and_then(ExecutableInterface::probe_ldconfig),
+            immutable_backing_security,
         }
     }
 
@@ -230,6 +249,9 @@ impl HostCapabilityInventory {
             if !descriptor.descriptor_is_well_formed() {
                 return Err(HostCapabilityInventoryError::InvalidDescriptor { interface: name });
             }
+        }
+        if let Some(capability) = &self.immutable_backing_security {
+            capability.validate()?;
         }
         self.validate_systemd_shape()?;
         Ok(())
@@ -493,6 +515,8 @@ pub enum HostCapabilityInventoryError {
     #[error("host capability inventory init-system and systemd operation sets are inconsistent")]
     InvalidSystemdShape,
     #[error(transparent)]
+    ImmutableBackingSecurity(#[from] ImmutableBackingSecurityError),
+    #[error(transparent)]
     Database(#[from] crate::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
@@ -620,6 +644,27 @@ mod tests {
         assert!(!encoded.contains("distro"));
         assert!(!encoded.contains("profile"));
         assert!(encoded.contains("\"tmpfiles\":{\"command\":{\"executable\":"));
+    }
+
+    #[test]
+    fn inventory_persists_opaque_target_immutable_backing_security() {
+        let capability = ImmutableBackingSecurity {
+            mechanism: ImmutableBackingSecurityMechanism::Selinux,
+            xattr_value: b"system_u:object_r:usr_t:s0\0".to_vec(),
+        };
+        let inventory =
+            HostCapabilityInventory::discover_in_paths_with_security([], Some(capability.clone()));
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+
+        inventory.persist(&conn).unwrap();
+        let loaded = HostCapabilityInventory::load_required(&conn).unwrap();
+
+        assert_eq!(loaded.immutable_backing_security, Some(capability));
+        assert_eq!(
+            loaded.schema_version,
+            HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -753,17 +798,19 @@ mod tests {
     }
 
     #[test]
-    fn unknown_inventory_schema_requires_a_clean_reinitialization() {
-        let inventory = HostCapabilityInventory {
-            schema_version: 99,
-            ..HostCapabilityInventory::default()
-        };
-        assert!(matches!(
-            inventory.validate(),
-            Err(HostCapabilityInventoryError::UnsupportedSchema {
-                found: 99,
-                expected: HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION
-            })
-        ));
+    fn retired_and_unknown_inventory_versions_require_clean_reinitialization() {
+        for found in [3, 99] {
+            let inventory = HostCapabilityInventory {
+                schema_version: found,
+                ..HostCapabilityInventory::default()
+            };
+            assert!(matches!(
+                inventory.validate(),
+                Err(HostCapabilityInventoryError::UnsupportedSchema {
+                    found: actual,
+                    expected: HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION
+                }) if actual == found
+            ));
+        }
     }
 }

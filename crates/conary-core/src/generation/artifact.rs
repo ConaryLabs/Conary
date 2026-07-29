@@ -12,7 +12,8 @@ use super::root_manifest::{
 };
 
 pub const ARTIFACT_MANIFEST_FILE: &str = ".conary-artifact.json";
-pub const ARTIFACT_MANIFEST_VERSION: u32 = 2;
+pub const ARTIFACT_MANIFEST_VERSION: u32 = 3;
+pub const GENERATION_CARRIER_CAPABILITIES_VERSION: u32 = 1;
 pub const CAS_MANIFEST_FILE: &str = "cas-manifest.json";
 pub const BOOT_ASSETS_DIR: &str = "boot-assets";
 pub const BOOT_ASSETS_MANIFEST_REL: &str = "boot-assets/manifest.json";
@@ -22,6 +23,8 @@ pub struct GenerationArtifactManifest {
     pub version: u32,
     pub generation: i64,
     pub architecture: String,
+    #[serde(default = "missing_generation_carrier_capabilities")]
+    pub carrier_capabilities: GenerationCarrierCapabilities,
     pub metadata: String,
     pub erofs: String,
     pub erofs_sha256: String,
@@ -34,6 +37,80 @@ pub struct GenerationArtifactManifest {
     pub cas_manifest_sha256: String,
     pub boot_assets: String,
     pub boot_assets_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationCarrierCapabilities {
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub immutable_backing_security: Option<crate::ccs::ImmutableBackingSecurity>,
+}
+
+impl Default for GenerationCarrierCapabilities {
+    fn default() -> Self {
+        Self {
+            version: GENERATION_CARRIER_CAPABILITIES_VERSION,
+            immutable_backing_security: None,
+        }
+    }
+}
+
+impl GenerationCarrierCapabilities {
+    /// Derive bootstrap carrier authority from an exact captured target root.
+    ///
+    /// Runtime generations use the initialized host inventory instead. A
+    /// bootstrap target is not running yet, so its signed `/usr` node is the
+    /// equivalent target-supplied fact.
+    pub fn from_generation_root(generation_root: &GenerationRootManifest) -> crate::Result<Self> {
+        let target_usr = generation_root
+            .entries
+            .iter()
+            .find(|entry| entry.path == "/usr")
+            .ok_or_else(|| {
+                crate::Error::InvalidPath(
+                    "generation carrier capability projection requires exact /usr authority"
+                        .to_string(),
+                )
+            })?;
+        let immutable_backing_security =
+            crate::ccs::ImmutableBackingSecurity::from_target_usr_node(&target_usr.node).map_err(
+                |error| {
+                    crate::Error::InvalidPath(format!(
+                        "generation carrier target /usr security authority is invalid: {error}"
+                    ))
+                },
+            )?;
+        let capabilities = Self {
+            immutable_backing_security,
+            ..Self::default()
+        };
+        capabilities.validate()?;
+        Ok(capabilities)
+    }
+
+    pub fn validate(&self) -> crate::Result<()> {
+        require_version(
+            "generation carrier capabilities",
+            self.version,
+            GENERATION_CARRIER_CAPABILITIES_VERSION,
+        )?;
+        if let Some(capability) = &self.immutable_backing_security {
+            capability.validate().map_err(|error| {
+                crate::Error::InvalidPath(format!(
+                    "generation carrier immutable-backing security capability is invalid: {error}"
+                ))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+fn missing_generation_carrier_capabilities() -> GenerationCarrierCapabilities {
+    GenerationCarrierCapabilities {
+        version: 0,
+        immutable_backing_security: None,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +174,7 @@ pub struct ArtifactWriteInputs<'a> {
     pub cas_base_rel: &'a str,
     pub cas_verification: CasObjectVerification,
     pub boot_assets: BootAssetsManifest,
+    pub carrier_capabilities: GenerationCarrierCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +217,7 @@ pub fn stage_boot_assets(inputs: BootAssetSources<'_>) -> crate::Result<BootAsse
 
 pub fn write_generation_artifact(inputs: ArtifactWriteInputs<'_>) -> crate::Result<String> {
     require_supported_architecture(inputs.architecture)?;
+    inputs.carrier_capabilities.validate()?;
     let erofs_rel = path_relative_to_generation(inputs.generation_dir, inputs.erofs_path, "erofs")?;
     let erofs_sha256 = sha256_file(inputs.erofs_path)?;
 
@@ -202,6 +281,7 @@ pub fn write_generation_artifact(inputs: ArtifactWriteInputs<'_>) -> crate::Resu
         version: ARTIFACT_MANIFEST_VERSION,
         generation: inputs.generation,
         architecture: inputs.architecture.to_string(),
+        carrier_capabilities: inputs.carrier_capabilities,
         metadata: GENERATION_METADATA_FILE.to_string(),
         erofs: erofs_rel,
         erofs_sha256,
@@ -292,6 +372,7 @@ fn load_generation_artifact_with_cas_verification(
     require_supported_architecture(&artifact_manifest.architecture)?;
     validate_artifact_manifest_paths(&artifact_manifest)?;
     validate_artifact_manifest_hashes(&artifact_manifest)?;
+    artifact_manifest.carrier_capabilities.validate()?;
 
     if artifact_manifest.metadata != GENERATION_METADATA_FILE {
         return Err(crate::Error::InvalidPath(format!(
