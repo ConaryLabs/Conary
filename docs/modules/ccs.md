@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 54
+revision: 55
 summary: Convert foreign packages through typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -385,6 +385,17 @@ checked projection only; malformed, unsupported, or unsigned authority never
 falls back to it. The archive carries no `components/*.json` copy of the signed
 file records: component views are derived from authority in
 `v2/component_view.rs`.
+
+Archive-envelope signer authority is established before that signed native
+authority is projected into a transaction. A repository-acquired CCS uses its
+exact persisted repository provenance and only active
+`repository_package_keys`; a static repository may derive those keys from its
+verified TUF targets metadata. Canonical Remi repository setup seeds a
+release-tracked, exact-endpoint/exact-profile key set, while self-hosted Remi
+requires an independently authenticated public-key file. An unknown,
+cross-profile, malformed, or retired signer fails closed before payload or
+lifecycle mutation. Local authoring and explicit file workflows retain their
+separate exact-key or policy authority.
 
 ### Structural Budget
 

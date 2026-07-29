@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-02
-revision: 2
+last_updated: 2026-07-29
+revision: 3
 summary: Run your own Remi conversion server in about 30 minutes
 ---
 
@@ -71,6 +71,9 @@ chunk_avg = 65536
 chunk_max = 262144
 strip_debug = false
 max_concurrent = 4
+
+[release_publish]
+repository_keys_dir = "/conary/repository-keys"
 ```
 
 Install the typed source manifest. Each source declares its package-manager
@@ -97,6 +100,7 @@ load its bootstrap token from a root-readable systemd environment file.
 ```bash
 id -u conary >/dev/null 2>&1 || sudo useradd --system --home /conary --shell /usr/sbin/nologin conary
 sudo chown -R conary:conary /conary
+sudo install -d -m 0700 -o conary -g conary /conary/repository-keys
 sudo cp deploy/systemd/remi.service /etc/systemd/system/remi.service
 sudo install -m 0600 /dev/null /etc/conary/remi.env
 TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
@@ -161,17 +165,30 @@ test "$status" = 200
 ```
 
 From a Fedora 44 client with the Conary CLI installed, point the client at the
-new server and run a dry-run install through the same seeded repository:
+new server and run a dry-run install through the same seeded repository.
+First copy the profile's public package-authority key over an independently
+authenticated administrative channel. For example, after verifying the SSH
+host identity:
 
 ```bash
+ssh root@your-remi-host \
+    'cat /conary/repository-keys/fedora-44/targets.public' \
+    > ./remi-fedora-44-targets.public
+
 conary repo add remi http://your-remi-host:8080 \
     --package-format json \
     --default-strategy remi \
     --remi-endpoint http://your-remi-host:8080 \
+    --ccs-package-key ./remi-fedora-44-targets.public \
     --source-profile fedora-44
 conary repo sync
 conary install curl --dry-run
 ```
+
+Do not download `targets.public` from the same unauthenticated Remi endpoint
+you are trying to trust. `repo add` validates the key and commits it in the
+same transaction as the repository row; a malformed, duplicate, or missing
+key leaves no partial repository.
 
 For an Ubuntu 26.04 LTS or Arch Linux client, create and sync the corresponding
 runtime repository instead of the Fedora example before running the client
