@@ -9,6 +9,7 @@ pub fn validate_debug_toml_projection(
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Result<()> {
     validate_config_projection(authority, manifest)?;
+    validate_file_capability_projection(authority, manifest)?;
     validate_requirement_projection(authority, manifest)?;
     validate_lifecycle_projection(authority, manifest)?;
     Ok(())
@@ -26,6 +27,18 @@ pub(crate) fn reject_unsupported_debug_toml_install_authority(
             "v2 debug TOML contains unsupported install authority fields: {}",
             unsupported.join(", ")
         );
+    }
+    Ok(())
+}
+
+fn validate_file_capability_projection(
+    authority: &AuthorityDocumentV2,
+    manifest: &crate::ccs::manifest::CcsManifest,
+) -> Result<()> {
+    let debug =
+        super::file_capabilities::canonicalize_file_capabilities(&manifest.file_capabilities)?;
+    if debug != authority.file_capabilities {
+        bail!("debug TOML file capability projection does not match signed authority");
     }
     Ok(())
 }
@@ -201,6 +214,43 @@ action = "restart"
         assert!(error.to_string().contains("debug TOML"));
         assert!(error.to_string().contains("conary-example.service"));
         assert!(error.to_string().contains("other.service"));
+    }
+
+    #[test]
+    fn rejects_debug_file_capability_mismatch_with_signed_authority() {
+        let toml = r#"
+[package]
+name = "demo"
+version = "0.1.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "demo package"
+
+[[file_capabilities]]
+path = "/usr/bin/hello"
+capabilities = ["cap_net_raw"]
+permitted = true
+effective = true
+inheritable = false
+"#;
+        let mut authority = AuthorityDocumentV2::package_for_tests("demo");
+        authority.file_capabilities = vec![crate::ccs::manifest::FileCapability {
+            path: "/usr/bin/hello".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
+
+        let error = super::validate_debug_toml_projection(&authority, &manifest).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("file capability projection does not match signed authority")
+        );
     }
 
     #[test]

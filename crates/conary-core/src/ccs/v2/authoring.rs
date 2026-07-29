@@ -140,6 +140,8 @@ pub fn project_build_result_authority_to_v2(
     }
 
     let config_authority = config_authority_for_manifest(&input.build.manifest, input.build)?;
+    let file_capabilities =
+        file_capability_authority_for_manifest(&input.build.manifest, input.build)?;
     let files = input
         .build
         .files
@@ -250,6 +252,7 @@ pub fn project_build_result_authority_to_v2(
         requirements: project_requirements(&input.build.manifest),
         relations: input.build.manifest.relations.clone(),
         capabilities: input.build.manifest.capabilities.clone(),
+        file_capabilities,
         components,
         lifecycle,
         provenance: ProvenanceAuthorityV2 {
@@ -413,6 +416,34 @@ fn config_authority_for_manifest(
     }
 
     Ok(authority)
+}
+
+fn file_capability_authority_for_manifest(
+    manifest: &crate::ccs::manifest::CcsManifest,
+    build: &BuildResult,
+) -> Result<Vec<crate::ccs::manifest::FileCapability>> {
+    let canonical =
+        super::file_capabilities::canonicalize_file_capabilities(&manifest.file_capabilities)?;
+    let build_files = build
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), &file.node.kind))
+        .collect::<BTreeMap<_, _>>();
+    for capability in &canonical {
+        let Some(kind) = build_files.get(capability.path.as_str()) else {
+            bail!(
+                "file capability target {} is absent from signed build output",
+                capability.path
+            );
+        };
+        if !matches!(kind, crate::payload::PayloadNodeKind::Regular { .. }) {
+            bail!(
+                "file capability target {} is not a regular signed build output file",
+                capability.path
+            );
+        }
+    }
+    Ok(canonical)
 }
 
 fn select_default_component(build: &BuildResult) -> Result<String> {

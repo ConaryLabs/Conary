@@ -361,6 +361,7 @@ fn release_artifact_with_attestation(
         requirements: Vec::new(),
         relations: Vec::new(),
         capabilities: None,
+        file_capabilities: Vec::new(),
         components: BTreeMap::from([(
             "main".to_string(),
             ComponentAuthorityV2 {

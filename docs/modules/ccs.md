@@ -597,11 +597,14 @@ exact directory claim even when dpkg or libalpm semantics preserve the
 currently visible directory metadata. See
 [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md#shared-directory-ownership-and-materialization).
 
-For `[[file_capabilities]]`, Conary persists the signed authority in the
-selected-root transaction, attaches `security.capability` while building the
-runtime generation inputs, and reports the resulting xattr count through
-`conary system generation info`. There is no mutable live-root application
-path.
+For `[[file_capabilities]]`, the v2 writer canonicalizes the declarations into
+signed authority and verification proves each unique path names an exact
+regular signed payload file. The verified install projection never consults
+debug TOML. The selected-root transaction applies `security.capability` before
+capturing the publication candidate and persists the same declaration for
+database-derived generation and rollback authority. Generation metadata
+reports the resulting xattr count through `conary system generation info`.
+There is no mutable live-root application path.
 
 Implementation routing: `apps/conary/src/commands/ccs/install.rs` is the
 stable command hub. Command execution lives in

@@ -179,6 +179,7 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
         requirements: Vec::new(),
         relations: Vec::new(),
         capabilities: None,
+        file_capabilities: Vec::new(),
         components: BTreeMap::from([(
             "main".to_string(),
             ComponentAuthorityV2 {

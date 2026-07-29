@@ -111,6 +111,98 @@ fn projection_preserves_exact_package_capability_authority() {
 }
 
 #[test]
+fn projection_signs_canonical_file_capability_authority() {
+    let mut build = test_support::single_file_build_result_at(
+        "file-capable",
+        "0.1.0",
+        "/usr/bin/file-capable",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.file_capabilities = vec![crate::ccs::manifest::FileCapability {
+        path: "/usr/bin/file-capable".to_string(),
+        capabilities: vec![
+            "cap_net_raw".to_string(),
+            "cap_net_bind_service".to_string(),
+        ],
+        permitted: true,
+        effective: true,
+        inheritable: false,
+    }];
+
+    let projected = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap();
+
+    assert_eq!(projected.authority.file_capabilities.len(), 1);
+    assert_eq!(
+        projected.authority.file_capabilities[0].capabilities,
+        ["cap_net_bind_service", "cap_net_raw"]
+    );
+}
+
+#[test]
+fn projection_rejects_file_capability_without_exact_regular_build_output() {
+    let mut build = test_support::single_file_build_result_at(
+        "file-capable",
+        "0.1.0",
+        "/usr/bin/file-capable",
+        b"#!/bin/sh\n",
+    );
+    build.manifest.file_capabilities = vec![crate::ccs::manifest::FileCapability {
+        path: "/usr/bin/missing".to_string(),
+        capabilities: vec!["cap_net_bind_service".to_string()],
+        permitted: true,
+        effective: true,
+        inheritable: false,
+    }];
+    let error = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("absent from signed build output")
+    );
+
+    build.manifest.file_capabilities[0].path = "/usr/bin/file-capable".to_string();
+    let mut symlink_node = crate::payload::PayloadNode::regular(0o777);
+    symlink_node.kind = crate::payload::PayloadNodeKind::Symlink {
+        target: "file-capable-real".to_string(),
+    };
+    symlink_node.mode = libc::S_IFLNK | 0o777;
+    build.files[0].node = symlink_node.clone();
+    build.files[0].content = None;
+    build.components.get_mut("runtime").unwrap().files[0].node = symlink_node.clone();
+    build.components.get_mut("runtime").unwrap().files[0].content = None;
+    build.components.get_mut("runtime").unwrap().size = 0;
+    build.payloads[0] = crate::packages::payload::PackagePayloadFile::new(
+        "/usr/bin/file-capable".to_string(),
+        symlink_node,
+        None,
+        None,
+    )
+    .unwrap();
+    build.total_size = 0;
+    let error = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("not a regular signed build output file")
+    );
+}
+
+#[test]
 fn projection_gives_payloadless_packages_an_explicit_empty_default_component() {
     let mut build = test_support::minimal_file_build_result("empty", "0.1.0", b"discarded");
     build.files.clear();
