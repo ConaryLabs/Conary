@@ -501,7 +501,7 @@ fn test_empty_package_conversion() {
         name: "empty-pkg".to_string(),
         version: "1.0.0".to_string(),
         version_scheme: VersionScheme::Rpm,
-        architecture: None, // No architecture
+        architecture: Some("noarch".to_string()),
         debian_multi_arch: None,
         description: None, // No description
         files: vec![],     // No files
