@@ -68,6 +68,8 @@ pub enum BudgetDimension {
     FileCount,
     ComponentCount,
     ConfigCount,
+    FileCapabilityCount,
+    FileCapabilityNameCount,
     ProvideCount,
     RequirementCount,
     RelationCount,
@@ -103,6 +105,8 @@ impl BudgetDimension {
             Self::FileCount => "file-count",
             Self::ComponentCount => "component-count",
             Self::ConfigCount => "config-count",
+            Self::FileCapabilityCount => "file-capability-count",
+            Self::FileCapabilityNameCount => "file-capability-name-count",
             Self::ProvideCount => "provide-count",
             Self::RequirementCount => "requirement-count",
             Self::RelationCount => "relation-count",
@@ -212,6 +216,7 @@ pub struct AuthorityCensus {
     pub files: u64,
     pub components: u64,
     pub config_entries: u64,
+    pub file_capabilities: u64,
     pub payload_objects: u64,
     pub payload_bytes: u64,
     pub path_bytes: u64,
@@ -321,6 +326,8 @@ pub struct CcsStructuralBudget {
     pub max_files: u64,
     pub max_components: u64,
     pub max_config_entries: u64,
+    pub max_file_capabilities: u64,
+    pub max_file_capability_names: u64,
     pub max_provides: u64,
     pub max_requirement_groups: u64,
     pub max_relation_groups: u64,
@@ -353,6 +360,8 @@ impl CcsStructuralBudget {
         max_files: 1 << 20,
         max_components: 1024,
         max_config_entries: 1 << 20,
+        max_file_capabilities: 1 << 20,
+        max_file_capability_names: crate::ccs::manifest::LINUX_FILE_CAPABILITY_NAMES.len() as u64,
         max_provides: 1 << 16,
         max_requirement_groups: 1 << 16,
         max_relation_groups: 1 << 16,
@@ -692,6 +701,33 @@ impl CcsStructuralBudget {
             self.max_relation_groups,
         )?;
         self.admit_lifecycle(&authority.lifecycle)?;
+        census.file_capabilities = authority.file_capabilities.len() as u64;
+        admit(
+            BudgetDimension::FileCapabilityCount,
+            "file_capabilities",
+            census.file_capabilities,
+            self.max_file_capabilities,
+        )?;
+        for capability in &authority.file_capabilities {
+            self.admit_path(&capability.path, "file_capabilities.path")?;
+            census.path_bytes = sum(
+                "file_capabilities.path",
+                [census.path_bytes, capability.path.len() as u64],
+            )?;
+            admit(
+                BudgetDimension::FileCapabilityNameCount,
+                "file_capabilities.capabilities",
+                capability.capabilities.len() as u64,
+                self.max_file_capability_names,
+            )?;
+            for name in &capability.capabilities {
+                self.admit_name(name, "file_capabilities.capabilities")?;
+                census.name_bytes = sum(
+                    "file_capabilities.capabilities",
+                    [census.name_bytes, name.len() as u64],
+                )?;
+            }
+        }
 
         let mut bytes = 0_u64;
         for (field, encoded) in [
@@ -705,6 +741,10 @@ impl CcsStructuralBudget {
             (
                 "capabilities",
                 encoded_len(&authority.capabilities, "capabilities")?,
+            ),
+            (
+                "file_capabilities",
+                encoded_len(&authority.file_capabilities, "file_capabilities")?,
             ),
             (
                 "components",

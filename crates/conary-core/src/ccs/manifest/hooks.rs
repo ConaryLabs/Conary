@@ -219,10 +219,17 @@ impl FileCapability {
                 self.path
             )));
         }
+        let mut seen = BTreeSet::new();
         for capability in &self.capabilities {
             if !is_supported_linux_file_capability(capability) {
                 return Err(ManifestError::Invalid(format!(
                     "unknown Linux file capability '{}' for {}",
+                    capability, self.path
+                )));
+            }
+            if !seen.insert(capability) {
+                return Err(ManifestError::Invalid(format!(
+                    "duplicate Linux file capability '{}' for {}",
                     capability, self.path
                 )));
             }

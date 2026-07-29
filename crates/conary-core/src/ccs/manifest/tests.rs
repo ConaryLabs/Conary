@@ -601,6 +601,50 @@ inheritable = false
 }
 
 #[test]
+fn test_manifest_rejects_duplicate_file_capability_authority() {
+    let mut manifest = CcsManifest::new_minimal("file-capable", "1.0.0");
+    manifest.file_capabilities = vec![FileCapability {
+        path: "/usr/bin/server".to_string(),
+        capabilities: vec![
+            "cap_net_bind_service".to_string(),
+            "cap_net_bind_service".to_string(),
+        ],
+        permitted: true,
+        effective: true,
+        inheritable: false,
+    }];
+    let duplicate_name = manifest.validate().unwrap_err();
+    assert!(
+        duplicate_name
+            .to_string()
+            .contains("duplicate Linux file capability")
+    );
+
+    manifest.file_capabilities = vec![
+        FileCapability {
+            path: "/usr/bin/server".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        },
+        FileCapability {
+            path: "/usr/bin/server".to_string(),
+            capabilities: vec!["cap_net_raw".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        },
+    ];
+    let duplicate_path = manifest.validate().unwrap_err();
+    assert!(
+        duplicate_path
+            .to_string()
+            .contains("declared more than once")
+    );
+}
+
+#[test]
 fn test_manifest_accepts_inheritable_file_capabilities() {
     let toml = r#"
 [package]

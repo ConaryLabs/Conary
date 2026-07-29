@@ -5,6 +5,7 @@ pub mod authoring;
 pub mod component_view;
 pub mod debug_projection;
 pub mod diagnostics;
+pub(crate) mod file_capabilities;
 pub mod identity;
 pub(crate) mod lifecycle;
 pub(crate) mod manifest_projection;

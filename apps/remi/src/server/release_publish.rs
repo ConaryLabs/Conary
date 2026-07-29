@@ -790,6 +790,7 @@ mod tests {
             requirements: Vec::new(),
             relations: Vec::new(),
             capabilities: None,
+            file_capabilities: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {
@@ -902,6 +903,7 @@ mod tests {
             requirements: Vec::new(),
             relations: Vec::new(),
             capabilities: None,
+            file_capabilities: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
                 ComponentAuthorityV2 {

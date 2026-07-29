@@ -1,12 +1,14 @@
 // conary-core/src/ccs/v2/validation.rs
 
 mod config;
+mod file_capabilities;
 mod identity;
 
 use super::diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 use super::schema::*;
 use crate::ccs::budget::{AuthorityCensus, CCS_BUDGET};
 use config::{validate_config_authority, validate_package_policy};
+use file_capabilities::validate_file_capabilities;
 use identity::{validate_identity, validate_provides};
 
 pub fn validate_authority(authority: &AuthorityDocumentV2) -> Result<(), V2ValidationError> {
@@ -120,6 +122,7 @@ fn validate_authority_common(
             validate_component_defaults(authority, &mut diagnostics);
             validate_package_policy(&data.policy, "kind.package.policy", &mut diagnostics);
             validate_files(data, authority, &mut diagnostics);
+            validate_file_capabilities(data, &authority.file_capabilities, &mut diagnostics);
             validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
             validate_lifecycle(&authority.lifecycle, &mut diagnostics);
@@ -216,7 +219,16 @@ fn validate_files(
     authority: &AuthorityDocumentV2,
     diagnostics: &mut Vec<V2Diagnostic>,
 ) {
+    let mut paths = std::collections::BTreeSet::new();
     for file in &data.files {
+        if !paths.insert(file.path.as_str()) {
+            diagnostics.push(V2Diagnostic::error(
+                V2DiagnosticCode::KindContractViolation,
+                format!("signed file path {} is declared more than once", file.path),
+                Some("kind.package.files.path".to_string()),
+                "declare one exact signed file authority record per package path",
+            ));
+        }
         if file.path.trim().is_empty() || file.component.trim().is_empty() {
             diagnostics.push(V2Diagnostic::error(
                 V2DiagnosticCode::MissingAuthority,
@@ -541,10 +553,13 @@ fn reject_group_redirect_payload_authority(
     authority: &AuthorityDocumentV2,
     diagnostics: &mut Vec<V2Diagnostic>,
 ) {
-    if !authority.components.is_empty() || authority.lifecycle != LifecycleAuthorityV2::default() {
+    if !authority.components.is_empty()
+        || !authority.file_capabilities.is_empty()
+        || authority.lifecycle != LifecycleAuthorityV2::default()
+    {
         diagnostics.push(V2Diagnostic::error(
             V2DiagnosticCode::KindContractViolation,
-            "v2 group and redirect packages must not carry file components or lifecycle payload authority",
+            "v2 group and redirect packages must not carry file, file-capability, component, or lifecycle payload authority",
             Some("components".to_string()),
             "move file/lifecycle authority to package kind payloads only",
         ));
