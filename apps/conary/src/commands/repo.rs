@@ -799,6 +799,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repo_add_rejects_canonical_authority_override_without_mutation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let private_key = temp_dir.path().join("targets.private");
+        let public_key = temp_dir.path().join("targets.public");
+        SigningKeyPair::generate()
+            .with_key_id("targets")
+            .save_to_files(&private_key, &public_key)
+            .unwrap();
+
+        let error = cmd_repo_add(remi_repo_options(
+            "canonical-override",
+            &db_path,
+            "https://remi.conary.io",
+            "fedora-44",
+            vec![public_key],
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot override release-tracked CCS package authority"),
+            "{error:#}"
+        );
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            Repository::find_by_name(&conn, "canonical-override")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_add_rolls_back_repository_when_authority_persistence_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        {
+            let conn = conary_core::db::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER reject_test_package_authority
+                 BEFORE INSERT ON repository_package_keys
+                 BEGIN
+                     SELECT RAISE(ABORT, 'simulated package authority persistence failure');
+                 END;",
+            )
+            .unwrap();
+        }
+
+        let error = cmd_repo_add(remi_repo_options(
+            "canonical-rollback",
+            &db_path,
+            "https://remi.conary.io",
+            "fedora-44",
+            Vec::new(),
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("persist verified CCS package authority"),
+            "{error:#}"
+        );
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            Repository::find_by_name(&conn, "canonical-rollback")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn repo_add_persists_explicit_self_hosted_authority_and_rejects_duplicates() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("conary.db");

@@ -168,7 +168,7 @@ exact canonical `repo add` persist those pins with the repository before it is
 visible. Remi sparse sync changes only the package snapshot and preserves the
 pins. Installation then verifies a downloaded CCS against the active keys for
 its exact repository provenance, so a key for one profile cannot authorize
-another.
+another. The self-hosted key option cannot replace canonical catalog authority.
 
 Self-hosted Remi has no implicit ConaryLabs authority. Its operator must move
 the appropriate `targets.public` file over an independently authenticated

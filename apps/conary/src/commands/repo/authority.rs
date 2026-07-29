@@ -27,19 +27,11 @@ pub(super) fn resolve_ccs_package_authority(
         return Ok(Vec::new());
     }
     let endpoint = remi_endpoint.context("--remi-endpoint is required for Remi authority")?;
+    let canonical_keys =
+        conary_core::repository::remi_authority::canonical_remi_package_keys(endpoint, profile_id);
 
-    let keys = if explicit_key_paths.is_empty() {
-        let catalog = conary_core::repository::remi_authority::canonical_remi_package_keys(
-            endpoint, profile_id,
-        )
-        .with_context(|| {
-            format!(
-                "Remi endpoint '{endpoint}' has no release-tracked CCS package authority for \
-                     exact profile '{profile_id}'; provide its authenticated targets.public with \
-                     --ccs-package-key"
-            )
-        })?;
-        catalog
+    let keys = match (canonical_keys, explicit_key_paths.is_empty()) {
+        (Some(catalog), true) => catalog
             .iter()
             .map(|key| ResolvedCcsPackageKey {
                 public_key: key.public_key.clone(),
@@ -49,9 +41,21 @@ pub(super) fn resolve_ccs_package_authority(
                     PackageKeyStatus::Retired => RepositoryPackageKeyStatus::Retired,
                 },
             })
-            .collect::<Vec<_>>()
-    } else {
-        explicit_key_paths
+            .collect::<Vec<_>>(),
+        (Some(_), false) => {
+            anyhow::bail!(
+                "--ccs-package-key cannot override release-tracked CCS package authority for \
+                 canonical Remi endpoint '{endpoint}' and exact profile '{profile_id}'"
+            );
+        }
+        (None, true) => {
+            anyhow::bail!(
+                "Remi endpoint '{endpoint}' has no release-tracked CCS package authority for \
+                 exact profile '{profile_id}'; provide its authenticated targets.public with \
+                 --ccs-package-key"
+            );
+        }
+        (None, false) => explicit_key_paths
             .iter()
             .map(|path| {
                 let key = load_signing_public_key(path).with_context(|| {
@@ -66,7 +70,7 @@ pub(super) fn resolve_ccs_package_authority(
                     status: RepositoryPackageKeyStatus::Active,
                 })
             })
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?,
     };
 
     let mut public_keys = BTreeSet::new();

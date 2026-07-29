@@ -139,6 +139,8 @@ or non-root URL cannot select those keys.
 `conary system init` creates or reconciles each Conary-owned Remi repository
 and its `repository_package_keys` rows in the same transaction. An explicit
 `conary repo add` for the exact canonical origin/profile pair does the same.
+The self-hosted key option cannot override that release-tracked canonical
+authority.
 Repeated initialization compares the semantic key set without rewriting its
 sync timestamps, and Remi sparse sync replaces package rows without replacing
 the repository's package authority. A same-name repository whose endpoint or
