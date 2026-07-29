@@ -34,6 +34,12 @@ use conary_core::repository::versioning::VersionScheme;
 use std::path::Path;
 use tempfile::TempDir;
 
+pub(crate) fn persist_test_host_capabilities(conn: &rusqlite::Connection) {
+    conary_core::ccs::HostCapabilityInventory::default()
+        .persist(conn)
+        .unwrap();
+}
+
 pub(crate) fn exact_package_self_provider(
     name: &str,
     version: &str,
@@ -133,10 +139,7 @@ pub(crate) fn create_test_db() -> (TempDir, String) {
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
     schema::ensure_current(&conn).unwrap();
-    conary_core::ccs::HostCapabilityInventory::discover()
-        .unwrap()
-        .persist(&conn)
-        .unwrap();
+    persist_test_host_capabilities(&conn);
     drop(conn);
     stage_test_boot_assets(temp_dir.path());
     (temp_dir, db_path_string)
@@ -164,10 +167,7 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
     let nginx_config_hash = cas.store(nginx_config_contents).unwrap();
     let nginx_config_size = i64::try_from(nginx_config_contents.len()).unwrap();
     let mut conn = conary_core::db::open(&db_path).unwrap();
-    conary_core::ccs::HostCapabilityInventory::discover()
-        .unwrap()
-        .persist(&conn)
-        .unwrap();
+    persist_test_host_capabilities(&conn);
 
     conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset1 = Changeset::new("Install nginx-1.24.0".to_string());
@@ -322,6 +322,7 @@ pub(crate) fn seed_test_bootable_runtime(db_path: &Path) -> i64 {
         conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
     stage_test_boot_assets(runtime_root.root());
     let conn = conary_core::db::open(db_path).unwrap();
+    persist_test_host_capabilities(&conn);
     if let Some(init) = FileEntry::find_by_path(&conn, "/sbin/init").unwrap() {
         return init.trove_id;
     }

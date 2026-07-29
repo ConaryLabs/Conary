@@ -94,13 +94,57 @@ def load_entries(root: Path) -> tuple[int, dict[str, dict[str, Any]], Path]:
         artifact = json.load(stream)
     if not isinstance(artifact, dict):
         fail(f"{artifact_path} does not contain a JSON object")
-    if artifact.get("version") != 2:
+    if artifact.get("version") != 3:
         fail(f"unsupported artifact version: {artifact.get('version')!r}")
     if artifact.get("generation") != generation:
         fail(
             f"artifact generation {artifact.get('generation')!r} "
             f"does not match selected generation {generation}"
         )
+    carrier_capabilities = artifact.get("carrier_capabilities")
+    if not isinstance(carrier_capabilities, dict):
+        fail("artifact carrier_capabilities is not an object")
+    if carrier_capabilities.get("version") != 1:
+        fail(
+            "unsupported carrier_capabilities version: "
+            f"{carrier_capabilities.get('version')!r}"
+        )
+    unknown_carrier_fields = set(carrier_capabilities) - {
+        "version",
+        "immutable_backing_security",
+    }
+    if unknown_carrier_fields:
+        fail(
+            "artifact carrier_capabilities contains unknown fields: "
+            f"{sorted(unknown_carrier_fields)!r}"
+        )
+    immutable_backing_security = carrier_capabilities.get(
+        "immutable_backing_security"
+    )
+    if immutable_backing_security is not None:
+        if not isinstance(immutable_backing_security, dict):
+            fail("artifact immutable_backing_security is not an object")
+        if set(immutable_backing_security) != {"mechanism", "xattr_value"}:
+            fail("artifact immutable_backing_security has an invalid shape")
+        if immutable_backing_security.get("mechanism") != "selinux":
+            fail(
+                "unsupported immutable_backing_security mechanism: "
+                f"{immutable_backing_security.get('mechanism')!r}"
+            )
+        xattr_value = immutable_backing_security.get("xattr_value")
+        if (
+            not isinstance(xattr_value, list)
+            or not xattr_value
+            or len(xattr_value) > 64 * 1024
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                or value > 255
+                for value in xattr_value
+            )
+        ):
+            fail("artifact immutable_backing_security xattr_value is invalid")
 
     _, generation_root = load_hashed_json(
         generation_dir,
