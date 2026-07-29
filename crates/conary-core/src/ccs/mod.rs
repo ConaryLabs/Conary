@@ -36,7 +36,9 @@ pub use budget::{
     ArchiveDecodeBounds, AuthorityCensus, BudgetDimension, BudgetError, CCS_BUDGET,
     CcsStructuralBudget,
 };
-pub use builder::{BuildResult, BuilderError, CcsBuilder, ChunkStats, ComponentData, FileEntry};
+pub use builder::{
+    BuildResult, BuilderError, CcsBuilder, CcsInstallPrefix, ChunkStats, ComponentData, FileEntry,
+};
 pub use chunking::{Chunk, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats};
 pub use convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 pub use enhancement::{
