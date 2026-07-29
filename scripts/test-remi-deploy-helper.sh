@@ -231,6 +231,89 @@ test_deploy_site_rejects_unknown_target() {
     expect_fail "unknown site target" run_helper "$fake_root" deploy-site admin "$staging"
 }
 
+test_publish_test_artifact_is_verified_atomic_and_idempotent() {
+    local fake_root="${tmpdir}/root-test-artifact"
+    local staged="${tmpdir}/fedora44-guest-v1.qcow2"
+    local digest
+    write_config "$fake_root"
+    printf 'qcow2-test-bytes\n' >"$staged"
+    digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
+
+    run_helper "$fake_root" publish-test-artifact \
+        fedora44-guest-v1.qcow2 "$digest" "$staged"
+
+    local published="$fake_root/conary/test-artifacts/fedora44-guest-v1.qcow2"
+    test -f "$published"
+    test ! -L "$published"
+    test ! -e "$staged"
+    test "$(sha256sum "$published" | cut -d ' ' -f 1)" = "$digest"
+    test "$(stat -c '%a' "$published")" = "644"
+
+    printf 'qcow2-test-bytes\n' >"$staged"
+    run_helper "$fake_root" publish-test-artifact \
+        fedora44-guest-v1.qcow2 "$digest" "$staged"
+    test ! -e "$staged"
+    test "$(sha256sum "$published" | cut -d ' ' -f 1)" = "$digest"
+}
+
+test_publish_test_artifact_rejects_unverified_or_mutating_inputs() {
+    local fake_root="${tmpdir}/root-test-artifact-rejections"
+    local staged="${tmpdir}/fedora44-guest-v1-rejected.qcow2"
+    local digest
+    write_config "$fake_root"
+    printf 'original\n' >"$staged"
+    digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
+
+    expect_fail "invalid test-artifact filename" \
+        run_helper "$fake_root" publish-test-artifact \
+        ../escape.qcow2 "$digest" "$staged"
+    expect_fail "test-artifact digest mismatch" \
+        run_helper "$fake_root" publish-test-artifact \
+        fedora44-guest-v1.qcow2 \
+        0000000000000000000000000000000000000000000000000000000000000000 \
+        "$staged"
+
+    local empty="${tmpdir}/empty.qcow2"
+    : >"$empty"
+    expect_fail "empty test artifact" \
+        run_helper "$fake_root" publish-test-artifact \
+        empty.qcow2 \
+        e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+        "$empty"
+
+    local oversized="${tmpdir}/oversized.qcow2"
+    truncate -s 8589934593 "$oversized"
+    expect_fail "oversized test artifact" \
+        run_helper "$fake_root" publish-test-artifact \
+        oversized.qcow2 \
+        0000000000000000000000000000000000000000000000000000000000000000 \
+        "$oversized"
+
+    local symlinked="${tmpdir}/symlinked.qcow2"
+    ln -s "$staged" "$symlinked"
+    expect_fail "symlinked test artifact" \
+        run_helper "$fake_root" publish-test-artifact \
+        symlinked.qcow2 "$digest" "$symlinked"
+
+    local directory="${tmpdir}/directory.qcow2"
+    mkdir "$directory"
+    expect_fail "directory test artifact" \
+        run_helper "$fake_root" publish-test-artifact \
+        directory.qcow2 "$digest" "$directory"
+
+    run_helper "$fake_root" publish-test-artifact \
+        fedora44-guest-v1.qcow2 "$digest" "$staged"
+    printf 'replacement\n' >"$staged"
+    local replacement_digest
+    replacement_digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
+    expect_fail "immutable test-artifact replacement" \
+        run_helper "$fake_root" publish-test-artifact \
+        fedora44-guest-v1.qcow2 "$replacement_digest" "$staged"
+    test -e "$staged"
+    test "$(sha256sum "$fake_root/conary/test-artifacts/fedora44-guest-v1.qcow2" |
+        cut -d ' ' -f 1)" = "$digest"
+}
+
 test_deploy_remi_uses_candidate_owned_transition() {
     local fake_root="${tmpdir}/root-remi"
     local bundle="${tmpdir}/remi-0.8.0.tar.gz"
@@ -309,6 +392,8 @@ main() {
     test_deploy_site_replaces_site_root_from_staging
     test_deploy_site_replaces_web_root_from_staging
     test_deploy_site_rejects_unknown_target
+    test_publish_test_artifact_is_verified_atomic_and_idempotent
+    test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
     test_deploy_remi_rejects_malformed_authority_root
     test_install_helper_requires_exact_digest

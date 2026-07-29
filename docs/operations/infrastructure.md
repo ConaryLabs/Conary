@@ -167,6 +167,13 @@ not cover the task or when you are debugging the underlying service path itself.
   files into `/conary/releases/<version>`. The helper copies that verified
   checksum file as release evidence, refuses symlinked trust inputs, and
   requires `<artifact>.ccs.sig` whenever a staged `.ccs` artifact is present.
+- Large QEMU fixtures use the helper's bounded
+  `publish-test-artifact <filename> <sha256> <staged-file>` operation after
+  authenticated SSH staging under `/tmp`. It accepts only a plain basename and
+  regular file, enforces Remi's 8 GiB limit, verifies the caller-pinned digest
+  before publication, and creates an immutable `/conary/test-artifacts/`
+  target atomically. Repeating the exact publication is idempotent; a
+  same-name, different-digest replacement fails closed.
 - Bootstrap or repair deploy access once from an existing privileged shell with
   `sudo scripts/install-remi-deploy-access.sh`. It installs
   `deploy/remi-deploy-helper.sh` to `/usr/local/sbin/conary-remi-deploy`,
