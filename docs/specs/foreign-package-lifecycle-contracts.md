@@ -388,7 +388,12 @@ materializes the overlay upper; `/var` and `/srv` entries cannot enter that
 upper. Boot-carrier export copies both manifests, reconstructs `/var` and
 `/srv`, and seeds the same `/etc` upper from verified, manifest-listed CAS
 objects. A read-only carrier may copy that seed to tmpfs for runtime writes,
-but the copied seed is not a second state authority.
+but the copied seed is not a second state authority. Export also restores the
+verified root node and manifest-owned `/usr`, `/etc`, and `/boot` mountpoint
+metadata. A carrier's partition topology is distinct from the selected root's
+source-host topology: its boot entry disables source-`fstab` generation and,
+for writable disks, declares the carrier ESP by partition label. Export does
+not rewrite the signed `/etc/fstab` seed to accomplish that projection.
 
 A generation-aware root mutation records a typed selected-root publication
 debt and durably installs its cumulative candidate before committing the

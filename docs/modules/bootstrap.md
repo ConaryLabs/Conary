@@ -149,6 +149,10 @@ That command loads the generation artifact contract, projects the runtime
 rootfs and boot staging trees, then produces raw, qcow2, or x86_64 UEFI ISO
 generation-carrier artifacts with a `.conary-provenance.json` sidecar. It does
 not scrape `/boot`, `/conary`, or other live-host paths while exporting.
+Projection restores verified root and mountpoint metadata, preserves the
+signed mutable `/etc` seed byte-for-byte, and makes the carrier boot entry own
+the newly created disk or ISO mount topology instead of replaying source-host
+`fstab` devices.
 
 The generation artifact export implementation is covered by the `Generation
 Artifact Export QEMU` and `ISO Generation Export QEMU` suites described in
