@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 12
+revision: 13
 summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -99,6 +99,12 @@ as explicitly trusted security advisories. Conversion-cache state, diagnostic
 scriptlet summaries, and content hashes stay on other public projections
 because sync does not consume them.
 `GET /v1/{distro}/metadata` is not a client-sync fallback.
+
+For Fedora, normalized provides include every generator-selected `<file>`
+record from authenticated `primary.xml` as `kind = "file"`. The sparse page and
+per-name lookup project that persisted typed row unchanged; Remi does not
+derive file providers from package names or filter them through its own path
+rules.
 
 Remi opens SQLite once for each HTTP page, selects all visible package/version
 rows for the page together, and batch-loads their normalized provides and

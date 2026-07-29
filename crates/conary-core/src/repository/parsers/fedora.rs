@@ -4,6 +4,9 @@
 //!
 //! Parses Fedora-style repomd.xml and primary.xml files which contain
 //! RPM package metadata in XML format.
+//! Generator-selected `<file>` records in primary.xml are package-owned file
+//! provides. This follows createrepo_c's pinned primary metadata contract:
+//! <https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump.c#L175-L225>.
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, PackageMetadata, RepositoryParser};
@@ -325,12 +328,18 @@ impl FedoraParser {
         let mut current_tag = String::new();
         let mut in_format = false;
         let mut format_section = None;
+        let mut current_primary_file = None::<String>;
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     let local_tag = Self::local_tag_name(&tag_name);
+                    if current_primary_file.is_some() {
+                        return Err(Error::ParseError(
+                            "RPM primary file record cannot contain nested elements".to_string(),
+                        ));
+                    }
                     current_tag = tag_name.clone();
 
                     match local_tag {
@@ -349,6 +358,17 @@ impl FedoraParser {
                         }
                         "obsoletes" if in_format => {
                             format_section = Some(FormatSection::Obsoletes);
+                        }
+                        "file" if in_format => {
+                            if current_package.is_none() {
+                                return Err(Error::ParseError(
+                                    "RPM primary file record appears outside a package".to_string(),
+                                ));
+                            }
+                            current_primary_file = Some(String::new());
+                            // A path's trailing XML whitespace is package
+                            // identity, not inter-element formatting.
+                            reader.config_mut().trim_text_end = false;
                         }
                         "checksum" => {
                             if let Some(ref mut pkg) = current_package {
@@ -382,6 +402,11 @@ impl FedoraParser {
                 Ok(Event::Empty(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     let local_tag = Self::local_tag_name(&tag_name);
+                    if current_primary_file.is_some() {
+                        return Err(Error::ParseError(
+                            "RPM primary file record cannot contain nested elements".to_string(),
+                        ));
+                    }
 
                     match local_tag {
                         "version" => {
@@ -582,31 +607,38 @@ impl FedoraParser {
                                 }
                             }
                         }
+                        "file" if in_format => {
+                            return Err(Error::ParseError(
+                                "RPM primary file record must contain an absolute path".to_string(),
+                            ));
+                        }
                         _ => {}
                     }
                 }
                 Ok(Event::Text(e)) => {
-                    if let Some(ref mut pkg) = current_package {
-                        let decoded =
-                            e.xml_content(quick_xml::XmlVersion::Implicit1_0)
-                                .map_err(|error| {
-                                    Error::ParseError(format!(
-                                        "Failed to decode primary.xml text: {error}"
-                                    ))
-                                })?;
-                        let text = quick_xml::escape::unescape(&decoded)
+                    let decoded =
+                        e.xml_content(quick_xml::XmlVersion::Implicit1_0)
                             .map_err(|error| {
                                 Error::ParseError(format!(
-                                    "Failed to unescape primary.xml text: {error}"
+                                    "Failed to decode primary.xml text: {error}"
                                 ))
-                            })?
-                            .into_owned();
-                        // Skip inter-element whitespace that quick_xml emits as
-                        // text events -- without this guard, trailing whitespace
-                        // between tags overwrites fields like pkg.name with "".
-                        if text.is_empty() {
-                            continue;
-                        }
+                            })?;
+                    let text = quick_xml::escape::unescape(&decoded)
+                        .map_err(|error| {
+                            Error::ParseError(format!(
+                                "Failed to unescape primary.xml text: {error}"
+                            ))
+                        })?
+                        .into_owned();
+                    // Skip inter-element whitespace that quick_xml emits as
+                    // text events -- without this guard, trailing whitespace
+                    // between tags overwrites fields like pkg.name with "".
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if let Some(file) = current_primary_file.as_mut() {
+                        file.push_str(&text);
+                    } else if let Some(ref mut pkg) = current_package {
                         append_package_text(pkg, &current_tag, &text);
                     }
                 }
@@ -632,14 +664,47 @@ impl FedoraParser {
                                 .to_string()
                         }
                     };
-                    if let Some(ref mut pkg) = current_package {
+                    if let Some(file) = current_primary_file.as_mut() {
+                        file.push_str(&text);
+                    } else if let Some(ref mut pkg) = current_package {
+                        append_package_text(pkg, &current_tag, &text);
+                    }
+                }
+                Ok(Event::CData(e)) => {
+                    let text =
+                        e.xml_content(quick_xml::XmlVersion::Implicit1_0)
+                            .map_err(|error| {
+                                Error::ParseError(format!(
+                                    "Failed to decode primary.xml CDATA: {error}"
+                                ))
+                            })?;
+                    if let Some(file) = current_primary_file.as_mut() {
+                        file.push_str(&text);
+                    } else if let Some(ref mut pkg) = current_package {
                         append_package_text(pkg, &current_tag, &text);
                     }
                 }
                 Ok(Event::End(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     let local_tag = Self::local_tag_name(&tag_name);
-                    if local_tag == "package" {
+                    if local_tag == "file" && in_format {
+                        let file = current_primary_file.take().ok_or_else(|| {
+                            Error::ParseError(
+                                "RPM primary file record ended without starting".to_string(),
+                            )
+                        })?;
+                        reader.config_mut().trim_text_end = true;
+                        let file = validate_primary_file_path(file)?;
+                        current_package
+                            .as_mut()
+                            .ok_or_else(|| {
+                                Error::ParseError(
+                                    "RPM primary file record appears outside a package".to_string(),
+                                )
+                            })?
+                            .primary_files
+                            .push(file);
+                    } else if local_tag == "package" {
                         let builder = current_package.take().ok_or_else(|| {
                             Error::ParseError(
                                 "RPM metadata ended a package that was never started".to_string(),
@@ -708,6 +773,7 @@ struct PackageBuilder {
     url: Option<String>,
     dependencies: Vec<(String, String)>,
     provides: Vec<(String, RpmProvideConstraint)>,
+    primary_files: Vec<String>,
     relations: Vec<(RepositoryRequirementKind, String)>,
 }
 
@@ -834,6 +900,12 @@ impl PackageBuilder {
                 native_text: Some(native_text),
             });
         }
+        structured_provides.extend(
+            self.primary_files
+                .iter()
+                .cloned()
+                .map(RepositoryProvide::file),
+        );
 
         let rpm_provides: Vec<String> = self
             .provides
@@ -879,6 +951,15 @@ impl PackageBuilder {
             provides: structured_provides,
         })
     }
+}
+
+fn validate_primary_file_path(path: String) -> Result<String> {
+    if path.is_empty() || !path.starts_with('/') {
+        return Err(Error::ParseError(
+            "RPM primary file record must contain an absolute path".to_string(),
+        ));
+    }
+    Ok(path)
 }
 
 fn append_package_text(package: &mut PackageBuilder, tag: &str, text: &str) {
