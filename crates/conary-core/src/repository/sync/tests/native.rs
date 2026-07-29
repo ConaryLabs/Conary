@@ -103,6 +103,74 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
 }
 
 #[test]
+fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassification() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+
+    let mut repo = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.com/fedora".to_string(),
+    );
+    repo.source_profile = Some("fedora-44".to_string());
+    repo.insert(&conn).unwrap();
+    let repo_id = repo.id.unwrap();
+
+    let mut pkg_meta = PackageMetadata::new(
+        "bash".to_string(),
+        "5.3.3-2.fc44".to_string(),
+        "abc123".to_string(),
+        1024,
+        "https://example.com/fedora/bash.rpm".to_string(),
+        RepositoryDependencyFlavor::Rpm,
+        VersionScheme::Rpm,
+    );
+    pkg_meta.architecture = Some("x86_64".to_string());
+    pkg_meta.provides = vec![
+        dep_model::RepositoryProvide::package_name(
+            "bash".to_string(),
+            Some("5.3.3-2.fc44".to_string()),
+        ),
+        dep_model::RepositoryProvide::file("/usr/bin/bash".to_string()),
+    ];
+
+    let provides = normalized_repository_capabilities(&pkg_meta);
+    let synced_packages = vec![SyncedPackageRow {
+        package: {
+            let mut package = RepositoryPackage::new(
+                repo_id,
+                pkg_meta.name,
+                pkg_meta.version,
+                VersionScheme::Rpm,
+                pkg_meta.checksum,
+                pkg_meta.size as i64,
+                pkg_meta.download_url,
+            );
+            package.architecture = pkg_meta.architecture;
+            package.source_profile = Some("fedora-44".to_string());
+            package
+        },
+        provides,
+        requirement_groups: Vec::new(),
+        requirement_group_clauses: Vec::new(),
+    }];
+    persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
+
+    let package = RepositoryPackage::find_by_repository(&conn, repo_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let stored = RepositoryProvide::find_by_repository_package(&conn, package.id.unwrap()).unwrap();
+    let file = stored
+        .iter()
+        .find(|provide| provide.capability == "/usr/bin/bash")
+        .expect("persisted file provider");
+    assert_eq!(file.kind, "file");
+    assert_eq!(file.version, None);
+    assert_eq!(file.raw, None);
+    assert_eq!(file.version_scheme, VersionScheme::Rpm);
+}
+
+#[test]
 fn test_remi_sparse_entry_builds_normalized_capabilities() {
     let entry = RemiSparseResolutionVersionEntry {
         version: "6.19.6-200.fc44".to_string(),
@@ -129,6 +197,16 @@ fn test_remi_sparse_entry_builds_normalized_capabilities() {
                 ),
                 kind: "package".to_string(),
                 raw: Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64".to_string()),
+                version_scheme: VersionScheme::Rpm,
+                architecture_qualifier:
+                    crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+            },
+            RemiProvide {
+                capability: "/usr/bin/kernel-install".to_string(),
+                version: None,
+                version_relation: None,
+                kind: "file".to_string(),
+                raw: None,
                 version_scheme: VersionScheme::Rpm,
                 architecture_qualifier:
                     crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
@@ -200,6 +278,12 @@ fn test_remi_sparse_entry_builds_normalized_capabilities() {
         provide.capability == "kernel-core-uname-r"
             && provide.version.as_deref() == Some("6.19.6-200.fc44.x86_64")
             && provide.raw.as_deref() == Some("kernel-core-uname-r = 6.19.6-200.fc44.x86_64")
+    }));
+    assert!(row.provides.iter().any(|provide| {
+        provide.capability == "/usr/bin/kernel-install"
+            && provide.kind == "file"
+            && provide.version.is_none()
+            && provide.raw.is_none()
     }));
     let requirements = row.requirement_group_clauses.concat();
     assert!(requirements.iter().any(|requirement| {

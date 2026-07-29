@@ -30,6 +30,28 @@ fn valid_builder() -> PackageBuilder {
     builder
 }
 
+fn primary_package_with_format(format_body: &str) -> String {
+    format!(
+        r#"
+<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+  <package type="rpm">
+    <name>bash</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="5.3.3" rel="2.fc44"/>
+    <checksum type="sha256">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</checksum>
+    <summary>GNU Bourne Again shell</summary>
+    <description>GNU Bourne Again shell</description>
+    <size package="1024"/>
+    <location href="Packages/b/bash-5.3.3-2.fc44.x86_64.rpm"/>
+    <format>
+      {format_body}
+    </format>
+  </package>
+</metadata>
+"#
+    )
+}
+
 #[test]
 fn test_package_builder() {
     let builder = valid_builder();
@@ -140,6 +162,66 @@ fn test_parse_primary_xml_captures_namespaced_requires_and_provides() {
             .all(|clause| !clause.name.starts_with("rpmlib("))
     );
     assert!(metadata.get("rpm_requires").is_none());
+}
+
+#[test]
+fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
+    // Structure derived from createrepo_c 5cf41fe5d703901d78078ed18c67ab667e446c1a
+    // tests/testdata/repodata_snippets/primary_snippet_02.xml. The repository
+    // generator owns selection; the parser must preserve every signed record.
+    let xml = primary_package_with_format(
+        r#"
+      <rpm:provides>
+        <rpm:entry name="bash" flags="EQ" epoch="0" ver="5.3.3" rel="2.fc44"/>
+      </rpm:provides>
+      <file>/usr/bin/bash</file>
+      <file type="ghost">/usr/bin/sh</file>
+      <file type="dir">/usr/share/bash-completion</file>
+      <file>/opt/provider&amp;selected</file>
+"#,
+    );
+
+    let packages = parser()
+        .parse_primary_xml(&xml, "https://example.com")
+        .unwrap();
+    let files = packages[0]
+        .provides
+        .iter()
+        .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        files
+            .iter()
+            .map(|provide| provide.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "/usr/bin/bash",
+            "/usr/bin/sh",
+            "/usr/share/bash-completion",
+            "/opt/provider&selected",
+        ]
+    );
+    assert!(files.iter().all(|provide| provide.version.is_none()
+        && provide.version_relation.is_none()
+        && provide.architecture_qualifier
+            == crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit));
+}
+
+#[test]
+fn primary_xml_rejects_file_records_without_an_absolute_path() {
+    for file_record in ["<file/>", "<file></file>", "<file>usr/bin/bash</file>"] {
+        let xml = primary_package_with_format(file_record);
+        let error = parser()
+            .parse_primary_xml(&xml, "https://example.com")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("file record must contain an absolute path"),
+            "{file_record}: {error}"
+        );
+    }
 }
 
 #[test]

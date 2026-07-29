@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 20
+revision: 21
 summary: Document exact profile-owned source policy, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -224,8 +224,9 @@ The supported chains are:
 - RPM: repository metadata and packages have distinct authorities. Either a
   detached OpenPGP signature or an exact HTTPS metalink identity authenticates
   `repomd.xml`; its SHA-256 and size authenticate `primary.xml`; primary
-  metadata authenticates the RPM bytes; and an independently pinned package
-  certificate verifies the RPM's embedded OpenPGP signature.
+  metadata supplies exact package relations and generator-selected file
+  providers and authenticates the RPM bytes; and an independently pinned
+  package certificate verifies the RPM's embedded OpenPGP signature.
 - Arch: one exact keyring source supplies the pinned master certificates,
   their certifications, packager certificates, and the companion
   `<keyring>-revoked` disabled-key list. An explicit threshold says how many
@@ -302,6 +303,16 @@ the same-operator chain and tag-context rules; and constructs repeated `with`
 from the right side as RPM does. The source-pinned Fedora 44 corpus under
 `crates/conary-core/tests/fixtures/rpm/` proves real repository expressions
 without granting those packages exceptional behavior.
+
+RPM primary-file authority is derived from `createrepo_c`
+`5cf41fe5d703901d78078ed18c67ab667e446c1a`: its
+[`cr_xml_dump_files()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump.c#L175-L225)
+selects and emits package-owned `<file>` records in `primary.xml`, and its
+[`STATE_FILE` parser](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_parser_primary.c#L428-L445)
+reads them independently of `rpm:provides`. Conary preserves every such signed
+record as an unversioned typed file provider on the exact package. It does not
+reimplement createrepo's path-selection rule or infer providers from package
+names, payload guesses, or a curated path list.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:
