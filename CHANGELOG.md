@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.9.2] - 2026-07-30
+
+### Fixed
+- preserve signed RPM primary file providers across Fedora ingest and sparse
+  serving (#196, #197)
+- accept signed CCS file-capability authority during Remi publication (#187)
+
 ## [remi-v0.9.1] - 2026-07-29
 
 ### Fixed
