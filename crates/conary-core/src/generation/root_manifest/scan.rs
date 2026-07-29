@@ -26,8 +26,54 @@ struct Candidate {
     domain: RootPathDomain,
 }
 
+/// Exact selected-root subtrees that are owned by the capture runtime itself.
+///
+/// The finite publication domains remain authoritative for `/run`, device/API
+/// trees, user state, and other ephemeral paths. These exclusions are only for
+/// additional absolute subtrees such as Conary's CAS and database directory,
+/// whose contents must never become inputs to their own capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedRootCaptureExclusions {
+    subtrees: Vec<String>,
+}
+
+impl SelectedRootCaptureExclusions {
+    pub fn new(mut subtrees: Vec<String>) -> crate::Result<Self> {
+        for subtree in &subtrees {
+            super::validate_root_path(subtree)?;
+        }
+        subtrees.sort();
+        subtrees.dedup();
+        Ok(Self { subtrees })
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            subtrees: Vec::new(),
+        }
+    }
+
+    pub fn excludes(&self, path: &str) -> bool {
+        self.subtrees.iter().any(|subtree| {
+            path == subtree
+                || path
+                    .strip_prefix(subtree)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        })
+    }
+}
+
 pub fn scan_selected_root(root: &Path, cas: &CasStore) -> crate::Result<CapturedSelectedRoot> {
-    let (root_node, candidates, hardlinks) = inspect_payload_tree(root, false, "selected-root")?;
+    scan_selected_root_with_exclusions(root, cas, &SelectedRootCaptureExclusions::empty())
+}
+
+pub fn scan_selected_root_with_exclusions(
+    root: &Path,
+    cas: &CasStore,
+    exclusions: &SelectedRootCaptureExclusions,
+) -> crate::Result<CapturedSelectedRoot> {
+    let (root_node, candidates, hardlinks) =
+        inspect_payload_tree(root, false, "selected-root", exclusions)?;
 
     let mut immutable = Vec::new();
     let mut state = Vec::new();
@@ -67,7 +113,12 @@ pub fn scan_payload_tree(
     cas: &CasStore,
     hardlink_namespace: &str,
 ) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
-    let (root_node, candidates, hardlinks) = inspect_payload_tree(root, true, hardlink_namespace)?;
+    let (root_node, candidates, hardlinks) = inspect_payload_tree(
+        root,
+        true,
+        hardlink_namespace,
+        &SelectedRootCaptureExclusions::empty(),
+    )?;
     let entries = candidates
         .iter()
         .enumerate()
@@ -80,6 +131,7 @@ fn inspect_payload_tree(
     root: &Path,
     include_ephemeral: bool,
     hardlink_namespace: &str,
+    exclusions: &SelectedRootCaptureExclusions,
 ) -> crate::Result<(ResolvedPayloadNode, Vec<Candidate>, HardlinkPlan)> {
     if hardlink_namespace.is_empty() || hardlink_namespace.contains('\0') {
         return Err(crate::Error::InvalidPath(
@@ -100,11 +152,12 @@ fn inspect_payload_tree(
             if entry.depth() == 0 {
                 return true;
             }
-            include_ephemeral
-                || root_manifest_path(root, entry.path())
-                    .ok()
-                    .and_then(|path| classify_root_path(&path).ok())
-                    != Some(RootPathDomain::EphemeralMountOrUser)
+            let Ok(path) = root_manifest_path(root, entry.path()) else {
+                return true;
+            };
+            !exclusions.excludes(&path)
+                && (include_ephemeral
+                    || classify_root_path(&path).ok() != Some(RootPathDomain::EphemeralMountOrUser))
         });
     for entry in walker {
         let entry = entry.map_err(|error| {
@@ -117,6 +170,9 @@ fn inspect_payload_tree(
             continue;
         }
         let path = root_manifest_path(root, entry.path())?;
+        if exclusions.excludes(&path) {
+            continue;
+        }
         let domain = classify_root_path(&path)?;
         if !include_ephemeral && domain == RootPathDomain::EphemeralMountOrUser {
             continue;

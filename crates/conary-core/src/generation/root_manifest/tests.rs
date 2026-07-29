@@ -47,6 +47,77 @@ fn root_path_domains_are_an_exact_finite_contract() {
 }
 
 #[test]
+fn capture_exclusions_are_normalized_exact_subtree_authority() {
+    for invalid in [
+        "",
+        "/",
+        "conary",
+        "/conary/",
+        "/var//lib/conary",
+        "/var/./lib/conary",
+        "/var/lib/../lib/conary",
+    ] {
+        let error = SelectedRootCaptureExclusions::new(vec![invalid.to_string()]).unwrap_err();
+        assert!(
+            error.to_string().contains("normalized absolute non-root"),
+            "{invalid:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn selected_root_capture_excludes_only_declared_runtime_subtrees() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    for directory in [
+        "conary",
+        "conary/objects",
+        "conary-adjacent",
+        "var",
+        "var/lib",
+        "var/lib/conary",
+        "var/lib/conary-adjacent",
+    ] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::fs::write(root.join("conary/objects/private"), b"runtime").unwrap();
+    std::fs::write(root.join("conary-adjacent/retained"), b"selected root").unwrap();
+    std::fs::write(root.join("var/lib/conary/conary.db"), b"runtime").unwrap();
+    std::fs::write(
+        root.join("var/lib/conary-adjacent/retained"),
+        b"selected root",
+    )
+    .unwrap();
+
+    let exclusions = SelectedRootCaptureExclusions::new(vec![
+        "/var/lib/conary".to_string(),
+        "/conary".to_string(),
+        "/conary".to_string(),
+    ])
+    .unwrap();
+    let captured = scan_selected_root_with_exclusions(&root, &cas, &exclusions).unwrap();
+    let paths = captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(!paths.iter().any(|path| path.starts_with("/conary/")));
+    assert!(
+        !paths
+            .iter()
+            .any(|path| path.starts_with("/var/lib/conary/"))
+    );
+    assert!(paths.contains(&"/conary-adjacent/retained"));
+    assert!(paths.contains(&"/var/lib/conary-adjacent/retained"));
+    assert!(paths.contains(&"/var"));
+    assert!(paths.contains(&"/var/lib"));
+}
+
+#[test]
 fn mutable_state_transaction_derives_exact_touched_paths() {
     let before = MutableStateManifest {
         version: GENERATION_ROOT_MANIFEST_VERSION,

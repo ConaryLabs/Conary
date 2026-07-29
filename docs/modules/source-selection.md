@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-28
-revision: 18
-summary: Document exact profile-owned source policy, canonical map authority, native repository authority, package identity, and lifecycle handoff
+last_updated: 2026-07-29
+revision: 19
+summary: Document exact profile-owned source policy, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -385,6 +385,38 @@ changesets, and the state snapshot. Track and full adoption both preserve
 native package-manager authority until an explicit takeover or
 selected-generation handoff.
 
+Complete, unfiltered `conary system adopt --system --full` additionally scans
+the selected root once, after all native package payload captures succeed. The
+scan uses the same finite publication domains as generation construction:
+`/etc` is config state, `/var` and `/srv` are mutable state, and other retained
+top-level paths are immutable generation input. `/proc`, `/sys`, `/dev`,
+`/run`, `/tmp`, `/home`, `/root`, `/mnt`, and `/media` are the exact
+ephemeral/API/device/user domains and are never captured. Conary's own runtime
+root and database directory are explicit normalized exclusions under both
+their lexical and resolved paths, so path aliases cannot make the CAS or
+database inputs to their own capture. A runtime root resolving to `/` fails
+closed.
+
+Persisted package file anchors and directory claims partition that exact scan.
+Package-owned paths retain their owner and claim graph while their materialized
+node/content authority is reconciled to the one global scan, preserving xattrs
+and hardlinks even when an inode group crosses ownership boundaries. Every
+remaining path belongs to one synthetic `CapturedRoot` trove. That source is a
+generation input but never substitutes for package install, update, remove, or
+native-manager authority. A repeated full adoption recognizes the same exact
+partition without accumulating another captured-root owner. Track-only native
+troves are privately CAS-backed and promoted to `AdoptedFull` in the same
+full-adoption transaction.
+
+Package filters and `--explicit-only` deliberately do not assert whole-root
+continuity: they adopt only their requested native package scope. If any exact
+native query, payload capture, or package persistence fails, full-system
+adoption reports an incomplete outcome and does not classify the missing
+package's paths as unowned captured-root state. Complete capture also fails
+closed if a metadata-only `AdoptedTrack` identity is absent from the current
+native inventory, because retaining that stale non-generation owner would
+silently omit its paths.
+
 ### Install
 
 Install uses the shared effective policy and then layers root-only request
@@ -493,6 +525,13 @@ state requires an explicit scoped install, update, or replatform operation.
   policy construction and canonical package name resolution
 - `apps/conary/src/commands/adopt/packages.rs` for shared single-package
   adoption preview/apply planning and native-authority preservation
+- `apps/conary/src/commands/adopt/system.rs` and
+  `adopt/system/captured_root.rs` for complete system adoption, track-to-full
+  promotion, and exact package-versus-captured-root partitioning
+- `crates/conary-core/src/generation/root_manifest/scan.rs` for finite
+  selected-root capture and normalized runtime exclusions
+- `crates/conary-core/src/generation/builder/runtime_inputs.rs` for installed
+  package and captured-root projection into immutable and mutable manifests
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
   execution, delta/full update handling, and lifecycle execution preflight

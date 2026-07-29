@@ -72,6 +72,19 @@ impl InstallSource {
                 | InstallSource::CapturedRoot
         )
     }
+
+    /// Returns true when this source carries complete selected-root authority
+    /// that can be projected into a generation.
+    pub fn is_generation_input(&self) -> bool {
+        matches!(
+            self,
+            InstallSource::AdoptedFull
+                | InstallSource::Taken
+                | InstallSource::Repository
+                | InstallSource::File
+                | InstallSource::CapturedRoot
+        )
+    }
 }
 
 /// Reason why a package was installed
@@ -954,5 +967,19 @@ mod tests {
     fn test_taken_is_not_adopted() {
         assert!(!InstallSource::Taken.is_adopted());
         assert!(!InstallSource::CapturedRoot.is_adopted());
+    }
+
+    #[test]
+    fn complete_selected_root_sources_are_generation_inputs() {
+        for source in [
+            InstallSource::AdoptedFull,
+            InstallSource::Taken,
+            InstallSource::File,
+            InstallSource::Repository,
+            InstallSource::CapturedRoot,
+        ] {
+            assert!(source.is_generation_input(), "{source}");
+        }
+        assert!(!InstallSource::AdoptedTrack.is_generation_input());
     }
 }

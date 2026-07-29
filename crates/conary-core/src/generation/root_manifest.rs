@@ -18,7 +18,8 @@ pub use materialize::{
     overlay_payload_entries,
 };
 pub use scan::{
-    capture_existing_payload_node, capture_root_node, scan_payload_tree, scan_selected_root,
+    SelectedRootCaptureExclusions, capture_existing_payload_node, capture_root_node,
+    scan_payload_tree, scan_selected_root, scan_selected_root_with_exclusions,
 };
 
 pub const GENERATION_ROOT_MANIFEST_FILE: &str = "generation-root.json";
@@ -383,7 +384,14 @@ fn entries_by_path(entries: &[GenerationRootEntry]) -> BTreeMap<&str, &Generatio
 
 fn validate_root_path(path: &str) -> crate::Result<()> {
     let parsed = Path::new(path);
-    if !parsed.is_absolute() || path == "/" || path.ends_with('/') {
+    if !parsed.is_absolute()
+        || path == "/"
+        || path.ends_with('/')
+        || path
+            .split('/')
+            .skip(1)
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
         return Err(crate::Error::InvalidPath(format!(
             "root manifest path must be a normalized absolute non-root path: {path:?}"
         )));

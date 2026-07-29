@@ -489,10 +489,28 @@ non-ephemeral nodes and escaping or looping aliases fail before mutation.
 Restoration first rebuilds all package bases, then all anchors, then all claims,
 so cross-package and cyclic claim graphs do not depend on insertion order.
 Additive RPM or CCS metadata changes restore the prior materialized node even
-when the pre-existing anchor package itself was not removed. Adoption uses the
-typed `CapturedRoot` source and commits each package's files, directory claims,
-requirements, and provides atomically; package names and partial warning paths
-are not ownership authority.
+when the pre-existing anchor package itself was not removed. Native adoption
+commits each package's files, directory claims, requirements, and provides
+atomically under `AdoptedTrack` or `AdoptedFull`; package names and partial
+warning paths are not ownership authority.
+
+A complete unfiltered full-system adoption also performs one exact global
+selected-root capture after every native package capture succeeds. Existing
+package anchors and claims retain ownership. Only retained paths with no
+package owner are assigned to one typed `CapturedRoot` authority, which
+generation construction consumes alongside other complete payload sources.
+The capture preserves global hardlink topology and exact numeric ownership,
+mode/type, timestamps, symlink targets, CAS content, and xattrs. Its finite
+domain contract retains immutable paths plus `/etc`, `/var`, and `/srv`, while
+excluding `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/home`, `/root`, `/mnt`,
+`/media`, and Conary's own normalized runtime/database subtrees. Runtime
+and database exclusions cover both lexical and resolved authority so aliases
+cannot reintroduce self-capture, and a runtime root resolving to `/` fails
+closed. Runtime generation collection therefore has no source-package-manager
+or source-database dependency. `CapturedRoot` is migration-continuity input,
+not package install/update/remove ownership. A complete capture refuses stale
+`AdoptedTrack` identities absent from the current native inventory rather than
+letting metadata-only ownership suppress their paths from the generation.
 
 ## Configuration Transaction Contract
 
