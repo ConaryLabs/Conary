@@ -63,6 +63,14 @@ mod tests {
         assert_eq!(manifest.package.version, "0.1.0");
         assert_eq!(manifest.package.release.as_str(), "1");
         assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
+        assert_eq!(
+            manifest
+                .package
+                .platform
+                .as_ref()
+                .and_then(|platform| platform.arch.as_deref()),
+            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE)
+        );
     }
 
     #[test]

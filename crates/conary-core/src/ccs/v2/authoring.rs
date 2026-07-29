@@ -55,6 +55,25 @@ pub fn lint_manifest_for_v2_authoring(
             blocks_publish: true,
         });
     }
+    if manifest
+        .package
+        .platform
+        .as_ref()
+        .and_then(|platform| platform.arch.as_deref())
+        .is_none_or(|architecture| architecture.trim().is_empty())
+    {
+        findings.push(AuthoringFinding {
+            code: "m4b-missing-architecture",
+            bucket: AuthoringFindingBucket::Contract,
+            severity: AuthoringFindingSeverity::Error,
+            field: Some("package.platform.arch"),
+            message: "v2 package authoring requires exact architecture authority".to_string(),
+            suggestion: "set arch = \"noarch\" under [package.platform] for an architecture-independent Conary package, or use the exact target architecture token",
+            blocks_build: true,
+            blocks_local_test: true,
+            blocks_publish: true,
+        });
+    }
     if manifest.components.default.len() != 1 || manifest.components.default[0].trim().is_empty() {
         findings.push(AuthoringFinding {
             code: "m4b-default-component",

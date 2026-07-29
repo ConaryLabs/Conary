@@ -336,7 +336,7 @@ impl InspectionState {
         }
 
         Ok(UntrustedCcsArchive {
-            manifest: install_manifest_projection(&authority),
+            manifest: untrusted_manifest_projection(&authority),
             components: crate::ccs::v2::component_view::components(&authority),
             census: self.census,
             v2_authority: authority,
@@ -369,19 +369,17 @@ fn require_format_version_2(raw: &[u8]) -> anyhow::Result<()> {
     }
 }
 
-fn install_manifest_projection(authority: &AuthorityDocumentV2) -> CcsManifest {
-    let mut manifest =
-        CcsManifest::new_minimal(&authority.identity.name, &authority.identity.version);
-    manifest.package.version_scheme = authority.identity.version_scheme;
-    manifest.package.release = authority.identity.release.clone();
-    manifest.package.kind = authority.identity.kind;
+fn untrusted_manifest_projection(authority: &AuthorityDocumentV2) -> CcsManifest {
+    let mut manifest = crate::ccs::v2::project_manifest_identity(
+        authority,
+        format!(
+            "Untrusted inspection projection for CCS v2 {:?}",
+            authority.identity.kind
+        ),
+    );
     manifest.requirements = authority.requirements.clone();
     manifest.relations = authority.relations.clone();
     manifest.native_lifecycle = authority.lifecycle.native_lifecycle.clone();
-    manifest.package.description = format!(
-        "Untrusted inspection projection for CCS v2 {:?}",
-        authority.identity.kind
-    );
     manifest
 }
 

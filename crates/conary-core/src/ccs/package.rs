@@ -310,6 +310,9 @@ release = "1"
 kind = "package"
 description = "test fixture"
 license = "MIT"
+
+[package.platform]
+arch = "noarch"
 "#,
         )
         .unwrap();
@@ -393,6 +396,9 @@ release = "1"
 kind = "package"
 description = "symlink fixture"
 license = "MIT"
+
+[package.platform]
+arch = "noarch"
 "#,
         )
         .unwrap();
