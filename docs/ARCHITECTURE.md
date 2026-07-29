@@ -443,7 +443,14 @@ CAS objects. Export reconstructs `/var` and `/srv` in the carrier root and
 projects `/etc` into `/conary/etc-state/<generation>` above one explicit empty
 lower directory. Read-only carriers copy that seeded config upper to runtime
 tmpfs before mounting it, so writability never replaces or bypasses the
-artifact's typed state authority.
+artifact's typed state authority. Carrier projection restores the verified
+generation-root metadata on `/` and the exact manifest metadata on `/usr`,
+`/etc`, and `/boot`; the disk backend excludes only `/boot/` contents so it
+does not replace the signed mountpoint with a default directory. Boot entries
+disable source-`fstab` generation because a self-contained carrier owns a new
+partition topology. Writable carriers declare their `CONARY_ESP` mount through
+the boot contract, while the original `/etc/fstab` bytes remain part of the
+unchanged mutable-state seed.
 
 ### Generation Module (`crates/conary-core/src/generation/`)
 

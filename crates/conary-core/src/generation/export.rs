@@ -14,8 +14,10 @@ use crate::generation::metadata::{
     EXCLUDED_DIRS, GENERATION_METADATA_FILE, GENERATION_METADATA_SIGNATURE_FILE, ROOT_SYMLINKS,
 };
 use crate::generation::root_manifest::{
-    GENERATION_ROOT_MANIFEST_FILE, MUTABLE_STATE_MANIFEST_FILE, materialize_state_root,
+    GENERATION_ROOT_MANIFEST_FILE, MUTABLE_STATE_MANIFEST_FILE, apply_resolved_payload_metadata,
+    materialize_state_root,
 };
+use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
 
 const RUNTIME_ROOT_DIRS: &[&str] = &["usr", "etc", "boot"];
 const ESP_SIZE_MB: u64 = 512;
@@ -25,6 +27,9 @@ const EXT4_MINIMIZE_HEADROOM_DIVISOR: u64 = 2;
 const ISO_VOLUME_ID: &str = "CONARY_ISO";
 const ISO_EFI_IMAGE_REL: &str = "EFI/efiboot.img";
 const ISO_EFI_IMAGE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
+const DISABLE_SOURCE_FSTAB_OPTION: &str = "fstab=no";
+const WRITABLE_ESP_MOUNT_OPTION: &str =
+    "systemd.mount-extra=PARTLABEL=CONARY_ESP:/boot:vfat:defaults,noatime";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenerationExportFormat {
@@ -412,6 +417,7 @@ pub fn project_generation_rootfs(
     artifact: &GenerationArtifact,
     staging_dir: &Path,
 ) -> crate::Result<PathBuf> {
+    validate_carrier_root_metadata(artifact)?;
     std::fs::create_dir_all(staging_dir)?;
 
     let generation_rel = PathBuf::from("conary")
@@ -486,8 +492,54 @@ pub fn project_generation_rootfs(
         std::fs::create_dir_all(staging_dir.join(dir))?;
     }
     create_root_symlinks(staging_dir)?;
+    restore_carrier_root_metadata(artifact, staging_dir)?;
 
     Ok(staging_dir.to_path_buf())
+}
+
+fn validate_carrier_root_metadata(artifact: &GenerationArtifact) -> crate::Result<()> {
+    for relative in RUNTIME_ROOT_DIRS {
+        carrier_mountpoint_node(artifact, &format!("/{relative}"))?;
+    }
+    Ok(())
+}
+
+fn restore_carrier_root_metadata(
+    artifact: &GenerationArtifact,
+    staging_dir: &Path,
+) -> crate::Result<()> {
+    for relative in RUNTIME_ROOT_DIRS {
+        let manifest_path = format!("/{relative}");
+        let node = carrier_mountpoint_node(artifact, &manifest_path)?;
+        apply_resolved_payload_metadata(&staging_dir.join(relative), node)?;
+    }
+
+    // Root metadata is restored last because every projected file, directory,
+    // and symlink changes the root directory timestamp.
+    apply_resolved_payload_metadata(staging_dir, &artifact.generation_root.root)
+}
+
+fn carrier_mountpoint_node<'a>(
+    artifact: &'a GenerationArtifact,
+    manifest_path: &str,
+) -> crate::Result<&'a ResolvedPayloadNode> {
+    let entry = artifact
+        .generation_root
+        .entries
+        .iter()
+        .chain(artifact.mutable_state.entries.iter())
+        .find(|entry| entry.path == manifest_path)
+        .ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "exportable generation is missing exact carrier mountpoint metadata for {manifest_path}"
+            ))
+        })?;
+    if !matches!(&entry.node.source.kind, PayloadNodeKind::Directory) {
+        return Err(crate::Error::InvalidPath(format!(
+            "carrier mountpoint {manifest_path} must be a directory in the generation artifact"
+        )));
+    }
+    Ok(&entry.node)
 }
 
 pub fn project_generation_esp(
@@ -549,12 +601,12 @@ fn project_generation_esp_for_carrier(
     )?;
     let boot_options = match carrier {
         BootCarrier::WritableDisk => format!(
-            "root=PARTLABEL=CONARY_ROOT rootfstype={} rw conary.generation={} console=tty0 console=ttyS0",
+            "root=PARTLABEL=CONARY_ROOT rootfstype={} rw {DISABLE_SOURCE_FSTAB_OPTION} {WRITABLE_ESP_MOUNT_OPTION} conary.generation={} console=tty0 console=ttyS0",
             crate::image::repart::BLS_ROOTFSTYPE,
             artifact.generation
         ),
         BootCarrier::ReadonlyIso => format!(
-            "root=LABEL={ISO_VOLUME_ID} rootfstype=iso9660 ro conary.generation={} conary.carrier=readonly systemd.mask=boot.mount console=tty0 console=ttyS0",
+            "root=LABEL={ISO_VOLUME_ID} rootfstype=iso9660 ro {DISABLE_SOURCE_FSTAB_OPTION} conary.generation={} conary.carrier=readonly systemd.mask=boot.mount console=tty0 console=ttyS0",
             artifact.generation
         ),
     };

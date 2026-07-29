@@ -93,8 +93,10 @@ impl RepartDefinition {
             size_min: None,
             size_max: None,
             copy_files: Some(format!("{}:/", source.display())),
-            exclude_files: vec!["/boot".to_string()],
-            make_directories: vec!["/boot".to_string()],
+            // Keep the source /boot directory metadata while excluding the
+            // boot assets carried by the separate ESP.
+            exclude_files: vec!["/boot/".to_string()],
+            make_directories: Vec::new(),
             label: Some(ROOT_PARTITION_LABEL.to_string()),
             minimize: false,
         }
@@ -210,8 +212,9 @@ mod tests {
         assert!(content.contains("Type=root-x86-64"));
         assert!(content.contains("Format=ext4"));
         assert!(content.contains("CopyFiles=/staged-root:/"));
-        assert!(content.contains("ExcludeFiles=/boot"));
-        assert!(content.contains("MakeDirectories=/boot"));
+        assert!(content.contains("ExcludeFiles=/boot/"));
+        assert!(!content.contains("ExcludeFiles=/boot\n"));
+        assert!(!content.contains("MakeDirectories=/boot"));
         assert!(content.contains("Label=CONARY_ROOT"));
         assert!(!content.contains("SizeMinBytes"));
         assert!(!content.contains("Minimize=guess"));
