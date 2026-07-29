@@ -160,6 +160,42 @@ fn selected_root_round_trip_preserves_typed_tree_and_omits_ephemeral_domains() {
 }
 
 #[test]
+fn config_state_projection_removes_exactly_one_etc_prefix() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let upper = temp.path().join("upper");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    for directory in ["etc", "etc/vendor", "var", "var/lib"] {
+        std::fs::create_dir_all(source.join(directory)).unwrap();
+    }
+    std::fs::write(source.join("etc/vendor/config"), b"configured=true\n").unwrap();
+    std::fs::hard_link(
+        source.join("etc/vendor/config"),
+        source.join("etc/vendor/config-link"),
+    )
+    .unwrap();
+    std::fs::write(source.join("var/lib/state"), b"mutable\n").unwrap();
+
+    let captured = scan_selected_root(&source, &cas).unwrap();
+    materialize_config_state_upper(&captured.state, &cas, &upper).unwrap();
+
+    assert_eq!(
+        std::fs::read(upper.join("vendor/config")).unwrap(),
+        b"configured=true\n"
+    );
+    assert_eq!(
+        std::fs::metadata(upper.join("vendor/config"))
+            .unwrap()
+            .ino(),
+        std::fs::metadata(upper.join("vendor/config-link"))
+            .unwrap()
+            .ino()
+    );
+    assert!(!upper.join("etc").exists());
+    assert!(!upper.join("var").exists());
+}
+
+#[test]
 fn scanner_rejects_hardlinks_across_publication_domains() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");

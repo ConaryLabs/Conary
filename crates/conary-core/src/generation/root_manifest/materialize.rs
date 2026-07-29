@@ -47,6 +47,58 @@ pub fn materialize_state_root(
     materialize_entries(&manifest.entries, cas, destination)
 }
 
+/// Recreate the `/etc` subtree as an overlay upper directory.
+///
+/// Mutable-state manifests use selected-root paths such as `/etc/passwd`,
+/// while an overlay upper for `/etc` stores that node as `passwd`. This
+/// projection keeps the typed manifest as authority while removing exactly
+/// one `/etc` prefix. `/var` and `/srv` entries remain owned by their live
+/// mutable roots and are not projected into the config upper.
+pub fn materialize_config_state_upper(
+    manifest: &MutableStateManifest,
+    cas: &CasStore,
+    destination: &Path,
+) -> crate::Result<()> {
+    manifest.validate()?;
+    require_sha256_cas(cas)?;
+    prepare_empty_destination(destination)?;
+
+    let mut root = None;
+    let mut entries = Vec::new();
+    for entry in &manifest.entries {
+        if entry.path == "/etc" {
+            root = Some(&entry.node);
+            continue;
+        }
+        let Some(relative) = entry.path.strip_prefix("/etc/") else {
+            continue;
+        };
+        let mut projected = entry.clone();
+        projected.path = format!("/{relative}");
+        if let PayloadNodeKind::Hardlink { target, identity } = &entry.node.source.kind {
+            let projected_target = target.strip_prefix("/etc/").ok_or_else(|| {
+                crate::Error::InvalidPath(format!(
+                    "config-state hardlink {} targets path outside /etc: {target}",
+                    entry.path
+                ))
+            })?;
+            projected.node.source.kind = PayloadNodeKind::Hardlink {
+                target: format!("/{projected_target}"),
+                identity: identity.clone(),
+            };
+        }
+        entries.push(projected);
+    }
+
+    materialize_entries(&entries, cas, destination)?;
+    if let Some(root) = root {
+        apply_resolved_payload_metadata(destination, root)?;
+    } else {
+        fs::set_permissions(destination, fs::Permissions::from_mode(0o755))?;
+    }
+    sync_directory(destination)
+}
+
 /// Recreate a complete selected root while preserving the captured root
 /// directory metadata after state entries have been installed.
 pub fn materialize_captured_selected_root(

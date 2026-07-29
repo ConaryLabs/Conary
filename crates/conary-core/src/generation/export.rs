@@ -13,6 +13,9 @@ use crate::generation::artifact::{
 use crate::generation::metadata::{
     EXCLUDED_DIRS, GENERATION_METADATA_FILE, GENERATION_METADATA_SIGNATURE_FILE, ROOT_SYMLINKS,
 };
+use crate::generation::root_manifest::{
+    GENERATION_ROOT_MANIFEST_FILE, MUTABLE_STATE_MANIFEST_FILE, materialize_state_root,
+};
 
 const RUNTIME_ROOT_DIRS: &[&str] = &["usr", "etc", "boot"];
 const ESP_SIZE_MB: u64 = 512;
@@ -439,6 +442,14 @@ pub fn project_generation_rootfs(
         &artifact.generation_dir.join(CAS_MANIFEST_FILE),
         &generation_dest.join(CAS_MANIFEST_FILE),
     )?;
+    copy_file(
+        &artifact.generation_dir.join(GENERATION_ROOT_MANIFEST_FILE),
+        &generation_dest.join(GENERATION_ROOT_MANIFEST_FILE),
+    )?;
+    copy_file(
+        &artifact.generation_dir.join(MUTABLE_STATE_MANIFEST_FILE),
+        &generation_dest.join(MUTABLE_STATE_MANIFEST_FILE),
+    )?;
     copy_dir_recursive(
         &artifact.generation_dir.join(BOOT_ASSETS_DIR),
         &generation_dest.join(BOOT_ASSETS_DIR),
@@ -452,7 +463,23 @@ pub fn project_generation_rootfs(
     }
 
     create_current_symlink(staging_dir, &artifact.generation.to_string())?;
-    std::fs::create_dir_all(staging_dir.join("conary/etc-state"))?;
+    let cas = crate::filesystem::CasStore::new(&objects_dest)?;
+    materialize_state_root(&artifact.mutable_state, &cas, staging_dir)?;
+    let etc_state = staging_dir
+        .join("conary/etc-state")
+        .join(artifact.generation.to_string());
+    std::fs::create_dir_all(
+        etc_state
+            .parent()
+            .expect("generation etc-state path always has a parent"),
+    )?;
+    let materialized_etc = staging_dir.join("etc");
+    if materialized_etc.is_dir() {
+        std::fs::rename(&materialized_etc, &etc_state)?;
+    } else {
+        std::fs::create_dir(&etc_state)?;
+    }
+    std::fs::create_dir_all(staging_dir.join("conary/etc-lower"))?;
     std::fs::create_dir_all(staging_dir.join("conary/mnt"))?;
 
     for dir in RUNTIME_ROOT_DIRS.iter().chain(EXCLUDED_DIRS.iter()) {

@@ -28,7 +28,7 @@ install() {
     install_conary_script "$moddir/conary-generator.sh" "/sbin/conary-generator"
     install_conary_script "$moddir/conary-generator.sh" \
         "/var/lib/dracut/hooks/pre-pivot/90-conary-generator.sh"
-    inst_multiple -o blkid grep head modprobe switch_root
+    inst_multiple -o blkid cp grep head modprobe switch_root
     # Include mount.composefs if available
     inst_multiple -o mount.composefs
 }

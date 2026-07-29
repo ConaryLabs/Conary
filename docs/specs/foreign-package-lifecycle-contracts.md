@@ -383,6 +383,12 @@ regular-file content authority all survive. Immutable content and mutable
 state reference the same SHA-256 CAS used by package payloads. Generation,
 retry, bootstrap EROFS, and try-session materialization consume those typed
 manifests rather than reconstructing lifecycle effects from package rows.
+Generation-local config projection removes exactly one `/etc` prefix when it
+materializes the overlay upper; `/var` and `/srv` entries cannot enter that
+upper. Boot-carrier export copies both manifests, reconstructs `/var` and
+`/srv`, and seeds the same `/etc` upper from verified, manifest-listed CAS
+objects. A read-only carrier may copy that seed to tmpfs for runtime writes,
+but the copied seed is not a second state authority.
 
 A generation-aware root mutation records a typed selected-root publication
 debt and durably installs its cumulative candidate before committing the

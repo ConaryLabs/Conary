@@ -14,7 +14,8 @@ use std::path::{Component, Path};
 pub use composefs::build_erofs_image_from_root_manifest;
 pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
-    materialize_generation_root, materialize_state_root, overlay_payload_entries,
+    materialize_config_state_upper, materialize_generation_root, materialize_state_root,
+    overlay_payload_entries,
 };
 pub use scan::{
     capture_existing_payload_node, capture_root_node, scan_payload_tree, scan_selected_root,
