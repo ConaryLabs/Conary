@@ -246,18 +246,23 @@ pub(crate) fn capture_existing_directory_materializations(
 ) -> Result<Vec<FileEntry>> {
     let mut captured = BTreeMap::new();
     for anchor in FileEntry::find_all_ordered(conn)? {
-        if classify_root_path(&anchor.path)? == RootPathDomain::EphemeralMountOrUser {
+        let claims = DirectoryClaim::find_retaining_path(conn, &anchor.path)?;
+        if claims.is_empty() && !matches!(anchor.node.source.kind, PayloadNodeKind::Directory) {
             continue;
         }
-        let claims = DirectoryClaim::find_retaining_path(conn, &anchor.path)?;
-        if claims.is_empty() {
-            if matches!(anchor.node.source.kind, PayloadNodeKind::Directory) {
-                return Err(anyhow!(
-                    "Tracked directory materialization {} has no package claim",
-                    anchor.path
-                ));
-            }
+        let effective_path =
+            conary_core::filesystem::selected_root::selected_root_effective_package_path(
+                selected_root,
+                &anchor.path,
+            )?;
+        if classify_root_path(&effective_path)? == RootPathDomain::EphemeralMountOrUser {
             continue;
+        }
+        if claims.is_empty() {
+            return Err(anyhow!(
+                "Tracked directory materialization {} has no package claim",
+                anchor.path
+            ));
         }
         let selected_root_node =
             conary_core::filesystem::selected_root::capture_selected_root_node(
