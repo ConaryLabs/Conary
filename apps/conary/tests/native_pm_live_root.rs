@@ -70,6 +70,9 @@ fn directory_entry(path: &str, permissions: u32, trove_id: i64) -> FileEntry {
 fn seed_selected_root_layout(db_path: &Path, immutable_directories: &[&str]) {
     stage_test_boot_assets(db_path.parent().unwrap());
     let conn = conary_core::db::open(db_path).unwrap();
+    conary_core::ccs::HostCapabilityInventory::default()
+        .persist(&conn)
+        .unwrap();
     let mut layout = Trove::new_with_source(
         "test-filesystem-layout".to_string(),
         "1.0.0".to_string(),
