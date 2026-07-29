@@ -263,6 +263,7 @@ mod tests {
     fn record(path: &str, device: u32, inode: u32, size: u64) -> HeaderRecord {
         HeaderRecord {
             path: path.to_string(),
+            path_kind: super::super::header::HeaderPathKind::Deployable,
             mode: libc::S_IFREG | 0o644,
             user: "root".to_string(),
             group: "root".to_string(),

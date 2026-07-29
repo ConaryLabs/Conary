@@ -129,6 +129,32 @@ fn decoder<'a>(
         .map_err(|error| parse_error(format!("create RPM {label} payload decoder: {error}")))
 }
 
+/// Associate one standard CPIO name with RPM's absolute header path.
+///
+/// RPM removes one optional `./` prefix and one optional leading `/` before
+/// comparing a CPIO name with its DIRNAMES/BASENAMES tables. The independent
+/// prefix steps make `""`, `"./"`, `"/"`, and `".//"` equivalent archive
+/// spellings of the header's exact root entry. See `rpmfnFindFN()` at the
+/// pinned upstream revision:
+/// <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L388-L435>.
+fn rpm_cpio_header_path(name: &str) -> Result<String> {
+    let without_dot = name.strip_prefix("./").unwrap_or(name);
+    let relative = without_dot.strip_prefix('/').unwrap_or(without_dot);
+    if relative.is_empty() {
+        return Ok("/".to_string());
+    }
+
+    let raw_path = format!("/{relative}");
+    let path = normalize_path(&raw_path)
+        .map_err(|error| parse_error(format!("invalid RPM CPIO path: {error}")))?;
+    if raw_path != path {
+        return Err(parse_error(format!(
+            "RPM CPIO path {name:?} does not identify canonical header path {path:?}"
+        )));
+    }
+    Ok(path)
+}
+
 struct RpmPayloadReader<'a> {
     reader: Box<dyn Read + 'a>,
     records: &'a [HeaderRecord],
@@ -283,8 +309,7 @@ impl<'a> RpmPayloadReader<'a> {
             }
             return Ok(true);
         }
-        let path = normalize_path(&name)
-            .map_err(|error| parse_error(format!("invalid RPM CPIO path: {error}")))?;
+        let path = rpm_cpio_header_path(&name)?;
         let index = *self
             .standard_path_indexes
             .get(path.as_str())
@@ -467,6 +492,7 @@ mod tests {
     fn header_record(mode: u32, size: u64, link_target: Option<&str>) -> HeaderRecord {
         HeaderRecord {
             path: "/usr/lib/.build-id/fixture".to_string(),
+            path_kind: super::super::header::HeaderPathKind::Deployable,
             mode,
             user: "root".to_string(),
             group: "root".to_string(),
@@ -515,6 +541,44 @@ mod tests {
             copy_exact_payload(&mut reader, &mut StopWriter, u64::from(u32::MAX) + 1).unwrap_err();
         assert!(error.to_string().contains("injected bounded sink stop"));
         assert!(reader.max_requested <= PAYLOAD_IO_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn rpm_cpio_root_spellings_map_only_to_the_header_root_anchor() {
+        for name in ["", "./", "/", ".//"] {
+            assert_eq!(
+                rpm_cpio_header_path(name).unwrap(),
+                "/",
+                "name was {name:?}"
+            );
+        }
+        for name in [".", "//", "./.", "../", "./../root"] {
+            assert!(
+                rpm_cpio_header_path(name).is_err(),
+                "{name:?} must not alias the RPM root anchor"
+            );
+        }
+    }
+
+    #[test]
+    fn rpm_cpio_paths_follow_upstream_prefix_and_exact_match_grammar() {
+        for name in [
+            "usr/share/fixture",
+            "./usr/share/fixture",
+            "/usr/share/fixture",
+        ] {
+            assert_eq!(
+                rpm_cpio_header_path(name).unwrap(),
+                "/usr/share/fixture",
+                "name was {name:?}"
+            );
+        }
+        for name in ["usr//share/fixture", "usr/./share/fixture", "usr/../etc"] {
+            assert!(
+                rpm_cpio_header_path(name).is_err(),
+                "{name:?} must not normalize into different header authority"
+            );
+        }
     }
 
     #[test]
