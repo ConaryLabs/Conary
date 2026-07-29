@@ -193,7 +193,7 @@ fn add_exact_selected_root_parent_closure(
                 ))
             })?;
             match present.get(parent_text) {
-                Some(kind) if matches!(kind, PayloadNodeKind::Directory) => {}
+                Some(PayloadNodeKind::Directory) => {}
                 Some(kind) => {
                     return Err(crate::Error::InvalidPath(format!(
                         "runtime generation path {} has non-directory parent {} ({})",
