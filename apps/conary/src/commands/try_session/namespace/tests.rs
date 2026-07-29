@@ -322,7 +322,7 @@ fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow:
     std::fs::write(staged.join("marker"), "new")?;
     recreate_path_symlink(&previous, &stable)?;
 
-    let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH", "1");
     let exposure = StagedNamespaceExposure {
         generation_id: 2,
@@ -391,7 +391,7 @@ fn namespace_switch_commit_removes_superseded_generation_paths() -> anyhow::Resu
         std::fs::create_dir_all(temp.path().join(name))?;
     }
 
-    let _mount_guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let exposure = StagedNamespaceExposure {
         generation_id: 2,
         next_namespace_root: staged,
