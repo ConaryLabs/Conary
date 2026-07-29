@@ -207,6 +207,9 @@ pub(super) mod test_support {
             let db_path = root.join("conary.db");
             let db_path_string = db_path.to_string_lossy().into_owned();
             conary_core::db::init(&db_path).unwrap();
+            let conn = conary_core::db::open(&db_path).unwrap();
+            crate::commands::test_helpers::persist_test_host_capabilities(&conn);
+            drop(conn);
             stage_test_boot_assets(&root);
             let signing_key = SigningKeyPair::generate().with_key_id("try-session-test");
             let trust_policy = TrustPolicy::strict(vec![signing_key.public_key_base64()]);
