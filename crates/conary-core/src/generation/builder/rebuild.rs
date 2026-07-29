@@ -8,6 +8,7 @@ use super::BuildResult;
 use super::boot_assets::{
     resolve_generation_boot_asset_sources, stage_runtime_boot_assets_from_sources,
 };
+use super::carrier_capabilities::generation_carrier_capabilities;
 use super::cas::{cas_objects_from_manifests, verify_runtime_generation_cas_object_presence};
 use super::root_validation::validate_runtime_generation_root_is_self_contained;
 use super::runtime_inputs;
@@ -87,6 +88,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         architecture,
         &boot_asset_sources,
     )?;
+    let carrier_capabilities = generation_carrier_capabilities(conn)?;
     let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
         generation_dir: &gen_dir,
         generation: gen_number,
@@ -95,6 +97,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
+        carrier_capabilities,
     })?;
 
     #[allow(clippy::cast_possible_wrap)]
@@ -138,7 +141,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 mod tests {
     use super::super::test_support::{
         assert_cas_size_mismatch_error, assert_missing_cas_object_error,
-        insert_regular_file_with_parents,
+        insert_regular_file_with_parents, persist_test_host_capabilities,
         runtime_generation_db_with_missing_regular_file_cas_object,
         runtime_generation_db_with_wrong_sized_regular_file_cas_object,
     };
@@ -210,6 +213,7 @@ mod tests {
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
+        persist_test_host_capabilities(&conn);
         let mut trove = Trove::new(
             "kernel-core".to_string(),
             "6.19.8-conary".to_string(),
@@ -269,6 +273,7 @@ mod tests {
         let init_hash = cas.store(b"init").unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
+        persist_test_host_capabilities(&conn);
         let mut trove = Trove::new(
             "kernel".to_string(),
             "6.19.8-conary".to_string(),

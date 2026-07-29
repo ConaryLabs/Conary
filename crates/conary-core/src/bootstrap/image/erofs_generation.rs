@@ -7,8 +7,8 @@ use crate::db::models::{ExistingDirectoryMaterialization, FileEntry, Trove, Trov
 use crate::db::schema::ensure_current;
 use crate::filesystem::CasStore;
 use crate::generation::artifact::{
-    ArtifactWriteInputs, BootAssetSources, CasObjectVerification, stage_boot_assets,
-    write_generation_artifact,
+    ArtifactWriteInputs, BootAssetSources, CasObjectVerification, GenerationCarrierCapabilities,
+    stage_boot_assets, write_generation_artifact,
 };
 use crate::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
 use crate::generation::root_manifest::{build_erofs_image_from_root_manifest, scan_selected_root};
@@ -138,6 +138,14 @@ impl ImageBuilder {
         .map_err(|e| ImageError::CreationFailed(format!("Failed to stage boot assets: {e}")))?;
 
         self.log_line("Writing generation artifact manifests");
+        let carrier_capabilities = GenerationCarrierCapabilities::from_generation_root(
+            &captured.generation,
+        )
+        .map_err(|e| {
+            ImageError::CreationFailed(format!(
+                "Failed to project bootstrap target carrier capabilities: {e}"
+            ))
+        })?;
         let artifact_manifest_sha256 = write_generation_artifact(ArtifactWriteInputs {
             generation_dir: &gen_dir,
             generation: 1,
@@ -146,6 +154,7 @@ impl ImageBuilder {
             cas_base_rel: "../../objects",
             cas_verification: CasObjectVerification::AlreadyVerified,
             boot_assets,
+            carrier_capabilities,
         })
         .map_err(|e| {
             ImageError::CreationFailed(format!("Failed to write generation artifact: {e}"))

@@ -134,6 +134,7 @@ pub(crate) fn create_test_db() -> (TempDir, String) {
     conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
     schema::ensure_current(&conn).unwrap();
     conary_core::ccs::HostCapabilityInventory::discover()
+        .unwrap()
         .persist(&conn)
         .unwrap();
     drop(conn);
@@ -164,6 +165,7 @@ pub(crate) fn setup_command_test_db() -> (TempDir, String) {
     let nginx_config_size = i64::try_from(nginx_config_contents.len()).unwrap();
     let mut conn = conary_core::db::open(&db_path).unwrap();
     conary_core::ccs::HostCapabilityInventory::discover()
+        .unwrap()
         .persist(&conn)
         .unwrap();
 
@@ -407,6 +409,7 @@ pub(crate) fn create_active_test_generation(db_path: &Path, generation: i64) {
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
+        carrier_capabilities: Default::default(),
     })
     .unwrap();
     GenerationMetadata {

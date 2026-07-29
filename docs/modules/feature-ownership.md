@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-28
-revision: 61
-summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, typed generation GC, exact release authority, and current canonical docs
+last_updated: 2026-07-29
+revision: 62
+summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -458,6 +458,7 @@ and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/root_manifest/composefs.rs`;
 `crates/conary-core/src/generation/builder/create.rs`;
 `crates/conary-core/src/generation/builder/rebuild.rs`;
+`crates/conary-core/src/generation/builder/carrier_capabilities.rs`;
 `crates/conary-core/src/generation/builder/boot_assets.rs`;
 `crates/conary-core/src/generation/builder/initramfs.rs`;
 `crates/conary-core/src/generation/builder/kernel.rs`;
@@ -467,6 +468,8 @@ and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/export/tests.rs`;
 `crates/conary-core/src/generation/artifact.rs`;
 `crates/conary-core/src/generation/artifact/tests.rs`;
+`crates/conary-core/src/ccs/hooks/capabilities.rs`;
+`crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`;
 `crates/conary-core/src/generation/gc.rs`;
 `apps/conary/src/commands/generation/gc.rs`;
 `crates/conary-core/src/boot_runtime.rs`;
@@ -498,6 +501,8 @@ SELinux/AppArmor provider interfaces, transaction commit, SQLite generation
 state, image building, bootstrap validation, conaryd route history.
 
 **Paths:** `crates/conary-core/src/generation/*`;
+`crates/conary-core/src/ccs/hooks/capabilities.rs`;
+`crates/conary-core/src/ccs/hooks/capabilities/*`;
 `crates/conary-core/src/boot_runtime.rs`;
 `crates/conary-core/src/boot_runtime/*`;
 `crates/conary-core/src/activation/*`;
@@ -515,6 +520,7 @@ state, image building, bootstrap validation, conaryd route history.
 
 **Focused proof:** `cargo test -p conary-core generation::export`;
 `cargo test -p conary-core generation::builder`;
+`cargo test -p conary-core --lib ccs::hooks::capabilities`;
 `cargo test -p conary-core generation::gc`;
 `cargo test -p conary-core --lib boot_runtime`;
 `cargo test -p conary-core --lib activation`;

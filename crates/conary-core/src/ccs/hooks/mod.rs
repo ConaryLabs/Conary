@@ -32,7 +32,8 @@ pub use capabilities::{
     ExecutableInterface, HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION,
     HOST_CAPABILITY_INVENTORY_SETTING, HostCapabilityInventory, HostCapabilityInventoryError,
     HostCapabilityPreflightError, HostCapabilityRequirement, HostExecutableContract,
-    HostExecutableImplementation, InitSystemCapability, SystemdInterface, SystemdOperation,
+    HostExecutableImplementation, ImmutableBackingSecurity, ImmutableBackingSecurityError,
+    ImmutableBackingSecurityMechanism, InitSystemCapability, SystemdInterface, SystemdOperation,
     TmpfilesInterface,
 };
 // Re-export helper functions that may be useful externally

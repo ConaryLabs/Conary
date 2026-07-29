@@ -40,6 +40,47 @@ fn ccs_build_uses_release_qualified_output_name() {
 }
 
 #[test]
+fn ccs_build_maps_source_children_without_authoring_prefix_ancestors() {
+    let fixture = MinimalPackageFixture::new();
+
+    let build = fixture
+        .conary()
+        .arg("ccs")
+        .arg("build")
+        .arg(fixture.project_dir())
+        .arg("--source")
+        .arg(fixture.project_dir().join("bin"))
+        .arg("--install-prefix")
+        .arg("/usr/bin")
+        .arg("--local-dev")
+        .arg("--output")
+        .arg(fixture.output_dir())
+        .output()
+        .expect("run conary ccs build with an install prefix");
+    assert_success(&build);
+
+    let inspect = fixture
+        .conary()
+        .arg("ccs")
+        .arg("inspect")
+        .arg(fixture.output_dir().join("hello-0.1.0-1.ccs"))
+        .arg("--files")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("inspect prefixed CCS package");
+    assert_success(&inspect);
+    let inspection: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    let paths = inspection["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, ["/usr/bin/hello"]);
+}
+
+#[test]
 fn ccs_build_accepts_explicit_release_key_and_policy_verify() {
     let fixture = MinimalPackageFixture::new();
     let key_base = fixture.work.path().join("release-key");

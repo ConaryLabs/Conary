@@ -15,6 +15,13 @@ use crate::filesystem::CasStore;
 use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode};
 
 #[cfg(feature = "composefs-rs")]
+pub(crate) fn persist_test_host_capabilities(conn: &rusqlite::Connection) {
+    crate::ccs::HostCapabilityInventory::default()
+        .persist(conn)
+        .unwrap();
+}
+
+#[cfg(feature = "composefs-rs")]
 pub(super) fn regular_file_entry(
     path: &str,
     sha256: String,
@@ -111,6 +118,7 @@ pub(super) fn runtime_generation_db_with_wrong_sized_regular_file_cas_object() -
     let init_hash = cas.store(b"init").unwrap();
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
+    persist_test_host_capabilities(&conn);
     let mut trove = Trove::new(
         "kernel-core".to_string(),
         "6.19.8-conary".to_string(),
@@ -162,6 +170,7 @@ pub(super) fn runtime_generation_db_with_missing_regular_file_cas_object() -> (
     let missing_hash = CasStore::compute_sha256(b"missing");
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
+    persist_test_host_capabilities(&conn);
     let mut trove = Trove::new(
         "kernel-core".to_string(),
         "6.19.8-conary".to_string(),

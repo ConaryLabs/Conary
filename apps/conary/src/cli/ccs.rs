@@ -53,6 +53,10 @@ pub enum CcsCommands {
         #[arg(long)]
         source: Option<String>,
 
+        /// Install source-root children beneath this absolute package path
+        #[arg(long, default_value = "/", value_name = "ABSOLUTE_PATH")]
+        install_prefix: conary_core::ccs::CcsInstallPrefix,
+
         /// Disable CDC chunking (chunking is enabled by default)
         /// When disabled, files are stored as whole blobs instead of
         /// content-defined chunks.

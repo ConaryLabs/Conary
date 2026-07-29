@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-29
-revision: 52
-summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
+revision: 54
+summary: Convert foreign packages through typed authoring, host capability, lifecycle, and native export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -16,6 +16,8 @@ export.
 ccs.toml (manifest)
      |
 CcsBuilder::new(manifest, source_dir)
+     |
+Apply typed install prefix (default `/`) to source-root children
      |
   Walk source directory
      |
@@ -42,6 +44,7 @@ CcsBuilder::new(manifest, source_dir)
 | `ManifestProvenance` | manifest_provenance.rs | Provenance DTOs embedded by the root manifest, including hermetic evidence, build attestations, and foreign conversion boundaries |
 | `BuildAttestationEnvelope` | attestation.rs | Signed M2 release-publish attestation payload and verification helpers |
 | `CcsBuilder` | builder.rs + builder/source.rs | Describes a CCS package from filesystem metadata and reopenable payload sources |
+| `CcsInstallPrefix` | builder.rs | Validated absolute mapping for source-root children; the prefix and its ancestors are not package entries |
 | `BuildResult` | builder.rs | Output: manifest, components, files, reopenable payload sources, total_size |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v2_projection.rs | Project verified signed v2 authority into install-time package data |
@@ -83,7 +86,12 @@ All operations respect a target_root parameter for bootstrap/container use.
 system init` discovers and persists the active init interface plus exact
 `systemctl`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
 `ldconfig` executable interfaces in `system.host-capability-inventory`.
-Each schema-v3 interface is bound to a command/root grammar, implementation
+The version-4 document also records the target `/usr` node's exact opaque
+`security.selinux` value when present. Generation artifacts authenticate that
+target fact separately from each logical composefs node and use it only for
+carrier CAS backing. `hooks/capabilities/filesystem_security.rs` owns its
+discovery, validation, and application without a distro or label table. Each
+executable interface remains bound to a command/root grammar, implementation
 family and version, and executable digest established by a non-mutating
 functional handshake. Install loads that document, repeats the handshake and
 identity check, and preflights the complete hook set before dry-run output or
@@ -431,6 +439,13 @@ not an omitted value for the target to infer. Authors of architecture-specific
 payloads must replace it with the exact target architecture token before
 building. Authoring lint and signed-v2 verification reject missing or blank
 architecture authority before installation.
+
+`ccs build --source <directory> --install-prefix /usr/bin` maps each child of
+the source directory below `/usr/bin`. It does not author the source directory,
+the target prefix, or any prefix ancestor as a package entry. The prefix is a
+typed normalized absolute POSIX path; relative paths, empty components, `.`,
+`..`, and trailing separators are rejected by the builder authority before
+output is created. The default prefix is `/`.
 
 Config-only packages can be authored and contract-tested directly:
 

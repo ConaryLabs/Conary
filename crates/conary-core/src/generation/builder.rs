@@ -7,6 +7,7 @@
 
 mod activation;
 mod boot_assets;
+mod carrier_capabilities;
 mod cas;
 mod create;
 mod file_capabilities;

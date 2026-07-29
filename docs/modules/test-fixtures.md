@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-29
-revision: 27
-summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof, the public v4 QEMU image contract, Fedora-based QEMU guest image regeneration, and RPM root-anchor conversion proof
+revision: 28
+summary: Map fixture ownership, including bounded CCS install-prefix authoring, cross-source lifecycle proof, the public v4 QEMU image contract, Fedora guest regeneration, and RPM root-anchor conversion
 ---
 
 # Test Fixtures And Proof Maps
@@ -207,6 +207,7 @@ Each fixture family should record:
   authority projection: `crates/conary-core/src/ccs/v2/authoring.rs`.
 - **Purpose:** Minimal-file native authoring loop from `ccs.toml` through lint,
   local-dev or explicit-key v2 build, local-dev verify, isolated dry-run test,
+  typed source-to-install-prefix mapping without implicit ancestor ownership,
   and static publish rejection for local-dev/host-hardened artifacts.
 - **Fixture sources:** in-test project builder in
   `apps/conary/tests/packaging_m4b.rs`.

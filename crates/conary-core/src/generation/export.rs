@@ -417,6 +417,24 @@ pub fn project_generation_rootfs(
     artifact: &GenerationArtifact,
     staging_dir: &Path,
 ) -> crate::Result<PathBuf> {
+    project_generation_rootfs_with_security_apply(
+        artifact,
+        staging_dir,
+        |capability, objects_dest| {
+            capability.apply_to_tree(objects_dest).map_err(|error| {
+                crate::Error::IoError(format!(
+                    "failed to apply generation carrier immutable-backing security authority: {error}"
+                ))
+            })
+        },
+    )
+}
+
+fn project_generation_rootfs_with_security_apply(
+    artifact: &GenerationArtifact,
+    staging_dir: &Path,
+    apply_security: impl FnOnce(&crate::ccs::ImmutableBackingSecurity, &Path) -> crate::Result<()>,
+) -> crate::Result<PathBuf> {
     validate_carrier_root_metadata(artifact)?;
     std::fs::create_dir_all(staging_dir)?;
 
@@ -491,7 +509,14 @@ pub fn project_generation_rootfs(
     for dir in RUNTIME_ROOT_DIRS.iter().chain(EXCLUDED_DIRS.iter()) {
         std::fs::create_dir_all(staging_dir.join(dir))?;
     }
-    create_root_symlinks(staging_dir)?;
+    if let Some(capability) = &artifact
+        .artifact_manifest
+        .carrier_capabilities
+        .immutable_backing_security
+    {
+        apply_security(capability, &objects_dest)?;
+    }
+    create_root_symlinks(artifact, staging_dir)?;
     restore_carrier_root_metadata(artifact, staging_dir)?;
 
     Ok(staging_dir.to_path_buf())
@@ -500,6 +525,9 @@ pub fn project_generation_rootfs(
 fn validate_carrier_root_metadata(artifact: &GenerationArtifact) -> crate::Result<()> {
     for relative in RUNTIME_ROOT_DIRS {
         carrier_mountpoint_node(artifact, &format!("/{relative}"))?;
+    }
+    for (relative, target) in ROOT_SYMLINKS {
+        carrier_root_symlink_node(artifact, &format!("/{relative}"), target)?;
     }
     Ok(())
 }
@@ -513,10 +541,40 @@ fn restore_carrier_root_metadata(
         let node = carrier_mountpoint_node(artifact, &manifest_path)?;
         apply_resolved_payload_metadata(&staging_dir.join(relative), node)?;
     }
+    for (relative, target) in ROOT_SYMLINKS {
+        let node = carrier_root_symlink_node(artifact, &format!("/{relative}"), target)?;
+        apply_resolved_payload_metadata(&staging_dir.join(relative), node)?;
+    }
 
     // Root metadata is restored last because every projected file, directory,
     // and symlink changes the root directory timestamp.
     apply_resolved_payload_metadata(staging_dir, &artifact.generation_root.root)
+}
+
+fn carrier_root_symlink_node<'a>(
+    artifact: &'a GenerationArtifact,
+    manifest_path: &str,
+    expected_target: &str,
+) -> crate::Result<&'a ResolvedPayloadNode> {
+    let entry = artifact
+        .generation_root
+        .entries
+        .iter()
+        .find(|entry| entry.path == manifest_path)
+        .ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "exportable generation is missing exact carrier root-symlink metadata for {manifest_path}"
+            ))
+        })?;
+    match &entry.node.source.kind {
+        PayloadNodeKind::Symlink { target } if target == expected_target => Ok(&entry.node),
+        PayloadNodeKind::Symlink { target } => Err(crate::Error::InvalidPath(format!(
+            "carrier root symlink {manifest_path} targets {target:?}; expected {expected_target:?}"
+        ))),
+        _ => Err(crate::Error::InvalidPath(format!(
+            "carrier root symlink {manifest_path} must be a symlink in the generation artifact"
+        ))),
+    }
 }
 
 fn carrier_mountpoint_node<'a>(
@@ -770,8 +828,12 @@ fn create_current_symlink(staging_dir: &Path, generation: &str) -> crate::Result
 }
 
 #[cfg(unix)]
-fn create_root_symlinks(staging_dir: &Path) -> crate::Result<()> {
-    for (link, target) in ROOT_SYMLINKS {
+fn create_root_symlinks(artifact: &GenerationArtifact, staging_dir: &Path) -> crate::Result<()> {
+    for (link, expected_target) in ROOT_SYMLINKS {
+        let node = carrier_root_symlink_node(artifact, &format!("/{link}"), expected_target)?;
+        let PayloadNodeKind::Symlink { target } = &node.source.kind else {
+            unreachable!("carrier_root_symlink_node validated the node kind");
+        };
         let link_path = staging_dir.join(link);
         let _ = std::fs::remove_file(&link_path);
         std::os::unix::fs::symlink(target, link_path)?;
@@ -780,8 +842,12 @@ fn create_root_symlinks(staging_dir: &Path) -> crate::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn create_root_symlinks(staging_dir: &Path) -> crate::Result<()> {
-    for (link, target) in ROOT_SYMLINKS {
+fn create_root_symlinks(artifact: &GenerationArtifact, staging_dir: &Path) -> crate::Result<()> {
+    for (link, expected_target) in ROOT_SYMLINKS {
+        let node = carrier_root_symlink_node(artifact, &format!("/{link}"), expected_target)?;
+        let PayloadNodeKind::Symlink { target } = &node.source.kind else {
+            unreachable!("carrier_root_symlink_node validated the node kind");
+        };
         std::fs::write(staging_dir.join(link), format!("{target}\n"))?;
     }
     Ok(())

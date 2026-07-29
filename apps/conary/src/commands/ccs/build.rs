@@ -6,7 +6,7 @@
 //! including native package export.
 
 use anyhow::{Context, Result};
-use conary_core::ccs::{CcsBuilder, CcsManifest, builder, native_export};
+use conary_core::ccs::{CcsBuilder, CcsInstallPrefix, CcsManifest, builder, native_export};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -15,6 +15,7 @@ pub struct CcsBuildOptions {
     pub output: String,
     pub target: String,
     pub source: Option<String>,
+    pub install_prefix: CcsInstallPrefix,
     pub chunked: bool,
     pub dry_run: bool,
     pub local_dev: bool,
@@ -123,7 +124,8 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
         println!("Scanning {} files...", file_count);
 
         let mut builder_instance = CcsBuilder::new(manifest.clone(), &source_dir)
-            .context("Invalid CCS build policy configuration")?;
+            .context("Invalid CCS build policy configuration")?
+            .with_install_prefix(options.install_prefix.clone());
         if options.chunked {
             builder_instance = builder_instance.with_chunking();
         } else {

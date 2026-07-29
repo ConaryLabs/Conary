@@ -194,6 +194,7 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
 
         let conn = conary_core::db::open(db_path_str).unwrap();
         conary_core::ccs::HostCapabilityInventory::discover()
+            .unwrap()
             .persist(&conn)
             .unwrap();
         let mut anchor_trove = Trove::new(
