@@ -370,6 +370,15 @@ package-manager state. It is not Conary's foreign-package acquisition path and
 does not prove source-independent cross-distro conversion or lifecycle
 execution.
 
+System-wide adoption preserves the native manager's explicit-versus-dependency
+reason for every installed package. On RPM systems, Conary uses each
+generation's documented DNF contract rather than reading DNF's internal state:
+DNF5's `repoquery --userinstalled` is itself an installed-only selector, while
+DNF4 composes `repoquery --installed --userinstalled`. Configured excludes are
+disabled through the corresponding generation's documented option. A missing
+manager or malformed result is a typed failure; Conary never treats every RPM
+as explicitly installed.
+
 Apply consumes that plan, rechecks file ownership inside its database
 transaction, and only then writes checkpoints, package metadata, CAS objects,
 changesets, and the state snapshot. Track and full adoption both preserve
