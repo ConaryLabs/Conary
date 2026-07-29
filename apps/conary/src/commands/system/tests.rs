@@ -16,7 +16,8 @@ use conary_core::ccs::native_lifecycle::{
 };
 use conary_core::db::models::{
     Changeset, ChangesetStatus, FileEntry, InstallSource, InstalledNativeLifecycleBundle,
-    PackageResolution, Repository, RepositoryPackage, Trove, TroveType,
+    PackageResolution, Repository, RepositoryPackage, RepositoryPackageKey,
+    RepositoryPackageKeyStatus, Trove, TroveType,
 };
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
@@ -64,6 +65,24 @@ async fn init_seeds_every_builtin_source_feed_without_a_host_distro() {
             Some("https://remi.conary.io")
         );
         assert_eq!(remi.source_profile.as_deref(), Some(feed.id()));
+        let expected_keys = conary_core::repository::remi_authority::canonical_remi_package_keys(
+            "https://remi.conary.io",
+            feed.id(),
+        )
+        .unwrap()
+        .iter()
+        .filter(|key| {
+            matches!(
+                key.status,
+                conary_core::repository::PackageKeyStatus::Active
+            )
+        })
+        .map(|key| key.public_key.clone())
+        .collect::<Vec<_>>();
+        assert_eq!(
+            RepositoryPackageKey::trusted_keys_for_repository(&conn, remi.id.unwrap()).unwrap(),
+            expected_keys
+        );
     }
 
     for seed in NATIVE_REPOSITORY_SEEDS {
@@ -140,6 +159,18 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
             "fedora-44".to_string(),
         );
         resolution.insert(&conn).unwrap();
+        RepositoryPackageKey::replace_for_repository(
+            &conn,
+            remi.id.unwrap(),
+            &[RepositoryPackageKey {
+                repository_id: remi.id.unwrap(),
+                public_key: "wrong-canonical-key".to_string(),
+                key_id: Some("wrong".to_string()),
+                status: RepositoryPackageKeyStatus::Active,
+                synced_at: None,
+            }],
+        )
+        .unwrap();
     }
 
     cmd_init(db_path_str).await.unwrap();
@@ -161,6 +192,17 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
             .unwrap()
             .len(),
         1
+    );
+    let expected_key = conary_core::repository::remi_authority::canonical_remi_package_keys(
+        "https://remi.conary.io",
+        "fedora-44",
+    )
+    .unwrap()[0]
+        .public_key
+        .clone();
+    assert_eq!(
+        RepositoryPackageKey::trusted_keys_for_repository(&conn, remi.id.unwrap()).unwrap(),
+        vec![expected_key]
     );
 
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-26.04")
@@ -223,6 +265,18 @@ async fn init_rerun_preserves_operator_repository_choices() {
         remi.default_strategy_endpoint = Some(remi.url.clone());
         remi.source_profile = Some("fedora-44".to_string());
         remi.update(&conn).unwrap();
+        RepositoryPackageKey::replace_for_repository(
+            &conn,
+            remi.id.unwrap(),
+            &[RepositoryPackageKey {
+                repository_id: remi.id.unwrap(),
+                public_key: "operator-managed-key".to_string(),
+                key_id: Some("operator".to_string()),
+                status: RepositoryPackageKeyStatus::Active,
+                synced_at: Some("2026-07-29T00:00:00Z".to_string()),
+            }],
+        )
+        .unwrap();
     }
 
     cmd_init(db_path_str).await.unwrap();
@@ -241,6 +295,64 @@ async fn init_rerun_preserves_operator_repository_choices() {
         .unwrap();
     assert_eq!(remi.url, "https://mirror.example.invalid/remi");
     assert_eq!(remi.source_profile.as_deref(), Some("fedora-44"));
+    assert_eq!(
+        RepositoryPackageKey::trusted_keys_for_repository(&conn, remi.id.unwrap()).unwrap(),
+        vec!["operator-managed-key".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn init_repeat_preserves_canonical_authority_timestamps() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    cmd_init(db_path_str).await.unwrap();
+    let before = {
+        let conn = conary_core::db::open(db_path_str).unwrap();
+        conn.prepare(
+            "SELECT r.name, k.public_key, k.synced_at
+             FROM repository_package_keys k
+             JOIN repositories r ON r.id = k.repository_id
+             WHERE r.name LIKE 'remi-%'
+             ORDER BY r.name, k.public_key",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap()
+    };
+
+    cmd_init(db_path_str).await.unwrap();
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let after = conn
+        .prepare(
+            "SELECT r.name, k.public_key, k.synced_at
+             FROM repository_package_keys k
+             JOIN repositories r ON r.id = k.repository_id
+             WHERE r.name LIKE 'remi-%'
+             ORDER BY r.name, k.public_key",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(after, before);
 }
 
 #[test]

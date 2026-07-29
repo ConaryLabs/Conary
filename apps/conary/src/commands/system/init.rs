@@ -4,7 +4,6 @@ use super::*;
 use anyhow::Context;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 
-const REMI_ENDPOINT: &str = "https://remi.conary.io";
 const MAX_INIT_SYMLINK_DEPTH: usize = 40;
 
 #[derive(Clone, Copy)]
@@ -279,22 +278,27 @@ fn lexically_normalize_path(path: &Path) -> PathBuf {
 }
 
 fn reconcile_remi_seeds(
-    conn: &rusqlite::Connection,
+    conn: &rusqlite::Transaction<'_>,
     messages: &mut Vec<(bool, String)>,
 ) -> conary_core::Result<()> {
+    let endpoint = conary_core::repository::remi_authority::canonical_remi_endpoint();
     for (index, feed) in conary_core::repository::supported_profiles::public_profiles()
         .iter()
         .enumerate()
     {
         let name = format!("remi-{}", feed.id());
         let Some(mut repo) = Repository::find_by_name(conn, &name)? else {
-            let mut repo = Repository::new(name.clone(), REMI_ENDPOINT.to_string());
+            let mut repo = Repository::new(name.clone(), endpoint.to_string());
             repo.priority = 110 - i32::try_from(index).unwrap_or(0);
             repo.default_strategy = Some("remi".to_string());
-            repo.default_strategy_endpoint = Some(REMI_ENDPOINT.to_string());
+            repo.default_strategy_endpoint = Some(endpoint.to_string());
             repo.source_profile = Some(feed.id().to_string());
             repo.set_parser_config(conary_core::repository::RepositoryParserConfig::Json)?;
-            repo.insert(conn)?;
+            let repo_id = repo.insert(conn)?;
+            let authority = canonical_remi_authority_rows(repo_id, feed)?;
+            RepositoryPackageKey::reconcile_for_repository_in_transaction(
+                conn, repo_id, &authority,
+            )?;
             messages.push((
                 false,
                 format!(
@@ -305,9 +309,9 @@ fn reconcile_remi_seeds(
             continue;
         };
 
-        let canonical_seed = repo.url == REMI_ENDPOINT
+        let canonical_seed = repo.url == endpoint
             && repo.default_strategy.as_deref() == Some("remi")
-            && repo.default_strategy_endpoint.as_deref() == Some(REMI_ENDPOINT);
+            && repo.default_strategy_endpoint.as_deref() == Some(endpoint);
         if !canonical_seed {
             messages.push((
                 true,
@@ -327,19 +331,57 @@ fn reconcile_remi_seeds(
             })?;
             RepositoryPackage::delete_by_repository(conn, repo_id)?;
             PackageResolution::delete_by_repository(conn, repo_id)?;
-            conn.execute(
-                "DELETE FROM repository_package_keys WHERE repository_id = ?1",
-                [repo_id],
-            )?;
             repo.source_profile = Some(feed.id().to_string());
             repo.set_parser_config(parser_config)?;
             repo.last_sync = None;
             repo.update(conn)?;
             messages.push((false, format!("  Updated: {name} source contract")));
         }
+        let repo_id = repo.id.ok_or_else(|| {
+            conary_core::Error::MissingId(format!("Remi repository '{name}' has no ID"))
+        })?;
+        let authority = canonical_remi_authority_rows(repo_id, feed)?;
+        if RepositoryPackageKey::reconcile_for_repository_in_transaction(conn, repo_id, &authority)?
+        {
+            messages.push((false, format!("  Updated: {name} CCS package authority")));
+        }
     }
 
     Ok(())
+}
+
+fn canonical_remi_authority_rows(
+    repository_id: i64,
+    profile: &conary_core::repository::supported_profiles::SupportedProfile,
+) -> conary_core::Result<Vec<RepositoryPackageKey>> {
+    let endpoint = conary_core::repository::remi_authority::canonical_remi_endpoint();
+    let keys = conary_core::repository::remi_authority::canonical_remi_package_keys(
+        endpoint,
+        profile.id(),
+    )
+    .ok_or_else(|| {
+        conary_core::Error::InitError(format!(
+            "canonical Remi authority is missing exact profile '{}'",
+            profile.id()
+        ))
+    })?;
+    Ok(keys
+        .iter()
+        .map(|key| RepositoryPackageKey {
+            repository_id,
+            public_key: key.public_key.clone(),
+            key_id: key.key_id.clone(),
+            status: match key.status {
+                conary_core::repository::PackageKeyStatus::Active => {
+                    RepositoryPackageKeyStatus::Active
+                }
+                conary_core::repository::PackageKeyStatus::Retired => {
+                    RepositoryPackageKeyStatus::Retired
+                }
+            },
+            synced_at: None,
+        })
+        .collect())
 }
 
 fn reconcile_native_repository_seeds(

@@ -1,0 +1,38 @@
+# crates/conary-core/src/repository/remi_authority/catalog.toml
+#
+# Public CCS package-authority pins for Conary's canonical Remi service.
+# Private signing keys remain only on the Remi host. Rotation must update this
+# catalog and republish current artifacts before a new key becomes active.
+
+schema_version = 1
+endpoint = "https://remi.conary.io"
+
+[[profiles]]
+profile = "fedora-44"
+
+[[profiles.keys]]
+algorithm = "ed25519"
+public_key = "fYfo4nIqpkmSrZci3KgTpQfuT5Puvm2NMZIvK8VzVsg="
+key_id = "targets"
+status = "active"
+comment = "Canonical Remi Fedora 44 targets authority"
+
+[[profiles]]
+profile = "ubuntu-26.04"
+
+[[profiles.keys]]
+algorithm = "ed25519"
+public_key = "U2xoMBrZMEo1VExVjjxlDX+PipjCu3/AA1QaYmyMbMM="
+key_id = "targets"
+status = "active"
+comment = "Canonical Remi Ubuntu 26.04 targets authority"
+
+[[profiles]]
+profile = "arch"
+
+[[profiles.keys]]
+algorithm = "ed25519"
+public_key = "/thv7CMMgGMwmT/bRQV9QBAhmFJQ6qulmEOsnlglmcc="
+key_id = "targets"
+status = "active"
+comment = "Canonical Remi Arch targets authority"

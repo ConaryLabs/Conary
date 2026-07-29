@@ -4,6 +4,7 @@
 use super::DbArgs;
 use clap::{Subcommand, ValueEnum};
 use conary_core::repository::OpenPgpTrustRoot;
+use std::path::PathBuf;
 
 pub(super) fn parse_public_profile_id(value: &str) -> Result<String, String> {
     conary_core::repository::supported_profiles::profile_by_public_id(value)
@@ -203,6 +204,17 @@ pub struct RepoAddArgs {
     /// Remi server endpoint URL (required when --default-strategy=remi)
     #[arg(long, value_name = "URL")]
     pub remi_endpoint: Option<String>,
+
+    /// Authenticated Ed25519 public key allowed to sign CCS packages; repeatable
+    ///
+    /// Canonical remi.conary.io keys ship with Conary. Self-hosted Remi
+    /// repositories must provide their targets.public file explicitly.
+    #[arg(
+        long = "ccs-package-key",
+        value_name = "PUBLIC_KEY_FILE",
+        requires = "default_strategy"
+    )]
+    pub ccs_package_keys: Vec<PathBuf>,
 
     /// Exact public distro profile served by this repository
     ///

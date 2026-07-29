@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-29
-revision: 19
-summary: Document exact profile-owned source policy, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
+revision: 20
+summary: Document exact profile-owned source policy, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -125,6 +125,35 @@ source-identity aliases. Native repository sync writes the repository's exact
 profile into every package row and rejects a missing or conflicting profile.
 The superseded
 `data/distros.toml` catalog was deleted in M4d.
+
+## Remi CCS Package Authority
+
+Authenticated source metadata and authenticated converted CCS output are
+separate boundaries. `crates/conary-core/src/repository/remi_authority.rs` and
+its embedded `remi_authority/catalog.toml` own the release-tracked Ed25519
+package-authority pins for Conary's canonical Remi service. A catalog entry is
+selected only by the exact `https://remi.conary.io` origin and one exact public
+profile ID. A route slug, package format, repository name, deceptive hostname,
+or non-root URL cannot select those keys.
+
+`conary system init` creates or reconciles each Conary-owned Remi repository
+and its `repository_package_keys` rows in the same transaction. An explicit
+`conary repo add` for the exact canonical origin/profile pair does the same.
+The self-hosted key option cannot override that release-tracked canonical
+authority.
+Repeated initialization compares the semantic key set without rewriting its
+sync timestamps, and Remi sparse sync replaces package rows without replacing
+the repository's package authority. A same-name repository whose endpoint or
+strategy is operator-managed is left unchanged.
+
+For a noncanonical Remi endpoint, `repo add` requires one or more authenticated
+`targets.public` files through the repeatable `--ccs-package-key` option and
+persists them transactionally with the repository. It never imports canonical
+ConaryLabs keys from a profile name alone or accepts a key delivered by the
+same unauthenticated package response. Install derives exact repository
+provenance, admits only that repository's active keys, and fails closed for an
+unknown or cross-profile signer. Retired keys remain history, not install
+authority.
 
 ## Canonical Package Map Authority
 

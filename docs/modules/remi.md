@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-28
-revision: 11
+last_updated: 2026-07-29
+revision: 12
 summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -158,6 +158,24 @@ profile. Public native-release and timestamp routes first resolve their route
 slug through the supported-profile registry, then load the exact profile's
 role keys. `fedora` and `ubuntu` are therefore never key-directory aliases for
 `fedora-44` and `ubuntu-26.04`.
+
+The public half of each deployed `targets` key is the client-side CCS package
+authority. Conary releases track the current canonical
+endpoint/exact-profile sets in
+`crates/conary-core/src/repository/remi_authority/catalog.toml`; private keys
+never enter that catalog or a client response. `conary system init` and an
+exact canonical `repo add` persist those pins with the repository before it is
+visible. Remi sparse sync changes only the package snapshot and preserves the
+pins. Installation then verifies a downloaded CCS against the active keys for
+its exact repository provenance, so a key for one profile cannot authorize
+another. The self-hosted key option cannot replace canonical catalog authority.
+
+Self-hosted Remi has no implicit ConaryLabs authority. Its operator must move
+the appropriate `targets.public` file over an independently authenticated
+administrative channel and pass it to `conary repo add --ccs-package-key`.
+Serving that key beside the package would not establish trust. Key rotation
+therefore requires a coordinated client pin update; public TUF routes do not
+stand in for a configured and verified root.
 
 ## Canonical Map Exchange
 

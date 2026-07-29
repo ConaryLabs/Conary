@@ -521,7 +521,10 @@ pub(super) async fn fetch_and_persist_canonical_map(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::RepositoryRequirementGroup as DbRequirementGroup;
+    use crate::db::models::{
+        RepositoryPackageKey, RepositoryPackageKeyStatus,
+        RepositoryRequirementGroup as DbRequirementGroup,
+    };
     use crate::db::testing::create_test_db;
     use crate::repository::package_relation::parse_native_relation;
     use crate::repository::remi_metadata::{
@@ -1006,6 +1009,18 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         crate::db::schema::ensure_current(&conn).unwrap();
         let mut repo = sparse_test_repo("https://remi.test".to_string(), &conn);
+        RepositoryPackageKey::replace_for_repository(
+            &conn,
+            repo.id.unwrap(),
+            &[RepositoryPackageKey {
+                repository_id: repo.id.unwrap(),
+                public_key: "release-tracked-key".to_string(),
+                key_id: Some("targets".to_string()),
+                status: RepositoryPackageKeyStatus::Active,
+                synced_at: None,
+            }],
+        )
+        .unwrap();
         let mut old = RepositoryPackage::new(
             repo.id.unwrap(),
             "retired".to_string(),
@@ -1029,6 +1044,10 @@ mod tests {
         let packages = RepositoryPackage::find_by_repository(&conn, repo.id.unwrap()).unwrap();
         assert_eq!(packages.len(), 300);
         assert!(!packages.iter().any(|package| package.name == "retired"));
+        assert_eq!(
+            RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
+            vec!["release-tracked-key".to_string()]
+        );
         assert_eq!(Repository::list_all(&conn).unwrap().len(), 1);
     }
 
