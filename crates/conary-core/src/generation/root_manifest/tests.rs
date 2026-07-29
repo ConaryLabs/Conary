@@ -196,6 +196,73 @@ fn config_state_projection_removes_exactly_one_etc_prefix() {
 }
 
 #[test]
+fn config_state_projection_rejects_non_directory_etc_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    let manifest = MutableStateManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        entries: vec![GenerationRootEntry {
+            path: "/etc".to_string(),
+            node: resolved(PayloadNode {
+                kind: PayloadNodeKind::Symlink {
+                    target: "usr/etc".to_string(),
+                },
+                mode: libc::S_IFLNK | 0o777,
+                user: PayloadIdentity::Numeric {
+                    id: u64::from(unsafe { libc::geteuid() }),
+                },
+                group: PayloadIdentity::Numeric {
+                    id: u64::from(unsafe { libc::getegid() }),
+                },
+                mtime: PayloadTimestamp::UNIX_EPOCH,
+                xattrs: BTreeMap::new(),
+            }),
+            content: None,
+        }],
+    };
+    manifest.validate().unwrap();
+
+    let error =
+        materialize_config_state_upper(&manifest, &cas, &temp.path().join("config-state-upper"))
+            .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("config-state root /etc must describe a directory")
+    );
+}
+
+#[test]
+fn mutable_state_manifest_rejects_hardlinks_that_cross_publication_domains() {
+    let content = b"shared mutable state";
+    let identity = "mutable-domain:shared".to_string();
+    let mut primary = regular_entry("/etc/shared", content);
+    primary.node.source.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.clone()),
+    };
+    let mut linked = primary.clone();
+    linked.path = "/var/shared".to_string();
+    linked.node.source.kind = PayloadNodeKind::Hardlink {
+        target: "/etc/shared".to_string(),
+        identity,
+    };
+    linked.content = None;
+    let manifest = MutableStateManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        entries: vec![
+            directory_entry("/etc", 0o755),
+            primary,
+            directory_entry("/var", 0o755),
+            linked,
+        ],
+    };
+    let error = manifest.validate().unwrap_err();
+
+    assert!(error.to_string().contains("publication domains"));
+}
+
+#[test]
 fn scanner_rejects_hardlinks_across_publication_domains() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");

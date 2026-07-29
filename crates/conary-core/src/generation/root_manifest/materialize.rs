@@ -67,6 +67,11 @@ pub fn materialize_config_state_upper(
     let mut entries = Vec::new();
     for entry in &manifest.entries {
         if entry.path == "/etc" {
+            if !matches!(entry.node.source.kind, PayloadNodeKind::Directory) {
+                return Err(crate::Error::InvalidPath(
+                    "config-state root /etc must describe a directory".to_string(),
+                ));
+            }
             root = Some(&entry.node);
             continue;
         }

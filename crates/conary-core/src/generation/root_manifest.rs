@@ -342,6 +342,12 @@ fn validate_hardlinks(entries: &[GenerationRootEntry]) -> crate::Result<()> {
                         entry.path, target, primary.path
                     )));
                 }
+                if classify_root_path(&entry.path)? != classify_root_path(&primary.path)? {
+                    return Err(crate::Error::InvalidPath(format!(
+                        "hardlink group crosses generation publication domains at {}",
+                        primary.path
+                    )));
+                }
                 if entry.node.source.mode != primary.node.source.mode
                     || entry.node.source.user != primary.node.source.user
                     || entry.node.source.group != primary.node.source.group
