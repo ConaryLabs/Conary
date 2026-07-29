@@ -335,6 +335,11 @@ impl FedoraParser {
                 Ok(Event::Start(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     let local_tag = Self::local_tag_name(&tag_name);
+                    if current_primary_file.is_some() {
+                        return Err(Error::ParseError(
+                            "RPM primary file record cannot contain nested elements".to_string(),
+                        ));
+                    }
                     current_tag = tag_name.clone();
 
                     match local_tag {
@@ -360,11 +365,7 @@ impl FedoraParser {
                                     "RPM primary file record appears outside a package".to_string(),
                                 ));
                             }
-                            if current_primary_file.replace(String::new()).is_some() {
-                                return Err(Error::ParseError(
-                                    "RPM primary file records cannot be nested".to_string(),
-                                ));
-                            }
+                            current_primary_file = Some(String::new());
                             // A path's trailing XML whitespace is package
                             // identity, not inter-element formatting.
                             reader.config_mut().trim_text_end = false;
@@ -401,6 +402,11 @@ impl FedoraParser {
                 Ok(Event::Empty(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     let local_tag = Self::local_tag_name(&tag_name);
+                    if current_primary_file.is_some() {
+                        return Err(Error::ParseError(
+                            "RPM primary file record cannot contain nested elements".to_string(),
+                        ));
+                    }
 
                     match local_tag {
                         "version" => {
@@ -658,6 +664,20 @@ impl FedoraParser {
                                 .to_string()
                         }
                     };
+                    if let Some(file) = current_primary_file.as_mut() {
+                        file.push_str(&text);
+                    } else if let Some(ref mut pkg) = current_package {
+                        append_package_text(pkg, &current_tag, &text);
+                    }
+                }
+                Ok(Event::CData(e)) => {
+                    let text =
+                        e.xml_content(quick_xml::XmlVersion::Implicit1_0)
+                            .map_err(|error| {
+                                Error::ParseError(format!(
+                                    "Failed to decode primary.xml CDATA: {error}"
+                                ))
+                            })?;
                     if let Some(file) = current_primary_file.as_mut() {
                         file.push_str(&text);
                     } else if let Some(ref mut pkg) = current_package {

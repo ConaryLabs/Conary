@@ -178,6 +178,7 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
       <file type="ghost">/usr/bin/sh</file>
       <file type="dir">/usr/share/bash-completion</file>
       <file>/opt/provider&amp;selected</file>
+      <file>/usr<![CDATA[/local/bin/cdata]]></file>
       <file>/usr/bin/trailing-space </file>
 "#,
     );
@@ -201,6 +202,7 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
             "/usr/bin/sh",
             "/usr/share/bash-completion",
             "/opt/provider&selected",
+            "/usr/local/bin/cdata",
             "/usr/bin/trailing-space ",
         ]
     );
@@ -208,6 +210,25 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
         && provide.version_relation.is_none()
         && provide.architecture_qualifier
             == crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit));
+}
+
+#[test]
+fn primary_xml_rejects_ambiguous_file_record_structure() {
+    for file_record in [
+        "<file>/usr<unexpected/>/bin/bash</file>",
+        "<file>/usr<file>/bin/bash</file></file>",
+    ] {
+        let xml = primary_package_with_format(file_record);
+        let error = parser()
+            .parse_primary_xml(&xml, "https://example.com")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("file record cannot contain nested elements"),
+            "{file_record}: {error}"
+        );
+    }
 }
 
 #[test]
