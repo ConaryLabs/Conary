@@ -13,21 +13,23 @@ use super::outcome::{BulkAdoptionFailure, BulkAdoptionFailureStage, BulkAdoption
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallReason, InstallSource,
-    ProvideEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, DirectoryClaim, ExistingDirectoryMaterialization, FileEntry,
+    InstallReason, InstallSource, ProvideEntry, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledFileAbsencePolicy, InstalledPackageIdentity, SystemPackageManager, dpkg_query,
     pacman_query, rpm_query,
 };
 use conary_core::repository::dependency_model::RepositoryRequirementGroup;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use tracing::warn;
 
+mod captured_root;
 mod live_root;
+use captured_root::{
+    capture_live_selected_root, ensure_complete_native_partition, synchronize_captured_root,
+};
 use live_root::adopt_live_root_as_full_package;
-#[cfg(test)]
-use live_root::{live_root_db_path, should_visit_live_root_path};
 
 fn parse_package_pattern(field: &str, pattern: Option<&str>) -> Result<Option<glob::Pattern>> {
     pattern
@@ -64,6 +66,7 @@ struct PackageData {
     requirements: Vec<RepositoryRequirementGroup>,
     provides: Vec<String>,
     is_dependency: bool,
+    promote_trove_id: Option<i64>,
 }
 
 struct PackagePersistenceFailure {
@@ -144,14 +147,23 @@ pub async fn cmd_adopt_system(
     })?;
     let include_pattern = parse_package_pattern("--pattern", pattern)?;
     let exclude_pattern = parse_package_pattern("--exclude", exclude)?;
+    let complete_full_root_scope = full && pattern.is_none() && exclude.is_none() && !explicit_only;
 
     let mut conn = open_db(db_path)?;
 
     // Get list of already-tracked packages to avoid duplicates
-    let tracked_packages: HashSet<String> = Trove::list_all(&conn)?
-        .into_iter()
-        .filter_map(|trove| Some(trove.native_package_identity?.selector().to_string()))
-        .collect();
+    let mut tracked_packages = HashMap::new();
+    for trove in Trove::list_all(&conn)? {
+        let Some(identity) = trove.native_package_identity.as_ref() else {
+            continue;
+        };
+        let selector = identity.selector().to_string();
+        if tracked_packages.insert(selector.clone(), trove).is_some() {
+            return Err(anyhow::anyhow!(
+                "Native package identity {selector} is tracked by more than one trove"
+            ));
+        }
+    }
 
     // Get every exact installed package-manager record. The typed selector is
     // kept distinct from the package name so multilib/multiarch variants
@@ -180,6 +192,12 @@ pub async fn cmd_adopt_system(
             .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
+    if complete_full_root_scope {
+        ensure_complete_native_partition(
+            &tracked_packages,
+            installed.iter().map(|package| package.identity.selector()),
+        )?;
+    }
 
     // Exact install-reason authority is required. An empty set means the
     // package manager explicitly reported no user-installed packages; query
@@ -229,13 +247,18 @@ pub async fn cmd_adopt_system(
 
     if dry_run {
         let mut to_adopt = 0;
+        let mut to_promote = 0;
         let mut already_tracked = 0;
         let mut explicit_count = 0;
         let mut dep_count = 0;
 
         for package in &installed {
-            if tracked_packages.contains(package.identity.selector()) {
-                already_tracked += 1;
+            if let Some(tracked) = tracked_packages.get(package.identity.selector()) {
+                if full && tracked.install_source == InstallSource::AdoptedTrack {
+                    to_promote += 1;
+                } else {
+                    already_tracked += 1;
+                }
             } else {
                 to_adopt += 1;
                 if !user_installed.contains(&package.identity.install_reason_selector()) {
@@ -249,6 +272,9 @@ pub async fn cmd_adopt_system(
         println!("Dry run: would adopt {} packages\n", to_adopt);
         println!("Summary:");
         println!("  Would adopt: {} packages", to_adopt);
+        if full {
+            println!("  Would CAS-back: {} track-only packages", to_promote);
+        }
         println!("    Explicit: {}", explicit_count);
         println!("    Dependency: {}", dep_count);
         println!("  Already tracked: {} packages", already_tracked);
@@ -264,7 +290,7 @@ pub async fn cmd_adopt_system(
             considered_packages,
             already_tracked_packages: installed
                 .iter()
-                .filter(|package| tracked_packages.contains(package.identity.selector()))
+                .filter(|package| tracked_packages.contains_key(package.identity.selector()))
                 .map(|package| package.identity.selector().to_string())
                 .collect(),
             ..Default::default()
@@ -295,6 +321,7 @@ pub async fn cmd_adopt_system(
     ));
 
     let mut adopted_count = 0;
+    let mut promoted_count = 0;
     let mut skipped_count = 0;
     let mut error_count = 0;
     let mut adopted_packages = Vec::new();
@@ -313,8 +340,19 @@ pub async fn cmd_adopt_system(
 
     for package in &installed {
         let selector = package.identity.selector();
-        // Skip already-tracked packages
-        if tracked_packages.contains(selector) {
+        let promote_trove_id = tracked_packages
+            .get(selector)
+            .filter(|trove| full && trove.install_source == InstallSource::AdoptedTrack)
+            .map(|trove| {
+                trove.id.ok_or_else(|| {
+                    anyhow::anyhow!("Tracked package {selector} has no database identity")
+                })
+            })
+            .transpose()?;
+        // Full mode promotes track-only authority to exact CAS-backed
+        // authority. Every other already-tracked source is already at least as
+        // authoritative as this command requests.
+        if tracked_packages.contains_key(selector) && promote_trove_id.is_none() {
             skipped_count += 1;
             already_tracked_packages.push(selector.to_string());
             progress.skip_package();
@@ -338,37 +376,45 @@ pub async fn cmd_adopt_system(
                 continue;
             }
         };
-        let requirements = match super::requirements::query_package_requirements(pkg_mgr, selector)
-        {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("Failed to query deps for '{}': {}; skipping", selector, e);
-                progress.fail_package(selector, &e.to_string());
-                error_count += 1;
-                failures.push(BulkAdoptionFailure::new(
-                    selector,
-                    BulkAdoptionFailureStage::RequirementQuery,
-                    e.to_string(),
-                ));
-                continue;
-            }
-        };
-        let provides: Vec<String> = match query_pm_provides(pkg_mgr, selector) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(
-                    "Failed to query provides for '{}': {}; skipping",
-                    selector, e
-                );
-                progress.fail_package(selector, &e.to_string());
-                error_count += 1;
-                failures.push(BulkAdoptionFailure::new(
-                    selector,
-                    BulkAdoptionFailureStage::ProvideQuery,
-                    e.to_string(),
-                ));
-                continue;
-            }
+        let (requirements, provides) = if promote_trove_id.is_some() {
+            // Track adoption already persisted the native metadata. Promotion
+            // changes only its payload authority from discovery hashes to
+            // privately captured CAS content.
+            (Vec::new(), Vec::new())
+        } else {
+            let requirements =
+                match super::requirements::query_package_requirements(pkg_mgr, selector) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        warn!("Failed to query deps for '{}': {}; skipping", selector, e);
+                        progress.fail_package(selector, &e.to_string());
+                        error_count += 1;
+                        failures.push(BulkAdoptionFailure::new(
+                            selector,
+                            BulkAdoptionFailureStage::RequirementQuery,
+                            e.to_string(),
+                        ));
+                        continue;
+                    }
+                };
+            let provides: Vec<String> = match query_pm_provides(pkg_mgr, selector) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(
+                        "Failed to query provides for '{}': {}; skipping",
+                        selector, e
+                    );
+                    progress.fail_package(selector, &e.to_string());
+                    error_count += 1;
+                    failures.push(BulkAdoptionFailure::new(
+                        selector,
+                        BulkAdoptionFailureStage::ProvideQuery,
+                        e.to_string(),
+                    ));
+                    continue;
+                }
+            };
+            (requirements, provides)
         };
 
         // Capture exact live nodes and bytes outside the transaction. Full
@@ -404,17 +450,42 @@ pub async fn cmd_adopt_system(
             requirements,
             provides,
             is_dependency,
+            promote_trove_id,
         });
     }
 
+    // A complete, unfiltered full adoption captures one global selected-root
+    // snapshot after every package payload was captured successfully. The
+    // database transaction below partitions that exact snapshot without using
+    // package names or the native database as generation-time authority.
+    let captured_selected_root = if complete_full_root_scope && error_count == 0 {
+        Some(capture_live_selected_root(
+            db_path,
+            cas.as_ref()
+                .expect("complete full-root capture requires an initialized CAS"),
+        )?)
+    } else {
+        None
+    };
+
     // DB-only transaction: all PM queries and CAS writes are already done.
     write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
+    let mut captured_root_sync = None;
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
 
         for pkg in &pre_collected {
             let selector = pkg.identity.selector();
             let persisted = execute_package_savepoint(tx, || {
+                if let Some(trove_id) = pkg.promote_trove_id {
+                    promote_track_package(tx, changeset_id, &pkg.identity, trove_id, &pkg.files)
+                        .map_err(|error| PackagePersistenceFailure {
+                            stage: BulkAdoptionFailureStage::MetadataInsert,
+                            message: error.to_string(),
+                        })?;
+                    return Ok::<bool, PackagePersistenceFailure>(true);
+                }
+
                 let mut trove = Trove::new_with_source(
                     pkg.identity.name().to_string(),
                     pkg.identity.version(),
@@ -477,13 +548,18 @@ pub async fn cmd_adopt_system(
                         }
                     })?;
                 }
-                Ok::<i64, PackagePersistenceFailure>(trove_id)
+                Ok::<bool, PackagePersistenceFailure>(false)
             })?;
 
             match persisted {
-                PackageSavepointOutcome::Committed(_) => {
-                    adopted_count += 1;
-                    adopted_packages.push(selector.to_string());
+                PackageSavepointOutcome::Committed(promoted) => {
+                    if promoted {
+                        promoted_count += 1;
+                        already_tracked_packages.push(selector.to_string());
+                    } else {
+                        adopted_count += 1;
+                        adopted_packages.push(selector.to_string());
+                    }
                     progress.complete_package(selector);
                 }
                 PackageSavepointOutcome::RolledBack(error) => {
@@ -502,12 +578,23 @@ pub async fn cmd_adopt_system(
             }
         }
 
+        // A package persistence failure means the native ownership partition
+        // is incomplete. Do not misclassify that package's paths as unowned.
+        if error_count == 0
+            && let Some(captured) = captured_selected_root.as_ref()
+        {
+            captured_root_sync = Some(synchronize_captured_root(tx, changeset_id, captured)?);
+        }
+
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
 
     // Create state snapshot for rollback safety
-    if adopted_count > 0 {
+    if adopted_count > 0
+        || promoted_count > 0
+        || captured_root_sync.as_ref().is_some_and(|sync| sync.changed)
+    {
         create_state_snapshot(
             &conn,
             changeset_id,
@@ -519,14 +606,26 @@ pub async fn cmd_adopt_system(
     let mode_desc = if full { "full" } else { "track" };
     if error_count > 0 {
         progress.finish_with_error(&format!(
-            "Adopted {} packages, {} skipped, {} errors ({})",
-            adopted_count, skipped_count, error_count, mode_desc
+            "Adopted {} packages, CAS-backed {}, {} skipped, {} errors ({})",
+            adopted_count, promoted_count, skipped_count, error_count, mode_desc
         ));
     } else {
         progress.finish(&format!(
-            "Adopted {} packages, {} skipped ({})",
-            adopted_count, skipped_count, mode_desc
+            "Adopted {} packages, CAS-backed {}, {} skipped ({})",
+            adopted_count, promoted_count, skipped_count, mode_desc
         ));
+    }
+    if let Some(sync) = captured_root_sync {
+        println!(
+            "  Captured root: {} unowned entries, {} package-owned entries{}",
+            sync.captured_entries,
+            sync.package_entries,
+            if sync.changed {
+                ""
+            } else {
+                " (already current)"
+            }
+        );
     }
     Ok(BulkAdoptionOutcome {
         considered_packages,
@@ -534,6 +633,74 @@ pub async fn cmd_adopt_system(
         already_tracked_packages,
         failures,
     })
+}
+
+fn promote_track_package(
+    tx: &rusqlite::Connection,
+    changeset_id: i64,
+    identity: &InstalledPackageIdentity,
+    trove_id: i64,
+    files: &[CapturedAdoptionFile],
+) -> conary_core::Result<()> {
+    let trove = Trove::find_by_id(tx, trove_id)?.ok_or_else(|| {
+        conary_core::Error::NotFound(format!(
+            "track-only trove {} disappeared before full-adoption commit",
+            identity.selector()
+        ))
+    })?;
+    if trove.install_source != InstallSource::AdoptedTrack
+        || trove.native_package_identity.as_ref() != Some(identity)
+    {
+        return Err(conary_core::Error::ConflictError(format!(
+            "track-only authority for {} changed after full-adoption planning",
+            identity.selector()
+        )));
+    }
+
+    for captured in files {
+        let path = &captured.source.0;
+        let existing = FileEntry::find_by_path(tx, path)?.ok_or_else(|| {
+            conary_core::Error::NotFound(format!(
+                "track-only package {} lost its file authority for {path}",
+                identity.selector()
+            ))
+        })?;
+        let owns_path = existing.trove_id == trove_id
+            || DirectoryClaim::find_by_path(tx, path)?
+                .iter()
+                .any(|claim| claim.trove_id == trove_id);
+        if !owns_path {
+            return Err(conary_core::Error::ConflictError(format!(
+                "track-only package {} no longer owns {path}",
+                identity.selector()
+            )));
+        }
+        FileEntry::reconcile_selected_root_materialization(
+            tx,
+            path,
+            &captured.node,
+            captured.content.as_ref(),
+        )?;
+    }
+
+    let updated = tx.execute(
+        "UPDATE troves
+         SET install_source = ?1, installed_by_changeset_id = ?2
+         WHERE id = ?3 AND install_source = ?4",
+        rusqlite::params![
+            InstallSource::AdoptedFull.as_str(),
+            changeset_id,
+            trove_id,
+            InstallSource::AdoptedTrack.as_str()
+        ],
+    )?;
+    if updated != 1 {
+        return Err(conary_core::Error::ConflictError(format!(
+            "track-only package {} was not promoted exactly",
+            identity.selector()
+        )));
+    }
+    Ok(())
 }
 
 const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
@@ -581,7 +748,7 @@ fn query_pm_provides(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
 
     #[test]
     fn package_pattern_matches_with_upstream_glob_semantics() {
@@ -655,45 +822,83 @@ mod tests {
     }
 
     #[test]
-    fn live_root_adoption_excludes_runtime_and_conary_state() {
-        for path in [
-            "/var/lib/conary/conary.db",
-            "/run/systemd/private",
-            "/tmp/build",
-            "/dev/null",
-            "/proc/cpuinfo",
-            "/sys/kernel",
-            "/mnt/scratch",
-            "/media/disk",
-            "/conary/objects/aa/bb",
-        ] {
-            assert!(
-                !should_visit_live_root_path(Path::new(path)).unwrap(),
-                "{path} should be excluded"
-            );
-        }
-
-        for path in [
-            "/usr/sbin/init",
-            "/usr/lib/systemd/systemd",
-            "/etc/os-release",
-            "/boot/EFI/BOOT/BOOTX64.EFI",
-        ] {
-            assert!(
-                should_visit_live_root_path(Path::new(path)).unwrap(),
-                "{path} should be included"
-            );
-        }
-    }
-
-    #[test]
-    fn live_root_db_path_maps_test_root_to_absolute_generation_path() {
-        let root = Path::new("/tmp/conary-live-root");
-        let path = root.join("usr/sbin/init");
-
-        assert_eq!(
-            live_root_db_path(root, &path).unwrap(),
-            "/usr/sbin/init".to_string()
+    fn full_adoption_promotes_track_authority_without_changing_path_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let mut conn = conary_core::db::open(&db_path).unwrap();
+        let identity = InstalledPackageIdentity::rpm(
+            "fixture-1-1.x86_64",
+            "fixture",
+            None,
+            "1",
+            "1",
+            "x86_64",
+        )
+        .unwrap();
+        let mut original = Trove::new_with_source(
+            "fixture".to_string(),
+            "1-1".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+            conary_core::repository::versioning::VersionScheme::Rpm,
         );
+        original.architecture = Some("x86_64".to_string());
+        original.native_package_identity = Some(identity.clone());
+        let trove_id = original.insert(&conn).unwrap();
+        let old_content = PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"old"),
+            size: 3,
+        };
+        let old_node =
+            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap();
+        FileEntry::new(
+            "/usr/bin/fixture".to_string(),
+            old_node,
+            Some(old_content),
+            trove_id,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let new_content = PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"new exact bytes"),
+            size: 15,
+        };
+        let new_node =
+            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap();
+        let captured = CapturedAdoptionFile {
+            source: (
+                "/usr/bin/fixture".to_string(),
+                15,
+                i32::try_from(libc::S_IFREG | 0o755).unwrap(),
+                None,
+                None,
+                None,
+                None,
+                InstalledFileAbsencePolicy::Required,
+            ),
+            node: new_node.clone(),
+            content: Some(new_content.clone()),
+        };
+
+        let tx = conn.transaction().unwrap();
+        let mut changeset = Changeset::new("promote fixture".to_string());
+        let changeset_id = changeset.insert(&tx).unwrap();
+        promote_track_package(&tx, changeset_id, &identity, trove_id, &[captured]).unwrap();
+        changeset
+            .update_status(&tx, ChangesetStatus::Applied)
+            .unwrap();
+        tx.commit().unwrap();
+
+        let promoted = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+        assert_eq!(promoted.install_source, InstallSource::AdoptedFull);
+        assert_eq!(promoted.installed_by_changeset_id, Some(changeset_id));
+        let file = FileEntry::find_by_path(&conn, "/usr/bin/fixture")
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.trove_id, trove_id);
+        assert_eq!(file.node, new_node);
+        assert_eq!(file.content, Some(new_content));
     }
 }

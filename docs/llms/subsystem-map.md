@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-29
-revision: 56
-summary: Route exact Remi signing, serialized selected-root mutation, typed rollback lineage, canonical-map authority, carrier security, generation GC, exact release authority, and subsystem proof through current feature owners.
+revision: 57
+summary: Route exact Remi signing, serialized selected-root mutation, full-adoption captured-root continuity, typed rollback lineage, canonical-map authority, carrier security, typed generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -186,6 +186,14 @@ commands.
   `runtime` component.
 - Adoption preserves native package-manager authority until explicit takeover or
   selected-generation handoff.
+- Complete unfiltered full-system adoption starts in
+  `apps/conary/src/commands/adopt/system.rs`; its exact unowned-root partition
+  is owned by `adopt/system/captured_root.rs`, the finite scanner and runtime
+  exclusions by `crates/conary-core/src/generation/root_manifest/scan.rs`, and
+  generation consumption by
+  `crates/conary-core/src/generation/builder/runtime_inputs.rs`. `CapturedRoot`
+  preserves continuity state only; package anchors and claims remain the
+  install/update/remove ownership authority.
 - Single-package adoption preview and apply share the planner in
   `apps/conary/src/commands/adopt/packages.rs`; preview stops before every
   SQLite, checkpoint, CAS, native-PM, hook, generation, and live-root write.

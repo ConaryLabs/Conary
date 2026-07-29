@@ -68,7 +68,11 @@ baseline covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
 - `TGE01`: metadata-only installed generations fail closed before artifact publication
 - `TGE03`: CAS-backed installed generations fail closed when an included CAS object is missing
 - `TGE04`: a full CAS-backed installed runtime generation exports to qcow2 and boots under UEFI
-- `TGE05`: exported installed-runtime generations preserve capability-absent and capability-present `security.capability` state for the same payload path, with rollback-equivalent proof through separate exported artifacts
+- `TGE05`: exported installed-runtime generations retain full-adoption
+  `CapturedRoot` lifecycle aliases, service enablement, and SSH authorization
+  state in both carriers, then preserve capability-absent and
+  capability-present `security.capability` state for the same package-owned
+  path with rollback-equivalent proof through separate exported artifacts
 - `TGE02`: a supported-host Fedora 44 root, assembled on a scratch disk from
   ordinary repository installs, publishes as a generation, exports to qcow2,
   and boots under UEFI
@@ -76,7 +80,10 @@ baseline covered `TGE01` and `TGE02`. The active Fedora 44 suite now covers:
 Keep this suite in the Phase 3 rotation for regressions in generation artifact
 export, QEMU fixture copying, scratch-disk handling, CAS integrity checks,
 guest SSH access, exported-image boot, and generation file-capability xattr
-preservation. Group P adds the focused ISO generation-carrier path:
+preservation. TGE05 must not reconstruct adopted lifecycle state in the
+carrier fixture: it directly asserts the `/etc` aliases, wants links, and SSH
+configuration captured before the initial generation build. Group P adds the
+focused ISO generation-carrier path:
 
 The active source fixture for the phase-3 QEMU suites is `fedora44-guest-v1`,
 an official Fedora Cloud Base 44 qcow2 provisioned by

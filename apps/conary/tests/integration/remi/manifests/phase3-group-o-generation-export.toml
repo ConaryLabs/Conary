@@ -153,7 +153,7 @@ exit_code = 0
 [[test]]
 id = "TGE05"
 name = "installed_runtime_generation_export_preserves_file_capability_xattrs"
-description = "Export baseline and upgraded installed-runtime generations, then boot both qcow2 artifacts to prove security.capability rollback-equivalent behavior"
+description = "Export baseline and upgraded installed-runtime generations, then boot both qcow2 artifacts to prove captured-root lifecycle continuity and security.capability rollback-equivalent behavior"
 timeout = 10800
 group = "generation-export"
 
@@ -215,6 +215,11 @@ copy_to_guest = [
 commands = [
     "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$EXPECTED\" || test \"$TARGET\" = \"$EXPECTED\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$EXPECTED\"",
+    "test -L /etc/systemd/system/dbus.service",
+    "test -L /etc/systemd/system/multi-user.target.wants/sshd.service",
+    "test -L /etc/systemd/system/multi-user.target.wants/NetworkManager.service",
+    "test -s /etc/ssh/authorized_keys/root",
+    "grep -q '/etc/ssh/authorized_keys/%u' /etc/ssh/sshd_config",
     "test -x /usr/bin/group-o-cap-demo",
     "if command -v getcap >/dev/null 2>&1; then OUT=$(getcap -n /usr/bin/group-o-cap-demo 2>/dev/null || true); printf '%s\\n' \"$OUT\"; test -z \"$OUT\"; elif command -v getfattr >/dev/null 2>&1; then ! getfattr --only-values -n security.capability /usr/bin/group-o-cap-demo >/tmp/group-o-cap.bin 2>/dev/null; elif command -v attr >/dev/null 2>&1; then ! attr -q -g security.capability /usr/bin/group-o-cap-demo >/tmp/group-o-cap.bin 2>/dev/null; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import os,sys; raise SystemExit(0 if \"security.capability\" not in os.listxattr(sys.argv[1]) else 1)' /usr/bin/group-o-cap-demo; else echo 'missing capability inspection helper' >&2; exit 1; fi",
     "echo installed-runtime-generation-file-capability-baseline-ok",
@@ -239,6 +244,11 @@ copy_to_guest = [
 commands = [
     "EXPECTED=$(cat /tmp/expected-generation); tr ' ' '\\n' < /proc/cmdline | grep -Fxq -- \"conary.generation=$EXPECTED\"",
     "EXPECTED=$(cat /tmp/expected-generation); TARGET=$(readlink /conary/current); test \"$TARGET\" = \"generations/$EXPECTED\" || test \"$TARGET\" = \"$EXPECTED\" || test \"$(readlink -f /conary/current)\" = \"/conary/generations/$EXPECTED\"",
+    "test -L /etc/systemd/system/dbus.service",
+    "test -L /etc/systemd/system/multi-user.target.wants/sshd.service",
+    "test -L /etc/systemd/system/multi-user.target.wants/NetworkManager.service",
+    "test -s /etc/ssh/authorized_keys/root",
+    "grep -q '/etc/ssh/authorized_keys/%u' /etc/ssh/sshd_config",
     "test -x /usr/bin/group-o-cap-demo",
     "if command -v getcap >/dev/null 2>&1; then OUT=$(getcap -n /usr/bin/group-o-cap-demo 2>/dev/null || true); printf '%s\\n' \"$OUT\"; printf '%s\\n' \"$OUT\" | grep -Eq 'cap_net_bind_service=ep'; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import os,sys; expected=bytes.fromhex(\"0100000200040000000000000000000000000000\"); actual=os.getxattr(sys.argv[1], \"security.capability\"); raise SystemExit(0 if actual == expected else 1)' /usr/bin/group-o-cap-demo; elif command -v getfattr >/dev/null 2>&1 && command -v od >/dev/null 2>&1; then getfattr --only-values -n security.capability /usr/bin/group-o-cap-demo 2>/dev/null | od -An -tx1 -v | tr -d ' \\n' | grep -qx '0100000200040000000000000000000000000000'; elif command -v attr >/dev/null 2>&1 && command -v od >/dev/null 2>&1; then attr -q -g security.capability /usr/bin/group-o-cap-demo 2>/dev/null | od -An -tx1 -v | tr -d ' \\n' | grep -qx '0100000200040000000000000000000000000000'; else echo 'missing capability inspection helper' >&2; exit 1; fi",
     "echo installed-runtime-generation-file-capability-enabled-ok",

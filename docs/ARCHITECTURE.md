@@ -393,6 +393,20 @@ Conary can build and select immutable system-generation artifacts using EROFS
 images and Linux composefs. This remains an advanced, explicitly gated path in
 the limited preview.
 
+Full system adoption establishes the first complete generation input without
+turning unowned host state into package ownership. One exact selected-root scan
+preserves package-owned anchors and directory claims, reconciles their
+materialized node/content authority, and assigns only the remaining retained
+paths to one `CapturedRoot` trove. `AdoptedFull`, `Taken`, `Repository`, `File`,
+and `CapturedRoot` are the finite complete generation-input sources;
+`AdoptedTrack` remains metadata-only. The scanner excludes the finite
+ephemeral/API/device/user domains plus Conary's own normalized runtime and
+database subtrees through both lexical and resolved path authority, and refuses
+a runtime root that resolves to `/`. It preserves numeric ownership, full mode and node type,
+timestamps, symlink targets, CAS content, xattrs, and global hardlink topology.
+Generation runtime collection consumes that persisted authority without
+consulting a native package manager or its database.
+
 ### Architecture
 
 ```

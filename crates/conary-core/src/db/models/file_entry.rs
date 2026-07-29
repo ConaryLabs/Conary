@@ -197,12 +197,33 @@ impl FileEntry {
                 anchor_policy.as_str()
             )));
         }
-        let existing = Self::find_by_path(tx, path)?.ok_or_else(|| {
+        Self::reconcile_selected_root_materialization(tx, path, node, None)?;
+        Ok(())
+    }
+
+    /// Reconcile one tracked path to exact selected-root materialization
+    /// without changing its package owner, component, timestamp, or directory
+    /// claim graph.
+    ///
+    /// This is used when one complete root scan establishes hardlink topology
+    /// and node/content authority across package ownership boundaries.
+    pub fn reconcile_selected_root_materialization(
+        conn: &Connection,
+        path: &str,
+        node: &ResolvedPayloadNode,
+        content: Option<&PayloadContentAuthority>,
+    ) -> Result<bool> {
+        let candidate = Self::new(path.to_string(), node.clone(), content.cloned(), i64::MIN);
+        candidate.validate()?;
+        let existing = Self::find_by_path(conn, path)?.ok_or_else(|| {
             Error::NotFound(format!(
-                "selected-root directory materialization {path} has no files anchor"
+                "selected-root materialization {path} has no files anchor"
             ))
         })?;
-        for claim in super::DirectoryClaim::find_retaining_path(tx, path)? {
+        if existing.node == *node && existing.content.as_ref() == content {
+            return Ok(false);
+        }
+        for claim in super::DirectoryClaim::find_retaining_path(conn, path)? {
             let accepted = if claim.path == path {
                 claim.anchor_policy.accepts(&node.source.kind)
             } else {
@@ -217,13 +238,24 @@ impl FileEntry {
             }
         }
         let node_json = canonical_node_json(node)?;
-        tx.execute(
+        let content_size = persisted_content_size(content)?;
+        let updated = conn.execute(
             "UPDATE files
-             SET payload_node_json = ?1, content_sha256 = NULL, content_size = NULL
-             WHERE id = ?2",
-            params![node_json, existing.id],
+             SET payload_node_json = ?1, content_sha256 = ?2, content_size = ?3
+             WHERE id = ?4",
+            params![
+                node_json,
+                content.map(|authority| &authority.sha256),
+                content_size,
+                existing.id
+            ],
         )?;
-        Ok(())
+        if updated != 1 {
+            return Err(Error::InternalError(format!(
+                "selected-root materialization {path} was not reconciled exactly"
+            )));
+        }
+        Ok(true)
     }
 
     /// Restore one exact materialized directory anchor inside a caller-owned
