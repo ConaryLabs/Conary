@@ -58,6 +58,23 @@ fn inspection_is_explicitly_untrusted_and_v2_only() {
 
     assert_eq!(archive.v2_authority.identity.name, "current");
     assert_eq!(archive.manifest.package.name, "current");
+    assert_eq!(
+        archive
+            .manifest
+            .package
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.arch.as_deref()),
+        archive.v2_authority.identity.architecture.as_deref()
+    );
+    assert_eq!(
+        archive.manifest.package.debian_multi_arch,
+        archive.v2_authority.identity.debian_multi_arch
+    );
+    assert_eq!(
+        archive.manifest.requirements,
+        archive.v2_authority.requirements
+    );
     assert!(archive.signature_raw.is_some());
     assert_eq!(archive.census.files, 1);
     assert!(has_current_ccs_archive_contract(path).unwrap());

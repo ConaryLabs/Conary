@@ -7,6 +7,7 @@ pub mod debug_projection;
 pub mod diagnostics;
 pub mod identity;
 pub(crate) mod lifecycle;
+pub(crate) mod manifest_projection;
 pub mod reader;
 pub mod schema;
 #[cfg(test)]
@@ -21,6 +22,7 @@ pub use diagnostics::{V2Diagnostic, V2DiagnosticCode, V2ValidationError};
 pub use identity::{
     ContentIdentityProjectionV2, compute_v2_content_identity, compute_v2_file_merkle_root,
 };
+pub(crate) use manifest_projection::project_manifest_identity;
 pub use reader::{ReadAuthorityV2, read_authority_document};
 pub use schema::{
     AuthorityDocumentV2, DependencyEntryV2, FORMAT_VERSION_V2, PackageKindTagV2, PackageKindV2,
