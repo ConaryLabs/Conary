@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 
 mod package_writer;
@@ -44,8 +45,49 @@ pub enum BuilderError {
     #[error("chunker not initialized even though chunking is enabled")]
     ChunkerNotInitialized,
 
+    #[error(
+        "CCS install prefix must be '/' or a normalized absolute path without empty, '.' or '..' components: {0:?}"
+    )]
+    InvalidInstallPrefix(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Validated POSIX path beneath which source-root children are authored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CcsInstallPrefix(PathBuf);
+
+impl CcsInstallPrefix {
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Default for CcsInstallPrefix {
+    fn default() -> Self {
+        Self(PathBuf::from("/"))
+    }
+}
+
+impl FromStr for CcsInstallPrefix {
+    type Err = BuilderError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let valid = value == "/"
+            || (value.starts_with('/')
+                && !value.ends_with('/')
+                && !value.contains('\0')
+                && value
+                    .split('/')
+                    .skip(1)
+                    .all(|component| !component.is_empty() && !matches!(component, "." | "..")));
+        if !valid {
+            return Err(BuilderError::InvalidInstallPrefix(value.to_string()));
+        }
+        Ok(Self(PathBuf::from(value)))
+    }
 }
 
 /// One signed file entry in a CCS package.
@@ -219,7 +261,7 @@ pub struct ChunkStats {
 pub struct CcsBuilder {
     manifest: CcsManifest,
     source_dir: PathBuf,
-    install_prefix: PathBuf,
+    install_prefix: CcsInstallPrefix,
     policy_chain: PolicyChain,
     use_chunking: bool,
     chunker: Option<Chunker>,
@@ -240,7 +282,7 @@ impl CcsBuilder {
         Ok(Self {
             manifest,
             source_dir: source_dir.to_path_buf(),
-            install_prefix: PathBuf::from("/"),
+            install_prefix: CcsInstallPrefix::default(),
             policy_chain,
             use_chunking: false,
             chunker: None,
@@ -248,8 +290,8 @@ impl CcsBuilder {
     }
 
     #[must_use]
-    pub fn with_install_prefix(mut self, prefix: &Path) -> Self {
-        self.install_prefix = prefix.to_path_buf();
+    pub fn with_install_prefix(mut self, prefix: CcsInstallPrefix) -> Self {
+        self.install_prefix = prefix;
         self
     }
 

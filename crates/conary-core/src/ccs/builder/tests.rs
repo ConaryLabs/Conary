@@ -3,6 +3,7 @@
 use super::*;
 use crate::payload::PayloadNodeKind;
 use std::io::Write;
+use std::str::FromStr;
 use tempfile::TempDir;
 
 fn create_test_manifest() -> CcsManifest {
@@ -18,6 +19,81 @@ fn builder_empty_dir() {
         .unwrap();
     assert!(result.files.is_empty());
     assert!(result.payloads.is_empty());
+}
+
+#[test]
+fn install_prefix_requires_canonical_absolute_authority() {
+    for valid in ["/", "/usr", "/usr/bin", "/opt/conary tools"] {
+        assert_eq!(
+            CcsInstallPrefix::from_str(valid)
+                .unwrap()
+                .as_path()
+                .to_str(),
+            Some(valid)
+        );
+    }
+    for invalid in [
+        "",
+        ".",
+        "usr/bin",
+        "/usr/./bin",
+        "/usr/../bin",
+        "/usr//bin",
+        "/usr/bin/",
+        "//usr",
+        "/usr/\0bin",
+    ] {
+        let error = CcsInstallPrefix::from_str(invalid).unwrap_err();
+        assert!(matches!(error, BuilderError::InvalidInstallPrefix(_)));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn builder_maps_only_source_children_beneath_install_prefix() {
+    let source = TempDir::new().unwrap();
+    fs::create_dir(source.path().join("helpers")).unwrap();
+    fs::write(source.path().join("tool"), b"payload").unwrap();
+    fs::hard_link(source.path().join("tool"), source.path().join("tool-alias")).unwrap();
+    std::os::unix::fs::symlink("../tool", source.path().join("helpers/tool-link")).unwrap();
+
+    let prefix = CcsInstallPrefix::from_str("/usr/bin").unwrap();
+    let result = CcsBuilder::new(create_test_manifest(), source.path())
+        .unwrap()
+        .with_install_prefix(prefix)
+        .build()
+        .unwrap();
+
+    let paths = result
+        .files
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "/usr/bin/helpers",
+            "/usr/bin/helpers/tool-link",
+            "/usr/bin/tool",
+            "/usr/bin/tool-alias"
+        ]
+    );
+    assert!(!paths.contains(&"/usr"));
+    assert!(!paths.contains(&"/usr/bin"));
+    assert!(result.files.iter().any(|entry| {
+        matches!(
+            &entry.node.kind,
+            PayloadNodeKind::Hardlink { target, .. }
+                if target == "/usr/bin/tool"
+        )
+    }));
+    assert!(result.files.iter().any(|entry| {
+        matches!(
+            &entry.node.kind,
+            PayloadNodeKind::Symlink { target }
+                if target == "../tool"
+        )
+    }));
 }
 
 #[cfg(unix)]
