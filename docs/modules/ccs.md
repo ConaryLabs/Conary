@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-29
-revision: 53
-summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
+revision: 54
+summary: Convert foreign packages through typed authoring, host capability, lifecycle, and native export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -86,7 +86,12 @@ All operations respect a target_root parameter for bootstrap/container use.
 system init` discovers and persists the active init interface plus exact
 `systemctl`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
 `ldconfig` executable interfaces in `system.host-capability-inventory`.
-Each schema-v3 interface is bound to a command/root grammar, implementation
+The version-4 document also records the target `/usr` node's exact opaque
+`security.selinux` value when present. Generation artifacts authenticate that
+target fact separately from each logical composefs node and use it only for
+carrier CAS backing. `hooks/capabilities/filesystem_security.rs` owns its
+discovery, validation, and application without a distro or label table. Each
+executable interface remains bound to a command/root grammar, implementation
 family and version, and executable digest established by a non-mutating
 functional handshake. Install loads that document, repeats the handshake and
 identity check, and preflights the complete hook set before dry-run output or
