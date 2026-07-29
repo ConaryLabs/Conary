@@ -20,6 +20,7 @@ GUEST_PACKAGES=(
     dracut
     kmod
     systemd-udev
+    systemd-boot-unsigned
     qemu-img
     e2fsprogs
     dosfstools
@@ -52,6 +53,14 @@ REQUIRED_COMMANDS=(
     xorriso
     mmd
     mcopy
+)
+
+# Exact packaged assets the generation builder consumes from the adopted live
+# root. A command-only preflight allowed `fedora44-guest-v1` to pass image
+# construction while TGE04/TGE05 failed after a full adoption and dracut run:
+# Fedora Cloud does not install systemd-boot's EFI binary by default.
+REQUIRED_FILES=(
+    /usr/lib/systemd/boot/efi/systemd-bootx64.efi
 )
 
 # Filesystem and device drivers the suites depend on: erofs and overlay carry
@@ -393,6 +402,18 @@ for cmd in ${REQUIRED_COMMANDS[*]}; do
     fi
 done
 test -d /usr/lib/dracut && echo 'ok      /usr/lib/dracut' || { echo 'MISSING /usr/lib/dracut'; missing=1; }
+test -z \"\${missing:-}\""
+
+step "preflight: packaged generation boot assets"
+guest_ssh "set -eu
+for path in ${REQUIRED_FILES[*]}; do
+    if test -f \"\$path\"; then
+        printf 'ok      %s\n' \"\$path\"
+    else
+        printf 'MISSING %s\n' \"\$path\"
+        missing=1
+    fi
+done
 test -z \"\${missing:-}\""
 
 step "preflight: kernel modules the suites depend on"

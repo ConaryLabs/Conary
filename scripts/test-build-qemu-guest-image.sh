@@ -106,6 +106,29 @@ while read -r cmd; do
         fail "phase-3 manifests require '$cmd' in their preflight, but build-qemu-guest-image.sh does not verify it"
 done <<<"$manifest_commands"
 
+# The adopted-live-root export proofs need a real EFI source in the fixture.
+# Pin both the Fedora package and the exact file the generation builder reads,
+# then prove the slow builder checks every declared file before promotion.
+script_packages="$(
+    sed -n '/^GUEST_PACKAGES=(/,/^)/p' "$script" |
+        sed '1d;$d' |
+        tr -d ' ' |
+        sort -u
+)"
+grep -qx "systemd-boot-unsigned" <<<"$script_packages" ||
+    fail "the QEMU guest package set must install systemd-boot-unsigned"
+
+script_files="$(
+    sed -n '/^REQUIRED_FILES=(/,/^)/p' "$script" |
+        sed '1d;$d' |
+        tr -d ' ' |
+        sort -u
+)"
+grep -qx "/usr/lib/systemd/boot/efi/systemd-bootx64.efi" <<<"$script_files" ||
+    fail "the QEMU guest contract must require systemd-boot's exact EFI binary"
+grep -Fq 'for path in ${REQUIRED_FILES[*]}; do' "$script" ||
+    fail "the image build must preflight every REQUIRED_FILES entry"
+
 # The pinned Fedora input must be internally consistent: the URL has to name the
 # same file as the pinned image name, so a half-edited release bump fails here.
 image_name="$(sed -n 's/^FEDORA_IMAGE="\(.*\)"$/\1/p' "$script")"
