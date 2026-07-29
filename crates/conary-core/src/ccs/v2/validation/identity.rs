@@ -45,6 +45,19 @@ pub(super) fn validate_identity(
             "set identity.release to a positive decimal CCS build release",
         ));
     }
+    if authority
+        .identity
+        .architecture
+        .as_deref()
+        .is_none_or(|architecture| architecture.trim().is_empty())
+    {
+        diagnostics.push(V2Diagnostic::error(
+            V2DiagnosticCode::MissingAuthority,
+            "v2 package identity architecture is required",
+            Some("identity.architecture".to_string()),
+            "encode the exact source-native architecture token; architecture-independent Conary packages use noarch",
+        ));
+    }
     match (
         authority.identity.version_scheme,
         authority.identity.debian_multi_arch,

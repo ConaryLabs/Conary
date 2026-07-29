@@ -4,7 +4,7 @@
 
 use crate::ccs::attestation::{BuildAttestationEnvelope, ForeignConversionBoundary};
 use crate::ccs::builder::FileEntry;
-use crate::ccs::manifest::{CcsManifest, Platform};
+use crate::ccs::manifest::CcsManifest;
 use crate::ccs::v2::AuthorityDocumentV2;
 use crate::ccs::v2::schema::{DependencyKindV2, PackageKindV2};
 use crate::error::{Error, Result};
@@ -16,22 +16,10 @@ pub(super) fn install_manifest_from_v2(
     build_attestation: Option<BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<ForeignConversionBoundary>,
 ) -> Result<CcsManifest> {
-    let mut manifest =
-        CcsManifest::new_minimal(&authority.identity.name, &authority.identity.version);
-    manifest.package.version_scheme = authority.identity.version_scheme;
-    manifest.package.release = authority.identity.release.clone();
-    manifest.package.kind = authority.identity.kind;
-    manifest.package.platform =
-        if authority.identity.platform.is_some() || authority.identity.architecture.is_some() {
-            Some(Platform {
-                os: authority.identity.platform.clone().unwrap_or_default(),
-                arch: authority.identity.architecture.clone(),
-                ..Platform::default()
-            })
-        } else {
-            None
-        };
-    manifest.package.description = format!("CCS v2 {}", authority.identity.name);
+    let mut manifest = crate::ccs::v2::project_manifest_identity(
+        authority,
+        format!("CCS v2 {}", authority.identity.name),
+    );
 
     manifest.requirements = authority.requirements.clone();
     manifest.relations = authority.relations.clone();

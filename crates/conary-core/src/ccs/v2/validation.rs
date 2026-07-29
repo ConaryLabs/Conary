@@ -694,6 +694,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_or_empty_identity_architecture() {
+        for architecture in [None, Some("  ".to_string())] {
+            let mut authority = AuthorityDocumentV2::package_for_tests("bad-architecture");
+            authority.identity.architecture = architecture;
+
+            let error = validate_authority(&authority).unwrap_err();
+            assert!(error.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == V2DiagnosticCode::MissingAuthority
+                    && diagnostic.field.as_deref() == Some("identity.architecture")
+            }));
+        }
+    }
+
+    #[test]
     fn rejects_symlink_with_invalid_signed_target() {
         let mut authority = AuthorityDocumentV2::package_for_tests("bad-link");
         let PackageKindV2::Package(data) = &mut authority.kind else {

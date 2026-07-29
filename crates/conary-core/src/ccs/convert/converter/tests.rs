@@ -483,6 +483,29 @@ fn conversion_preserves_exact_source_architecture_tokens_in_signed_identity() {
 }
 
 #[test]
+fn conversion_rejects_missing_source_architecture_authority() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(temp_dir.path());
+    let mut metadata = make_test_metadata();
+    metadata.architecture = None;
+
+    let error = converter
+        .convert_in_memory_for_test(
+            &metadata,
+            &make_test_files(),
+            "rpm",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConversionError::BuildError(message)
+            if message.contains("v2 package identity architecture is required")
+    ));
+}
+
+#[test]
 fn converted_rpm_preserves_exact_config_and_ghost_authority() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut metadata = make_test_metadata();

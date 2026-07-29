@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 50
+revision: 52
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -46,6 +46,7 @@ CcsBuilder::new(manifest, source_dir)
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v2_projection.rs | Project verified signed v2 authority into install-time package data |
 | `AuthorityDocumentV2` | v2/schema.rs | Signed CCS v2 native package authority |
+| v2 manifest identity projection | v2/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
 | `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
 | `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
 | Component view | v2/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
@@ -300,6 +301,10 @@ for source-backed collection, policy transforms, and archive emission, and
 into signed v2 authority. `crates/conary-core/src/ccs/v2/lifecycle.rs` owns the
 exact bidirectional projection between manifest lifecycle declarations, signed
 v2 lifecycle authority, and the install-interface manifest projection.
+`crates/conary-core/src/ccs/v2/manifest_projection.rs` is the sole projection
+of signed package identity into both install and untrusted-inspection
+compatibility manifests, so authoring defaults cannot overwrite native
+architecture or Debian `Multi-Arch` authority.
 `crates/conary-core/src/ccs/v2/validation/identity.rs` owns exact package
 identity and typed provider validation; the validation hub owns orchestration.
 `crates/conary-core/src/ccs/v2/validation/config.rs` owns exact per-path config
@@ -419,6 +424,13 @@ conary ccs build --local-dev
 conary ccs verify package.ccs
 conary ccs test package.ccs --dry-run
 ```
+
+`ccs init` writes `[package.platform]` with the explicit Conary `noarch`
+architecture token. That token is signed architecture-independent authority,
+not an omitted value for the target to infer. Authors of architecture-specific
+payloads must replace it with the exact target architecture token before
+building. Authoring lint and signed-v2 verification reject missing or blank
+architecture authority before installation.
 
 Config-only packages can be authored and contract-tested directly:
 

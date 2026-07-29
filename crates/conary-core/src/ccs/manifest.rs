@@ -31,6 +31,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
+/// Explicit architecture-independent token for native Conary-authored packages.
+pub const DEFAULT_CONARY_ARCHITECTURE: &str = "noarch";
+
 #[derive(Error, Debug)]
 pub enum ManifestError {
     #[error("Failed to read manifest file: {0}")]
@@ -341,7 +344,10 @@ impl CcsManifest {
                 license: None,
                 homepage: None,
                 repository: None,
-                platform: None,
+                platform: Some(Platform {
+                    arch: Some(DEFAULT_CONARY_ARCHITECTURE.to_string()),
+                    ..Platform::default()
+                }),
                 authors: None,
             },
             provides: Provides::default(),

@@ -51,6 +51,10 @@ fn projection_builds_complete_local_dev_package_authority() {
     assert_eq!(projected.authority.identity.name, "hello");
     assert_eq!(projected.authority.identity.release, "1");
     assert_eq!(
+        projected.authority.identity.architecture.as_deref(),
+        Some(crate::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE)
+    );
+    assert_eq!(
         projected.authority.provenance.hardening_level.as_deref(),
         Some("host")
     );
@@ -60,6 +64,26 @@ fn projection_builds_complete_local_dev_package_authority() {
             .payloads
             .iter()
             .any(|payload| payload.path == "/hello")
+    );
+}
+
+#[test]
+fn projection_rejects_missing_architecture_authority() {
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    build.manifest.package.platform = None;
+
+    let error = project_build_result_to_v2(V2AuthoringInput {
+        build: &build,
+        local_dev: true,
+        debug_toml: None,
+    })
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("package identity architecture is required"),
+        "expected architecture diagnostic, got {error}"
     );
 }
 
@@ -293,6 +317,27 @@ fn lint_manifest_reports_empty_release() {
 
     assert!(findings.iter().any(|f| f.field == Some("package.release")));
     assert!(findings.iter().all(|f| f.blocks_build));
+}
+
+#[test]
+fn lint_manifest_rejects_missing_or_empty_architecture_authority() {
+    for platform in [
+        None,
+        Some(crate::ccs::manifest::Platform {
+            arch: Some("  ".to_string()),
+            ..Default::default()
+        }),
+    ] {
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
+        manifest.package.platform = platform;
+
+        let findings = lint_manifest_for_v2_authoring(&manifest);
+        assert!(findings.iter().any(|finding| {
+            finding.code == "m4b-missing-architecture"
+                && finding.field == Some("package.platform.arch")
+                && finding.blocks_build
+        }));
+    }
 }
 
 #[test]

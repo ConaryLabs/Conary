@@ -66,3 +66,104 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         "dry-run reinstall must not delete the existing installed trove"
     );
 }
+
+#[tokio::test]
+async fn default_authored_package_upgrades_with_explicit_architecture_authority() {
+    use conary_core::ccs::{BuildResult, CcsManifest};
+    use conary_core::db::models::InstalledRequirementGroup;
+    use conary_core::repository::dependency_model::RepositoryRequirementKind;
+    use conary_core::repository::versioning::VersionScheme;
+
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    super::test_support::stage_test_boot_assets(temp_dir.path());
+    super::test_support::seed_test_init_trove(db_path_str, temp_dir.path());
+
+    let package_result = |version: &str| {
+        let mut manifest = CcsManifest::new_minimal("authored-upgrade", version);
+        manifest.requirements.push(
+            conary_core::repository::requirement::parse_native_requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Conary,
+                "test-init",
+            )
+            .unwrap(),
+        );
+        BuildResult {
+            manifest,
+            components: HashMap::new(),
+            files: Vec::new(),
+            payloads: Vec::new(),
+            total_size: 0,
+            chunked: false,
+            chunk_stats: None,
+        }
+    };
+
+    let first_package = temp_dir.path().join("authored-upgrade-1.ccs");
+    let first_policy =
+        super::test_support::write_signed_test_package(&package_result("1.0.0"), &first_package);
+    cmd_ccs_install(
+        first_package.to_str().unwrap(),
+        db_path_str,
+        install_root.to_str().unwrap(),
+        false,
+        Some(first_policy.to_string_lossy().into_owned()),
+        None,
+        crate::commands::SandboxMode::Always,
+        true,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let installed =
+        conary_core::db::models::Trove::find_by_name(&conn, "authored-upgrade").unwrap();
+    assert_eq!(installed.len(), 1);
+    assert_eq!(
+        installed[0].architecture.as_deref(),
+        Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE)
+    );
+    assert_eq!(
+        InstalledRequirementGroup::find_by_trove(&conn, installed[0].id.unwrap())
+            .unwrap()
+            .len(),
+        1,
+        "the replacement preflight must evaluate a persisted requirement"
+    );
+    drop(conn);
+
+    let second_package = temp_dir.path().join("authored-upgrade-2.ccs");
+    let second_policy =
+        super::test_support::write_signed_test_package(&package_result("2.0.0"), &second_package);
+    cmd_ccs_install(
+        second_package.to_str().unwrap(),
+        db_path_str,
+        install_root.to_str().unwrap(),
+        false,
+        Some(second_policy.to_string_lossy().into_owned()),
+        None,
+        crate::commands::SandboxMode::Always,
+        true,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let installed =
+        conary_core::db::models::Trove::find_by_name(&conn, "authored-upgrade").unwrap();
+    assert_eq!(installed.len(), 1);
+    assert_eq!(installed[0].version, "2.0.0");
+    assert_eq!(
+        installed[0].architecture.as_deref(),
+        Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE)
+    );
+}
