@@ -19,6 +19,21 @@ use tracing::debug;
 const RPM_PACKAGE_RECORD_FORMAT: &str = "%{NEVRA}\x1e%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f";
 const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1f]";
 const RPM_OWNER_RECORD_FORMAT: &str = "%{NAME}\x1f";
+const DNF5_USER_INSTALLED_ARGS: &[&str] = &[
+    "--setopt=disable_excludes=*",
+    "repoquery",
+    "--userinstalled",
+    "--queryformat",
+    r"%{name}.%{arch}\n",
+];
+const DNF4_USER_INSTALLED_ARGS: &[&str] = &[
+    "--disableexcludes=all",
+    "repoquery",
+    "--installed",
+    "--userinstalled",
+    "--queryformat",
+    r"%{name}.%{arch}\n",
+];
 
 /// Information about an installed RPM package
 #[derive(Debug, Clone)]
@@ -340,40 +355,35 @@ pub fn query_all_packages() -> Result<Vec<InstalledPackageRecord<InstalledRpmInf
 
 /// Query DNF's exact user-installed package set.
 ///
-/// DNF4 and DNF5 both document `repoquery --installed --userinstalled` as the
-/// package-manager authority for this set. Their distinct documented options
-/// disable configured excludes so the result cannot silently omit installed
-/// packages. A host with RPM but no DNF authority returns a typed error.
+/// DNF4 documents `repoquery --installed --userinstalled`, while DNF5 5.4.1.0
+/// makes those selectors mutually exclusive because `--userinstalled` is
+/// itself installed-only. DNF5's typed `filter_userinstalled` first restricts
+/// to installed packages, then excludes dependency and weak-dependency
+/// reasons (upstream tag 5.4.1.0, `dnf5/commands/repoquery/repoquery.cpp` and
+/// `libdnf5/rpm/package_query.cpp`). Keep the two source-derived command
+/// grammars separate rather than assuming DNF4 flag composition applies to
+/// DNF5. Their distinct documented options disable configured excludes so the
+/// result cannot silently omit installed packages. A host with RPM but no DNF
+/// authority returns a typed error.
 pub fn query_user_installed()
 -> std::result::Result<std::collections::HashSet<String>, InstallReasonAuthorityError> {
     debug!("Querying user-installed RPM packages via DNF authority");
+    query_user_installed_with(query_package_names)
+}
 
-    let dnf5 = query_package_names(
-        "DNF5",
-        "dnf5",
-        &[
-            "--setopt=disable_excludes=*",
-            "repoquery",
-            "--installed",
-            "--userinstalled",
-            "--queryformat",
-            "%{name}.%{arch}\n",
-        ],
-    );
+fn query_user_installed_with(
+    mut query: impl FnMut(
+        &'static str,
+        &str,
+        &[&str],
+    ) -> std::result::Result<HashSet<String>, InstallReasonAuthorityError>,
+) -> std::result::Result<HashSet<String>, InstallReasonAuthorityError> {
+    let dnf5 = query("DNF5", "dnf5", DNF5_USER_INSTALLED_ARGS);
     match dnf5 {
         Ok(packages) => Ok(packages),
-        Err(error) if error.is_command_unavailable() => query_package_names(
-            "DNF4",
-            "dnf",
-            &[
-                "--disableexcludes=all",
-                "repoquery",
-                "--installed",
-                "--userinstalled",
-                "--queryformat",
-                "%{name}.%{arch}\n",
-            ],
-        ),
+        Err(error) if error.is_command_unavailable() => {
+            query("DNF4", "dnf", DNF4_USER_INSTALLED_ARGS)
+        }
         Err(error) => Err(error),
     }
 }
@@ -468,6 +478,64 @@ mod tests {
             vec!["filesystem", "bash"]
         );
         assert!(parse_owner_records("file is not owned by any package").is_err());
+    }
+
+    #[test]
+    fn dnf5_userinstalled_is_an_installed_only_selector_not_a_composable_filter() {
+        let expected = HashSet::from(["fixture.x86_64".to_string()]);
+        let mut calls = Vec::new();
+
+        let packages = query_user_installed_with(|authority, command, args| {
+            calls.push((
+                authority,
+                command.to_string(),
+                args.iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect::<Vec<_>>(),
+            ));
+            Ok(expected.clone())
+        })
+        .unwrap();
+
+        assert_eq!(packages, expected);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "DNF5");
+        assert_eq!(calls[0].1, "dnf5");
+        assert!(calls[0].2.contains(&"--userinstalled".to_string()));
+        assert!(!calls[0].2.contains(&"--installed".to_string()));
+        assert_eq!(calls[0].2, DNF5_USER_INSTALLED_ARGS);
+    }
+
+    #[test]
+    fn only_a_missing_dnf5_command_falls_back_to_dnf4s_distinct_grammar() {
+        let expected = HashSet::from(["fixture.x86_64".to_string()]);
+        let mut calls = Vec::new();
+
+        let packages = query_user_installed_with(|authority, command, args| {
+            calls.push((
+                authority,
+                command.to_string(),
+                args.iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect::<Vec<_>>(),
+            ));
+            if command == "dnf5" {
+                return Err(InstallReasonAuthorityError::CommandUnavailable {
+                    authority,
+                    command: command.to_string(),
+                });
+            }
+            Ok(expected.clone())
+        })
+        .unwrap();
+
+        assert_eq!(packages, expected);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].0, "DNF4");
+        assert_eq!(calls[1].1, "dnf");
+        assert!(calls[1].2.contains(&"--installed".to_string()));
+        assert!(calls[1].2.contains(&"--userinstalled".to_string()));
+        assert_eq!(calls[1].2, DNF4_USER_INSTALLED_ARGS);
     }
 
     #[test]
