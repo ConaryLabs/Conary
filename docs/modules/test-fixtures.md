@@ -500,14 +500,17 @@ Each fixture family should record:
   `systemd-repart`, `qemu-img`, ext4/FAT mkfs helpers, `composefs-info`, and
   `/usr/lib/dracut`.
 - **Slow proof:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`.
-- **Active image:** `fedora44-guest-v1` — an official Fedora Cloud Base 44
+- **Active image:** `fedora44-guest-v2` — an official Fedora Cloud Base 44
   qcow2 provisioned by `scripts/build-qemu-guest-image.sh`, on the
   `conaryos-test-key-v4` disposable identity (the key name records the identity,
   not the image lineage; the Fedora image reuses it rather than rotating). It
   ships **no** `/var/lib/conary`, which is why it can run the current build at
-  all — see the lineage note below. **It has no published artifact**; it exists
-  only in a local `~/.cache/conary-test/` cache, so an empty-cache host cannot
-  run the phase-3 QEMU suites until it is published.
+  all — see the lineage note below. V2 also carries the packaged
+  `/usr/lib/systemd/boot/efi/systemd-bootx64.efi` that generation export
+  consumes after full adoption. Its immutable public artifact is
+  `https://remi.conary.io/test-artifacts/fedora44-guest-v2.qcow2`, SHA-256
+  `f688ac2a02b0b0558e28de1c97bbcb2e45b6772a4f019b037f72ec584a420174`;
+  an empty-cache KVM host can therefore reproduce the lane.
 - **Regeneration:** `scripts/build-qemu-guest-image.sh --output PATH
   --private-key PATH` builds a guest image from scratch. It downloads a pinned
   official Fedora Cloud Base qcow2, verifies it against a pinned SHA-256, grows
@@ -543,10 +546,12 @@ Each fixture family should record:
   serves the v4 image and private/public disposable test-key artifacts from its
   public test-artifact path; an isolated cache downloaded the image and private
   key with matching hashes and passed TGE01 under KVM in 63,320 ms. That run
-  predates both the #61 schema epoch cut and the Fedora re-base; **no suite run
-  against `fedora44-guest-v1` is recorded here yet**, and the `minimal-boot-v5`
-  stopgap never produced one either — its TGE01 attempt on 2026-07-28 failed at
-  `conary system init` on the retired schema described above.
+  predates both the #61 schema epoch cut and the Fedora re-base. The v1
+  bring-up exposed that Fedora Cloud omitted systemd-boot's packaged EFI
+  binary; v2 added that exact source asset and superseded v1. The
+  `minimal-boot-v5` stopgap never produced a green run — its TGE01 attempt on
+  2026-07-28 failed at `conary system init` on the retired schema described
+  above.
 - **Safety notes:** Never overwrite the source image. Keep the generated
   private key mode `0600`; it is a disposable test credential, not a Remi,
   federation, release-signing, or operator identity. Publish small image/key

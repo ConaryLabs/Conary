@@ -85,12 +85,15 @@ carrier fixture: it directly asserts the `/etc` aliases, wants links, and SSH
 configuration captured before the initial generation build. Group P adds the
 focused ISO generation-carrier path:
 
-The active source fixture for the phase-3 QEMU suites is `fedora44-guest-v1`,
+The active source fixture for the phase-3 QEMU suites is `fedora44-guest-v2`,
 an official Fedora Cloud Base 44 qcow2 provisioned by
 `scripts/build-qemu-guest-image.sh` and carrying the `conaryos-test-key-v4`
-disposable identity. **It has no published artifact**: it exists only in a local
-`~/.cache/conary-test/` cache, so a host with an empty cache cannot run these
-suites until it is published.
+disposable identity. It supersedes v1 by including Fedora's packaged
+systemd-boot EFI binary, which generation export consumes after full adoption.
+The immutable public artifact is served from
+`https://remi.conary.io/test-artifacts/fedora44-guest-v2.qcow2`; its SHA-256 is
+`f688ac2a02b0b0558e28de1c97bbcb2e45b6772a4f019b037f72ec584a420174`,
+so an empty-cache KVM host can reproduce the lane.
 
 It replaces the `minimal-boot-*` lineage, which the current build cannot use for
 two independent reasons found on 2026-07-28:
@@ -762,7 +765,7 @@ guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
 ```toml
 [[test.step]]
 [test.step.qemu_boot]
-image = "fedora44-guest-v1"
+image = "fedora44-guest-v2"
 scratch_disk_mb = 65536
 local_image_path = "/tmp/conary-generation-export/generated.qcow2"
 copy_to_guest = [
