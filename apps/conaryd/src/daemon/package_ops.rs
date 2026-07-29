@@ -499,6 +499,9 @@ mod tests {
         std::fs::write(boot.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
 
         let conn = conary_core::db::open(&state.config.db_path).unwrap();
+        conary_core::ccs::HostCapabilityInventory::default()
+            .persist(&conn)
+            .unwrap();
         let mut trove = Trove::new_with_source(
             "test-runtime-base".to_string(),
             "1.0.0".to_string(),
