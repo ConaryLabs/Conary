@@ -195,6 +195,7 @@ fn seed_selected_root(db_path: &Path) -> i64 {
     .insert(&conn)
     .unwrap();
     conary_core::ccs::HostCapabilityInventory::discover()
+        .unwrap()
         .persist(&conn)
         .unwrap();
 

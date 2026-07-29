@@ -48,8 +48,9 @@ pub use hooks::{
     HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION, HOST_CAPABILITY_INVENTORY_SETTING,
     HookExecutionResults, HookExecutor, HookResult, HookType, HostCapabilityInventory,
     HostCapabilityInventoryError, HostCapabilityPreflightError, HostCapabilityRequirement,
-    HostExecutableContract, HostExecutableImplementation, InitSystemCapability, SystemdInterface,
-    SystemdOperation, TmpfilesInterface,
+    HostExecutableContract, HostExecutableImplementation, ImmutableBackingSecurity,
+    ImmutableBackingSecurityError, ImmutableBackingSecurityMechanism, InitSystemCapability,
+    SystemdInterface, SystemdOperation, TmpfilesInterface,
 };
 pub use inspector::UntrustedPackageInspection;
 pub use manifest::CcsManifest;

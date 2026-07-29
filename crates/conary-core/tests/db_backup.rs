@@ -348,6 +348,7 @@ fn write_generation_artifact_fixture(
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::Deep,
         boot_assets,
+        carrier_capabilities: Default::default(),
     })
     .unwrap();
 

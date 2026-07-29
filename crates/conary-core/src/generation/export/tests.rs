@@ -150,6 +150,20 @@ impl Fixture {
         ]);
         root_manifest
             .entries
+            .extend(
+                ROOT_SYMLINKS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (path, target))| {
+                        root_symlink_entry(
+                            &format!("/{path}"),
+                            target,
+                            u32::try_from(index).unwrap() + 10,
+                        )
+                    }),
+            );
+        root_manifest
+            .entries
             .sort_by(|left, right| left.path.cmp(&right.path));
         root_manifest.write_to(&generation_dir).unwrap();
 
@@ -195,6 +209,7 @@ impl Fixture {
             cas_base_rel: "../../objects",
             cas_verification: crate::generation::artifact::CasObjectVerification::Deep,
             boot_assets,
+            carrier_capabilities: Default::default(),
         })
         .unwrap();
         GenerationMetadata {
@@ -230,6 +245,28 @@ fn state_directory(path: &str) -> GenerationRootEntry {
     GenerationRootEntry {
         path: path.to_string(),
         node: directory_node(0o755, 5, path.as_bytes()),
+        content: None,
+    }
+}
+
+fn root_symlink_entry(
+    path: &str,
+    target: &str,
+    timestamp_discriminator: u32,
+) -> GenerationRootEntry {
+    let mut node = PayloadNode::regular(0o777);
+    node.kind = PayloadNodeKind::Symlink {
+        target: target.to_string(),
+    };
+    node.mode = libc::S_IFLNK | 0o777;
+    node.mtime = PayloadTimestamp {
+        seconds: 1_700_000_000 + i64::from(timestamp_discriminator),
+        nanoseconds: timestamp_discriminator,
+    };
+    set_test_process_ownership(&mut node);
+    GenerationRootEntry {
+        path: path.to_string(),
+        node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
         content: None,
     }
 }
@@ -369,7 +406,41 @@ fn rootfs_projection_creates_current_and_usr_merge_symlinks() {
             std::fs::read_link(staging.join(link)).unwrap(),
             PathBuf::from(target)
         );
+        let expected = carrier_root_symlink_node(&artifact, &format!("/{link}"), target).unwrap();
+        let metadata = std::fs::symlink_metadata(staging.join(link)).unwrap();
+        assert_eq!(metadata.mode(), expected.source.mode);
+        assert_eq!(u64::from(metadata.uid()), expected.uid);
+        assert_eq!(u64::from(metadata.gid()), expected.gid);
+        assert_eq!(metadata.mtime(), expected.source.mtime.seconds);
+        assert_eq!(
+            u32::try_from(metadata.mtime_nsec()).unwrap(),
+            expected.source.mtime.nanoseconds
+        );
     }
+}
+
+#[test]
+fn rootfs_projection_applies_authenticated_immutable_backing_security() {
+    let fixture = Fixture::new();
+    let mut artifact = fixture.artifact();
+    let capability = crate::ccs::ImmutableBackingSecurity {
+        mechanism: crate::ccs::ImmutableBackingSecurityMechanism::Selinux,
+        xattr_value: b"system_u:object_r:usr_t:s0\0".to_vec(),
+    };
+    artifact
+        .artifact_manifest
+        .carrier_capabilities
+        .immutable_backing_security = Some(capability.clone());
+    let staging = fixture._tmp.path().join("rootfs-security");
+    let mut observed = None;
+
+    project_generation_rootfs_with_security_apply(&artifact, &staging, |actual, objects_dest| {
+        observed = Some((actual.clone(), objects_dest.to_path_buf()));
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(observed, Some((capability, staging.join("conary/objects"))));
 }
 
 #[test]
@@ -412,6 +483,26 @@ fn rootfs_projection_rejects_missing_mountpoint_metadata_before_staging() {
         error
             .to_string()
             .contains("missing exact carrier mountpoint metadata for /boot")
+    );
+    assert!(!staging.exists());
+}
+
+#[test]
+fn rootfs_projection_rejects_missing_root_symlink_metadata_before_staging() {
+    let fixture = Fixture::new();
+    let mut artifact = fixture.artifact();
+    artifact
+        .generation_root
+        .entries
+        .retain(|entry| entry.path != "/lib64");
+    let staging = fixture._tmp.path().join("rootfs-missing-lib64-authority");
+
+    let error = project_generation_rootfs(&artifact, &staging).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("missing exact carrier root-symlink metadata for /lib64")
     );
     assert!(!staging.exists());
 }

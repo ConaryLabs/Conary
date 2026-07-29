@@ -134,6 +134,7 @@ impl ArtifactFixture {
             version: ARTIFACT_MANIFEST_VERSION,
             generation: 1,
             architecture: "x86_64".to_string(),
+            carrier_capabilities: GenerationCarrierCapabilities::default(),
             metadata: GENERATION_METADATA_FILE.to_string(),
             erofs: "root.erofs".to_string(),
             erofs_sha256: digest_file(&root_erofs),
@@ -222,6 +223,13 @@ fn artifact_manifest_json_roundtrips() {
         version: ARTIFACT_MANIFEST_VERSION,
         generation: 7,
         architecture: "x86_64".to_string(),
+        carrier_capabilities: GenerationCarrierCapabilities {
+            immutable_backing_security: Some(crate::ccs::ImmutableBackingSecurity {
+                mechanism: crate::ccs::ImmutableBackingSecurityMechanism::Selinux,
+                xattr_value: b"system_u:object_r:usr_t:s0\0".to_vec(),
+            }),
+            ..GenerationCarrierCapabilities::default()
+        },
         metadata: ".conary-gen.json".to_string(),
         erofs: "root.erofs".to_string(),
         erofs_sha256: SHA_A.to_string(),
@@ -360,6 +368,63 @@ fn complete_artifact_loads_successfully() {
     assert_eq!(artifact.erofs_path, fixture.root_erofs);
     assert_eq!(artifact.cas_objects.len(), 1);
     assert_eq!(artifact.boot_assets.kernel, "vmlinuz");
+    assert_eq!(
+        artifact.artifact_manifest.carrier_capabilities,
+        GenerationCarrierCapabilities::default()
+    );
+}
+
+#[test]
+fn artifact_manifest_rejects_missing_carrier_capability_authority() {
+    let fixture = ArtifactFixture::new();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.artifact_manifest_path).unwrap()).unwrap();
+    manifest
+        .as_object_mut()
+        .unwrap()
+        .remove("carrier_capabilities");
+    let bytes = write_json(&fixture.artifact_manifest_path, &manifest);
+    fixture.write_metadata_digest(Some(digest_bytes(&bytes)));
+
+    let error = load_generation_artifact(&fixture.generation_dir).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("generation carrier capabilities has unsupported version 0")
+    );
+}
+
+#[test]
+fn artifact_manifest_rejects_retired_carrier_capability_authority() {
+    let fixture = ArtifactFixture::new();
+    fixture.rewrite_artifact_manifest(|manifest| {
+        manifest.carrier_capabilities.version = 0;
+    });
+
+    let error = load_generation_artifact(&fixture.generation_dir).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("generation carrier capabilities has unsupported version 0")
+    );
+}
+
+#[test]
+fn artifact_v2_is_a_hard_cut_that_requires_generation_rebuild() {
+    let fixture = ArtifactFixture::new();
+    fixture.rewrite_artifact_manifest(|manifest| {
+        manifest.version = 2;
+    });
+
+    let error = load_generation_artifact(&fixture.generation_dir).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported version 2; expected version 3")
+    );
 }
 
 #[test]
@@ -412,6 +477,7 @@ fn write_generation_artifact_sorts_cas_manifest_objects() {
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::Deep,
         boot_assets,
+        carrier_capabilities: Default::default(),
     })
     .unwrap();
     metadata_for_fixture(1, Some(artifact_digest))
@@ -484,6 +550,7 @@ fn preverified_artifact_write_skips_deep_cas_hashing_but_loader_verifies() {
         cas_base_rel: "../../objects",
         cas_verification: CasObjectVerification::AlreadyVerified,
         boot_assets,
+        carrier_capabilities: Default::default(),
     })
     .unwrap();
     metadata_for_fixture(1, Some(artifact_digest))
@@ -777,7 +844,9 @@ fn invalid_sha256_strings_are_rejected() {
 #[test]
 fn unknown_manifest_versions_are_rejected() {
     let fixture = ArtifactFixture::new();
-    fixture.rewrite_artifact_manifest(|manifest| manifest.version = 3);
+    fixture.rewrite_artifact_manifest(|manifest| {
+        manifest.version = ARTIFACT_MANIFEST_VERSION + 1;
+    });
     let err = load_generation_artifact(&fixture.generation_dir).unwrap_err();
     assert!(err.to_string().contains("version"));
 

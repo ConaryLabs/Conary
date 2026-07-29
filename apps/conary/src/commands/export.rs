@@ -488,6 +488,7 @@ mod tests {
             cas_base_rel: "../../objects",
             cas_verification: CasObjectVerification::Deep,
             boot_assets,
+            carrier_capabilities: Default::default(),
         })
         .unwrap();
 
