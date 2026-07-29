@@ -365,6 +365,9 @@ impl FedoraParser {
                                     "RPM primary file records cannot be nested".to_string(),
                                 ));
                             }
+                            // A path's trailing XML whitespace is package
+                            // identity, not inter-element formatting.
+                            reader.config_mut().trim_text_end = false;
                         }
                         "checksum" => {
                             if let Some(ref mut pkg) = current_package {
@@ -670,6 +673,7 @@ impl FedoraParser {
                                 "RPM primary file record ended without starting".to_string(),
                             )
                         })?;
+                        reader.config_mut().trim_text_end = true;
                         let file = validate_primary_file_path(file)?;
                         current_package
                             .as_mut()

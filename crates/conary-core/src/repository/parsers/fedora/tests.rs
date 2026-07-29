@@ -178,6 +178,7 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
       <file type="ghost">/usr/bin/sh</file>
       <file type="dir">/usr/share/bash-completion</file>
       <file>/opt/provider&amp;selected</file>
+      <file>/usr/bin/trailing-space </file>
 "#,
     );
 
@@ -200,6 +201,7 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
             "/usr/bin/sh",
             "/usr/share/bash-completion",
             "/opt/provider&selected",
+            "/usr/bin/trailing-space ",
         ]
     );
     assert!(files.iter().all(|provide| provide.version.is_none()
