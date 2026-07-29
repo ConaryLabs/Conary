@@ -348,6 +348,9 @@ fn try_session_by_id(db_path: &str, session_id: &str) -> Option<TrySession> {
 fn create_current_generation(db_path: &str) {
     let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path));
     let conn = conary_core::db::open(db_path).unwrap();
+    conary_core::ccs::HostCapabilityInventory::default()
+        .persist(&conn)
+        .unwrap();
     let selected_root = tempfile::tempdir().unwrap();
     conary_core::generation::builder::materialize_selected_root_from_db(
         &conn,
