@@ -484,6 +484,11 @@ pub(super) mod test_support {
 
     impl EnvVarGuard {
         pub(super) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            assert_ne!(
+                key,
+                crate::commands::composefs_ops::TEST_MOUNT_SKIP_ENV,
+                "use composefs_ops::test_mount_skip_guard for the shared mount-skip environment"
+            );
             let previous = std::env::var_os(key);
             unsafe {
                 std::env::set_var(key, value);
@@ -593,6 +598,14 @@ mod tests {
 
     use super::install::{build_try_install_plan, build_try_transaction_config};
     use super::test_support::*;
+
+    #[test]
+    #[should_panic(
+        expected = "use composefs_ops::test_mount_skip_guard for the shared mount-skip environment"
+    )]
+    fn generic_env_guard_rejects_mount_skip_mutation_authority() {
+        let _guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+    }
 
     #[test]
     fn try_transaction_config_override_keeps_live_runtime_paths_for_copied_db() {
