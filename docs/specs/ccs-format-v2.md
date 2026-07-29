@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-27
-revision: 5
+last_updated: 2026-07-29
+revision: 6
 summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
 ---
 
@@ -83,6 +83,12 @@ is a format-independent wildcard. The release remains part of exact identity
 through repository selection, SAT output, installation, state snapshots,
 rollback, and display, so two packages with the same name/version but different
 release cannot collide or be re-resolved to one another.
+
+The native authoring template emits Conary `noarch` explicitly for an
+architecture-independent package. Authors replace it with an exact target
+token when payloads are architecture-specific. Missing and blank architecture
+authority are rejected by authoring preflight and signed-v2 validation;
+consumers never substitute the current host architecture.
 
 Each provided capability signs its exact kind, name, version scheme,
 architecture qualifier, and either no version authority or a paired typed

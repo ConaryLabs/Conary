@@ -122,6 +122,8 @@ pub(super) fn seed_test_root_layout(
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
+        trove.architecture =
+            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE.to_string());
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
         let mut component = Component::new(trove_id, "runtime".to_string());
@@ -204,7 +206,10 @@ pub(super) fn seed_test_init_trove(db_path: &str, db_dir: &std::path::Path) {
             "test-init".to_string(),
             "1.0.0".to_string(),
             TroveType::Package,
-        conary_core::repository::versioning::VersionScheme::Conary);
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        trove.architecture =
+            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE.to_string());
         trove.installed_by_changeset_id = Some(changeset_id);
         let trove_id = trove.insert(tx)?;
 

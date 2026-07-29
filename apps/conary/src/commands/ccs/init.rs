@@ -212,6 +212,42 @@ license = "MIT"
         assert_eq!(manifest.package.license.as_deref(), Some("MIT"));
         assert_eq!(manifest.package.release.as_str(), "1");
         assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
+        assert_eq!(
+            manifest
+                .package
+                .platform
+                .as_ref()
+                .and_then(|platform| platform.arch.as_deref()),
+            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE)
+        );
+    }
+
+    #[tokio::test]
+    async fn default_init_writes_explicit_noarch_authority() {
+        let temp = tempfile::tempdir().unwrap();
+
+        cmd_ccs_init(
+            temp.path().to_str().unwrap(),
+            Some("demo".to_string()),
+            "0.1.0",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let content = std::fs::read_to_string(temp.path().join("ccs.toml")).unwrap();
+        assert!(content.contains("[package.platform]"));
+        assert!(content.contains("arch = \"noarch\""));
+        let manifest = CcsManifest::parse(&content).unwrap();
+        assert_eq!(
+            manifest
+                .package
+                .platform
+                .as_ref()
+                .and_then(|platform| platform.arch.as_deref()),
+            Some(conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE)
+        );
     }
 
     #[tokio::test]

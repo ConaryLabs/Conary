@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 50
+revision: 51
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -419,6 +419,13 @@ conary ccs build --local-dev
 conary ccs verify package.ccs
 conary ccs test package.ccs --dry-run
 ```
+
+`ccs init` writes `[package.platform]` with the explicit Conary `noarch`
+architecture token. That token is signed architecture-independent authority,
+not an omitted value for the target to infer. Authors of architecture-specific
+payloads must replace it with the exact target architecture token before
+building. Authoring lint and signed-v2 verification reject missing or blank
+architecture authority before installation.
 
 Config-only packages can be authored and contract-tested directly:
 

@@ -81,6 +81,17 @@ fn test_generate_minimal() {
     let toml = manifest.to_toml().unwrap();
     assert!(toml.contains("name = \"test\""));
     assert!(toml.contains("version = \"0.1.0\""));
+    assert!(toml.contains("[package.platform]"));
+    assert!(toml.contains("arch = \"noarch\""));
+    let decoded = CcsManifest::parse(&toml).unwrap();
+    assert_eq!(
+        decoded
+            .package
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.arch.as_deref()),
+        Some(DEFAULT_CONARY_ARCHITECTURE)
+    );
 }
 
 #[test]
