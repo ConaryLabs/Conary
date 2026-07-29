@@ -47,6 +47,77 @@ fn root_path_domains_are_an_exact_finite_contract() {
 }
 
 #[test]
+fn capture_exclusions_are_normalized_exact_subtree_authority() {
+    for invalid in [
+        "",
+        "/",
+        "conary",
+        "/conary/",
+        "/var//lib/conary",
+        "/var/./lib/conary",
+        "/var/lib/../lib/conary",
+    ] {
+        let error = SelectedRootCaptureExclusions::new(vec![invalid.to_string()]).unwrap_err();
+        assert!(
+            error.to_string().contains("normalized absolute non-root"),
+            "{invalid:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn selected_root_capture_excludes_only_declared_runtime_subtrees() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    for directory in [
+        "conary",
+        "conary/objects",
+        "conary-adjacent",
+        "var",
+        "var/lib",
+        "var/lib/conary",
+        "var/lib/conary-adjacent",
+    ] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::fs::write(root.join("conary/objects/private"), b"runtime").unwrap();
+    std::fs::write(root.join("conary-adjacent/retained"), b"selected root").unwrap();
+    std::fs::write(root.join("var/lib/conary/conary.db"), b"runtime").unwrap();
+    std::fs::write(
+        root.join("var/lib/conary-adjacent/retained"),
+        b"selected root",
+    )
+    .unwrap();
+
+    let exclusions = SelectedRootCaptureExclusions::new(vec![
+        "/var/lib/conary".to_string(),
+        "/conary".to_string(),
+        "/conary".to_string(),
+    ])
+    .unwrap();
+    let captured = scan_selected_root_with_exclusions(&root, &cas, &exclusions).unwrap();
+    let paths = captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(!paths.iter().any(|path| path.starts_with("/conary/")));
+    assert!(
+        !paths
+            .iter()
+            .any(|path| path.starts_with("/var/lib/conary/"))
+    );
+    assert!(paths.contains(&"/conary-adjacent/retained"));
+    assert!(paths.contains(&"/var/lib/conary-adjacent/retained"));
+    assert!(paths.contains(&"/var"));
+    assert!(paths.contains(&"/var/lib"));
+}
+
+#[test]
 fn mutable_state_transaction_derives_exact_touched_paths() {
     let before = MutableStateManifest {
         version: GENERATION_ROOT_MANIFEST_VERSION,
@@ -157,6 +228,53 @@ fn selected_root_round_trip_preserves_typed_tree_and_omits_ephemeral_domains() {
     assert_eq!(original.ino(), original_link.ino());
     assert_eq!(restored.ino(), restored_link.ino());
     assert_ne!(original.ino(), restored.ino());
+}
+
+#[test]
+fn hardlink_identities_are_stable_across_inode_reallocation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let destination = temp.path().join("destination");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    std::fs::create_dir_all(source.join("usr/bin")).unwrap();
+
+    // Create the lexically later group first so source inode order is the
+    // opposite of materialization order.
+    std::fs::write(source.join("usr/bin/zeta"), b"zeta").unwrap();
+    std::fs::hard_link(
+        source.join("usr/bin/zeta"),
+        source.join("usr/bin/zeta-link"),
+    )
+    .unwrap();
+    std::fs::write(source.join("usr/bin/alpha"), b"alpha").unwrap();
+    std::fs::hard_link(
+        source.join("usr/bin/alpha"),
+        source.join("usr/bin/alpha-link"),
+    )
+    .unwrap();
+
+    let captured = scan_selected_root(&source, &cas).unwrap();
+    let identities = captured
+        .generation
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.node.source.kind {
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some(identity),
+            } => Some((entry.path.as_str(), identity.as_str())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities,
+        [
+            ("/usr/bin/alpha", "selected-root:hardlink:1"),
+            ("/usr/bin/zeta", "selected-root:hardlink:2"),
+        ]
+    );
+
+    materialize_captured_selected_root(&captured, &cas, &destination).unwrap();
+    assert_eq!(scan_selected_root(&destination, &cas).unwrap(), captured);
 }
 
 #[test]

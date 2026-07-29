@@ -19,16 +19,6 @@ type RuntimeXattrs = BTreeMap<String, Vec<u8>>;
 type CapabilityTargetKey = (i64, String);
 type RuntimeCapabilityXattrs = HashMap<CapabilityTargetKey, RuntimeXattrs>;
 
-pub(super) fn is_generation_input_source(source: InstallSource) -> bool {
-    matches!(
-        source,
-        InstallSource::AdoptedFull
-            | InstallSource::Taken
-            | InstallSource::Repository
-            | InstallSource::File
-    )
-}
-
 #[derive(Debug)]
 pub(super) struct RuntimeGenerationInputs {
     pub generation: GenerationRootManifest,
@@ -82,7 +72,8 @@ pub(super) fn collect_runtime_generation_inputs(
                 file.path, file.trove_id
             )));
         };
-        let mut generation_owner = is_generation_input_source((*anchor_source).clone())
+        let mut generation_owner = anchor_source
+            .is_generation_input()
             .then_some((*anchor_package_name, file.trove_id));
         for claim in DirectoryClaim::find_retaining_path(conn, &file.path)? {
             let Some((claim_package_name, claim_source)) = trove_map.get(&claim.trove_id) else {
@@ -91,7 +82,7 @@ pub(super) fn collect_runtime_generation_inputs(
                     file.path, claim.trove_id
                 )));
             };
-            if generation_owner.is_none() && is_generation_input_source((*claim_source).clone()) {
+            if generation_owner.is_none() && claim_source.is_generation_input() {
                 generation_owner = Some((*claim_package_name, claim.trove_id));
             }
         }
@@ -175,7 +166,7 @@ fn collect_runtime_capability_xattrs(
                 ),
             ));
         };
-        if !is_generation_input_source((*source).clone()) {
+        if !source.is_generation_input() {
             return Err(capability_input_error(
                 package_name,
                 &row.path,
@@ -446,6 +437,40 @@ mod tests {
         let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
         assert_eq!(inputs.adopted_track_count, 1);
         assert!(inputs.generation.entries.is_empty());
+    }
+
+    #[test]
+    fn captured_root_is_exact_generation_and_mutable_state_authority() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let troves = vec![trove(1, "captured-root", InstallSource::CapturedRoot)];
+        let files = vec![
+            directory("/etc", 1),
+            regular("/etc/sshd_config", b"configured", 1),
+            directory("/usr", 1),
+            regular("/usr/local-state", b"captured", 1),
+        ];
+
+        let inputs = collect_runtime_generation_inputs(&conn, &troves, files, root.path()).unwrap();
+
+        assert_eq!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/usr", "/usr/local-state"]
+        );
+        assert_eq!(
+            inputs
+                .state
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/etc", "/etc/sshd_config"]
+        );
     }
 
     #[test]
