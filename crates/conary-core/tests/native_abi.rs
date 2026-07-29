@@ -16,7 +16,7 @@ use conary_core::packages::traits::{
 use conary_core::packages::{arch::ArchPackage, deb::DebPackage, rpm::RpmPackage};
 use flate2::{Compression, write::GzEncoder};
 use std::collections::BTreeSet;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -377,6 +377,38 @@ fn conversion_preserves_upstream_native_entries_in_ccs_scriptlet_bundle() {
     let arch_path = write_arch_fixture(temp.path());
     let arch = ArchPackage::parse(arch_path.to_str().expect("utf8 arch path")).expect("parse arch");
     assert_conversion_preserves_native_entries(&arch, &arch_path, "arch", "arch");
+}
+
+/// Live source artifact for issue #177:
+/// https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os/Packages/f/filesystem-3.18-52.fc44.x86_64.rpm
+///
+/// Kept opt-in so ordinary tests remain hermetic; the exact Fedora release URL
+/// and digest make the external proof reproducible without checking a 1.4 MiB
+/// package binary into the repository.
+#[test]
+#[ignore = "requires CONARY_RPM_ROOT_ANCHOR_FIXTURE pointing to the pinned Fedora 44 filesystem RPM"]
+fn pinned_fedora_filesystem_root_anchor_parses_and_converts() {
+    let path = PathBuf::from(
+        std::env::var("CONARY_RPM_ROOT_ANCHOR_FIXTURE")
+            .expect("set CONARY_RPM_ROOT_ANCHOR_FIXTURE to the pinned Fedora filesystem RPM"),
+    );
+    let bytes = fs::read(&path).expect("read pinned Fedora filesystem RPM");
+    assert_eq!(bytes.len(), 1_398_770);
+    assert_eq!(
+        conary_core::hash::sha256(&bytes),
+        "7abc643d653bf2773c38e183e0e33489cab4880c8a540b315fcd7fff09c6c52c"
+    );
+
+    let package = RpmPackage::parse(path.to_str().expect("UTF-8 fixture path"))
+        .expect("parse pinned Fedora filesystem RPM");
+
+    assert_eq!(package.name(), "filesystem");
+    assert_eq!(package.version(), "3.18-52.fc44");
+    assert!(
+        package.files().iter().all(|file| file.path != "/"),
+        "the RPM root ownership anchor must not become deployable payload authority"
+    );
+    assert_conversion_preserves_native_entries(&package, &path, "rpm", "fedora-44");
 }
 
 fn native_slots(package: &impl PackageFormat) -> BTreeSet<&str> {

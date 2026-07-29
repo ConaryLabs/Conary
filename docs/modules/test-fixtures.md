@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-28
-revision: 24
+last_updated: 2026-07-29
+revision: 25
 summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
 ---
 
@@ -41,6 +41,7 @@ Each fixture family should record:
 | `m4d-supported-profile-cutover` | Repository feed profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
 | `native-lifecycle-query-fixtures` | Native lifecycle query surfaces | `cargo test -p conary --test query_scripts` |
 | `rpm-hardlink-transaction` | RPM payload projection and CCS conversion | `cargo test -p conary-core packages::rpm::payload`; `cargo test -p conary --test conversion_integration golden_conversion` |
+| `rpm-root-anchor-conversion` | RPM root ownership parsing and CCS omission | `cargo test -p conary-core packages::rpm::payload`; opt-in pinned-artifact test below |
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
 | `remi-converted-artifact-serving` | Remi conversion persistence and serving | `cargo test -p remi conversion` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
@@ -108,6 +109,35 @@ Each fixture family should record:
 - **Safety notes:** The fixture is public package data. Native-oracle commands
   run only in a disposable test image/root; never install it into the host,
   production Remi, `/conary/data`, or `/etc/conary`.
+
+### rpm-root-anchor-conversion
+
+- **Owner:** RPM header and CPIO projection:
+  `crates/conary-core/src/packages/rpm/payload/{header,stream}.rs`; CCS omission:
+  `crates/conary-core/src/packages/rpm/payload.rs`.
+- **Purpose:** Prove that RPM's exact `/` ownership entry remains part of
+  source header/payload validation but cannot become selected-root install or
+  remove authority.
+- **Fixture source:** Fedora 44
+  [`filesystem-3.18-52.fc44.x86_64.rpm`](https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/x86_64/os/Packages/f/filesystem-3.18-52.fc44.x86_64.rpm),
+  downloaded only for the opt-in test. Exact size: 1,398,770 bytes. SHA-256:
+  `7abc643d653bf2773c38e183e0e33489cab4880c8a540b315fcd7fff09c6c52c`.
+  Unit tests construct the neighboring malformed metadata and CPIO path forms
+  without network access.
+- **Consumes:** RPM payload unit tests and
+  `pinned_fedora_filesystem_root_anchor_parses_and_converts` in
+  `crates/conary-core/tests/native_abi.rs`.
+- **Fast proof:** `cargo test -p conary-core packages::rpm::payload`.
+- **External artifact proof:** set `CONARY_RPM_ROOT_ANCHOR_FIXTURE` to the
+  exact pinned RPM, then run `cargo test -p conary-core --test native_abi
+  pinned_fedora_filesystem_root_anchor_parses_and_converts -- --ignored`.
+- **Medium proof:** `cargo test -p conary --test conversion_integration
+  golden_conversion`; `cargo test -p remi conversion`.
+- **Regeneration:** Do not replace the pinned identity in response to repository
+  drift. Add a separately identified artifact when a later RPM grammar needs
+  proof.
+- **Safety notes:** Download and parse/convert only. Do not install the native
+  RPM on the host or let its root metadata modify a test destination.
 
 ### host-executable-interface-fixtures
 

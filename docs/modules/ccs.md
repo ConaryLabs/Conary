@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-28
-revision: 49
+last_updated: 2026-07-29
+revision: 50
 summary: Convert foreign packages into source-independent CCS lifecycle transactions and export CCS as native packages
 ---
 
@@ -162,6 +162,20 @@ proves that equality, projection retains the target as symlink variant data
 without inventing regular-file content authority. Any mismatched target or
 length still fails, and every other non-regular node must carry zero payload
 bytes.
+
+RPM may encode the filesystem root itself as `DIRNAMES="/"` plus an empty
+`BASENAMES` value. At the pinned upstream revision,
+[`fsmFsPath`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/fsm.cc#L71-L82)
+handles that empty basename as `/`, while
+[`rpmfnFindFN`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L388-L435)
+associates the corresponding standard CPIO entry after RPM's exact optional
+`./` and `/` prefix removal. Conary preserves that entry through header/CPIO
+association and completeness validation as a typed source ownership anchor.
+It accepts only an unflagged directory with zero declared size, no
+content-bearing metadata, and a zero-content CPIO member. The selected root is
+the transaction container, not a deployable package path, so conversion
+consumes the anchor without emitting a CCS payload node or install/remove claim
+for `/`.
 
 RPM hardlink projection follows the transaction rule pinned at upstream commit
 `a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.
