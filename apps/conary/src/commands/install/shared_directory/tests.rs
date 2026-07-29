@@ -526,6 +526,66 @@ fn rollback_capture_excludes_only_generation_ephemeral_directory_claims() {
 }
 
 #[test]
+fn rollback_capture_classifies_effective_selected_root_alias_domains() {
+    let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
+    let conn = conary_core::db::open(db_path).unwrap();
+    let owner = insert_trove(&conn, "aliased-layout");
+    for path in ["/var/run/faillock", "/lib/vendor"] {
+        FileEntry::new(path.to_string(), resolved_directory(0o755), None, owner)
+            .insert(&conn)
+            .unwrap();
+    }
+
+    let selected_root = tempfile::tempdir().unwrap();
+    physical_directory(selected_root.path(), "/var");
+    physical_symlink(selected_root.path(), "/var/run", "../run");
+    physical_directory(selected_root.path(), "/usr/lib/vendor");
+    physical_symlink(selected_root.path(), "/lib", "usr/lib");
+
+    let captured =
+        capture_existing_directory_materializations(&conn, selected_root.path()).unwrap();
+
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].path, "/lib/vendor");
+    assert_eq!(
+        captured[0].node,
+        conary_core::filesystem::selected_root::capture_selected_root_node(
+            selected_root.path(),
+            "/lib/vendor",
+        )
+        .unwrap()
+        .unwrap()
+    );
+}
+
+#[test]
+fn rollback_capture_still_rejects_missing_non_ephemeral_materialization() {
+    let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
+    let conn = conary_core::db::open(db_path).unwrap();
+    let owner = insert_trove(&conn, "missing-layout");
+    FileEntry::new(
+        "/usr/lib/missing".to_string(),
+        resolved_directory(0o755),
+        None,
+        owner,
+    )
+    .insert(&conn)
+    .unwrap();
+
+    let selected_root = tempfile::tempdir().unwrap();
+    physical_directory(selected_root.path(), "/usr/lib");
+
+    let error =
+        capture_existing_directory_materializations(&conn, selected_root.path()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Tracked directory materialization /usr/lib/missing is absent"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn pinned_upstream_directory_sources_are_exact() {
     assert_eq!(UPSTREAM_DIRECTORY_MATERIALIZATION_INPUTS.len(), 4);
     let mut formats = BTreeSet::new();

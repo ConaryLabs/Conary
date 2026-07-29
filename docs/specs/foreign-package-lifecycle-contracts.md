@@ -480,6 +480,12 @@ claim-aware payload view rather than treating the anchor as the sole owner.
 
 Rollback captures directory claims and the independently materialized node
 before any package in a single or batch transaction mutates the selected root.
+It resolves only the package path's existing selected-root ancestor symlinks
+before applying the finite publication-domain contract. Thus a native spelling
+such as `/var/run/example` retains its package ownership identity while its
+effective `/run/example` materialization is excluded as ephemeral; aliases
+into non-ephemeral domains still require exact captured nodes. Missing
+non-ephemeral nodes and escaping or looping aliases fail before mutation.
 Restoration first rebuilds all package bases, then all anchors, then all claims,
 so cross-package and cyclic claim graphs do not depend on insertion order.
 Additive RPM or CCS metadata changes restore the prior materialized node even
