@@ -9,6 +9,9 @@ description = "QEMU harness SSH access and unit enablement for the supported-hos
 release = "1"
 kind = "package"
 
+[package.platform]
+arch = "noarch"
+
 [provides]
 capabilities = []
 sonames = []

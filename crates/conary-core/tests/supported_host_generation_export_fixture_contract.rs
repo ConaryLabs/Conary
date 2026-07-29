@@ -67,6 +67,15 @@ fn access_package_manifest_names_the_package_the_model_expects() {
         manifest.package.name, "conary-qemu-test-access",
         "the model lists the access package by name, so the CCS manifest name is the contract"
     );
+    assert_eq!(
+        manifest
+            .package
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.arch.as_deref()),
+        Some("noarch"),
+        "the access-only fixture is architecture-independent and must carry exact noarch authority"
+    );
 
     let model = parse_model_file(&fixture_dir().join("fixture-system.toml")).expect("model parses");
     assert!(
