@@ -1,16 +1,21 @@
 // src/commands/repo.rs
 //! Repository management commands
 
+mod authority;
+
 use super::open_db;
-use anyhow::Result;
-use conary_core::db::models::SecurityAdvisorySupport;
+use anyhow::{Context, Result};
+use conary_core::db::models::{RepositoryPackageKey, SecurityAdvisorySupport};
 use conary_core::repository::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, OpenPgpTrustRoot,
     RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
 };
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
+
+use authority::resolve_ccs_package_authority;
 
 /// Options for adding a new repository
 pub struct RepoAddOptions {
@@ -39,6 +44,7 @@ pub struct RepoAddOptions {
     pub replace: bool,
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
+    pub ccs_package_keys: Vec<PathBuf>,
     pub source_profile: Option<String>,
     pub security_advisory_support: SecurityAdvisorySupport,
 }
@@ -53,6 +59,9 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         && opts.remi_endpoint.is_none()
     {
         anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
+    }
+    if !opts.ccs_package_keys.is_empty() && opts.default_strategy.as_deref() != Some("remi") {
+        anyhow::bail!("--ccs-package-key requires --default-strategy=remi");
     }
 
     let supplied_profile = opts
@@ -110,6 +119,12 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
             package_format.as_str()
         );
     }
+    let package_authority = resolve_ccs_package_authority(
+        opts.default_strategy.as_deref(),
+        opts.remi_endpoint.as_deref(),
+        profile.id(),
+        &opts.ccs_package_keys,
+    )?;
     let parser_config = exact_parser_config(
         package_format,
         opts.distribution,
@@ -132,7 +147,8 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
 
     let db_path = opts.db_path;
 
-    let conn = open_db(&db_path)?;
+    let mut conn = open_db(&db_path)?;
+    let tx = conn.transaction()?;
 
     // Create the repository with all settings
     let mut repo = conary_core::db::models::Repository::new(opts.name, opts.url);
@@ -148,7 +164,7 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     repo.source_profile = Some(profile.id().to_string());
     repo.security_advisory_support = opts.security_advisory_support;
 
-    if let Err(error) = repo.insert(&conn) {
+    if let Err(error) = repo.insert(&tx) {
         if matches!(&error, conary_core::Error::ConflictError(_)) {
             return Err(anyhow::Error::new(conary_core::Error::ConflictError(
                 format!(
@@ -163,6 +179,28 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
             error
         ));
     }
+    let repository_id = repo
+        .id
+        .context("new repository has no ID after successful insertion")?;
+    let package_authority_rows = package_authority
+        .iter()
+        .map(|key| RepositoryPackageKey {
+            repository_id,
+            public_key: key.public_key.clone(),
+            key_id: key.key_id.clone(),
+            status: key.status.clone(),
+            synced_at: None,
+        })
+        .collect::<Vec<_>>();
+    if !package_authority_rows.is_empty() {
+        RepositoryPackageKey::reconcile_for_repository_in_transaction(
+            &tx,
+            repository_id,
+            &package_authority_rows,
+        )
+        .context("persist verified CCS package authority")?;
+    }
+    tx.commit()?;
 
     println!("Added repository: {}", repo.name);
     println!("  Metadata URL: {}", repo.url);
@@ -179,6 +217,11 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     );
     if let Some(policy) = repo.trust_policy.as_ref() {
         println!("  Repository Trust: {}", describe_trust_policy(policy));
+    } else if !package_authority_rows.is_empty() {
+        println!(
+            "  Repository Trust: {} pinned CCS package key(s)",
+            package_authority_rows.len()
+        );
     } else {
         println!("  Repository Trust: typed JSON/Remi authority");
     }
@@ -655,7 +698,158 @@ pub async fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{Repository, SecurityAdvisorySupport};
+    use conary_core::ccs::signing::SigningKeyPair;
+    use conary_core::db::models::{Repository, RepositoryPackageKey, SecurityAdvisorySupport};
+
+    fn remi_repo_options(
+        name: &str,
+        db_path: &std::path::Path,
+        endpoint: &str,
+        profile: &str,
+        ccs_package_keys: Vec<PathBuf>,
+    ) -> RepoAddOptions {
+        RepoAddOptions {
+            name: name.to_string(),
+            url: endpoint.to_string(),
+            package_format: Some(RepositoryFormat::Json),
+            distribution: None,
+            component: None,
+            architecture: None,
+            database: None,
+            db_path: db_path.to_string_lossy().to_string(),
+            content_url: None,
+            priority: 50,
+            disabled: false,
+            debian_release_keys: Vec::new(),
+            rpm_metadata_keys: Vec::new(),
+            rpm_metalink: None,
+            rpm_package_keys: Vec::new(),
+            arch_keyring: None,
+            arch_keyring_format: None,
+            arch_master_keys: Vec::new(),
+            arch_packager_key_threshold: None,
+            arch_database_signature: None,
+            fingerprints: Vec::new(),
+            yes: false,
+            replace: false,
+            default_strategy: Some("remi".to_string()),
+            remi_endpoint: Some(endpoint.to_string()),
+            ccs_package_keys,
+            source_profile: Some(profile.to_string()),
+            security_advisory_support: SecurityAdvisorySupport::Unknown,
+        }
+    }
+
+    #[tokio::test]
+    async fn repo_add_seeds_exact_canonical_remi_package_authority() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+
+        cmd_repo_add(remi_repo_options(
+            "canonical-fedora",
+            &db_path,
+            "https://remi.conary.io/",
+            "fedora-44",
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let repo = Repository::find_by_name(&conn, "canonical-fedora")
+            .unwrap()
+            .unwrap();
+        let expected = conary_core::repository::remi_authority::canonical_remi_package_keys(
+            "https://remi.conary.io",
+            "fedora-44",
+        )
+        .unwrap()[0]
+            .public_key
+            .clone();
+        assert_eq!(
+            RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
+            vec![expected]
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_add_requires_explicit_authority_for_self_hosted_remi_without_mutation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+
+        let error = cmd_repo_add(remi_repo_options(
+            "self-hosted",
+            &db_path,
+            "https://remi.example.invalid",
+            "fedora-44",
+            Vec::new(),
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--ccs-package-key"), "{error:#}");
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert!(
+            Repository::find_by_name(&conn, "self-hosted")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_add_persists_explicit_self_hosted_authority_and_rejects_duplicates() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        let private_key = temp_dir.path().join("targets.private");
+        let public_key = temp_dir.path().join("targets.public");
+        let signing_key = SigningKeyPair::generate().with_key_id("targets");
+        signing_key
+            .save_to_files(&private_key, &public_key)
+            .unwrap();
+
+        let duplicate_error = cmd_repo_add(remi_repo_options(
+            "duplicate-authority",
+            &db_path,
+            "https://remi.example.invalid",
+            "fedora-44",
+            vec![public_key.clone(), public_key.clone()],
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            duplicate_error.to_string().contains("repeats public key"),
+            "{duplicate_error:#}"
+        );
+        {
+            let conn = conary_core::db::open(&db_path).unwrap();
+            assert!(
+                Repository::find_by_name(&conn, "duplicate-authority")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        cmd_repo_add(remi_repo_options(
+            "self-hosted",
+            &db_path,
+            "https://remi.example.invalid",
+            "fedora-44",
+            vec![public_key],
+        ))
+        .await
+        .unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let repo = Repository::find_by_name(&conn, "self-hosted")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
+            vec![signing_key.public_key_base64()]
+        );
+    }
 
     #[tokio::test]
     async fn repo_add_rejects_internal_source_route_slug() {
@@ -685,6 +879,7 @@ mod tests {
             replace: false,
             default_strategy: Some("remi".to_string()),
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
+            ccs_package_keys: Vec::new(),
             source_profile: Some("fedora".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Unknown,
         })
@@ -729,6 +924,7 @@ mod tests {
             replace: false,
             default_strategy: None,
             remi_endpoint: None,
+            ccs_package_keys: Vec::new(),
             source_profile: Some("fedora-44".to_string()),
             security_advisory_support: SecurityAdvisorySupport::Supported,
         })

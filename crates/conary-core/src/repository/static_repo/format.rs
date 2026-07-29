@@ -323,7 +323,7 @@ pub struct PackageKeysFile {
     pub keys: Vec<PackageKeyEntry>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageKeyStatus {
     Active,

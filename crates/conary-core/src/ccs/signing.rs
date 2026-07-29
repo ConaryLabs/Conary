@@ -313,6 +313,27 @@ pub fn load_signing_public_key(path: &Path) -> Result<SigningPublicKey> {
             key_file.algorithm
         )));
     }
+    let decoded = BASE64.decode(&key_file.key).map_err(|error| {
+        Error::ParseError(format!(
+            "Invalid base64 in public key {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
+    let key_bytes: [u8; 32] = decoded.try_into().map_err(|decoded: Vec<u8>| {
+        Error::ParseError(format!(
+            "Invalid public key length in {}: expected 32 bytes, got {}",
+            path.display(),
+            decoded.len()
+        ))
+    })?;
+    VerifyingKey::from_bytes(&key_bytes).map_err(|error| {
+        Error::ParseError(format!(
+            "Invalid Ed25519 public key in {}: {}",
+            path.display(),
+            error
+        ))
+    })?;
 
     Ok(SigningPublicKey {
         key: key_file.key,
@@ -449,5 +470,24 @@ mod tests {
                 .to_string()
                 .contains("Unsupported public key algorithm")
         );
+
+        fs::write(
+            &public_path,
+            "algorithm = \"ed25519\"\nkey = \"not-base64\"\nkey_id = \"targets\"\n",
+        )
+        .unwrap();
+        let error = load_signing_public_key(&public_path).unwrap_err();
+        assert!(error.to_string().contains("Invalid base64"), "{error}");
+
+        fs::write(
+            &public_path,
+            format!(
+                "algorithm = \"ed25519\"\nkey = \"{}\"\nkey_id = \"targets\"\n",
+                BASE64.encode([7_u8; 31])
+            ),
+        )
+        .unwrap();
+        let error = load_signing_public_key(&public_path).unwrap_err();
+        assert!(error.to_string().contains("expected 32 bytes"), "{error}");
     }
 }

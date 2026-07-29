@@ -4,7 +4,8 @@
 
 use crate::error::{Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryPackageKeyStatus {
@@ -36,54 +37,38 @@ impl RepositoryPackageKey {
         repository_id: i64,
         keys: &[Self],
     ) -> Result<()> {
-        for key in keys {
-            if key.repository_id != repository_id {
-                return Err(Error::InternalError(format!(
-                    "repository_id mismatch for repository package key: expected {repository_id}, got {}",
-                    key.repository_id
-                )));
-            }
-        }
-
         let tx = conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM repository_package_keys WHERE repository_id = ?1",
-            [repository_id],
-        )?;
-
-        {
-            let mut insert_with_default_synced_at = tx.prepare(
-                "INSERT INTO repository_package_keys (repository_id, public_key, key_id, status)
-                 VALUES (?1, ?2, ?3, ?4)",
-            )?;
-            let mut insert_with_synced_at = tx.prepare(
-                "INSERT INTO repository_package_keys
-                    (repository_id, public_key, key_id, status, synced_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
-
-            for key in keys {
-                if let Some(synced_at) = &key.synced_at {
-                    insert_with_synced_at.execute(params![
-                        key.repository_id,
-                        &key.public_key,
-                        &key.key_id,
-                        key.status.as_db_str(),
-                        synced_at,
-                    ])?;
-                } else {
-                    insert_with_default_synced_at.execute(params![
-                        key.repository_id,
-                        &key.public_key,
-                        &key.key_id,
-                        key.status.as_db_str(),
-                    ])?;
-                }
-            }
-        }
-
+        Self::replace_for_repository_in_transaction(&tx, repository_id, keys)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Replace the exact authority set inside a caller-owned transaction.
+    pub fn replace_for_repository_in_transaction(
+        tx: &Transaction<'_>,
+        repository_id: i64,
+        keys: &[Self],
+    ) -> Result<()> {
+        validate_replacement(repository_id, keys)?;
+        replace_rows(tx, repository_id, keys)
+    }
+
+    /// Reconcile the exact authority set inside a caller-owned transaction.
+    ///
+    /// Returns `true` only when persisted authority changed. Synchronization
+    /// timestamps are deliberately excluded from equality so an idempotent
+    /// repository initialization does not churn trust state.
+    pub fn reconcile_for_repository_in_transaction(
+        tx: &Transaction<'_>,
+        repository_id: i64,
+        keys: &[Self],
+    ) -> Result<bool> {
+        validate_replacement(repository_id, keys)?;
+        if authority_rows_match(tx, repository_id, keys)? {
+            return Ok(false);
+        }
+        Self::replace_for_repository_in_transaction(tx, repository_id, keys)?;
+        Ok(true)
     }
 
     pub fn trusted_keys_for_repository(
@@ -156,6 +141,100 @@ impl RepositoryPackageKey {
         }
         Ok(keys)
     }
+}
+
+fn validate_replacement(repository_id: i64, keys: &[RepositoryPackageKey]) -> Result<()> {
+    let mut public_keys = BTreeSet::new();
+    for key in keys {
+        if key.repository_id != repository_id {
+            return Err(Error::InternalError(format!(
+                "repository_id mismatch for repository package key: expected {repository_id}, got {}",
+                key.repository_id
+            )));
+        }
+        if !public_keys.insert(key.public_key.as_str()) {
+            return Err(Error::ConflictError(format!(
+                "repository {repository_id} package authority repeats public key {}",
+                key.public_key
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn authority_rows_match(
+    conn: &Connection,
+    repository_id: i64,
+    keys: &[RepositoryPackageKey],
+) -> Result<bool> {
+    let mut stmt = conn.prepare(
+        "SELECT public_key, key_id, status
+         FROM repository_package_keys
+         WHERE repository_id = ?1
+         ORDER BY public_key",
+    )?;
+    let observed = stmt
+        .query_map([repository_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut expected = keys
+        .iter()
+        .map(|key| {
+            (
+                key.public_key.clone(),
+                key.key_id.clone(),
+                key.status.as_db_str().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    expected.sort();
+    Ok(observed == expected)
+}
+
+fn replace_rows(
+    conn: &Connection,
+    repository_id: i64,
+    keys: &[RepositoryPackageKey],
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM repository_package_keys WHERE repository_id = ?1",
+        [repository_id],
+    )?;
+
+    let mut insert_with_default_synced_at = conn.prepare(
+        "INSERT INTO repository_package_keys (repository_id, public_key, key_id, status)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    let mut insert_with_synced_at = conn.prepare(
+        "INSERT INTO repository_package_keys
+            (repository_id, public_key, key_id, status, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+
+    for key in keys {
+        if let Some(synced_at) = &key.synced_at {
+            insert_with_synced_at.execute(params![
+                key.repository_id,
+                &key.public_key,
+                &key.key_id,
+                key.status.as_db_str(),
+                synced_at,
+            ])?;
+        } else {
+            insert_with_default_synced_at.execute(params![
+                key.repository_id,
+                &key.public_key,
+                &key.key_id,
+                key.status.as_db_str(),
+            ])?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -388,6 +467,93 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("repository_id"));
+        assert_eq!(
+            RepositoryPackageKey::trusted_keys_for_repository(&conn, repo_id).unwrap(),
+            vec!["existing-key".to_string()]
+        );
+    }
+
+    #[test]
+    fn transactional_reconcile_is_idempotent_and_preserves_sync_time() {
+        let (_temp, mut conn) = create_test_db();
+        let repo_id = insert_repository(&conn, "reconciled-keys");
+        RepositoryPackageKey::replace_for_repository(
+            &conn,
+            repo_id,
+            &[package_key(
+                repo_id,
+                "stable-key",
+                Some("targets"),
+                RepositoryPackageKeyStatus::Active,
+                Some("2026-07-29T00:00:00Z"),
+            )],
+        )
+        .unwrap();
+
+        let tx = conn.transaction().unwrap();
+        let changed = RepositoryPackageKey::reconcile_for_repository_in_transaction(
+            &tx,
+            repo_id,
+            &[package_key(
+                repo_id,
+                "stable-key",
+                Some("targets"),
+                RepositoryPackageKeyStatus::Active,
+                None,
+            )],
+        )
+        .unwrap();
+        assert!(!changed);
+        tx.commit().unwrap();
+
+        assert_eq!(
+            stored_rows(&conn, repo_id)[0].3.as_deref(),
+            Some("2026-07-29T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn transactional_reconcile_rejects_duplicate_authority_without_mutation() {
+        let (_temp, mut conn) = create_test_db();
+        let repo_id = insert_repository(&conn, "duplicate-keys");
+        RepositoryPackageKey::replace_for_repository(
+            &conn,
+            repo_id,
+            &[package_key(
+                repo_id,
+                "existing-key",
+                None,
+                RepositoryPackageKeyStatus::Active,
+                None,
+            )],
+        )
+        .unwrap();
+
+        let tx = conn.transaction().unwrap();
+        let error = RepositoryPackageKey::reconcile_for_repository_in_transaction(
+            &tx,
+            repo_id,
+            &[
+                package_key(
+                    repo_id,
+                    "duplicate-key",
+                    Some("one"),
+                    RepositoryPackageKeyStatus::Active,
+                    None,
+                ),
+                package_key(
+                    repo_id,
+                    "duplicate-key",
+                    Some("two"),
+                    RepositoryPackageKeyStatus::Retired,
+                    None,
+                ),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("repeats public key"));
+        drop(tx);
+
         assert_eq!(
             RepositoryPackageKey::trusted_keys_for_repository(&conn, repo_id).unwrap(),
             vec!["existing-key".to_string()]

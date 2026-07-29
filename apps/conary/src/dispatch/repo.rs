@@ -35,6 +35,7 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
                 replace,
                 default_strategy,
                 remi_endpoint,
+                ccs_package_keys,
                 source_profile,
                 security_advisories,
             } = *args;
@@ -87,6 +88,7 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
                 replace,
                 default_strategy,
                 remi_endpoint,
+                ccs_package_keys,
                 source_profile,
                 security_advisory_support,
             })
