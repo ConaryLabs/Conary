@@ -1,8 +1,8 @@
 // apps/conary/src/cli/tests.rs
 
 use super::{
-    Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands, NativePackageManager,
-    QueryCommands, RepoCommands, SystemCommands,
+    CcsCommands, Cli, CliSandboxMode, Commands, GenerationCommands, McpCommands,
+    NativePackageManager, QueryCommands, RepoCommands, SystemCommands,
 };
 use clap::{CommandFactory, Parser};
 
@@ -31,6 +31,24 @@ fn cli_rejects_removed_builtin_trigger_filter() {
         .err()
         .expect("current trigger authority has no built-in classification");
     assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn ccs_build_parses_only_typed_install_prefixes() {
+    let cli = parse_cli(["conary", "ccs", "build", "--install-prefix", "/usr/bin"]).unwrap();
+    match cli.command {
+        Some(Commands::Ccs(CcsCommands::Build { install_prefix, .. })) => {
+            assert_eq!(install_prefix.as_path(), std::path::Path::new("/usr/bin"));
+        }
+        _ => panic!("expected ccs build command"),
+    }
+
+    for invalid in ["usr/bin", "/usr/../bin", "/usr//bin", "/usr/bin/"] {
+        assert!(
+            parse_cli(["conary", "ccs", "build", "--install-prefix", invalid]).is_err(),
+            "invalid install prefix parsed: {invalid}"
+        );
+    }
 }
 
 fn render_help_with_stack<F>(render: F) -> String

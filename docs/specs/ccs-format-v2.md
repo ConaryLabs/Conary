@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 7
+revision: 8
 summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
 ---
 
@@ -233,6 +233,13 @@ conary ccs build --local-dev
 conary ccs verify package.ccs
 conary ccs test package.ccs --dry-run
 ```
+
+The optional `ccs build --install-prefix <absolute-path>` mapping applies only
+to the children of `--source`. The source root, install prefix, and its
+ancestors are not signed file entries unless they are independently present
+beneath the source root. The builder accepts `/` or a normalized absolute
+POSIX path and rejects relative, empty, dot, parent, repeated-separator, and
+trailing-separator forms before archive emission.
 
 Mutation and publication consumers must verify first and construct
 `CcsPackage` from the resulting capability. `CcsPackage::parse` intentionally

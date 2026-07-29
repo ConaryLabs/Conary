@@ -23,7 +23,7 @@ impl CcsBuilder {
         let relative = source_path
             .strip_prefix(&self.source_dir)
             .map_err(|_| BuilderError::FileNotUnderSource(source_path.to_path_buf()))?;
-        let install_path = self.install_prefix.join(relative);
+        let install_path = self.install_prefix.as_path().join(relative);
         let install_path_text = install_path
             .to_str()
             .ok_or_else(|| {

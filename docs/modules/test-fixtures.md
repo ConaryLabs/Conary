@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-29
-revision: 25
+revision: 26
 summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
 ---
 
@@ -206,6 +206,7 @@ Each fixture family should record:
   authority projection: `crates/conary-core/src/ccs/v2/authoring.rs`.
 - **Purpose:** Minimal-file native authoring loop from `ccs.toml` through lint,
   local-dev or explicit-key v2 build, local-dev verify, isolated dry-run test,
+  typed source-to-install-prefix mapping without implicit ancestor ownership,
   and static publish rejection for local-dev/host-hardened artifacts.
 - **Fixture sources:** in-test project builder in
   `apps/conary/tests/packaging_m4b.rs`.
