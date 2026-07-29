@@ -502,6 +502,11 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
         "readonly carriers must seed their tmpfs upper from exported config-state authority"
     );
     assert!(
+        dracut_generator.contains("if [ ! -d \"$ETC_STATE_SEED\" ]; then")
+            && dracut_generator.contains("if [ ! -d \"$ETC_UPPER\" ]; then"),
+        "boot must fail closed instead of creating an empty /etc upper when typed state is absent"
+    );
+    assert!(
         dracut_module.contains("inst_multiple -o blkid cp grep"),
         "the initramfs must carry the copy tool required for readonly config-state seeding"
     );

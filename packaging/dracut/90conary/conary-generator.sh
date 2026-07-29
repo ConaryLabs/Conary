@@ -74,6 +74,12 @@ read_current_generation() {
 }
 
 prepare_etc_state_base() {
+    ETC_STATE_SEED="${SYSROOT}/conary/etc-state/${CONARY_GEN}"
+    if [ ! -d "$ETC_STATE_SEED" ]; then
+        echo "conary: generation ${CONARY_GEN} is missing its exported /etc state seed" >&2
+        return 1
+    fi
+
     if [ "$CONARY_CARRIER" = "readonly" ]; then
         mkdir -p "${SYSROOT}/run"
         if ! grep -q " ${SYSROOT}/run " /proc/mounts 2>/dev/null; then
@@ -89,9 +95,8 @@ prepare_etc_state_base() {
 
     mkdir -p "$ETC_STATE_BASE"
     if [ "$CONARY_CARRIER" = "readonly" ]; then
-        ETC_STATE_SEED="${SYSROOT}/conary/etc-state/${CONARY_GEN}"
         ETC_STATE_RUNTIME="${ETC_STATE_BASE}/${CONARY_GEN}"
-        if [ -d "$ETC_STATE_SEED" ] && [ ! -e "$ETC_STATE_RUNTIME" ]; then
+        if [ ! -e "$ETC_STATE_RUNTIME" ]; then
             cp -a "$ETC_STATE_SEED" "$ETC_STATE_RUNTIME" || {
                 echo "conary: failed to seed readonly /etc state for generation ${CONARY_GEN}" >&2
                 return 1
@@ -175,7 +180,11 @@ prepare_etc_state_base || exit 1
 prepare_etc_lower || exit 1
 ETC_UPPER="${ETC_STATE_BASE}/${CONARY_GEN}"
 ETC_WORK="${ETC_STATE_BASE}/${CONARY_GEN}-work"
-mkdir -p "$ETC_UPPER" "$ETC_WORK"
+if [ ! -d "$ETC_UPPER" ]; then
+    echo "conary: generation ${CONARY_GEN} has no materialized /etc upper" >&2
+    exit 1
+fi
+mkdir -p "$ETC_WORK"
 mount -t overlay overlay "${SYSROOT}/etc" \
     -o "lowerdir=${ETC_LOWER},upperdir=${ETC_UPPER},workdir=${ETC_WORK}" || {
     echo "conary: failed to mount /etc overlay for generation ${CONARY_GEN}" >&2
