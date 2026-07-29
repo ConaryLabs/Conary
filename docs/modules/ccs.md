@@ -171,10 +171,11 @@ handles that empty basename as `/`, while
 associates the corresponding standard CPIO entry after RPM's exact optional
 `./` and `/` prefix removal. Conary preserves that entry through header/CPIO
 association and completeness validation as a typed source ownership anchor.
-It accepts only an unflagged directory without content-bearing metadata and a
-zero-content CPIO member. The selected root is the transaction container, not
-a deployable package path, so conversion consumes the anchor without emitting
-a CCS payload node or install/remove claim for `/`.
+It accepts only an unflagged directory with zero declared size, no
+content-bearing metadata, and a zero-content CPIO member. The selected root is
+the transaction container, not a deployable package path, so conversion
+consumes the anchor without emitting a CCS payload node or install/remove claim
+for `/`.
 
 RPM hardlink projection follows the transaction rule pinned at upstream commit
 `a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.

@@ -418,9 +418,10 @@ and
 contracts establish that header identity and its standard-CPIO association.
 
 The RPM parser retains the exact root entry long enough to prove parallel
-header-array validity, uniqueness, archive association, zero payload content,
-and completeness. It accepts only an unflagged directory without a digest,
-link target, file capabilities, IMA signature, or device-node identity.
+header-array validity, uniqueness, archive association, zero declared size,
+zero payload content, and completeness. It accepts only an unflagged directory
+without a digest, link target, file capabilities, IMA signature, or device-node
+identity.
 Conversion then consumes the source ownership anchor without creating a CCS
 payload node, installed file row, directory claim, or remove authority for
 `/`. Every non-root path still must become one canonical below-root deployment

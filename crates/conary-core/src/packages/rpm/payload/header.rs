@@ -234,6 +234,7 @@ fn validate_root_anchor(record: &HeaderRecord, flags: FileFlags) -> Result<()> {
         || record.link_target.is_some()
         || record.caps.is_some()
         || record.ima_signature.is_some()
+        || record.size != 0
         || record.rdev != 0
     {
         return Err(parse_error(
@@ -479,6 +480,15 @@ mod tests {
         linked.link_target = Some("usr".to_string());
         assert!(
             validate_root_anchor(&linked, FileFlags::empty())
+                .unwrap_err()
+                .to_string()
+                .contains("non-directory payload metadata")
+        );
+
+        let mut sized = root_record();
+        sized.size = 1;
+        assert!(
+            validate_root_anchor(&sized, FileFlags::empty())
                 .unwrap_err()
                 .to_string()
                 .contains("non-directory payload metadata")
