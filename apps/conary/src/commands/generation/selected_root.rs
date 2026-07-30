@@ -2,6 +2,8 @@
 
 //! Rollback-safe writable roots for generation-aware transaction execution.
 
+mod deferred_ima;
+
 use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::GenerationPublication;
@@ -15,6 +17,8 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use deferred_ima::DeferredImaAuthority;
+
 /// One isolated selected-root view backed by a single filesystem journal.
 ///
 /// The caller retains its SQLite transaction. This session never changes the
@@ -25,6 +29,7 @@ pub(crate) struct SelectedRootSession {
     selected_root: PathBuf,
     transaction: Option<LiveRootTransaction>,
     transaction_engine: TransactionEngine,
+    deferred_ima: DeferredImaAuthority,
 }
 
 impl SelectedRootSession {
@@ -88,10 +93,20 @@ impl SelectedRootSession {
                 selected_root.display()
             )
         })?;
-        if let Err(error) = materialize_current_root(conn, runtime_root, &selected_root) {
-            let _ = fs::remove_dir_all(&session_dir);
-            return Err(error);
-        }
+        let materialized = match materialize_current_root(conn, runtime_root, &selected_root) {
+            Ok(materialized) => materialized,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(error);
+            }
+        };
+        let deferred_ima = match DeferredImaAuthority::from_captured(&materialized) {
+            Ok(authority) => authority,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(error);
+            }
+        };
         let transaction =
             LiveRootTransaction::begin(runtime_root.root(), &selected_root, session_id, operation)?;
         Ok(Self {
@@ -99,6 +114,7 @@ impl SelectedRootSession {
             selected_root,
             transaction: Some(transaction),
             transaction_engine,
+            deferred_ima,
         })
     }
 
@@ -115,16 +131,21 @@ impl SelectedRootSession {
     /// Rollback persists this manifest with the changeset. Rebuilding from package
     /// rows alone would lose exact parent-directory and lifecycle-created state.
     pub(crate) fn capture_rollback_authority(&self) -> Result<CapturedSelectedRoot> {
-        scan_selected_root(&self.selected_root, self.transaction_engine.cas()).map_err(Into::into)
+        let mut captured = scan_selected_root(&self.selected_root, self.transaction_engine.cas())?;
+        self.deferred_ima.restore_into(&mut captured)?;
+        Ok(captured)
     }
 
     pub(crate) fn apply_install_files(&mut self, files: &[LiveRootFile]) -> Result<()> {
         self.transaction_mut()?.apply_install_files(files)?;
+        self.deferred_ima.record_overlay(files)?;
         Ok(())
     }
 
     pub(crate) fn apply_remove_paths(&mut self, paths: &[String]) -> Result<LiveRootStats> {
-        self.transaction_mut()?.apply_remove_paths(paths)
+        let stats = self.transaction_mut()?.apply_remove_paths(paths)?;
+        self.deferred_ima.remove_paths(paths);
+        Ok(stats)
     }
 
     /// Commit and capture the exact selected root while retaining its writable
@@ -138,7 +159,8 @@ impl SelectedRootSession {
             .context("selected-root transaction already completed")?
             .commit()?;
         let cas = CasStore::new(runtime_root.objects_dir())?;
-        let captured = scan_selected_root(&self.selected_root, &cas)?;
+        let mut captured = scan_selected_root(&self.selected_root, &cas)?;
+        self.deferred_ima.restore_into(&mut captured)?;
         Ok((self.selected_root.clone(), captured))
     }
 
@@ -158,7 +180,8 @@ impl SelectedRootSession {
                 .context("selected-root transaction already completed")?
                 .commit()?;
             let cas = CasStore::new(runtime_root.objects_dir())?;
-            let captured = scan_selected_root(&self.selected_root, &cas)?;
+            let mut captured = scan_selected_root(&self.selected_root, &cas)?;
+            self.deferred_ima.restore_into(&mut captured)?;
             persist_publication_candidate(runtime_root, debt, &self.session_dir, &captured)?;
             Ok(captured)
         })();
@@ -194,11 +217,11 @@ fn materialize_current_root(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
     selected_root: &Path,
-) -> Result<()> {
+) -> Result<CapturedSelectedRoot> {
     let cas = CasStore::new(runtime_root.objects_dir())?;
     if let Some(candidate) = latest_selected_root_candidate(conn, runtime_root)? {
-        return materialize_captured_selected_root(&candidate, &cas, selected_root)
-            .map_err(Into::into);
+        materialize_captured_selected_root(&candidate, &cas, selected_root)?;
+        return Ok(candidate);
     }
 
     if let Some(generation) =
@@ -207,18 +230,15 @@ fn materialize_current_root(
         let artifact = conary_core::generation::artifact::load_generation_artifact(
             &runtime_root.generation_path(generation),
         )?;
-        return materialize_captured_selected_root(
-            &CapturedSelectedRoot {
-                generation: artifact.generation_root,
-                state: artifact.mutable_state,
-            },
-            &cas,
-            selected_root,
-        )
-        .map_err(Into::into);
+        let captured = CapturedSelectedRoot {
+            generation: artifact.generation_root,
+            state: artifact.mutable_state,
+        };
+        materialize_captured_selected_root(&captured, &cas, selected_root)?;
+        return Ok(captured);
     }
 
-    conary_core::generation::builder::materialize_selected_root_from_db(
+    conary_core::generation::builder::materialize_selected_root_from_db_with_authority(
         conn,
         &runtime_root.objects_dir(),
         selected_root,

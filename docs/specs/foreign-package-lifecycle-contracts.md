@@ -387,6 +387,15 @@ regular-file content authority all survive. Immutable content and mutable
 state reference the same SHA-256 CAS used by package payloads. Generation,
 retry, bootstrap EROFS, and try-session materialization consume those typed
 manifests rather than reconstructing lifecycle effects from package rows.
+RPM IMA signatures remain typed `security.ima` payload authority across that
+staging boundary. Matching pinned RPM
+[`plugins/ima.c`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/plugins/ima.c#L60-L76),
+`EOPNOTSUPP`, or `EPERM` for real UID zero, is non-fatal only when applying
+that exact xattr; every other xattr/error pair remains fatal. A selected-root
+filesystem that cannot apply the signature does not erase it: capture restores
+the deferred value only while the regular-file SHA-256 and size are unchanged,
+so a lifecycle content mutation invalidates the signature before generation
+serialization.
 Generation-local config projection removes exactly one `/etc` prefix when it
 materializes the overlay upper; `/var` and `/srv` entries cannot enter that
 upper. Boot-carrier export copies both manifests, reconstructs `/var` and

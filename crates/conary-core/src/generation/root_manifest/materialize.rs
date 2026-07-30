@@ -11,7 +11,7 @@ use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
 use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
@@ -453,7 +453,11 @@ fn replace_xattrs(
         let c_name = CString::new(name.as_bytes()).expect("validated xattr name");
         let result = unsafe { libc::lremovexattr(c_path.as_ptr(), c_name.as_ptr()) };
         if result != 0 {
-            return Err(xattr_error(&format!("remove {name}"), path));
+            return Err(xattr_error(
+                &format!("remove {name}"),
+                path,
+                io::Error::last_os_error(),
+            ));
         }
     }
     for (name, value) in expected {
@@ -470,16 +474,37 @@ fn replace_xattrs(
             )
         };
         if result != 0 {
-            return Err(xattr_error(&format!("set {name}"), path));
+            let error = io::Error::last_os_error();
+            // Pinned RPM treats these two IMA application outcomes as a
+            // staging limitation, not a package failure. The typed payload
+            // node remains authority; selected-root capture carries the
+            // signature forward only while its content digest is unchanged.
+            let real_uid = unsafe { libc::getuid() };
+            if ima_staging_error_is_non_fatal(name, error.raw_os_error(), real_uid) {
+                continue;
+            }
+            return Err(xattr_error(&format!("set {name}"), path, error));
         }
     }
     Ok(())
 }
 
+const SECURITY_IMA_XATTR: &str = "security.ima";
+
+fn ima_staging_error_is_non_fatal(
+    name: &str,
+    raw_os_error: Option<i32>,
+    real_uid: libc::uid_t,
+) -> bool {
+    name == SECURITY_IMA_XATTR
+        && (raw_os_error == Some(libc::EOPNOTSUPP)
+            || (raw_os_error == Some(libc::EPERM) && real_uid == 0))
+}
+
 fn list_xattr_names(c_path: &CString, path: &Path) -> crate::Result<Vec<String>> {
     let length = unsafe { libc::llistxattr(c_path.as_ptr(), std::ptr::null_mut(), 0) };
     if length < 0 {
-        return Err(xattr_error("list", path));
+        return Err(xattr_error("list", path, io::Error::last_os_error()));
     }
     let length = usize::try_from(length).map_err(|_| {
         crate::Error::InvalidPath(format!(
@@ -497,7 +522,7 @@ fn list_xattr_names(c_path: &CString, path: &Path) -> crate::Result<Vec<String>>
             )
         };
         if actual < 0 {
-            return Err(xattr_error("list", path));
+            return Err(xattr_error("list", path, io::Error::last_os_error()));
         }
         bytes.truncate(usize::try_from(actual).map_err(|_| {
             crate::Error::InvalidPath(format!(
@@ -577,10 +602,37 @@ fn sync_directory(path: &Path) -> crate::Result<()> {
     Ok(())
 }
 
-fn xattr_error(operation: &str, path: &Path) -> crate::Error {
+fn xattr_error(operation: &str, path: &Path, error: io::Error) -> crate::Error {
     crate::Error::IoError(format!(
         "failed to {operation} xattrs for {}: {}",
         path.display(),
-        std::io::Error::last_os_error()
+        error
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SECURITY_IMA_XATTR, ima_staging_error_is_non_fatal};
+
+    #[test]
+    fn ima_staging_error_policy_matches_pinned_rpm_contract() {
+        let cases = [
+            (SECURITY_IMA_XATTR, libc::EOPNOTSUPP, 0, true),
+            (SECURITY_IMA_XATTR, libc::EOPNOTSUPP, 1000, true),
+            (SECURITY_IMA_XATTR, libc::EPERM, 0, true),
+            (SECURITY_IMA_XATTR, libc::EPERM, 1000, false),
+            (SECURITY_IMA_XATTR, libc::EACCES, 0, false),
+            ("security.capability", libc::EOPNOTSUPP, 0, false),
+            ("security.capability", libc::EPERM, 0, false),
+        ];
+
+        for (name, errno, real_uid, expected) in cases {
+            assert_eq!(
+                ima_staging_error_is_non_fatal(name, Some(errno), real_uid),
+                expected,
+                "name={name} errno={errno} real_uid={real_uid}"
+            );
+        }
+        assert!(!ima_staging_error_is_non_fatal(SECURITY_IMA_XATTR, None, 0));
+    }
 }
