@@ -37,6 +37,18 @@ impl InstallSemantics {
             version_scheme,
         }
     }
+
+    pub(super) const fn payload_sharing_policy(self) -> conary_core::payload::PayloadSharingPolicy {
+        match self.source {
+            PreparedSourceKind::NativePackage {
+                format: PackageFormatType::Rpm,
+            } => conary_core::payload::PayloadSharingPolicy::Rpm,
+            PreparedSourceKind::NativePackage {
+                format: PackageFormatType::Deb | PackageFormatType::Arch,
+            }
+            | PreparedSourceKind::Ccs => conary_core::payload::PayloadSharingPolicy::Exclusive,
+        }
+    }
 }
 
 pub(super) fn build_execution_mode(old_version: Option<&str>) -> ExecutionMode {
@@ -60,6 +72,26 @@ mod tests {
             ExecutionMode::Upgrade {
                 old_version: "1.0.0".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn source_semantics_own_payload_sharing_policy() {
+        use conary_core::payload::PayloadSharingPolicy;
+
+        assert_eq!(
+            InstallSemantics::native_package(PackageFormatType::Rpm).payload_sharing_policy(),
+            PayloadSharingPolicy::Rpm
+        );
+        for format in [PackageFormatType::Deb, PackageFormatType::Arch] {
+            assert_eq!(
+                InstallSemantics::native_package(format).payload_sharing_policy(),
+                PayloadSharingPolicy::Exclusive
+            );
+        }
+        assert_eq!(
+            InstallSemantics::ccs(VersionScheme::Conary).payload_sharing_policy(),
+            PayloadSharingPolicy::Exclusive
         );
     }
 }

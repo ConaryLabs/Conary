@@ -745,11 +745,13 @@ impl NativeGraphPayloadMutation for RestoreInstallPayload<'_, '_> {
             &[],
             prepared.semantics,
         )?;
-        let package_files =
-            super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?
-                .into_iter()
-                .filter(|file| !directory_plan.preserves_leaf(&file.path))
-                .collect::<Vec<_>>();
+        let all_package_files =
+            super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?;
+        let package_files = all_package_files
+            .iter()
+            .filter(|file| !directory_plan.preserves_leaf(&file.path))
+            .cloned()
+            .collect::<Vec<_>>();
         let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
         let retain_old_payload = self.native_transaction.requires_upgrade_payload_boundary();
         let old_trove_id = prepared
@@ -773,7 +775,7 @@ impl NativeGraphPayloadMutation for RestoreInstallPayload<'_, '_> {
                 replaced_trove_ids: &immediately_replaced,
             },
         )?;
-        let config_plan = super::super::config_files::prepare_config_install(
+        let mut config_plan = super::super::config_files::prepare_config_install(
             self.tx,
             self.selected_root.selected_root(),
             super::super::config_files::source_for_semantics(prepared.semantics),
@@ -781,7 +783,14 @@ impl NativeGraphPayloadMutation for RestoreInstallPayload<'_, '_> {
             old_trove_id,
             package_files,
         )?;
-        self.selected_root.apply_install_files(&config_plan.files)?;
+        let hardlink_references = super::super::execute::prepare_preserved_hardlink_references(
+            self.tx,
+            &directory_plan,
+            &all_package_files,
+            &mut config_plan.files,
+        )?;
+        self.selected_root
+            .apply_install_files_with_references(&config_plan.files, &hardlink_references)?;
         self.selected_root
             .apply_install_files(&through_symlink_files)?;
         self.selected_root

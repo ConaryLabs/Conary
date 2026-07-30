@@ -87,10 +87,11 @@ pub(crate) fn capture_install(
     );
     for trove_id in replaced_trove_ids {
         paths.extend(
-            FileEntry::find_by_trove(conn, *trove_id)?
-                .into_iter()
+            conary_core::db::models::PackagePayloadOwnership::load(conn, *trove_id)?
+                .entries()
+                .iter()
                 .filter(|file| is_etc_config_payload(&file.path, &file.node.source.kind))
-                .map(|file| file.path),
+                .map(|file| file.path.clone()),
         );
         paths.extend(
             ConfigFile::find_by_trove(conn, *trove_id)?
@@ -208,10 +209,11 @@ pub(crate) fn capture_removal(
     trove_id: i64,
     purge: bool,
 ) -> Result<GenerationConfigTransaction> {
-    let mut paths = FileEntry::find_by_trove(conn, trove_id)?
-        .into_iter()
+    let mut paths = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?
+        .entries()
+        .iter()
         .filter(|file| is_etc_config_payload(&file.path, &file.node.source.kind))
-        .map(|file| file.path)
+        .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>();
     paths.extend(
         ConfigFile::find_by_trove(conn, trove_id)?

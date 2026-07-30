@@ -84,7 +84,8 @@ pub enum RepositoryCapabilityKind {
 pub enum RepositoryRequirementKind {
     /// Hard runtime dependency (RPM Requires, Debian Depends).
     Depends,
-    /// Must be configured before the depending package (Debian Pre-Depends).
+    /// Source-defined strong installation ordering (Debian Pre-Depends or an
+    /// RPM install prerequirement).
     PreDepends,
     /// Optional / recommended (RPM Suggests, Debian Recommends, Arch optdepends).
     Optional,

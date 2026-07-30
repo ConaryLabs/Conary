@@ -2,7 +2,7 @@
 
 use super::{restore_snapshot, restore_snapshots};
 use crate::commands::installed_authority_snapshot::{
-    DirectoryAnchorSnapshot, DirectoryClaimSnapshot, ProvideSnapshot, TroveSnapshot,
+    DirectoryAnchorSnapshot, PayloadClaimSnapshot, ProvideSnapshot, TroveSnapshot,
 };
 use crate::commands::remove::snapshot_trove;
 use conary_core::capability::{CapabilityDeclaration, store_capabilities};
@@ -15,9 +15,9 @@ use conary_core::ccs::native_transaction::DebPackageState;
 use conary_core::db::models::{
     Changeset, CollectionMember, Component, ComponentDepType, ComponentDependency,
     ComponentProvide, ConfigBackup, ConfigFile, ConfigSource, ConfigStatus, ConvertedPackage,
-    DirectoryClaim, DirectoryClaimAnchorPolicy, FileEntry, Flavor, InstallReason, InstallSource,
-    InstalledCcsRemoveHook, InstalledFileCapability, InstalledNativeLifecycleBundle,
-    InstalledRequirementGroup, LabelEntry, NativeLifecycleResidualState, ProvideEntry, Repository,
+    FileEntry, Flavor, InstallReason, InstallSource, InstalledCcsRemoveHook,
+    InstalledFileCapability, InstalledNativeLifecycleBundle, InstalledRequirementGroup, LabelEntry,
+    NativeLifecycleResidualState, PayloadClaim, PayloadClaimAnchorPolicy, ProvideEntry, Repository,
     Trove, TroveType,
 };
 use conary_core::packages::InstalledPackageIdentity;
@@ -109,11 +109,13 @@ fn verified_symlink_directory_anchor_policy_round_trips_exactly() {
             component: None,
         }],
     );
-    snapshot.directory_claims = vec![DirectoryClaimSnapshot {
+    snapshot.payload_claims = vec![PayloadClaimSnapshot {
         path: "/lib".to_string(),
         node: claim_node,
+        content: None,
         component: None,
-        anchor_policy: DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
+        sharing_policy: conary_core::payload::PayloadSharingPolicy::Exclusive,
+        anchor_policy: PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
         materialization_target_path: None,
         claimed_at: INSTALLED_AT.to_string(),
         anchor: Some(DirectoryAnchorSnapshot {
@@ -123,7 +125,7 @@ fn verified_symlink_directory_anchor_policy_round_trips_exactly() {
         }),
     }];
     let mut invalid = snapshot.clone();
-    invalid.directory_claims[0].anchor_policy = DirectoryClaimAnchorPolicy::Directory;
+    invalid.payload_claims[0].anchor_policy = PayloadClaimAnchorPolicy::Directory;
     assert!(
         invalid
             .validate()
@@ -158,8 +160,8 @@ fn verified_symlink_directory_anchor_policy_round_trips_exactly() {
         PayloadNodeKind::Symlink { .. }
     ));
     assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/lib").unwrap()[0].anchor_policy,
-        DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+        PayloadClaim::find_by_path(&conn, "/lib").unwrap()[0].anchor_policy,
+        PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
     );
     assert_eq!(snapshot_trove(&conn, &restored).unwrap(), snapshot);
 }
@@ -206,9 +208,9 @@ fn rollback_reclaims_an_exact_peer_reanchored_symlink_without_unique_path_failur
     )
     .insert(&conn)
     .unwrap();
-    DirectoryClaim::new("/shared".to_string(), claimant_id, directory_node)
+    PayloadClaim::new_directory("/shared".to_string(), claimant_id, directory_node)
         .unwrap()
-        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
         .insert(&conn)
         .unwrap();
     let before = snapshot_trove(
@@ -242,13 +244,15 @@ fn rollback_reclaims_an_exact_peer_reanchored_symlink_without_unique_path_failur
             .trove_id,
         restored.id.unwrap()
     );
+    let mut expected_claimants = vec![claimant_id, restored.id.unwrap()];
+    expected_claimants.sort_unstable();
     assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/shared")
+        PayloadClaim::find_by_path(&conn, "/shared")
             .unwrap()
             .into_iter()
             .map(|claim| claim.trove_id)
             .collect::<Vec<_>>(),
-        vec![claimant_id]
+        expected_claimants
     );
     assert_eq!(snapshot_trove(&conn, &restored).unwrap(), before);
 }
@@ -309,9 +313,9 @@ fn rollback_restores_a_target_owned_only_by_an_rpm_through_symlink_edge() {
     )
     .insert(&conn)
     .unwrap();
-    DirectoryClaim::new("/shared".to_string(), rpm_claimant_id, directory_node)
+    PayloadClaim::new_directory("/shared".to_string(), rpm_claimant_id, directory_node)
         .unwrap()
-        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
         .with_materialization_target(Some("/real".to_string()))
         .insert(&conn)
         .unwrap();
@@ -332,7 +336,7 @@ fn rollback_restores_a_target_owned_only_by_an_rpm_through_symlink_edge() {
     assert_eq!(before.files.len(), 1);
     assert_eq!(before.files[0].path, "/real");
     assert_eq!(
-        before.directory_claims[0]
+        before.payload_claims[0]
             .materialization_target_path
             .as_deref(),
         Some("/real")
@@ -350,7 +354,7 @@ fn rollback_restores_a_target_owned_only_by_an_rpm_through_symlink_edge() {
     let restored = Trove::find_one_by_name(&conn, "rpm-claimant")
         .unwrap()
         .unwrap();
-    let restored_claim = DirectoryClaim::find_by_path(&conn, "/shared")
+    let restored_claim = PayloadClaim::find_by_path(&conn, "/shared")
         .unwrap()
         .into_iter()
         .find(|claim| claim.trove_id == restored.id.unwrap())
@@ -370,7 +374,7 @@ fn rollback_restores_a_target_owned_only_by_an_rpm_through_symlink_edge() {
 }
 
 #[test]
-fn cyclic_cross_directory_claims_restore_through_global_anchor_phase() {
+fn cyclic_cross_payload_claims_restore_through_global_anchor_phase() {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("conary.db");
     conary_core::db::init(&db_path).unwrap();
@@ -385,11 +389,13 @@ fn cyclic_cross_directory_claims_restore_through_global_anchor_phase() {
         })
         .unwrap()
     };
-    let claim = |path: &str, claim_mode: u32, anchor_mode: Option<u32>| DirectoryClaimSnapshot {
+    let claim = |path: &str, claim_mode: u32, anchor_mode: Option<u32>| PayloadClaimSnapshot {
         path: path.to_string(),
         node: directory_node(claim_mode),
+        content: None,
         component: None,
-        anchor_policy: DirectoryClaimAnchorPolicy::Directory,
+        sharing_policy: conary_core::payload::PayloadSharingPolicy::Exclusive,
+        anchor_policy: PayloadClaimAnchorPolicy::Directory,
         materialization_target_path: None,
         claimed_at: INSTALLED_AT.to_string(),
         anchor: anchor_mode.map(|mode| DirectoryAnchorSnapshot {
@@ -399,12 +405,12 @@ fn cyclic_cross_directory_claims_restore_through_global_anchor_phase() {
         }),
     };
     let mut package_a = TroveSnapshot::test_package("cycle-a", "1", Vec::new());
-    package_a.directory_claims = vec![
+    package_a.payload_claims = vec![
         claim("/opt", 0o700, None),
         claim("/usr", 0o755, Some(0o711)),
     ];
     let mut package_b = TroveSnapshot::test_package("cycle-b", "1", Vec::new());
-    package_b.directory_claims = vec![
+    package_b.payload_claims = vec![
         claim("/opt", 0o750, Some(0o775)),
         claim("/usr", 0o700, None),
     ];
@@ -431,7 +437,7 @@ fn cyclic_cross_directory_claims_restore_through_global_anchor_phase() {
         restored_b.id.unwrap()
     );
     for path in ["/opt", "/usr"] {
-        let claims = DirectoryClaim::find_by_path(&conn, path).unwrap();
+        let claims = PayloadClaim::find_by_path(&conn, path).unwrap();
         assert_eq!(claims.len(), 2, "{path}");
         assert!(
             claims
@@ -695,17 +701,17 @@ fn exact_installed_authority_round_trips_and_rejects_broken_relations() {
     .unwrap();
     let mut claim_component = Component::new(trove_id, "directory-claim".to_string());
     let claim_component_id = claim_component.insert(&conn).unwrap();
-    DirectoryClaim::new("/usr".to_string(), trove_id, directory_node.clone())
+    PayloadClaim::new_directory("/usr".to_string(), trove_id, directory_node.clone())
         .unwrap()
         .with_component(Some(claim_component_id))
         .insert(&conn)
         .unwrap();
-    DirectoryClaim::new("/usr".to_string(), peer_id, directory_node)
+    PayloadClaim::new_directory("/usr".to_string(), peer_id, directory_node)
         .unwrap()
         .insert(&conn)
         .unwrap();
     conn.execute(
-        "UPDATE directory_claims SET claimed_at = ?1 WHERE path = '/usr'",
+        "UPDATE payload_claims SET claimed_at = ?1 WHERE path = '/usr'",
         [INSTALLED_AT],
     )
     .unwrap();

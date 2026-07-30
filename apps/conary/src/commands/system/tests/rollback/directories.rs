@@ -2,7 +2,7 @@
 
 use super::*;
 use conary_core::db::models::{
-    DirectoryClaim, DirectoryClaimAnchorPolicy, ExistingDirectoryMaterialization,
+    ExistingDirectoryMaterialization, PayloadClaim, PayloadClaimAnchorPolicy,
 };
 use conary_core::generation::root_manifest::GenerationRootEntry;
 
@@ -26,7 +26,7 @@ fn raw_materialized_authority(conn: &rusqlite::Connection, path: &str) -> RawMat
     let claims = conn
         .prepare(
             "SELECT trove_id, component_id, anchor_policy, payload_node_json, claimed_at
-             FROM directory_claims WHERE path = ?1 ORDER BY trove_id",
+             FROM payload_claims WHERE path = ?1 ORDER BY trove_id",
         )
         .unwrap()
         .query_map([path], |row| {
@@ -95,9 +95,9 @@ async fn assert_additive_shared_directory_rollback(
     };
     let claim_node = resolved_node(PayloadNodeKind::Directory, libc::S_IFDIR | 0o755);
     let anchor_policy = if symlink_anchor {
-        DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+        PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
     } else {
-        DirectoryClaimAnchorPolicy::Directory
+        PayloadClaimAnchorPolicy::Directory
     };
     let materialization = if symlink_anchor {
         ExistingDirectoryMaterialization::PreserveExistingDirectoryOrSymlinkToDirectory
@@ -126,19 +126,39 @@ async fn assert_additive_shared_directory_rollback(
     } else {
         anchor_id
     };
-    DirectoryClaim::new(path.to_string(), claim_owner_id, claim_node.clone())
+    PayloadClaim::new_directory(path.to_string(), claim_owner_id, claim_node.clone())
         .unwrap()
         .with_anchor_policy(anchor_policy)
         .insert(&conn)
         .unwrap();
     if symlink_anchor {
-        assert!(
-            DirectoryClaim::find_by_path(&conn, path)
-                .unwrap()
-                .iter()
-                .all(|claim| claim.trove_id != anchor_id),
-            "a peer-owned verified symlink anchor does not need its own directory claim"
+        let claims = PayloadClaim::find_by_path(&conn, path).unwrap();
+        assert_eq!(
+            claims.len(),
+            2,
+            "the symlink owner and directory claimant retain independent authority"
         );
+        let symlink_claim = claims
+            .iter()
+            .find(|claim| claim.trove_id == anchor_id)
+            .unwrap();
+        assert_eq!(symlink_claim.anchor_policy, PayloadClaimAnchorPolicy::Exact);
+        assert!(matches!(
+            symlink_claim.node.source.kind,
+            PayloadNodeKind::Symlink { .. }
+        ));
+        let directory_claim = claims
+            .iter()
+            .find(|claim| claim.trove_id == claim_owner_id)
+            .unwrap();
+        assert_eq!(
+            directory_claim.anchor_policy,
+            PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+        );
+        assert!(matches!(
+            directory_claim.node.source.kind,
+            PayloadNodeKind::Directory
+        ));
     }
 
     let rollback_root =
@@ -209,8 +229,8 @@ async fn assert_additive_shared_directory_rollback(
         incoming.insert_or_replace(&conn, materialization).unwrap();
     }
     assert_eq!(
-        DirectoryClaim::find_by_path(&conn, path).unwrap().len(),
-        additions.len() + 1
+        PayloadClaim::find_by_path(&conn, path).unwrap().len(),
+        additions.len() + if symlink_anchor { 2 } else { 1 }
     );
     if !symlink_anchor || apply_through_symlink {
         let mut forward_root = rollback_root.clone();
@@ -311,7 +331,7 @@ async fn additive_batch_shared_directory_capture_is_unioned_once_and_rollback_is
 }
 
 #[tokio::test]
-async fn additive_deb_directory_claim_rollback_preserves_verified_symlink_materialization() {
+async fn additive_deb_payload_claim_rollback_preserves_verified_symlink_materialization() {
     assert_additive_shared_directory_rollback(
         "deb-symlink-directory",
         true,

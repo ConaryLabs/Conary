@@ -2,9 +2,16 @@
 
 mod common;
 
+use conary_core::ccs::native_lifecycle::{
+    LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation,
+    NativeLifecycleBundle, NativeLifecycleEntry, NativeLifecycleEntryKind, RpmCriticality,
+    RpmProgram, RpmRuntimeMetadata, ScriptletFidelity, SourceFormat, TransactionOrder,
+    VersionScheme as LifecycleVersionScheme,
+};
 use conary_core::db;
 use conary_core::db::models::{
-    ExistingDirectoryMaterialization, FileEntry, InstallReason, InstallSource, Trove, TroveType,
+    ExistingDirectoryMaterialization, FileEntry, InstallReason, InstallSource,
+    InstalledNativeLifecycleBundle, Trove, TroveType,
 };
 use conary_core::packages::InstalledPackageIdentity;
 use conary_core::payload::{
@@ -63,10 +70,6 @@ fn seed_orphan(
     name: &str,
     source: InstallSource,
 ) {
-    let payload = root.join(format!("usr/share/{name}/payload.txt"));
-    fs::create_dir_all(payload.parent().unwrap()).unwrap();
-    fs::write(&payload, name).unwrap();
-
     let version = if source.is_adopted() {
         "1.0.0-1"
     } else {
@@ -101,6 +104,19 @@ fn seed_orphan(
     trove.install_reason = InstallReason::Dependency;
     trove.selection_reason = Some("Required by removed-parent".to_string());
     let trove_id = trove.insert(conn).unwrap();
+    seed_orphan_payload(conn, root, name, trove_id);
+}
+
+fn seed_orphan_payload(
+    conn: &rusqlite::Connection,
+    root: &std::path::Path,
+    name: &str,
+    trove_id: i64,
+) {
+    let payload = root.join(format!("usr/share/{name}/payload.txt"));
+    fs::create_dir_all(payload.parent().unwrap()).unwrap();
+    fs::write(&payload, name).unwrap();
+
     let package_dir = format!("/usr/share/{name}");
     for path in ["/usr", "/usr/share", package_dir.as_str()] {
         directory_file_entry(path.to_string(), trove_id)
@@ -124,20 +140,87 @@ fn seed_orphan(
     .unwrap();
 }
 
-fn seed_broken_orphan(conn: &rusqlite::Connection, name: &str) {
+fn seed_broken_orphan(conn: &rusqlite::Connection, root: &std::path::Path, name: &str) {
+    let version = "1.0.0-1.fc44";
     let mut trove = Trove::new_with_source(
         name.to_string(),
-        "1.0.0".to_string(),
+        version.to_string(),
         TroveType::Package,
         InstallSource::Repository,
-        conary_core::repository::versioning::VersionScheme::Conary,
+        conary_core::repository::versioning::VersionScheme::Rpm,
     );
+    trove.architecture = Some("x86_64".to_string());
     trove.install_reason = InstallReason::Dependency;
     trove.selection_reason = Some("Required by removed-parent".to_string());
     let trove_id = trove.insert(conn).unwrap();
-    regular_file_entry("../escape".to_string(), b"escape", trove_id)
-        .insert(conn)
-        .unwrap();
+    seed_orphan_payload(conn, root, name, trove_id);
+
+    let bundle = missing_interpreter_remove_bundle(name, version);
+    let mut installed = InstalledNativeLifecycleBundle::new(trove_id, None, &bundle).unwrap();
+    installed.insert_or_replace(conn).unwrap();
+}
+
+fn missing_interpreter_remove_bundle(package: &str, version: &str) -> NativeLifecycleBundle {
+    let body = "exit 0\n".to_string();
+    let entry = NativeLifecycleEntry {
+        id: "rpm:%preun".to_string(),
+        native_slot: "%preun".to_string(),
+        kind: NativeLifecycleEntryKind::Executable,
+        phase: LifecyclePath::PreRemove,
+        lifecycle_paths: vec![LifecyclePath::PreRemove.as_str().to_string()],
+        interpreter: "/definitely/missing/conary-hook".to_string(),
+        interpreter_args: Vec::new(),
+        body_sha256: conary_core::hash::sha256_prefixed(body.as_bytes()),
+        body,
+        body_encoding: None,
+        native_invocation: NativeInvocation::default(),
+        transaction_order: TransactionOrder {
+            position: "pre-remove".to_string(),
+            ..TransactionOrder::default()
+        },
+        timeout_ms: 30_000,
+        sandbox: None,
+        capabilities: Vec::new(),
+        evidence_digest: None,
+        source_evidence_refs: Vec::new(),
+        rpm_trigger: None,
+        rpm_runtime: Some(RpmRuntimeMetadata {
+            program: RpmProgram::External,
+            body_transforms: Vec::new(),
+            critical: true,
+            criticality: RpmCriticality::SlotDefault,
+            raw_flags: 0,
+            unknown_flags: 0,
+            install_prefixes: Vec::new(),
+            macro_context: Default::default(),
+            header_context: Default::default(),
+            package_rpm_version: None,
+        }),
+        rpm_sysusers: None,
+        deb_maintainer: None,
+        arch_install: None,
+        arch_hook: None,
+        residual_lifecycle: None,
+    };
+    NativeLifecycleBundle {
+        schema: NATIVE_LIFECYCLE_SCHEMA_V1.to_string(),
+        schema_revision: NATIVE_LIFECYCLE_SCHEMA_REVISION,
+        source_format: SourceFormat::Rpm,
+        source_family: "fedora-rhel".to_string(),
+        source_profile: Some("fedora-44".to_string()),
+        source_release: Some("44".to_string()),
+        source_arch: Some("x86_64".to_string()),
+        source_package: package.to_string(),
+        source_version: version.to_string(),
+        source_checksum: None,
+        version_scheme: LifecycleVersionScheme::Rpm,
+        conversion_tool: "test".to_string(),
+        conversion_tool_version: "1".to_string(),
+        conversion_policy: "autoremove-preflight-fixture".to_string(),
+        evidence_digest: None,
+        scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
+        entries: vec![entry],
+    }
 }
 
 #[test]
@@ -237,7 +320,7 @@ fn autoremove_preflight_failure_leaves_all_orphans_unchanged() {
     let db_path = root.path().join("conary.db");
     db::init(&db_path).unwrap();
     let conn = db::open(&db_path).unwrap();
-    seed_broken_orphan(&conn, "broken-orphan");
+    seed_broken_orphan(&conn, root.path(), "broken-orphan");
     seed_orphan(
         &conn,
         root.path(),
@@ -268,10 +351,7 @@ fn autoremove_preflight_failure_leaves_all_orphans_unchanged() {
         text.contains("autoremove lifecycle execution preflight failed"),
         "{text}"
     );
-    assert!(
-        text.contains("native transaction path '../escape' escapes its archive root"),
-        "{text}"
-    );
+    assert!(text.contains("at stage PackagePreRemove"), "{text}");
     let conn = db::open(&db_path).unwrap();
     assert!(
         Trove::find_one_by_name(&conn, "broken-orphan")

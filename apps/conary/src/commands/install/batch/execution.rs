@@ -308,11 +308,13 @@ where
                 &package.relation_removals,
                 semantics,
             )?;
-            let package_files =
-                super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?
-                    .into_iter()
-                    .filter(|file| !directory_plan.preserves_leaf(&file.path))
-                    .collect::<Vec<_>>();
+            let all_package_files =
+                super::super::live_root_files_from_stored_files(self.cas, &resolved_files)?;
+            let package_files = all_package_files
+                .iter()
+                .filter(|file| !directory_plan.preserves_leaf(&file.path))
+                .cloned()
+                .collect::<Vec<_>>();
             let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
             let retain_for_lifecycle = self
                 .retain_for_lifecycle_by_pkg
@@ -339,7 +341,7 @@ where
             self.config_transaction
                 .entries
                 .append(&mut captured.entries);
-            let plan = super::super::config_files::prepare_config_install(
+            let mut plan = super::super::config_files::prepare_config_install(
                 self.tx,
                 self.selected_root,
                 super::super::config_files::source_for_semantics(package.semantics),
@@ -347,7 +349,14 @@ where
                 old_trove_id,
                 package_files,
             )?;
-            self.root_mutation.apply_install_files(&plan.files)?;
+            let hardlink_references = super::super::execute::prepare_preserved_hardlink_references(
+                self.tx,
+                &directory_plan,
+                &all_package_files,
+                &mut plan.files,
+            )?;
+            self.root_mutation
+                .apply_install_files_with_references(&plan.files, &hardlink_references)?;
             self.root_mutation
                 .apply_install_files(&through_symlink_files)?;
             self.root_mutation.apply_remove_paths(&plan.remove_paths)?;

@@ -12,15 +12,14 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 22 of the current-only schema epoch.
+/// Revision 23 of the current-only schema epoch.
 ///
-/// Revision 22 binds every repository conversion to the exact normalized
-/// repository-provide projection signed into its CCS authority. It retains
-/// revision 21's exact public `source_profile`, package release, source-native
-/// architecture, Debian Multi-Arch behavior, typed provider range boundaries,
-/// and identity indexes. Pre-alpha databases from revision 21 must be rebuilt; no
-/// compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 22;
+/// Revision 23 replaces directory-only ownership with one exact payload claim
+/// per package path plus a single selected-root materialization anchor. It
+/// retains revision 22's signed repository-provide projection. Pre-alpha
+/// databases from revision 22 must be rebuilt; no compatibility migration is
+/// provided.
+pub const SCHEMA_VERSION: i32 = 23;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 

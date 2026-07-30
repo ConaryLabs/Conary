@@ -9,8 +9,8 @@ use conary_core::ccs::native_lifecycle::{
 };
 use conary_core::ccs::{BuildResult, CcsManifest, ComponentData, FileEntry as CcsFileEntry};
 use conary_core::db::models::{
-    DirectoryClaim, DirectoryClaimAnchorPolicy, FileEntry as DbFileEntry, GenerationPublication,
-    Trove, TroveType,
+    FileEntry as DbFileEntry, GenerationPublication, PayloadClaim, PayloadClaimAnchorPolicy, Trove,
+    TroveType,
 };
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
@@ -169,19 +169,19 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
             SourceFormat::Rpm,
             VersionScheme::Rpm,
             0o700,
-            DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
+            PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
         ),
         (
             SourceFormat::Deb,
             VersionScheme::Debian,
             0o755,
-            DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
+            PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
         ),
         (
             SourceFormat::Arch,
             VersionScheme::Arch,
             0o755,
-            DirectoryClaimAnchorPolicy::Directory,
+            PayloadClaimAnchorPolicy::Directory,
         ),
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -250,7 +250,7 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
             .unwrap();
         assert_eq!(materialized.trove_id, anchor_trove_id);
         assert_eq!(materialized.node.source.mode, libc::S_IFDIR | expected_mode);
-        let claim = DirectoryClaim::find_by_path(&conn, "/shared")
+        let claim = PayloadClaim::find_by_path(&conn, "/shared")
             .unwrap()
             .into_iter()
             .find(|claim| claim.trove_id == installed_id)

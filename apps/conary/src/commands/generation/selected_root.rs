@@ -142,6 +142,17 @@ impl SelectedRootSession {
         Ok(())
     }
 
+    pub(crate) fn apply_install_files_with_references(
+        &mut self,
+        files: &[LiveRootFile],
+        references: &[LiveRootFile],
+    ) -> Result<()> {
+        self.transaction_mut()?
+            .apply_install_files_with_references(files, references)?;
+        self.deferred_ima.record_overlay(files)?;
+        Ok(())
+    }
+
     pub(crate) fn apply_remove_paths(&mut self, paths: &[String]) -> Result<LiveRootStats> {
         let stats = self.transaction_mut()?.apply_remove_paths(paths)?;
         self.deferred_ima.remove_paths(paths);

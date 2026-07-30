@@ -130,31 +130,7 @@ fn print_remove_summary(remove_result: &RemoveInnerResult, stats: &crate::comman
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use tempfile::TempDir;
-
-    fn regular_file_entry(
-        db_path: &std::path::Path,
-        path: &str,
-        content: &[u8],
-        trove_id: i64,
-    ) -> conary_core::db::models::FileEntry {
-        let runtime_root =
-            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
-        let hash = conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
-            .unwrap()
-            .store(content)
-            .unwrap();
-        conary_core::db::models::FileEntry::new(
-            path.to_string(),
-            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o755)).unwrap(),
-            Some(PayloadContentAuthority {
-                sha256: hash,
-                size: content.len() as u64,
-            }),
-            trove_id,
-        )
-    }
 
     #[tokio::test]
     async fn no_current_generation_remove_publishes_without_mutating_ambient_root() {
@@ -290,8 +266,20 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Conary,
         );
         let trove_id = trove.insert(&conn).unwrap();
-        let mut file = regular_file_entry(&db_path, "../escape", b"fixture", trove_id);
-        file.insert(&conn).unwrap();
+        let file = crate::commands::test_helpers::insert_test_regular_file_with_parents(
+            &conn,
+            &db_path,
+            "/usr/bin/fixture",
+            b"fixture",
+            0o755,
+            trove_id,
+            None,
+        );
+        let runtime_root =
+            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
+        let cas = conary_core::filesystem::CasStore::new(runtime_root.objects_dir()).unwrap();
+        let content_hash = &file.content.as_ref().unwrap().sha256;
+        std::fs::remove_file(cas.hash_to_path(content_hash).unwrap()).unwrap();
         drop(conn);
 
         let err = cmd_remove(
@@ -306,7 +294,11 @@ mod tests {
         .unwrap_err();
         let error_chain = format!("{err:#}");
 
-        assert!(error_chain.contains("escape"), "{error_chain}");
+        assert!(
+            error_chain.contains("failed to retrieve CAS object")
+                && error_chain.contains("/usr/bin/fixture"),
+            "{error_chain}"
+        );
         let conn = conary_core::db::open(&db_path).unwrap();
         let changesets: i64 = conn
             .query_row("SELECT COUNT(*) FROM changesets", [], |row| row.get(0))

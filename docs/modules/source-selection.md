@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 21
+last_updated: 2026-07-30
+revision: 23
 summary: Document exact profile-owned source policy, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -304,6 +304,15 @@ from the right side as RPM does. The source-pinned Fedora 44 corpus under
 `crates/conary-core/tests/fixtures/rpm/` proves real repository expressions
 without granting those packages exceptional behavior.
 
+RPM-MD prerequisite authority is part of that same signed dependency record.
+Pinned `createrepo_c`
+[`cr_xml_dump_primary()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump_primary.c#L80-L128)
+emits `pre="1"` only for a Requires entry whose RPM dependency is an install
+prerequisite. The Fedora parser preserves that marker as the typed
+`PreDepends` relation; it does not infer order from a capability or package
+name. Direct RPM parsing projects the corresponding header sense flags through
+the same relation kind.
+
 RPM primary-file authority is derived from `createrepo_c`
 `5cf41fe5d703901d78078ed18c67ab667e446c1a`: its
 [`cr_xml_dump_files()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump.c#L175-L225)
@@ -443,7 +452,7 @@ directory are explicit normalized exclusions under both their lexical and
 resolved paths, so path aliases cannot make the CAS or database inputs to their
 own capture. A runtime root resolving to `/` fails closed.
 
-Persisted package file anchors and directory claims partition that exact scan.
+Persisted package file anchors and payload claims partition that exact scan.
 Package-owned paths retain their owner and claim graph while their materialized
 node/content authority is reconciled to the one global scan, preserving xattrs
 and hardlinks even when an inode group crosses ownership boundaries. Every

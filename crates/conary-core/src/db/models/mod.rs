@@ -33,7 +33,6 @@ mod converted;
 mod debian_debconf_state;
 mod delta;
 mod derived;
-mod directory_claim;
 mod distro_pin;
 mod download_stats;
 mod file_entry;
@@ -50,6 +49,7 @@ mod metadata;
 mod native_lifecycle_residual_state;
 mod native_publication;
 mod package_payload_ownership;
+mod payload_claim;
 mod provenance;
 mod provide_entry;
 mod redirect;
@@ -87,7 +87,6 @@ pub use converted::{
 pub use debian_debconf_state::DebianDebconfState;
 pub use delta::{DeltaStats, PackageDelta};
 pub use derived::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
-pub use directory_claim::{DirectoryClaim, DirectoryClaimAnchorPolicy};
 pub use distro_pin::{DistroPin, SystemAffinity};
 pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
 pub use file_entry::{ExistingDirectoryMaterialization, FileEntry};
@@ -111,6 +110,7 @@ pub use native_publication::{
     NATIVE_NOARCH, NativePackagePublication, NativePublicationStatus, normalize_native_architecture,
 };
 pub use package_payload_ownership::{PackagePayloadEntry, PackagePayloadOwnership};
+pub use payload_claim::{PayloadClaim, PayloadClaimAnchorPolicy};
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};

@@ -12,12 +12,28 @@ use std::path::Path;
 
 pub(crate) trait TransactionRootMutation {
     fn apply_install_files(&mut self, files: &[crate::commands::LiveRootFile]) -> Result<()>;
+    fn apply_install_files_with_references(
+        &mut self,
+        files: &[crate::commands::LiveRootFile],
+        references: &[crate::commands::LiveRootFile],
+    ) -> Result<()>;
     fn apply_remove_paths(&mut self, paths: &[String]) -> Result<crate::commands::LiveRootStats>;
 }
 
 impl TransactionRootMutation for crate::commands::LiveRootTransaction {
     fn apply_install_files(&mut self, files: &[crate::commands::LiveRootFile]) -> Result<()> {
         crate::commands::LiveRootTransaction::apply_install_files(self, files)?;
+        Ok(())
+    }
+
+    fn apply_install_files_with_references(
+        &mut self,
+        files: &[crate::commands::LiveRootFile],
+        references: &[crate::commands::LiveRootFile],
+    ) -> Result<()> {
+        crate::commands::LiveRootTransaction::apply_install_files_with_references(
+            self, files, references,
+        )?;
         Ok(())
     }
 
@@ -29,6 +45,14 @@ impl TransactionRootMutation for crate::commands::LiveRootTransaction {
 impl TransactionRootMutation for crate::commands::generation::selected_root::SelectedRootSession {
     fn apply_install_files(&mut self, files: &[crate::commands::LiveRootFile]) -> Result<()> {
         Self::apply_install_files(self, files)
+    }
+
+    fn apply_install_files_with_references(
+        &mut self,
+        files: &[crate::commands::LiveRootFile],
+        references: &[crate::commands::LiveRootFile],
+    ) -> Result<()> {
+        Self::apply_install_files_with_references(self, files, references)
     }
 
     fn apply_remove_paths(&mut self, paths: &[String]) -> Result<crate::commands::LiveRootStats> {

@@ -6,7 +6,7 @@ use crate::commands::installed_authority_snapshot::{
     MaterializedDirectorySnapshot, StableTroveIdentitySnapshot,
 };
 use conary_core::Error;
-use conary_core::db::models::{Component, DirectoryClaim, FileEntry, Trove};
+use conary_core::db::models::{Component, FileEntry, PayloadClaim, Trove};
 use rusqlite::Transaction;
 
 pub(in crate::commands::system) fn restore_materialized_directories(
@@ -43,7 +43,7 @@ pub(in crate::commands::system) fn restore_materialized_directories(
                 })
             })
             .transpose()?;
-        let claims = DirectoryClaim::find_retaining_path(tx, &snapshot.path)?;
+        let claims = PayloadClaim::find_retaining_path(tx, &snapshot.path)?;
         if claims.is_empty() {
             return Err(Error::ConflictError(format!(
                 "rollback materialized directory '{}' has no directory-claim authority",
@@ -53,7 +53,7 @@ pub(in crate::commands::system) fn restore_materialized_directories(
         for claim in &claims {
             if !claim
                 .anchor_policy
-                .accepts(&snapshot.materialized_node.source.kind)
+                .accepts_kind(&snapshot.materialized_node.source.kind)
             {
                 return Err(Error::ConflictError(format!(
                     "rollback materialized directory '{}' is incompatible with claim policy '{}' for trove {}",

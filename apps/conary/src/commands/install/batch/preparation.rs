@@ -16,6 +16,7 @@ pub(super) enum BatchConflict {
         path: String,
         package1: String,
         package2: String,
+        reason: String,
     },
 }
 
@@ -26,10 +27,11 @@ impl fmt::Display for BatchConflict {
                 path,
                 package1,
                 package2,
+                reason,
             } => write!(
                 f,
-                "{}: conflict between {} and {}",
-                path, package1, package2
+                "{}: conflict between {} and {}: {}",
+                path, package1, package2, reason
             ),
         }
     }
@@ -131,26 +133,61 @@ impl BatchInstaller<'_> {
         packages: &[PreparedPackage],
         _conn: &Connection,
     ) -> Result<BatchPlan> {
-        let mut all_paths = HashMap::<String, (String, bool)>::new();
+        let mut all_paths = HashMap::<
+            String,
+            (
+                String,
+                conary_core::payload::PayloadSharingPolicy,
+                conary_core::payload::PayloadNode,
+                Option<conary_core::payload::PayloadContentAuthority>,
+            ),
+        >::new();
         let mut conflicts = Vec::new();
         let mut total_files = 0;
 
         for pkg in packages {
             for file in &pkg.extracted_files {
+                let incoming_policy = pkg.semantics.payload_sharing_policy();
                 let incoming_is_directory = matches!(
                     file.node.kind,
                     conary_core::payload::PayloadNodeKind::Directory
                 );
-                if let Some((other_package, other_is_directory)) = all_paths.get(&file.path) {
-                    if !(incoming_is_directory && *other_is_directory) {
+                if let Some((other_package, other_policy, other_node, other_content)) =
+                    all_paths.get(&file.path)
+                {
+                    let other_is_directory = matches!(
+                        other_node.kind,
+                        conary_core::payload::PayloadNodeKind::Directory
+                    );
+                    let comparison = if incoming_is_directory && other_is_directory {
+                        Ok(())
+                    } else {
+                        incoming_policy.compare(
+                            *other_policy,
+                            &file.node,
+                            file.content_authority.as_ref(),
+                            other_node,
+                            other_content.as_ref(),
+                        )
+                    };
+                    if let Err(reason) = comparison {
                         conflicts.push(BatchConflict::CrossPackageConflict {
                             path: file.path.clone(),
                             package1: other_package.clone(),
                             package2: pkg.name.clone(),
+                            reason: reason.to_string(),
                         });
                     }
                 } else {
-                    all_paths.insert(file.path.clone(), (pkg.name.clone(), incoming_is_directory));
+                    all_paths.insert(
+                        file.path.clone(),
+                        (
+                            pkg.name.clone(),
+                            incoming_policy,
+                            file.node.clone(),
+                            file.content_authority.clone(),
+                        ),
+                    );
                 }
                 total_files += 1;
             }

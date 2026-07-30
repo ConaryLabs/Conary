@@ -124,7 +124,23 @@ impl LiveRootTransaction {
     }
 
     pub(crate) fn apply_install_files(&mut self, files: &[LiveRootFile]) -> Result<LiveRootStats> {
-        preflight_install_files(files)?;
+        self.apply_install_files_with_references(files, &[])
+    }
+
+    /// Apply payload mutations whose hardlink graph may target exact,
+    /// already-materialized regular files.
+    ///
+    /// References participate in graph and content validation but are never
+    /// backed up, rewritten, or reported as mutations.
+    pub(crate) fn apply_install_files_with_references(
+        &mut self,
+        files: &[LiveRootFile],
+        references: &[LiveRootFile],
+    ) -> Result<LiveRootStats> {
+        preflight_install_files(files, references)?;
+        for reference in references {
+            verify_preserved_reference(&self.root, reference)?;
+        }
         let mut stats = LiveRootStats::default();
         let mut directories = files
             .iter()
@@ -135,7 +151,10 @@ impl LiveRootTransaction {
             self.apply_directory(file, &mut stats)?;
         }
 
-        let mut completed = BTreeSet::new();
+        let mut completed = references
+            .iter()
+            .map(|reference| reference.path.as_str())
+            .collect::<BTreeSet<_>>();
         for file in files.iter().filter(|file| {
             !matches!(
                 file.node.source.kind,
@@ -501,9 +520,9 @@ fn validate_tx_uuid(tx_uuid: &str) -> Result<()> {
     Ok(())
 }
 
-fn preflight_install_files(files: &[LiveRootFile]) -> Result<()> {
+fn preflight_install_files(files: &[LiveRootFile], references: &[LiveRootFile]) -> Result<()> {
     let mut by_path = BTreeMap::new();
-    for file in files {
+    for file in references.iter().chain(files) {
         target_path(Path::new("/"), &file.path)?;
         file.node
             .validate()
@@ -523,6 +542,28 @@ fn preflight_install_files(files: &[LiveRootFile]) -> Result<()> {
         }
         if by_path.insert(file.path.as_str(), file).is_some() {
             bail!("payload path {} is declared more than once", file.path);
+        }
+    }
+
+    let hardlink_targets = files
+        .iter()
+        .filter_map(|file| match &file.node.source.kind {
+            PayloadNodeKind::Hardlink { target, .. } => Some(target.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for reference in references {
+        if !matches!(reference.node.source.kind, PayloadNodeKind::Regular { .. }) {
+            bail!(
+                "preserved hardlink reference {} is not a regular payload node",
+                reference.path
+            );
+        }
+        if !hardlink_targets.contains(reference.path.as_str()) {
+            bail!(
+                "preserved payload reference {} is not targeted by this hardlink graph",
+                reference.path
+            );
         }
     }
 
@@ -592,6 +633,49 @@ fn preflight_install_files(files: &[LiveRootFile]) -> Result<()> {
                 target
             );
         }
+    }
+    Ok(())
+}
+
+fn verify_preserved_reference(root: &Path, reference: &LiveRootFile) -> Result<()> {
+    let path = target_path(root, &reference.path)?;
+    let metadata = fs::symlink_metadata(&path).with_context(|| {
+        format!(
+            "preserved hardlink target {} is unavailable",
+            reference.path
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        bail!(
+            "preserved hardlink target {} is not a regular file",
+            reference.path
+        );
+    }
+    let authority = reference.content.authority().with_context(|| {
+        format!(
+            "preserved hardlink target {} has no content authority",
+            reference.path
+        )
+    })?;
+    if metadata.len() != authority.size {
+        bail!(
+            "preserved hardlink target {} size changed: expected {}, got {}",
+            reference.path,
+            authority.size,
+            metadata.len()
+        );
+    }
+    let mut input = File::open(&path)
+        .with_context(|| format!("open preserved hardlink target {}", reference.path))?;
+    let digest = conary_core::hash::sha256_reader_hex(&mut input)
+        .with_context(|| format!("hash preserved hardlink target {}", reference.path))?;
+    if digest != authority.sha256 {
+        bail!(
+            "preserved hardlink target {} digest changed: expected {}, got {}",
+            reference.path,
+            authority.sha256,
+            digest
+        );
     }
     Ok(())
 }

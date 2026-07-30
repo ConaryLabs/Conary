@@ -3,10 +3,10 @@
 use super::{
     CcsRemoveHookSnapshot, CollectionMemberSnapshot, ComponentDependencySnapshot,
     ComponentProvideSnapshot, ComponentSnapshot, ConfigBackupSnapshot, ConfigFileSnapshot,
-    DerivedPackageReferenceSnapshot, DirectoryAnchorSnapshot, DirectoryClaimSnapshot, FileSnapshot,
-    FlavorSnapshot, InstalledConversionSnapshot, InstalledFileCapabilitySnapshot,
-    InstalledRequirementSnapshot, MaterializedDirectorySnapshot, NativeLifecycleSnapshot,
-    PackageCapabilitySnapshot, ProvenanceSnapshot, ProvideSnapshot, StableTroveIdentitySnapshot,
+    DerivedPackageReferenceSnapshot, DirectoryAnchorSnapshot, FileSnapshot, FlavorSnapshot,
+    InstalledConversionSnapshot, InstalledFileCapabilitySnapshot, InstalledRequirementSnapshot,
+    MaterializedDirectorySnapshot, NativeLifecycleSnapshot, PackageCapabilitySnapshot,
+    PayloadClaimSnapshot, ProvenanceSnapshot, ProvideSnapshot, StableTroveIdentitySnapshot,
     TroveSnapshot,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -14,9 +14,9 @@ use conary_core::capability::load_capabilities;
 use conary_core::ccs::manifest::FileCapability;
 use conary_core::db::models::{
     CollectionMember, Component, ComponentDependency, ComponentProvide, ConfigBackup, ConfigFile,
-    ConvertedArtifactKind, ConvertedPackage, DirectoryClaim, DirectoryClaimAnchorPolicy, FileEntry,
-    Flavor, InstalledFileCapability, InstalledNativeLifecycleBundle, InstalledRequirementGroup,
-    ProvideEntry, Trove,
+    ConvertedArtifactKind, ConvertedPackage, FileEntry, Flavor, InstalledFileCapability,
+    InstalledNativeLifecycleBundle, InstalledRequirementGroup, PayloadClaim,
+    PayloadClaimAnchorPolicy, ProvideEntry, Trove,
 };
 use conary_core::payload::PayloadNodeKind;
 use rusqlite::{Connection, OptionalExtension};
@@ -78,7 +78,7 @@ pub(crate) fn capture_materialized_directory_snapshots(
                 Ok(component.name)
             })
             .transpose()?;
-        let claims = DirectoryClaim::find_retaining_path(conn, &directory.path)?;
+        let claims = PayloadClaim::find_retaining_path(conn, &directory.path)?;
         if claims.is_empty() {
             bail!(
                 "pre-mutation materialized directory '{}' has no directory-claim authority",
@@ -86,7 +86,10 @@ pub(crate) fn capture_materialized_directory_snapshots(
             );
         }
         for claim in &claims {
-            if !claim.anchor_policy.accepts(&directory.node.source.kind) {
+            if !claim
+                .anchor_policy
+                .accepts_kind(&directory.node.source.kind)
+            {
                 bail!(
                     "pre-mutation materialized directory '{}' is incompatible with claim policy '{}' for trove {}",
                     directory.path,
@@ -96,9 +99,9 @@ pub(crate) fn capture_materialized_directory_snapshots(
             }
         }
         let anchor_policy = match directory.node.source.kind {
-            PayloadNodeKind::Directory => DirectoryClaimAnchorPolicy::Directory,
+            PayloadNodeKind::Directory => PayloadClaimAnchorPolicy::Directory,
             PayloadNodeKind::Symlink { .. } => {
-                DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+                PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
             }
             _ => unreachable!("materialized node kind was checked above"),
         };
@@ -140,8 +143,8 @@ pub(crate) fn capture_trove_snapshot(
         .clone()
         .ok_or_else(|| anyhow!("installed trove '{}' has no installed_at", trove.name))?;
     let (components, component_names) = capture_components(conn, trove_id)?;
-    let directory_claims = capture_directory_claims(conn, trove_id, files, &component_names)?;
-    let file_snapshots = capture_files(files, &component_names, &directory_claims)?;
+    let payload_claims = capture_payload_claims(conn, trove_id, files, &component_names)?;
+    let file_snapshots = capture_files(files, &component_names, &payload_claims)?;
     let snapshot = TroveSnapshot {
         name: trove.name.clone(),
         version: trove.version.clone(),
@@ -188,10 +191,10 @@ pub(crate) fn capture_trove_snapshot(
             })
             .collect(),
         provides: capture_provides(conn, trove_id)?,
-        config_files: capture_config_files(conn, trove_id, files)?,
+        config_files: capture_config_files(conn, trove_id)?,
         package_capabilities: capture_package_capabilities(conn, trove_id)?,
         installed_file_capabilities: capture_file_capabilities(conn, trove_id)?,
-        directory_claims,
+        payload_claims,
         native_lifecycle: capture_native_lifecycle(conn, trove_id)?,
         ccs_remove_hook: ccs_remove_hook.map(|hook| CcsRemoveHookSnapshot {
             script: hook.script.clone(),
@@ -264,9 +267,9 @@ fn capture_components(
 fn capture_files(
     files: &[FileEntry],
     component_names: &BTreeMap<i64, String>,
-    directory_claims: &[DirectoryClaimSnapshot],
+    payload_claims: &[PayloadClaimSnapshot],
 ) -> Result<Vec<FileSnapshot>> {
-    let target_paths = directory_claims
+    let target_paths = payload_claims
         .iter()
         .filter_map(|claim| claim.materialization_target_path.as_deref())
         .collect::<std::collections::BTreeSet<_>>();
@@ -306,12 +309,12 @@ fn capture_files(
     Ok(snapshots)
 }
 
-fn capture_directory_claims(
+fn capture_payload_claims(
     conn: &Connection,
     trove_id: i64,
     files: &[FileEntry],
     component_names: &BTreeMap<i64, String>,
-) -> Result<Vec<DirectoryClaimSnapshot>> {
+) -> Result<Vec<PayloadClaimSnapshot>> {
     let anchors = files
         .iter()
         .filter(|file| {
@@ -322,7 +325,7 @@ fn capture_directory_claims(
         })
         .map(|file| (file.path.as_str(), file))
         .collect::<BTreeMap<_, _>>();
-    DirectoryClaim::find_by_trove(conn, trove_id)?
+    PayloadClaim::find_by_trove(conn, trove_id)?
         .into_iter()
         .map(|claim| {
             let claimed_at = claim.claimed_at.ok_or_else(|| {
@@ -343,8 +346,9 @@ fn capture_directory_claims(
                     })
                 })
                 .transpose()?;
-            let anchor = anchors
-                .get(claim.path.as_str())
+            let anchor = matches!(claim.node.source.kind, PayloadNodeKind::Directory)
+                .then(|| anchors.get(claim.path.as_str()))
+                .flatten()
                 .map(|file| -> Result<DirectoryAnchorSnapshot> {
                     let installed_at = file.installed_at.clone().ok_or_else(|| {
                         anyhow!(
@@ -371,10 +375,12 @@ fn capture_directory_claims(
                     })
                 })
                 .transpose()?;
-            Ok(DirectoryClaimSnapshot {
+            Ok(PayloadClaimSnapshot {
                 path: claim.path,
                 node: claim.node,
+                content: claim.content,
                 component,
+                sharing_policy: claim.sharing_policy,
                 anchor_policy: claim.anchor_policy,
                 materialization_target_path: claim.materialization_target_path,
                 claimed_at,
@@ -417,22 +423,26 @@ fn capture_provides(conn: &Connection, trove_id: i64) -> Result<Vec<ProvideSnaps
     Ok(provides)
 }
 
-fn capture_config_files(
-    conn: &Connection,
-    trove_id: i64,
-    files: &[FileEntry],
-) -> Result<Vec<ConfigFileSnapshot>> {
+fn capture_config_files(conn: &Connection, trove_id: i64) -> Result<Vec<ConfigFileSnapshot>> {
     let trove_identity: (String, String, Option<String>) = conn.query_row(
         "SELECT name, version, architecture FROM troves WHERE id = ?1",
         [trove_id],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let file_ids = files
-        .iter()
-        .map(|file| {
-            file.id
-                .map(|id| (id, file.path.as_str()))
-                .ok_or_else(|| anyhow!("installed file '{}' has no ID", file.path))
+    let file_ids = PayloadClaim::find_by_trove(conn, trove_id)?
+        .into_iter()
+        .map(|claim| {
+            let path = claim.path;
+            let file = FileEntry::find_by_path(conn, &path)?.ok_or_else(|| {
+                anyhow!(
+                    "installed payload claim '{}' has no materialized anchor",
+                    path
+                )
+            })?;
+            let id = file
+                .id
+                .ok_or_else(|| anyhow!("installed file '{}' has no ID", path))?;
+            Ok((id, path))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     ConfigFile::find_by_trove(conn, trove_id)?
@@ -443,7 +453,7 @@ fn capture_config_files(
                 .ok_or_else(|| anyhow!("installed config '{}' has no ID", config.path))?;
             if let Some(file_id) = config.file_id {
                 match file_ids.get(&file_id) {
-                    Some(path) if *path == config.path => {}
+                    Some(path) if path == &config.path => {}
                     _ => bail!(
                         "installed config '{}' references file ID {} outside its exact owning path",
                         config.path,

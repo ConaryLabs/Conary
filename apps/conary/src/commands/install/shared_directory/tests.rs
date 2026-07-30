@@ -1,8 +1,10 @@
 // apps/conary/src/commands/install/shared_directory/tests.rs
 
 use super::*;
-use conary_core::db::models::{DirectoryClaimAnchorPolicy, TroveType};
-use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
+use conary_core::db::models::{PayloadClaimAnchorPolicy, TroveType};
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadNode, PayloadSharingPolicy, ResolvedPayloadNode,
+};
 use conary_core::repository::versioning::VersionScheme;
 use std::collections::BTreeSet;
 use std::os::unix::fs::symlink;
@@ -69,6 +71,7 @@ fn conflicting_directory_metadata_is_supported_but_node_type_overlap_is_not() {
         None,
         owner_id,
     )
+    .with_claim_policy(PayloadSharingPolicy::Rpm)
     .insert(&conn)
     .unwrap();
     let selected_root = tempfile::tempdir().unwrap();
@@ -87,17 +90,24 @@ fn conflicting_directory_metadata_is_supported_but_node_type_overlap_is_not() {
     let error = preflight_resolved_file_ownership(
         &conn,
         selected_root.path(),
-        &[resolved_file(
-            "/etc",
-            ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
-        )],
+        &[ResolvedInstallFile {
+            path: "/etc".to_string(),
+            node: ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
+            content: Some(PayloadContentAuthority {
+                sha256: conary_core::hash::sha256(b""),
+                size: 0,
+            }),
+            cas_hash: None,
+        }],
         "incoming",
         &[],
         InstallSemantics::native_package(PackageFormatType::Rpm),
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("tracked by package owner"),
+        error.to_string().contains(
+            "incompatible with package owner: node kinds differ (regular versus directory)"
+        ),
         "{error:#}"
     );
 }
@@ -254,7 +264,9 @@ fn live_directory_never_reclassifies_a_peer_owned_regular_database_row() {
     .unwrap_err();
 
     assert!(
-        error.to_string().contains("tracked by package owner"),
+        error.to_string().contains(&format!(
+            "violates package {owner_id} payload anchor policy 'exact'"
+        )),
         "{error:#}"
     );
     assert!(matches!(
@@ -269,7 +281,149 @@ fn live_directory_never_reclassifies_a_peer_owned_regular_database_row() {
 }
 
 #[test]
-fn peer_owned_symlink_anchor_accepts_a_debian_directory_claim() {
+fn compatible_rpm_target_extends_one_materialized_hardlink_graph() {
+    let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
+    let mut conn = conary_core::db::open(db_path).unwrap();
+    let anchor_owner = insert_trove(&conn, "anchor-owner");
+    let incoming_owner = insert_trove(&conn, "incoming");
+    let target = "/usr/share/shared-target";
+    let content = PayloadContentAuthority {
+        sha256: conary_core::hash::sha256(b"shared"),
+        size: 6,
+    };
+    let regular = ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap();
+    let mut anchor = FileEntry::new(
+        target.to_string(),
+        regular.clone(),
+        Some(content.clone()),
+        anchor_owner,
+    )
+    .with_claim_policy(PayloadSharingPolicy::Rpm);
+    anchor.insert(&conn).unwrap();
+
+    let mut edge_node = regular.clone();
+    edge_node.source.kind = PayloadNodeKind::Hardlink {
+        target: target.to_string(),
+        identity: "rpm:9:42".to_string(),
+    };
+    let incoming = vec![
+        ResolvedInstallFile {
+            path: target.to_string(),
+            node: regular,
+            content: Some(content.clone()),
+            cas_hash: Some(content.sha256.clone()),
+        },
+        ResolvedInstallFile {
+            path: "/usr/share/incoming-edge".to_string(),
+            node: edge_node,
+            content: None,
+            cas_hash: None,
+        },
+    ];
+    let selected_root = tempfile::tempdir().unwrap();
+    let plan = preflight_resolved_file_ownership(
+        &conn,
+        selected_root.path(),
+        &incoming,
+        "incoming",
+        &[],
+        InstallSemantics::native_package(PackageFormatType::Rpm),
+    )
+    .unwrap();
+    assert!(plan.preserves_leaf(target));
+
+    let all_live_files = vec![
+        crate::commands::LiveRootFile {
+            path: target.to_string(),
+            content: crate::commands::LiveRootContent::from_in_memory_bytes(b"shared"),
+            node: incoming[0].node.clone(),
+        },
+        crate::commands::LiveRootFile {
+            path: incoming[1].path.clone(),
+            content: crate::commands::LiveRootContent::absent(),
+            node: incoming[1].node.clone(),
+        },
+    ];
+    let mut mutation_files = all_live_files
+        .iter()
+        .filter(|file| !plan.preserves_leaf(&file.path))
+        .cloned()
+        .collect::<Vec<_>>();
+    let references = super::super::execute::prepare_preserved_hardlink_references(
+        &conn,
+        &plan,
+        &all_live_files,
+        &mut mutation_files,
+    )
+    .unwrap();
+    let identity = format!("path:{target}");
+    assert_eq!(references.len(), 1);
+    assert_eq!(
+        references[0].node.source.kind,
+        PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.clone())
+        }
+    );
+    assert_eq!(
+        mutation_files[0].node.source.kind,
+        PayloadNodeKind::Hardlink {
+            target: target.to_string(),
+            identity: identity.clone()
+        }
+    );
+
+    let tx = conn.transaction().unwrap();
+    for file in &incoming {
+        let mut entry = FileEntry::new(
+            file.path.clone(),
+            file.node.clone(),
+            file.content.clone(),
+            incoming_owner,
+        )
+        .with_claim_policy(PayloadSharingPolicy::Rpm);
+        super::super::inner::insert_file_entry_claiming_live_root_overlap(
+            &tx,
+            &mut entry,
+            "incoming",
+            &[],
+            plan.materialization_for_path(&file.path),
+            plan.leaf_before(&file.path),
+        )
+        .unwrap();
+    }
+    super::super::inner::reconcile_installed_hardlink_materializations(&tx, &incoming).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(PayloadClaim::find_by_path(&conn, target).unwrap().len(), 2);
+    assert_eq!(
+        FileEntry::find_by_path(&conn, target)
+            .unwrap()
+            .unwrap()
+            .node
+            .source
+            .kind,
+        PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.clone())
+        }
+    );
+    assert_eq!(
+        FileEntry::find_by_path(&conn, "/usr/share/incoming-edge")
+            .unwrap()
+            .unwrap()
+            .node
+            .source
+            .kind,
+        PayloadNodeKind::Hardlink {
+            target: target.to_string(),
+            identity
+        }
+    );
+    conary_core::db::models::PackagePayloadOwnership::load(&conn, anchor_owner).unwrap();
+    conary_core::db::models::PackagePayloadOwnership::load(&conn, incoming_owner).unwrap();
+}
+
+#[test]
+fn peer_owned_symlink_anchor_accepts_a_debian_payload_claim() {
     let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
     let mut conn = conary_core::db::open(db_path).unwrap();
     let symlink_owner = insert_trove(&conn, "symlink-owner");
@@ -319,12 +473,20 @@ fn peer_owned_symlink_anchor_accepts_a_debian_directory_claim() {
     let materialized = FileEntry::find_by_path(&conn, "/shared").unwrap().unwrap();
     assert_eq!(materialized.trove_id, symlink_owner);
     assert_eq!(materialized.node, leaf);
-    let claims = DirectoryClaim::find_by_path(&conn, "/shared").unwrap();
-    assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0].trove_id, incoming_owner);
+    let claims = PayloadClaim::find_by_path(&conn, "/shared").unwrap();
+    assert_eq!(claims.len(), 2);
+    let symlink_claim = claims
+        .iter()
+        .find(|claim| claim.trove_id == symlink_owner)
+        .unwrap();
+    assert_eq!(symlink_claim.anchor_policy, PayloadClaimAnchorPolicy::Exact);
+    let incoming_claim = claims
+        .iter()
+        .find(|claim| claim.trove_id == incoming_owner)
+        .unwrap();
     assert_eq!(
-        claims[0].anchor_policy,
-        DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+        incoming_claim.anchor_policy,
+        PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
     );
 }
 
@@ -407,7 +569,7 @@ fn rpm_through_symlink_reconciles_tracked_target_and_retains_leaf() {
             .node,
         leaf
     );
-    let incoming_claim = DirectoryClaim::find_by_path(&conn, "/shared")
+    let incoming_claim = PayloadClaim::find_by_path(&conn, "/shared")
         .unwrap()
         .into_iter()
         .find(|claim| claim.trove_id == incoming_owner)
@@ -502,7 +664,7 @@ fn rollback_capture_precedes_a_later_batch_symlink_target_mutation() {
 }
 
 #[test]
-fn rollback_capture_excludes_only_generation_ephemeral_directory_claims() {
+fn rollback_capture_excludes_only_generation_ephemeral_payload_claims() {
     let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
     let conn = conary_core::db::open(db_path).unwrap();
     let owner = insert_trove(&conn, "root-layout");
