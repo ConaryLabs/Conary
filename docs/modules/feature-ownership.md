@@ -186,6 +186,7 @@ mutation flows for local package operations.
 `crates/conary-core/src/scriptlet/sandbox.rs`;
 `crates/conary-core/src/scriptlet/process.rs`;
 `crates/conary-core/src/scriptlet/boundary.rs`;
+`crates/conary-core/src/scriptlet/sysusers.rs`;
 `crates/conary-core/src/scriptlet/native_lifecycle.rs`;
 `crates/conary-core/src/scriptlet/native_lifecycle/contracts.rs`;
 `crates/conary-core/src/db/models/installed_ccs_remove_hook.rs`;

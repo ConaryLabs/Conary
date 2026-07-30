@@ -85,8 +85,12 @@ commands.
   environment, administrative state, trigger/config capture, and
   update-alternatives projection start in
   `apps/conary/src/commands/install/native_events/debian_runtime.rs` and
-  `apps/conary/src/commands/install/native_events/debian_runtime/`. Exact
-  source-independent payload nodes start in `crates/conary-core/src/payload.rs`.
+  `apps/conary/src/commands/install/native_events/debian_runtime/`. Exact RPM
+  pre-payload sysusers target-interface execution starts in
+  `crates/conary-core/src/scriptlet/sysusers.rs`; generic native argv remains
+  selected-root confined in
+  `crates/conary-core/src/scriptlet/native_command.rs`. Exact source-independent
+  payload nodes start in `crates/conary-core/src/payload.rs`.
   `apps/conary/src/commands/live_root/recovery.rs` is confined to the
   selected-root session journal implementation.
 - Declarative models, source selection, and replatforming:

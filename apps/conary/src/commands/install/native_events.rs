@@ -172,10 +172,6 @@ impl PreparedNativeTransaction {
             .iter()
             .any(|input| input.version_scheme == VersionScheme::Arch)
             || relation_removal_has_arch;
-        let host_capabilities = arch_transaction
-            .then(|| conary_core::ccs::HostCapabilityInventory::load_required(conn))
-            .transpose()
-            .context("Arch transaction host capability preflight failed")?;
         let input_old_trove_ids = inputs
             .iter()
             .map(|input| {
@@ -532,6 +528,7 @@ impl PreparedNativeTransaction {
             deb_change_indices,
         };
         let plan = plan_native_transaction(&views, &changes, &transaction_state)?;
+        let host_capabilities = host_capabilities_for_plan(conn, arch_transaction, &plan)?;
         let path_projection =
             NativePathProjection::from_transaction(&plan, &changes, &installed_paths_after)?;
         Ok(Self {
@@ -661,11 +658,6 @@ impl PreparedNativeTransaction {
             });
         }
 
-        let host_capabilities = arch_transaction
-            .then(|| conary_core::ccs::HostCapabilityInventory::load_required(conn))
-            .transpose()
-            .context("Arch removal host capability preflight failed")?;
-
         let mut owners = Vec::new();
         let installed_bundles = InstalledNativeLifecycleBundle::find_all(conn)?;
         for installed in installed_bundles {
@@ -719,6 +711,7 @@ impl PreparedNativeTransaction {
             deb_change_indices,
         };
         let plan = plan_native_transaction(&views, &changes, &transaction_state)?;
+        let host_capabilities = host_capabilities_for_plan(conn, arch_transaction, &plan)?;
         let path_projection =
             NativePathProjection::from_transaction(&plan, &changes, &installed_paths_after)?;
         Ok(Self {
@@ -740,6 +733,25 @@ impl PreparedNativeTransaction {
     pub(crate) fn requires_upgrade_payload_boundary(&self) -> bool {
         self.requires_upgrade_payload_boundary
     }
+
+    pub(super) fn rpm_sysusers_interface(&self) -> Result<&conary_core::ccs::ExecutableInterface> {
+        self.host_capabilities
+            .as_ref()
+            .context("RPM sysusers event lost its required typed host capability inventory")?
+            .sysusers_interface()
+            .map_err(anyhow::Error::from)
+    }
+}
+
+fn host_capabilities_for_plan(
+    conn: &rusqlite::Connection,
+    arch_transaction: bool,
+    plan: &NativeTransactionPlan,
+) -> Result<Option<conary_core::ccs::HostCapabilityInventory>> {
+    (arch_transaction || plan.requires_sysusers_interface())
+        .then(|| conary_core::ccs::HostCapabilityInventory::load_required(conn))
+        .transpose()
+        .context("native transaction typed host capability preflight failed")
 }
 
 fn debian_relation_removal_operation(

@@ -89,6 +89,17 @@ value or derive one from a distro, path, policy name, source package manager, or
 pairwise compatibility selector. A version-3 inventory must be replaced by
 rerunning `conary system init`.
 
+RPM sysusers planning emits a dedicated typed native event rather than a
+generic command. Because RPM schedules it before the incoming payload is
+visible, install preflight revalidates the persisted `SystemdSysusers`
+descriptor and execution invokes that exact host-side interface with
+`--root=<selected-root>`, optional `--replace <guest-path>`, and the decoded
+declarations on stdin. The fixed grammar gives the target implementation
+semantic authority without reading or mutating host account state. Missing,
+wrong-contract, or drifted descriptors fail before package mutation. Generic
+native commands remain confined to the selected-root execution boundary and
+cannot acquire this target-interface path from argv text or lifecycle stage.
+
 The typed tmpfiles contract preserves type, path, mode, user, group, age, and
 argument as seven required strings. Conary parses only the documented type
 envelope—one ASCII letter plus tmpfiles modifiers—and the field boundaries
@@ -849,7 +860,8 @@ transaction packages. Conary's typed stages preserve this order:
 1. `%pretrans` of `new`.
 2. `%preuntrans` of `old`.
 3. `%transfiletriggerun` of `any`, selected by paths removed with `old`.
-4. RPM's implicit sysusers operation for `new`.
+4. RPM's implicit sysusers operation for `new`, through the exact persisted
+   target sysusers interface with the selected root supplied explicitly.
 5. `%triggerprein` passes between `rpmdb`, `new`, and the installing change.
 6. `%pre` of `new`.
 7. Unpack `new` and make its payload visible.

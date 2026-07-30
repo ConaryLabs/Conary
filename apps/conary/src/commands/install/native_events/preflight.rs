@@ -153,6 +153,9 @@ impl PreparedNativeTransaction {
             NativeEventProgram::Command { argv } => executor
                 .preflight_native_command(argv)
                 .map_err(anyhow::Error::from),
+            NativeEventProgram::RpmSysusers { source_path } => executor
+                .preflight_rpm_sysusers(self.rpm_sysusers_interface()?, source_path.as_deref())
+                .map_err(anyhow::Error::from),
         }
     }
 

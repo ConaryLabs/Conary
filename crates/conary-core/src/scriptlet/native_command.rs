@@ -369,6 +369,20 @@ mod tests {
     }
 
     #[test]
+    fn generic_native_command_cannot_use_a_host_program() {
+        let root = tempfile::tempdir().unwrap();
+        let executor = executor(root.path());
+        let error = executor
+            .preflight_native_command(&["/bin/sh".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("missing from target root"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn transaction_command_preflight_rejects_the_host_root() {
         let executor = executor(Path::new("/"));
         let error = executor
