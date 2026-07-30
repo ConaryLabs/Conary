@@ -343,7 +343,7 @@ mod tests {
     use crate::server::native_publish::test_support::seed_native_publication;
     use axum::extract::{Path, Query, State};
     use conary_core::db::models::{
-        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryRequirement,
+        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryProvide, RepositoryRequirement,
         RepositoryRequirementGroup as DbRequirementGroup,
     };
     use conary_core::db::schema;
@@ -585,6 +585,15 @@ mod tests {
         let (temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
         let fetchable_id = insert_package(&conn, repo_id, "fetchable", "1.0-1.fc44", 1024);
+        let mut file_provider = RepositoryProvide::new(
+            fetchable_id,
+            "/usr/bin/fetchable".to_string(),
+            None,
+            "file".to_string(),
+            None,
+            conary_core::repository::versioning::VersionScheme::Rpm,
+        );
+        file_provider.insert(&conn).unwrap();
         conn.execute(
             "UPDATE repository_packages SET metadata = ?1 WHERE id = ?2",
             rusqlite::params![
@@ -617,6 +626,9 @@ mod tests {
             .collect::<Vec<_>>();
         let list = build_package_list(temp_file.path(), "fedora", 1, 100).unwrap();
         let page = build_package_page(temp_file.path(), "fedora", 1, 100).unwrap();
+        let lookup = build_sparse_entry(temp_file.path(), "fedora", "fetchable")
+            .unwrap()
+            .unwrap();
         let page_names = page
             .packages
             .iter()
@@ -632,6 +644,16 @@ mod tests {
             page.packages[0].versions[0].metadata.as_ref().unwrap()["security_advisory"]["id"],
             "FEDORA-2026-0001"
         );
+        assert!(page.packages[0].versions[0].provides.iter().any(|provide| {
+            provide.capability == "/usr/bin/fetchable"
+                && provide.kind == "file"
+                && provide.version.is_none()
+        }));
+        assert!(lookup.versions[0].provides.iter().any(|provide| {
+            provide.capability == "/usr/bin/fetchable"
+                && provide.kind == "file"
+                && provide.version.is_none()
+        }));
         assert_eq!(page.packages[1].versions.len(), 1);
         assert_eq!(page.packages[1].versions[0].version, "1.0-1.fc44");
         assert_eq!(page.packages[1].versions[0].requirement_groups.len(), 2);

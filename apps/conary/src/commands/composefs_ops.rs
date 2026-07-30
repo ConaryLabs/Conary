@@ -301,10 +301,16 @@ fn forced_generation_rebuild_failure() -> Option<anyhow::Error> {
 #[cfg(test)]
 pub(crate) struct TestMountSkipGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
 }
 
 #[cfg(test)]
 static TEST_MOUNT_SKIP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// This variable controls behavior across the whole unit-test process. Every
+// mutation must stay behind TEST_MOUNT_SKIP_LOCK.
+#[cfg(test)]
+pub(crate) const TEST_MOUNT_SKIP_ENV: &str = "CONARY_TEST_SKIP_GENERATION_MOUNT";
 
 #[cfg(test)]
 fn lock_test_mount_skip() -> std::sync::MutexGuard<'static, ()> {
@@ -314,52 +320,42 @@ fn lock_test_mount_skip() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[cfg(test)]
-pub(crate) struct TestMountSkipClearGuard {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    previous: Option<std::ffi::OsString>,
+fn replace_test_mount_skip(value: Option<&std::ffi::OsStr>) -> Option<std::ffi::OsString> {
+    let previous = std::env::var_os(TEST_MOUNT_SKIP_ENV);
+    unsafe {
+        if let Some(value) = value {
+            std::env::set_var(TEST_MOUNT_SKIP_ENV, value);
+        } else {
+            std::env::remove_var(TEST_MOUNT_SKIP_ENV);
+        }
+    }
+    previous
 }
 
 #[cfg(test)]
-pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
+fn test_mount_skip_guard_for(value: Option<&std::ffi::OsStr>) -> TestMountSkipGuard {
     let guard = lock_test_mount_skip();
-    unsafe {
-        std::env::set_var("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
-    }
-    TestMountSkipGuard { _guard: guard }
-}
-
-#[cfg(test)]
-pub(crate) fn test_mount_skip_clear_guard() -> TestMountSkipClearGuard {
-    let guard = lock_test_mount_skip();
-    let previous = std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT");
-    unsafe {
-        std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
-    }
-    TestMountSkipClearGuard {
+    let previous = replace_test_mount_skip(value);
+    TestMountSkipGuard {
         _guard: guard,
         previous,
     }
 }
 
 #[cfg(test)]
-impl Drop for TestMountSkipGuard {
-    fn drop(&mut self) {
-        unsafe {
-            std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
-        }
-    }
+pub(crate) fn test_mount_skip_guard() -> TestMountSkipGuard {
+    test_mount_skip_guard_for(Some(std::ffi::OsStr::new("1")))
 }
 
 #[cfg(test)]
-impl Drop for TestMountSkipClearGuard {
+pub(crate) fn test_mount_skip_clear_guard() -> TestMountSkipGuard {
+    test_mount_skip_guard_for(None)
+}
+
+#[cfg(test)]
+impl Drop for TestMountSkipGuard {
     fn drop(&mut self) {
-        unsafe {
-            if let Some(previous) = &self.previous {
-                std::env::set_var("CONARY_TEST_SKIP_GENERATION_MOUNT", previous);
-            } else {
-                std::env::remove_var("CONARY_TEST_SKIP_GENERATION_MOUNT");
-            }
-        }
+        replace_test_mount_skip(self.previous.as_deref());
     }
 }
 
@@ -395,6 +391,22 @@ impl Drop for TestGenerationRebuildFailureGuard {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    struct MountSkipEnvReset(Option<std::ffi::OsString>);
+
+    impl MountSkipEnvReset {
+        fn replace_with(value: Option<&std::ffi::OsStr>) -> Self {
+            let _guard = lock_test_mount_skip();
+            Self(replace_test_mount_skip(value))
+        }
+    }
+
+    impl Drop for MountSkipEnvReset {
+        fn drop(&mut self) {
+            let _guard = lock_test_mount_skip();
+            replace_test_mount_skip(self.0.as_deref());
+        }
+    }
 
     #[test]
     fn forced_generation_rebuild_failure_reads_test_env_message() {
@@ -457,5 +469,72 @@ mod tests {
             boot_root_for_generation_build(&runtime_root),
             temp.path().join("boot")
         );
+    }
+
+    #[test]
+    fn mount_skip_guards_restore_exact_prior_state() {
+        let reset = MountSkipEnvReset::replace_with(Some(std::ffi::OsStr::new("prior-test-value")));
+
+        {
+            let _guard = test_mount_skip_guard();
+            assert_eq!(
+                std::env::var_os(TEST_MOUNT_SKIP_ENV),
+                Some(std::ffi::OsString::from("1"))
+            );
+        }
+        {
+            let _guard = lock_test_mount_skip();
+            assert_eq!(
+                std::env::var_os(TEST_MOUNT_SKIP_ENV),
+                Some(std::ffi::OsString::from("prior-test-value"))
+            );
+        }
+
+        {
+            let _guard = test_mount_skip_clear_guard();
+            assert_eq!(std::env::var_os(TEST_MOUNT_SKIP_ENV), None);
+        }
+        {
+            let _guard = lock_test_mount_skip();
+            assert_eq!(
+                std::env::var_os(TEST_MOUNT_SKIP_ENV),
+                Some(std::ffi::OsString::from("prior-test-value"))
+            );
+        }
+
+        drop(reset);
+    }
+
+    #[test]
+    fn mount_skip_guards_serialize_competing_mutations() {
+        let first = test_mount_skip_guard();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let _second = test_mount_skip_clear_guard();
+            acquired_tx
+                .send(std::env::var_os(TEST_MOUNT_SKIP_ENV))
+                .unwrap();
+        });
+
+        started_rx.recv().unwrap();
+        assert!(matches!(
+            TEST_MOUNT_SKIP_LOCK.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        assert!(matches!(
+            acquired_rx.recv_timeout(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(first);
+        assert_eq!(
+            acquired_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            None
+        );
+        worker.join().unwrap();
     }
 }

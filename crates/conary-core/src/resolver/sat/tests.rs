@@ -433,6 +433,74 @@ fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
 }
 
 #[test]
+fn rpm_path_requirement_resolves_through_generator_selected_file_provider() {
+    use crate::repository::dependency_model::RepositoryRequirementKind;
+
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.com/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let mut consumer = RepositoryPackage::new(
+        repository_id,
+        "glibc-common".to_string(),
+        "2.43.9000-6.fc44".to_string(),
+        VersionScheme::Rpm,
+        "sha256:glibc-common".to_string(),
+        1,
+        "https://example.com/fedora/glibc-common.rpm".to_string(),
+    );
+    consumer.architecture = Some("x86_64".to_string());
+    let consumer_id = consumer.insert(&conn).unwrap();
+    let requirement = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "/usr/bin/bash",
+    )
+    .unwrap();
+    insert_typed_repo_requirement_group(&conn, consumer_id, &requirement);
+
+    let mut provider = RepositoryPackage::new(
+        repository_id,
+        "bash".to_string(),
+        "5.3.3-2.fc44".to_string(),
+        VersionScheme::Rpm,
+        "sha256:bash".to_string(),
+        1,
+        "https://example.com/fedora/bash.rpm".to_string(),
+    );
+    provider.architecture = Some("x86_64".to_string());
+    let provider_id = provider.insert(&conn).unwrap();
+    let mut file_provide = RepositoryProvide::new(
+        provider_id,
+        "/usr/bin/bash".to_string(),
+        None,
+        "file".to_string(),
+        None,
+        VersionScheme::Rpm,
+    );
+    file_provide.insert(&conn).unwrap();
+
+    let result = solve_install(
+        &conn,
+        &[("glibc-common".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    let names = result
+        .install_order
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"glibc-common"));
+    assert!(names.contains(&"bash"));
+}
+
+#[test]
 fn debian_multi_arch_qualifiers_reach_sat_without_name_suffix_matching() {
     use crate::repository::dependency_model::{DebianMultiArch, RepositoryRequirementKind};
 
