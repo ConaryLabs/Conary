@@ -317,6 +317,40 @@ fn conversion_result_embeds_native_lifecycle_bundle() {
 }
 
 #[test]
+fn conversion_preserves_strong_source_order_in_signed_ccs_authority() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut metadata = make_test_metadata();
+    metadata.requirements = vec![
+        crate::repository::requirement::parse_native_requirement(
+            crate::repository::dependency_model::RepositoryRequirementKind::PreDepends,
+            crate::repository::versioning::VersionScheme::Rpm,
+            "setup",
+        )
+        .unwrap(),
+    ];
+
+    let result = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &make_test_files(),
+            "rpm",
+            "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+        )
+        .unwrap();
+    let package = verified_converted_package(&result);
+
+    assert_eq!(
+        result.build_result.manifest.requirements,
+        metadata.requirements
+    );
+    assert_eq!(package.requirements(), metadata.requirements);
+    assert_eq!(
+        package.v2_authority().unwrap().requirements,
+        metadata.requirements
+    );
+}
+
+#[test]
 fn arch_install_conversion_requires_exact_source_profile() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut metadata = make_test_metadata();

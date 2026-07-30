@@ -522,6 +522,7 @@ impl FedoraParser {
                                 let mut dep_epoch = None;
                                 let mut dep_ver = None;
                                 let mut dep_rel = None;
+                                let mut dep_pre = None;
 
                                 for attr in e.attributes() {
                                     let attr = attr.map_err(|error| {
@@ -546,6 +547,7 @@ impl FedoraParser {
                                         "epoch" => dep_epoch = Some(value.to_string()),
                                         "ver" => dep_ver = Some(value.to_string()),
                                         "rel" => dep_rel = Some(value.to_string()),
+                                        "pre" => dep_pre = Some(value.to_string()),
                                         _ => {}
                                     }
                                 }
@@ -565,11 +567,18 @@ impl FedoraParser {
                                                 dep_epoch.as_deref(),
                                                 dep_ver.as_deref(),
                                                 dep_rel.as_deref(),
+                                                dep_pre.as_deref(),
                                             )? {
                                                 pkg.dependencies.push(requirement);
                                             }
                                         }
                                         FormatSection::Provides => {
+                                            if dep_pre.is_some() {
+                                                return Err(Error::ParseError(
+                                                    "RPM primary pre marker is valid only on a requires entry"
+                                                        .to_string(),
+                                                ));
+                                            }
                                             let provide = rpm_provide_constraint(
                                                 &name,
                                                 dep_flags.as_deref(),
@@ -580,6 +589,12 @@ impl FedoraParser {
                                             pkg.provides.push((name, provide));
                                         }
                                         FormatSection::Conflicts => {
+                                            if dep_pre.is_some() {
+                                                return Err(Error::ParseError(
+                                                    "RPM primary pre marker is valid only on a requires entry"
+                                                        .to_string(),
+                                                ));
+                                            }
                                             pkg.relations.push((
                                                 RepositoryRequirementKind::Conflict,
                                                 rpm_relation_native_text(
@@ -592,6 +607,12 @@ impl FedoraParser {
                                             ));
                                         }
                                         FormatSection::Obsoletes => {
+                                            if dep_pre.is_some() {
+                                                return Err(Error::ParseError(
+                                                    "RPM primary pre marker is valid only on a requires entry"
+                                                        .to_string(),
+                                                ));
+                                            }
                                             pkg.relations.push((
                                                 RepositoryRequirementKind::Obsolete,
                                                 rpm_relation_native_text(

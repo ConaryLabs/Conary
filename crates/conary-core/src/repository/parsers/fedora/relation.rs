@@ -49,6 +49,16 @@ fn rpm_flags_to_dependency_flags(name: &str, flags: Option<&str>) -> Result<Depe
     }
 }
 
+fn rpm_pre_to_dependency_flags(name: &str, pre: Option<&str>) -> Result<DependencyFlags> {
+    match pre {
+        None => Ok(DependencyFlags::empty()),
+        Some("1") => Ok(DependencyFlags::PREREQ),
+        Some(value) => Err(Error::ParseError(format!(
+            "unsupported RPM pre marker '{value}' for {name}; createrepo_c emits exactly '1'"
+        ))),
+    }
+}
+
 fn rpm_evr_native_text(
     name: &str,
     flags: Option<&str>,
@@ -168,8 +178,10 @@ pub(super) fn rpm_require_to_group(
     epoch: Option<&str>,
     version: Option<&str>,
     release: Option<&str>,
+    pre: Option<&str>,
 ) -> Result<Option<RepositoryRequirementGroup>> {
-    let dependency_flags = rpm_flags_to_dependency_flags(name, flags)?;
+    let dependency_flags =
+        rpm_flags_to_dependency_flags(name, flags)? | rpm_pre_to_dependency_flags(name, pre)?;
     let evr = rpm_evr_native_text(name, flags, epoch, version, release)?;
     crate::packages::rpm::decode_rpm_requirement(name, &evr, dependency_flags)
 }
@@ -202,6 +214,7 @@ mod tests {
                 Some(epoch),
                 Some("1.02.212"),
                 Some("2.fc44"),
+                None,
             )
             .unwrap()
             .unwrap();
@@ -225,10 +238,31 @@ mod tests {
             Some("invalid"),
             Some("1.02.212"),
             Some("2.fc44"),
+            None,
         )
         .unwrap_err();
 
         assert!(error.to_string().contains("epoch"));
+    }
+
+    #[test]
+    fn requirement_preserves_createrepo_prerequisite_marker() {
+        let requirement = rpm_require_to_group("setup", None, None, None, None, Some("1"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            requirement.kind,
+            crate::repository::dependency_model::RepositoryRequirementKind::PreDepends
+        );
+    }
+
+    #[test]
+    fn requirement_rejects_noncanonical_prerequisite_marker() {
+        let error =
+            rpm_require_to_group("setup", None, None, None, None, Some("true")).unwrap_err();
+
+        assert!(error.to_string().contains("pre marker"));
     }
 
     #[test]
