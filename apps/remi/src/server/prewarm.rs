@@ -84,12 +84,13 @@ pub struct PackagePopularity {
 
 /// Run pre-warming job
 pub async fn run_prewarm(config: &PrewarmConfig) -> Result<PrewarmResult> {
-    run_prewarm_with_permits(config, None).await
+    run_prewarm_with_permits(config, None, None).await
 }
 
 async fn run_prewarm_with_permits(
     config: &PrewarmConfig,
     conversion_permits: Option<&Semaphore>,
+    shared_conversion_service: Option<ConversionService>,
 ) -> Result<PrewarmResult> {
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(&config.distro)
@@ -127,14 +128,18 @@ async fn run_prewarm_with_permits(
         });
     }
 
-    // Create conversion service
-    let conversion_service = ConversionService::new(
-        config.chunk_dir.clone().into(),
-        config.cache_dir.clone().into(),
-        config.db_path.clone().into(),
-        None, // R2 not available in prewarm context
-    )
-    .with_repository_keys_dir(config.repository_keys_dir.clone());
+    // Server-owned prewarm jobs clone the same service as request conversions.
+    // The standalone command owns an isolated service because it is the only
+    // conversion authority in that process.
+    let conversion_service = shared_conversion_service.unwrap_or_else(|| {
+        ConversionService::new(
+            config.chunk_dir.clone().into(),
+            config.cache_dir.clone().into(),
+            config.db_path.clone().into(),
+            None,
+        )
+        .with_repository_keys_dir(config.repository_keys_dir.clone())
+    });
 
     let mut result = PrewarmResult {
         packages_processed: 0,

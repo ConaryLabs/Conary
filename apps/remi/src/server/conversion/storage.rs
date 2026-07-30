@@ -144,23 +144,27 @@ impl ConversionService {
 
         if !exact_sizes.is_empty() {
             let db_path = self.db_path.clone();
+            let writer = self.database_writer.clone();
             tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = crate::server::open_runtime_db(&db_path)?;
-                let tx = conn.transaction()?;
-                for (hash, size) in exact_sizes {
-                    if let Some(existing) = ChunkAccess::find_by_hash(&tx, &hash)?
-                        && existing.size_bytes != size
-                    {
-                        anyhow::bail!(
-                            "chunk {hash} size disagrees with persisted CAS authority: \
-                             {} != {size}",
-                            existing.size_bytes
-                        );
+                writer.execute(|| {
+                    let mut conn = crate::server::open_runtime_db(&db_path)?;
+                    let tx =
+                        conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                    for (hash, size) in exact_sizes {
+                        if let Some(existing) = ChunkAccess::find_by_hash(&tx, &hash)?
+                            && existing.size_bytes != size
+                        {
+                            anyhow::bail!(
+                                "chunk {hash} size disagrees with persisted CAS authority: \
+                                 {} != {size}",
+                                existing.size_bytes
+                            );
+                        }
+                        ChunkAccess::new(hash, size).upsert(&tx)?;
                     }
-                    ChunkAccess::new(hash, size).upsert(&tx)?;
-                }
-                tx.commit()?;
-                Ok(())
+                    tx.commit()?;
+                    Ok(())
+                })
             })
             .await
             .context("join exact chunk-size persistence task")??;
