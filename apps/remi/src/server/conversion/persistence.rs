@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::ccs::convert::ConversionResult;
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
 use conary_core::packages::common::PackageMetadata;
-use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, TransactionBehavior};
 use std::path::PathBuf;
 use tracing::info;
 
@@ -22,7 +22,70 @@ pub(super) struct PersistConversionInput {
     pub(super) chunk_hashes: Vec<String>,
 }
 
+enum CacheInspection {
+    Current(Box<ServerConversionResult>),
+    Missing,
+    Stale,
+}
+
+enum PersistOutcome {
+    Existing(Box<ServerConversionResult>),
+    Inserted,
+}
+
 impl ConversionService {
+    fn inspect_cached_conversion(
+        &self,
+        conn: &Connection,
+        source_profile: &str,
+        repo_pkg: &RepositoryPackage,
+        original_checksum: &str,
+        repository_provides_digest: &str,
+    ) -> Result<CacheInspection> {
+        let repository_package_id = repo_pkg
+            .id
+            .context("repository conversion package has no persisted identity")?;
+        let current_package = RepositoryPackage::find_by_id(conn, repository_package_id)?
+            .context("repository package metadata changed during conversion cache lookup")?;
+        ensure!(
+            repository_package_conversion_inputs_match(repo_pkg, &current_package),
+            "repository package identity changed during conversion cache lookup"
+        );
+        let Some(existing) =
+            ConvertedPackage::find_repository_by_checksum(conn, source_profile, original_checksum)?
+        else {
+            return Ok(CacheInspection::Missing);
+        };
+
+        let artifact = existing.repository_artifact()?;
+        let expected_architecture = repo_pkg
+            .architecture
+            .as_deref()
+            .context("repository conversion package has no exact architecture")?;
+        let artifact_matches_package = artifact.source_profile == source_profile
+            && artifact.package_name == repo_pkg.name
+            && artifact.package_version == repo_pkg.version
+            && artifact.package_architecture == expected_architecture;
+        let metadata_is_current = existing.repository_metadata_is_current(conn)?;
+        let ccs_path = PathBuf::from(artifact.ccs_path);
+        if metadata_is_current {
+            ensure!(
+                artifact_matches_package,
+                "current conversion checksum maps to a conflicting repository package identity"
+            );
+        }
+        if metadata_is_current
+            && artifact.repository_provides_digest == repository_provides_digest
+            && ccs_path.exists()
+        {
+            return Ok(CacheInspection::Current(Box::new(
+                self.build_result_from_existing(&existing)?,
+            )));
+        }
+
+        Ok(CacheInspection::Stale)
+    }
+
     pub(super) async fn cached_conversion_result_async(
         &self,
         source_profile: &str,
@@ -37,67 +100,54 @@ impl ConversionService {
         let repository_provides_digest = repository_provides_digest.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let mut conn = conary_core::db::open(&service.db_path)?;
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let repository_package_id = repo_pkg
-                .id
-                .context("repository conversion package has no persisted identity")?;
-            let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
-                .context("repository package metadata changed during conversion cache lookup")?;
-            ensure!(
-                repository_package_conversion_inputs_match(&repo_pkg, &current_package),
-                "repository package identity changed during conversion cache lookup"
-            );
-            let Some(existing) = ConvertedPackage::find_repository_by_checksum(
+            let mut conn = crate::server::open_runtime_db(&service.db_path)?;
+            let tx = conn.transaction()?;
+            let inspection = service.inspect_cached_conversion(
                 &tx,
                 &source_profile,
+                &repo_pkg,
                 &original_checksum,
-            )?
-            else {
-                tx.commit()?;
-                return Ok(None);
-            };
-
-            let artifact = existing.repository_artifact()?;
-            let expected_architecture = repo_pkg
-                .architecture
-                .as_deref()
-                .context("repository conversion package has no exact architecture")?;
-            let artifact_matches_package = artifact.source_profile == source_profile
-                && artifact.package_name == repo_pkg.name
-                && artifact.package_version == repo_pkg.version
-                && artifact.package_architecture == expected_architecture;
-            let metadata_is_current = existing.repository_metadata_is_current(&tx)?;
-            let ccs_path = PathBuf::from(artifact.ccs_path);
-            if metadata_is_current {
-                ensure!(
-                    artifact_matches_package,
-                    "current conversion checksum maps to a conflicting repository package identity"
-                );
-            }
-            if metadata_is_current
-                && artifact.repository_provides_digest == repository_provides_digest
-                && ccs_path.exists()
-            {
-                info!(
-                    "Package already converted (checksum: {})",
-                    original_checksum
-                );
-                let result = service.build_result_from_existing(&existing)?;
-                tx.commit()?;
-                return Ok(Some(result));
-            }
-
-            info!(
-                "Stale conversion record (CCS file missing or conversion input changed), re-converting"
-            );
-            ConvertedPackage::delete_repository_by_checksum(
-                &tx,
-                &source_profile,
-                &original_checksum,
+                &repository_provides_digest,
             )?;
             tx.commit()?;
-            Ok(None)
+            match inspection {
+                CacheInspection::Current(result) => {
+                    info!("Package already converted (checksum: {})", original_checksum);
+                    return Ok(Some(*result));
+                }
+                CacheInspection::Missing => return Ok(None),
+                CacheInspection::Stale => {}
+            }
+
+            let writer = service.database_writer.clone();
+            writer.execute(|| {
+                let mut conn = crate::server::open_runtime_db(&service.db_path)?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let inspection = service.inspect_cached_conversion(
+                    &tx,
+                    &source_profile,
+                    &repo_pkg,
+                    &original_checksum,
+                    &repository_provides_digest,
+                )?;
+                let result = match inspection {
+                    CacheInspection::Current(result) => Some(*result),
+                    CacheInspection::Missing => None,
+                    CacheInspection::Stale => {
+                        info!(
+                            "Stale conversion record (CCS file missing or conversion input changed), re-converting"
+                        );
+                        ConvertedPackage::delete_repository_by_checksum(
+                            &tx,
+                            &source_profile,
+                            &original_checksum,
+                        )?;
+                        None
+                    }
+                };
+                tx.commit()?;
+                Ok(result)
+            })
         })
         .await
         .map_err(|e| anyhow!("conversion cache lookup task panicked: {e}"))?
@@ -142,31 +192,13 @@ impl ConversionService {
         }
         std::fs::copy(ccs_path, &final_ccs_path)?;
 
-        let mut conn = conary_core::db::open(&self.db_path)?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let repository_package_id = repo_pkg
-            .id
-            .context("converted repository package has no persisted identity")?;
-        let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
-            .context("repository package metadata changed while conversion was running")?;
-        ensure!(
-            repository_package_conversion_inputs_match(&repo_pkg, &current_package),
-            "repository package identity changed while conversion was running"
-        );
-        let current_repository_provides_digest =
-            RepositoryProvide::conversion_capabilities_digest(&tx, repository_package_id)?;
-        ensure!(
-            current_repository_provides_digest == repository_provides_digest,
-            "repository provide authority changed while conversion was running"
-        );
-
         let mut converted = ConvertedPackage::new_repository(
             source_profile.clone(),
             metadata.name.clone(),
             metadata.version.clone(),
             package_architecture.clone(),
             format.to_string(),
-            original_checksum,
+            original_checksum.clone(),
             &chunk_hashes,
             persisted_total_size,
             content_hash_text.clone(),
@@ -174,12 +206,59 @@ impl ConversionService {
             repository_provides_digest,
         );
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
-        ensure!(
-            converted.repository_metadata_is_current(&tx)?,
-            "repository source metadata changed while conversion was running"
-        );
-        converted.insert(&tx)?;
-        tx.commit()?;
+        let writer = self.database_writer.clone();
+        let outcome = writer.execute(|| {
+            let mut conn = crate::server::open_runtime_db(&self.db_path)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+            match self.inspect_cached_conversion(
+                &tx,
+                &source_profile,
+                &repo_pkg,
+                &original_checksum,
+                converted.repository_artifact()?.repository_provides_digest,
+            )? {
+                CacheInspection::Current(result) => {
+                    tx.commit()?;
+                    return Ok(PersistOutcome::Existing(result));
+                }
+                CacheInspection::Stale => {
+                    ConvertedPackage::delete_repository_by_checksum(
+                        &tx,
+                        &source_profile,
+                        &original_checksum,
+                    )?;
+                }
+                CacheInspection::Missing => {}
+            }
+
+            let repository_package_id = repo_pkg
+                .id
+                .context("converted repository package has no persisted identity")?;
+            let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
+                .context("repository package metadata changed while conversion was running")?;
+            ensure!(
+                repository_package_conversion_inputs_match(&repo_pkg, &current_package),
+                "repository package identity changed while conversion was running"
+            );
+            let current_repository_provides_digest =
+                RepositoryProvide::conversion_capabilities_digest(&tx, repository_package_id)?;
+            ensure!(
+                current_repository_provides_digest
+                    == converted.repository_artifact()?.repository_provides_digest,
+                "repository provide authority changed while conversion was running"
+            );
+            ensure!(
+                converted.repository_metadata_is_current(&tx)?,
+                "repository source metadata changed while conversion was running"
+            );
+            converted.insert(&tx)?;
+            tx.commit()?;
+            Ok(PersistOutcome::Inserted)
+        })?;
+        if let PersistOutcome::Existing(result) = outcome {
+            return Ok(*result);
+        }
 
         info!(
             "Recorded conversion in database (source_profile={}, name={}, version={})",
@@ -323,6 +402,50 @@ mod tests {
         let conn = conary_core::db::open(&service.db_path).unwrap();
         assert!(
             ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", &source_checksum)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_miss_remains_read_only_while_another_writer_is_active() {
+        let (_database, _storage, service, package, source_checksum, current_digest) =
+            cache_fixture(true);
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        ConvertedPackage::delete_repository_by_checksum(&conn, "fedora-44", &source_checksum)
+            .unwrap();
+        drop(conn);
+
+        let db_path = service.db_path.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let mut conn = conary_core::db::open(&db_path).unwrap();
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            tx.commit().unwrap();
+        });
+        locked_rx.recv().unwrap();
+
+        let lookup = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.cached_conversion_result_async(
+                "fedora-44",
+                &package,
+                &source_checksum,
+                &current_digest,
+            ),
+        )
+        .await;
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+
+        assert!(
+            lookup
+                .expect("cache miss must not wait for the SQLite writer")
                 .unwrap()
                 .is_none()
         );

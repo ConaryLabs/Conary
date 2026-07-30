@@ -2,6 +2,7 @@
 //! Bounded, fair scheduling across exact source-profile prewarm jobs.
 
 use super::{PrewarmConfig, PrewarmResult, run_prewarm_with_permits};
+use crate::server::ConversionService;
 use anyhow::Result;
 use futures::future::join_all;
 use std::future::Future;
@@ -23,9 +24,13 @@ pub(crate) struct PrewarmJobOutcome {
 pub(crate) async fn run_prewarm_jobs(
     jobs: Vec<PrewarmConfig>,
     conversion_permits: Arc<Semaphore>,
+    conversion_service: ConversionService,
 ) -> Vec<PrewarmJobOutcome> {
-    run_prewarm_jobs_with(jobs, conversion_permits, |job, permits| async move {
-        run_prewarm_with_permits(&job, Some(permits.as_ref())).await
+    run_prewarm_jobs_with(jobs, conversion_permits, move |job, permits| {
+        let conversion_service = conversion_service.clone();
+        async move {
+            run_prewarm_with_permits(&job, Some(permits.as_ref()), Some(conversion_service)).await
+        }
     })
     .await
 }

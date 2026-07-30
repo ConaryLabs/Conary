@@ -417,20 +417,9 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
                 return;
             }
         };
-        // Clone the conversion service config for use outside the lock
-        let svc = crate::server::ConversionService::new(
-            state_guard.config.chunk_dir.clone(),
-            state_guard.config.cache_dir.clone(),
-            state_guard.config.db_path.clone(),
-            state_guard.r2_store.clone(),
-        )
-        .with_repository_keys_dir(
-            state_guard
-                .config
-                .release_publish
-                .repository_keys_dir
-                .clone(),
-        );
+        // Clone the state-owned service so requests and prewarm work retain
+        // the same conversion database writer.
+        let svc = state_guard.conversion_service.clone();
         (job, svc)
     };
 

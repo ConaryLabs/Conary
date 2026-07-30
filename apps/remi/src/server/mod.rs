@@ -451,7 +451,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                         remi_config.r2.r2_redirect
                     );
                     let mut state_w = state.write().await;
-                    state_w.r2_store = Some(Arc::new(store));
+                    let store = Arc::new(store);
+                    state_w.r2_store = Some(Arc::clone(&store));
+                    state_w.conversion_service = state_w
+                        .conversion_service
+                        .clone()
+                        .with_r2_store(Some(store));
                     state_w.r2_redirect = remi_config.r2.r2_redirect;
                 }
                 Err(e) => {
@@ -577,6 +582,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             let state = state.read().await;
             state.job_manager.semaphore()
         };
+        let prewarm_conversion_service = {
+            let state = state.read().await;
+            state.conversion_service.clone()
+        };
         tracing::info!(
             "  Metadata refresh: enabled every {}s",
             refresh_interval.as_secs()
@@ -627,6 +636,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                         for outcome in prewarm::run_prewarm_jobs(
                             eligible_jobs,
                             Arc::clone(&prewarm_conversion_permits),
+                            prewarm_conversion_service.clone(),
                         )
                         .await
                         {
