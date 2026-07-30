@@ -236,7 +236,7 @@ mutation flows for local package operations.
 `cargo test -p conary-core --lib filesystem::selected_root`;
 `cargo test -p conary-core --lib config_transaction`;
 `cargo test -p conary --lib commands::generation::config_transaction`;
-`cargo test -p conary --lib commands::install::transaction::upgrade_rollback`;
+`cargo test -p conary --lib commands::install::rollback_snapshot`;
 `cargo test -p conary-core native_transaction`;
 `cargo test -p conary --test live_host_mutation_safety`;
 `cargo test -p conary-core native_lifecycle`.
