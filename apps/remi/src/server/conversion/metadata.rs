@@ -2,7 +2,7 @@
 //! Package metadata extraction, safe CCS filenames, and native provide merging.
 
 use super::ConversionService;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
@@ -29,6 +29,12 @@ type ProvideIdentity = (
     RepositoryVersionScheme,
     ProvideArchitectureQualifier,
 );
+
+#[derive(Debug, Clone)]
+pub(super) struct RepositoryConversionMetadata {
+    pub(super) provides: Vec<ProvidedCapability>,
+    pub(super) digest: String,
+}
 
 impl ConversionService {
     /// Create a safe CCS filename from package name and version
@@ -110,18 +116,38 @@ impl ConversionService {
         }
     }
 
-    pub(super) fn merge_repository_provides(
-        conn: &rusqlite::Connection,
+    pub(super) async fn load_repository_conversion_metadata_async(
+        &self,
         repo_pkg: &RepositoryPackage,
+    ) -> Result<RepositoryConversionMetadata> {
+        let db_path = self.db_path.clone();
+        let expected_package = repo_pkg.clone();
+        let repository_package_id = repo_pkg
+            .id
+            .ok_or_else(|| anyhow!("repository conversion package has no persisted identity"))?;
+        tokio::task::spawn_blocking(move || {
+            let mut conn = conary_core::db::open(&db_path)?;
+            let tx = conn.transaction()?;
+            let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
+                .context("repository package metadata changed before conversion")?;
+            ensure!(
+                repository_package_conversion_inputs_match(&expected_package, &current_package),
+                "repository package identity changed before conversion"
+            );
+            let (provides, digest) =
+                RepositoryProvide::conversion_capabilities_with_digest(&tx, repository_package_id)?;
+            tx.commit()?;
+            Ok(RepositoryConversionMetadata { provides, digest })
+        })
+        .await
+        .map_err(|error| anyhow!("repository conversion metadata task panicked: {error}"))?
+    }
+
+    pub(super) fn merge_repository_provides(
+        repository_metadata: &RepositoryConversionMetadata,
         metadata: &mut PackageMetadata,
     ) -> Result<()> {
-        let Some(repository_package_id) = repo_pkg.id else {
-            return Ok(());
-        };
-
-        let repo_provides =
-            RepositoryProvide::find_by_repository_package(conn, repository_package_id)?;
-        if repo_provides.is_empty() {
+        if repository_metadata.provides.is_empty() {
             return Ok(());
         }
 
@@ -140,19 +166,7 @@ impl ConversionService {
             })
             .collect();
 
-        for provide in repo_provides {
-            let kind = repository_capability_kind(&provide.kind)?;
-            let exact = ProvidedCapability {
-                kind,
-                name: provide.capability,
-                version: provide.version,
-                version_relation: provide.version_relation,
-                version_scheme: provide.version_scheme,
-                architecture_qualifier: provide.architecture_qualifier,
-            };
-            exact
-                .validate()
-                .map_err(|error| anyhow!("invalid normalized repository provide: {error}"))?;
+        for exact in &repository_metadata.provides {
             if !seen.insert((
                 exact.kind,
                 exact.name.clone(),
@@ -163,7 +177,7 @@ impl ConversionService {
             )) {
                 continue;
             }
-            metadata.provides.push(exact);
+            metadata.provides.push(exact.clone());
         }
 
         Ok(())
@@ -190,20 +204,24 @@ impl ConversionService {
     }
 }
 
-fn repository_capability_kind(value: &str) -> Result<RepositoryCapabilityKind> {
-    match value {
-        "package" => Ok(RepositoryCapabilityKind::PackageName),
-        "virtual" => Ok(RepositoryCapabilityKind::Virtual),
-        "soname" => Ok(RepositoryCapabilityKind::Soname),
-        "file" => Ok(RepositoryCapabilityKind::File),
-        "path" => Ok(RepositoryCapabilityKind::Path),
-        "binary" => Ok(RepositoryCapabilityKind::Binary),
-        "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
-        "generic" => Ok(RepositoryCapabilityKind::Generic),
-        other => Err(anyhow!(
-            "unsupported normalized repository provide kind '{other}'"
-        )),
-    }
+pub(super) fn repository_package_conversion_inputs_match(
+    expected: &RepositoryPackage,
+    current: &RepositoryPackage,
+) -> bool {
+    expected.id == current.id
+        && expected.repository_id == current.repository_id
+        && expected.name == current.name
+        && expected.version == current.version
+        && expected.package_release == current.package_release
+        && expected.architecture == current.architecture
+        && expected.debian_multi_arch == current.debian_multi_arch
+        && bare_sha256(&expected.checksum) == bare_sha256(&current.checksum)
+        && expected.source_profile == current.source_profile
+        && expected.version_scheme == current.version_scheme
+}
+
+fn bare_sha256(value: &str) -> &str {
+    value.strip_prefix("sha256:").unwrap_or(value)
 }
 
 #[cfg(test)]
@@ -334,7 +352,10 @@ mod tests {
             VersionScheme::Rpm,
         );
 
-        ConversionService::merge_repository_provides(&conn, &repo_pkg, &mut metadata).unwrap();
+        let (provides, digest) =
+            RepositoryProvide::conversion_capabilities_with_digest(&conn, repo_pkg_id).unwrap();
+        let repository_metadata = RepositoryConversionMetadata { provides, digest };
+        ConversionService::merge_repository_provides(&repository_metadata, &mut metadata).unwrap();
 
         assert!(metadata.provides.iter().any(|provide| {
             provide.name == "kernel-uname-r"
@@ -344,5 +365,9 @@ mod tests {
                         conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
                     )
         }));
+        assert_eq!(
+            repository_metadata.digest,
+            RepositoryProvide::conversion_capabilities_digest(&conn, repo_pkg_id).unwrap()
+        );
     }
 }

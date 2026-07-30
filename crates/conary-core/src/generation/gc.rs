@@ -169,7 +169,7 @@ impl CasReachability {
         }
 
         for converted in crate::db::models::ConvertedPackage::list_repository_conversions(conn)? {
-            if converted.needs_reconversion() {
+            if !converted.repository_metadata_is_current(conn)? {
                 continue;
             }
             converted.scriptlet_summary()?;
@@ -365,7 +365,9 @@ fn should_skip_recent_object(path: &Path, now: SystemTime, grace_period: Duratio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{ConvertedPackage, FileEntry};
+    use crate::db::models::{
+        ConvertedPackage, FileEntry, Repository, RepositoryPackage, RepositoryProvide,
+    };
     use crate::db::schema;
     use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use tempfile::TempDir;
@@ -382,6 +384,46 @@ mod tests {
         let dir = objects_dir.join(prefix);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(suffix), content).unwrap();
+    }
+
+    fn seed_repository_source(conn: &Connection, converted: &mut ConvertedPackage) -> i64 {
+        let artifact = converted.repository_artifact().unwrap();
+        let source_profile = artifact.source_profile.to_string();
+        let package_name = artifact.package_name.to_string();
+        let package_version = artifact.package_version.to_string();
+        let package_architecture = artifact.package_architecture.to_string();
+        let original_checksum = converted.original_checksum.clone();
+        let profile =
+            crate::repository::supported_profiles::profile_by_public_id(&source_profile).unwrap();
+
+        let repository_name = format!("gc-fixture-{source_profile}");
+        let repository_id = match Repository::find_by_name(conn, &repository_name).unwrap() {
+            Some(repository) => repository.id.expect("persisted fixture repository"),
+            None => {
+                let mut repository = Repository::new(
+                    repository_name,
+                    format!("https://example.invalid/{source_profile}"),
+                );
+                repository.source_profile = Some(source_profile.clone());
+                repository.insert(conn).unwrap()
+            }
+        };
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            package_name,
+            package_version,
+            profile.version_scheme(),
+            original_checksum,
+            1,
+            "https://example.invalid/package".to_string(),
+        );
+        package.architecture = Some(package_architecture);
+        package.source_profile = Some(source_profile);
+        let repository_package_id = package.insert(conn).unwrap();
+        converted.repository_provides_digest = Some(
+            RepositoryProvide::conversion_capabilities_digest(conn, repository_package_id).unwrap(),
+        );
+        repository_package_id
     }
 
     #[test]
@@ -493,7 +535,7 @@ mod tests {
     #[test]
     fn malformed_explicit_chunk_authority_fails_closed() {
         let conn = create_test_db();
-        ConvertedPackage::new_repository(
+        let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "pkg".to_string(),
             "1".to_string(),
@@ -504,9 +546,10 @@ mod tests {
             1,
             "content".to_string(),
             "/tmp/pkg.ccs".to_string(),
-        )
-        .insert(&conn)
-        .unwrap();
+            crate::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+        );
+        seed_repository_source(&conn, &mut converted);
+        converted.insert(&conn).unwrap();
         let error = CasReachability::new()
             .protect_current_database(&conn)
             .expect_err("malformed chunk authority must abort");
@@ -530,7 +573,9 @@ mod tests {
             1,
             current.clone(),
             "/tmp/current.ccs".to_string(),
+            crate::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
+        seed_repository_source(&conn, &mut current_conversion);
         current_conversion.insert(&conn).unwrap();
         let mut stale_conversion = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
@@ -543,6 +588,7 @@ mod tests {
             1,
             stale.clone(),
             "/tmp/stale.ccs".to_string(),
+            crate::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         stale_conversion.conversion_version =
             crate::db::models::CONVERSION_VERSION.saturating_sub(1);

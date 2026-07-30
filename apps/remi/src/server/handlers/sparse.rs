@@ -487,6 +487,7 @@ mod tests {
             42,
             content_hash.to_string(),
             format!("/tmp/{package}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
@@ -697,6 +698,7 @@ mod tests {
             2048,
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.insert(&conn).unwrap();
 
@@ -738,6 +740,7 @@ mod tests {
             2048,
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(&conn).unwrap();
@@ -768,6 +771,7 @@ mod tests {
             2048,
             "sha256:i686-content".to_string(),
             "/data/libffi-i686.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.insert(&conn).unwrap();
 

@@ -1,7 +1,7 @@
 // conary-core/src/repository/sync/native.rs
 
 use crate::db::models::{
-    Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+    ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
     RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
@@ -29,6 +29,9 @@ pub(super) fn persist_native_sync_rows(
 
     persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     link_canonical_ids(&tx, repo_id)?;
+    if let Some(source_profile) = repo.source_profile.as_deref() {
+        ConvertedPackage::reconcile_repository_metadata(&tx, source_profile)?;
+    }
 
     repo.last_sync = Some(current_timestamp());
     repo.update(&tx)?;

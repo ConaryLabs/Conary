@@ -462,6 +462,7 @@ mod tests {
             3,
             "sha256:first".to_string(),
             "/tmp/first.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         first.insert(&conn).unwrap();
 
@@ -476,6 +477,7 @@ mod tests {
             2,
             "sha256:second".to_string(),
             "/tmp/second.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         second.insert(&conn).unwrap();
 
@@ -547,6 +549,7 @@ mod tests {
             1,
             "sha256:content".to_string(),
             "/tmp/broken.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         let id = converted.insert(&conn).unwrap();
         conn.execute_batch("PRAGMA ignore_check_constraints = ON;")

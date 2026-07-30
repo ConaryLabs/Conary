@@ -2,7 +2,7 @@
 //! Shared test helpers for Remi conversion child modules.
 
 use conary_core::ccs::convert::{ConversionResult, ScriptletBundleSummary};
-use conary_core::db::models::{Repository, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide};
 use conary_core::db::schema;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,6 +46,54 @@ pub(super) fn insert_package(
     );
     pkg.architecture = Some("x86_64".to_string());
     pkg.insert(conn).unwrap();
+}
+
+/// Seed the exact repository source row that makes a converted fixture current,
+/// then bind the fixture to the source row's normalized capability projection.
+pub(crate) fn seed_repository_conversion_source(
+    conn: &rusqlite::Connection,
+    converted: &mut ConvertedPackage,
+) -> i64 {
+    let artifact = converted.repository_artifact().unwrap();
+    let source_profile = artifact.source_profile.to_string();
+    let package_name = artifact.package_name.to_string();
+    let package_version = artifact.package_version.to_string();
+    let package_architecture = artifact.package_architecture.to_string();
+    let original_checksum = converted.original_checksum.clone();
+    let profile =
+        conary_core::repository::supported_profiles::profile_by_public_id(&source_profile)
+            .unwrap_or_else(|| panic!("test conversion must use exact profile '{source_profile}'"));
+
+    let repository_name = format!("conversion-fixture-{source_profile}");
+    let repository_id = match Repository::find_by_name(conn, &repository_name).unwrap() {
+        Some(repository) => repository.id.expect("persisted fixture repository"),
+        None => {
+            let mut repository = Repository::new(
+                repository_name,
+                format!("https://example.invalid/{source_profile}"),
+            );
+            repository.source_profile = Some(source_profile.clone());
+            repository.insert(conn).unwrap()
+        }
+    };
+
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        package_name,
+        package_version,
+        profile.version_scheme(),
+        original_checksum,
+        1,
+        "https://example.invalid/package".to_string(),
+    );
+    package.architecture = Some(package_architecture);
+    package.source_profile = Some(source_profile);
+    let repository_package_id = package.insert(conn).unwrap();
+
+    converted.repository_provides_digest = Some(
+        RepositoryProvide::conversion_capabilities_digest(conn, repository_package_id).unwrap(),
+    );
+    repository_package_id
 }
 
 fn production_source_without_comments(path: &Path) -> String {

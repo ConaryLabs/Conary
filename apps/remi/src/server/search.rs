@@ -571,7 +571,7 @@ fn current_conversion_search_keys(
 ) -> Result<HashSet<SearchConversionKey>> {
     let mut keys = HashSet::new();
     for converted in ConvertedPackage::list_repository_conversions(conn)? {
-        if !converted.needs_reconversion() {
+        if converted.repository_metadata_is_current(conn)? {
             let artifact = converted.repository_artifact()?;
             converted.scriptlet_summary()?;
             keys.insert(SearchConversionKey {
@@ -682,6 +682,7 @@ mod tests {
             42,
             format!("sha256:{package}-{version}-content"),
             format!("/tmp/{package}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();

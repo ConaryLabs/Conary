@@ -1,5 +1,6 @@
 // apps/remi/src/server/handlers/chunks/tests.rs
 use super::*;
+use crate::server::conversion::test_support::seed_repository_conversion_source;
 
 #[test]
 fn batch_fetch_request_rejects_removed_json_format() {
@@ -41,9 +42,12 @@ async fn chunk_state_with_db(
             11,
             format!("sha256:content-{index}"),
             format!("/tmp/pkg-{index}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         if stale {
             converted.conversion_version = CONVERSION_VERSION - 1;
+        } else {
+            seed_repository_conversion_source(&conn, &mut converted);
         }
         converted.insert(&conn).unwrap();
     }

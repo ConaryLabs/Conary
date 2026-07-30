@@ -4,8 +4,9 @@ mod tests {
     use super::*;
     use crate::ccs::signing::SigningKeyPair;
     use crate::db::models::{
-        RepositoryPackage, RepositoryPackageKey, RepositoryProvide, RepositoryRequirement,
-        RepositoryRequirementGroup as DbRequirementGroup, SecurityAdvisorySupport,
+        ConvertedPackage, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,
+        RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
+        SecurityAdvisorySupport,
     };
     use crate::db::schema::ensure_current;
     use crate::hash::sha256;

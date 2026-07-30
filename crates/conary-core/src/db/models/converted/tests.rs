@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::ccs::convert::ScriptletBundleSummary;
-use crate::db::models::{Trove, TroveType};
+use crate::db::models::{RepositoryProvide, Trove, TroveType};
 use crate::db::testing::create_test_db;
 
 fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
@@ -17,7 +17,25 @@ fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
         42,
         "sha256:content".to_string(),
         "/tmp/fixture.ccs".to_string(),
+        EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     )
+}
+
+fn seed_server_package_source(conn: &Connection, checksum: &str) {
+    conn.execute(
+        "INSERT INTO repositories (name, url, source_profile)
+         VALUES ('fedora-source', 'https://example.test', 'fedora-44')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repository_packages
+         (repository_id, name, version, architecture, checksum, size, download_url, version_scheme)
+         VALUES (1, 'fixture', '1.0-1', 'x86_64', ?1, 42,
+                 'https://example.test/fixture.rpm', 'rpm')",
+        [checksum],
+    )
+    .unwrap();
 }
 
 fn installed_package(
@@ -123,6 +141,7 @@ fn stale_rows_are_excluded_from_current_conversion_query() {
 #[test]
 fn current_typed_summary_is_returned_by_current_conversion_query() {
     let (_temp, conn) = create_test_db();
+    seed_server_package_source(&conn, "sha256:source");
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
 
@@ -131,6 +150,36 @@ fn current_typed_summary_is_returned_by_current_conversion_query() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn repository_provide_change_invalidates_and_reconciles_conversion() {
+    let (_temp, conn) = create_test_db();
+    seed_server_package_source(&conn, "sha256:source");
+    let mut converted = server_package("sha256:source", "sha256:chunk");
+    converted.insert(&conn).unwrap();
+    assert!(converted.repository_metadata_is_current(&conn).unwrap());
+
+    let mut provide = RepositoryProvide::new(
+        1,
+        "/usr/bin/kernel-install".to_string(),
+        None,
+        "file".to_string(),
+        Some("/usr/bin/kernel-install".to_string()),
+        crate::repository::versioning::VersionScheme::Rpm,
+    );
+    provide.insert(&conn).unwrap();
+
+    assert!(!converted.repository_metadata_is_current(&conn).unwrap());
+    assert_eq!(
+        ConvertedPackage::reconcile_repository_metadata(&conn, "fedora-44").unwrap(),
+        1
+    );
+    assert!(
+        ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", "sha256:source")
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -196,6 +245,7 @@ fn repository_artifact_rejects_corrupt_chunk_json() {
 #[test]
 fn chunk_conversion_state_uses_current_typed_rows() {
     let (_temp, conn) = create_test_db();
+    seed_server_package_source(&conn, "source");
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
 
@@ -208,6 +258,7 @@ fn chunk_conversion_state_uses_current_typed_rows() {
 #[test]
 fn chunk_conversion_state_errors_on_malformed_current_summary() {
     let (_temp, conn) = create_test_db();
+    seed_server_package_source(&conn, "source");
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
     conn.execute(

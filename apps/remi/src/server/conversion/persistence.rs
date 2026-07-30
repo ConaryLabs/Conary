@@ -1,11 +1,13 @@
 // apps/remi/src/server/conversion/persistence.rs
 //! Converted-package persistence and cache-hit reconstruction.
 
+use super::metadata::repository_package_conversion_inputs_match;
 use super::{ConversionService, ScriptletPackageMetadata, ServerConversionResult};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::ccs::convert::ConversionResult;
-use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
 use conary_core::packages::common::PackageMetadata;
+use rusqlite::TransactionBehavior;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -16,6 +18,7 @@ pub(super) struct PersistConversionInput {
     pub(super) original_checksum: String,
     pub(super) conversion_result: ConversionResult,
     pub(super) repo_pkg: RepositoryPackage,
+    pub(super) repository_provides_digest: String,
     pub(super) chunk_hashes: Vec<String>,
 }
 
@@ -25,47 +28,75 @@ impl ConversionService {
         source_profile: &str,
         repo_pkg: &RepositoryPackage,
         original_checksum: &str,
+        repository_provides_digest: &str,
     ) -> Result<Option<ServerConversionResult>> {
         let service = self.clone();
         let source_profile = source_profile.to_string();
         let repo_pkg = repo_pkg.clone();
         let original_checksum = original_checksum.to_string();
+        let repository_provides_digest = repository_provides_digest.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&service.db_path)?;
+            let mut conn = conary_core::db::open(&service.db_path)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let repository_package_id = repo_pkg
+                .id
+                .context("repository conversion package has no persisted identity")?;
+            let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
+                .context("repository package metadata changed during conversion cache lookup")?;
+            ensure!(
+                repository_package_conversion_inputs_match(&repo_pkg, &current_package),
+                "repository package identity changed during conversion cache lookup"
+            );
             let Some(existing) = ConvertedPackage::find_repository_by_checksum(
-                &conn,
+                &tx,
                 &source_profile,
                 &original_checksum,
             )?
             else {
+                tx.commit()?;
                 return Ok(None);
             };
 
-            let ccs_filename = Self::safe_ccs_filename_with_arch(
-                &repo_pkg.name,
-                &repo_pkg.version,
-                repo_pkg.architecture.as_deref(),
-            )?;
-            let ccs_path = service.cache_dir.join("packages").join(&ccs_filename);
-            if !existing.needs_reconversion() && ccs_path.exists() {
+            let artifact = existing.repository_artifact()?;
+            let expected_architecture = repo_pkg
+                .architecture
+                .as_deref()
+                .context("repository conversion package has no exact architecture")?;
+            let artifact_matches_package = artifact.source_profile == source_profile
+                && artifact.package_name == repo_pkg.name
+                && artifact.package_version == repo_pkg.version
+                && artifact.package_architecture == expected_architecture;
+            let metadata_is_current = existing.repository_metadata_is_current(&tx)?;
+            let ccs_path = PathBuf::from(artifact.ccs_path);
+            if metadata_is_current {
+                ensure!(
+                    artifact_matches_package,
+                    "current conversion checksum maps to a conflicting repository package identity"
+                );
+            }
+            if metadata_is_current
+                && artifact.repository_provides_digest == repository_provides_digest
+                && ccs_path.exists()
+            {
                 info!(
                     "Package already converted (checksum: {})",
                     original_checksum
                 );
-                return service
-                    .build_result_from_existing(&existing, &repo_pkg)
-                    .map(Some);
+                let result = service.build_result_from_existing(&existing)?;
+                tx.commit()?;
+                return Ok(Some(result));
             }
 
             info!(
-                "Stale conversion record (CCS file missing or needs reconversion), re-converting"
+                "Stale conversion record (CCS file missing or conversion input changed), re-converting"
             );
             ConvertedPackage::delete_repository_by_checksum(
-                &conn,
+                &tx,
                 &source_profile,
                 &original_checksum,
             )?;
+            tx.commit()?;
             Ok(None)
         })
         .await
@@ -83,34 +114,51 @@ impl ConversionService {
             original_checksum,
             conversion_result,
             repo_pkg,
+            repository_provides_digest,
             chunk_hashes,
         } = input;
 
-        let conn = conary_core::db::open(&self.db_path)?;
         let ccs_path = conversion_result
             .package_path
             .as_ref()
             .ok_or_else(|| anyhow!("No CCS package path"))?;
 
-        let content_hash = Self::calculate_sha256(ccs_path)?.to_prefixed_string();
+        let content_hash = Self::calculate_sha256(ccs_path)?;
+        let content_hash_text = content_hash.to_prefixed_string();
         let total_size = std::fs::metadata(ccs_path)?.len();
+        let persisted_total_size =
+            i64::try_from(total_size).context("converted CCS size exceeds SQLite INTEGER range")?;
 
         let package_architecture = repo_pkg
             .architecture
             .clone()
             .or_else(|| metadata.architecture.clone())
             .ok_or_else(|| anyhow!("converted package has no exact architecture identity"))?;
-        let ccs_filename = Self::safe_ccs_filename_with_arch(
-            &metadata.name,
-            &metadata.version,
-            Some(&package_architecture),
-        )?;
+        let ccs_filename = format!("{}.ccs", content_hash.as_str());
         let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
 
         if let Some(parent) = final_ccs_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::copy(ccs_path, &final_ccs_path)?;
+
+        let mut conn = conary_core::db::open(&self.db_path)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let repository_package_id = repo_pkg
+            .id
+            .context("converted repository package has no persisted identity")?;
+        let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
+            .context("repository package metadata changed while conversion was running")?;
+        ensure!(
+            repository_package_conversion_inputs_match(&repo_pkg, &current_package),
+            "repository package identity changed while conversion was running"
+        );
+        let current_repository_provides_digest =
+            RepositoryProvide::conversion_capabilities_digest(&tx, repository_package_id)?;
+        ensure!(
+            current_repository_provides_digest == repository_provides_digest,
+            "repository provide authority changed while conversion was running"
+        );
 
         let mut converted = ConvertedPackage::new_repository(
             source_profile.clone(),
@@ -120,12 +168,18 @@ impl ConversionService {
             format.to_string(),
             original_checksum,
             &chunk_hashes,
-            total_size as i64,
-            content_hash.clone(),
+            persisted_total_size,
+            content_hash_text.clone(),
             final_ccs_path.to_string_lossy().to_string(),
+            repository_provides_digest,
         );
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
-        converted.insert(&conn)?;
+        ensure!(
+            converted.repository_metadata_is_current(&tx)?,
+            "repository source metadata changed while conversion was running"
+        );
+        converted.insert(&tx)?;
+        tx.commit()?;
 
         info!(
             "Recorded conversion in database (source_profile={}, name={}, version={})",
@@ -139,7 +193,7 @@ impl ConversionService {
             source_profile: Some(source_profile),
             chunk_hashes,
             total_size,
-            content_hash,
+            content_hash: content_hash_text,
             ccs_path: final_ccs_path,
             cache_state: "cold".to_string(),
             scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
@@ -151,7 +205,6 @@ impl ConversionService {
     fn build_result_from_existing(
         &self,
         existing: &ConvertedPackage,
-        _repo_pkg: &RepositoryPackage,
     ) -> Result<ServerConversionResult> {
         let artifact = existing.repository_artifact()?;
         let scriptlet_summary = existing.scriptlet_summary()?;
@@ -168,5 +221,178 @@ impl ConversionService {
             scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
             timing: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::{create_test_db, insert_package, insert_repo};
+    use super::*;
+    use conary_core::db::models::RepositoryProvide;
+    use conary_core::repository::versioning::VersionScheme;
+
+    fn cache_fixture(
+        bind_current_digest: bool,
+    ) -> (
+        tempfile::NamedTempFile,
+        tempfile::TempDir,
+        ConversionService,
+        RepositoryPackage,
+        String,
+        String,
+    ) {
+        let (database, conn) = create_test_db();
+        let repository_id = insert_repo(&conn, "fedora-base", "fedora");
+        insert_package(&conn, repository_id, "systemd-udev", "259.5-1.fc44", 42);
+        let package = RepositoryPackage::find_by_name(&conn, "systemd-udev")
+            .unwrap()
+            .pop()
+            .unwrap();
+        let package_id = package.id.unwrap();
+        let source_checksum = package.checksum.clone();
+        let mut provide = RepositoryProvide::new(
+            package_id,
+            "/usr/bin/kernel-install".to_string(),
+            None,
+            "file".to_string(),
+            Some("/usr/bin/kernel-install".to_string()),
+            VersionScheme::Rpm,
+        );
+        provide.insert(&conn).unwrap();
+        let current_digest =
+            RepositoryProvide::conversion_capabilities_digest(&conn, package_id).unwrap();
+
+        let storage = tempfile::tempdir().unwrap();
+        let cache_dir = storage.path().join("cache");
+        let ccs_path = cache_dir.join("packages/existing.ccs");
+        std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
+        std::fs::write(&ccs_path, b"existing").unwrap();
+        let converted_digest = if bind_current_digest {
+            current_digest.clone()
+        } else {
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string()
+        };
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            "systemd-udev".to_string(),
+            "259.5-1.fc44".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            source_checksum.clone(),
+            &[],
+            8,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+            converted_digest,
+        );
+        converted.insert(&conn).unwrap();
+        drop(conn);
+
+        let service = ConversionService::new(
+            storage.path().join("chunks"),
+            cache_dir,
+            database.path().to_path_buf(),
+            None,
+        );
+        (
+            database,
+            storage,
+            service,
+            package,
+            source_checksum,
+            current_digest,
+        )
+    }
+
+    #[tokio::test]
+    async fn cache_hit_requires_the_current_repository_provide_digest() {
+        let (_database, _storage, service, package, source_checksum, current_digest) =
+            cache_fixture(false);
+
+        let result = service
+            .cached_conversion_result_async(
+                "fedora-44",
+                &package,
+                &source_checksum,
+                &current_digest,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        assert!(
+            ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", &source_checksum)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_hit_reuses_an_exact_metadata_bound_artifact() {
+        let (_database, _storage, service, package, source_checksum, current_digest) =
+            cache_fixture(true);
+
+        let result = service
+            .cached_conversion_result_async(
+                "fedora-44",
+                &package,
+                &source_checksum,
+                &current_digest,
+            )
+            .await
+            .unwrap()
+            .expect("exact conversion cache hit");
+
+        assert_eq!(result.cache_state, "hot");
+        assert_eq!(result.name, "systemd-udev");
+    }
+
+    #[tokio::test]
+    async fn cache_hit_rejects_a_checksum_alias_with_conflicting_package_identity() {
+        let (_database, _storage, service, package, source_checksum, current_digest) =
+            cache_fixture(true);
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        let mut alias = RepositoryPackage::new(
+            package.repository_id,
+            "aliased-systemd".to_string(),
+            package.version.clone(),
+            VersionScheme::Rpm,
+            source_checksum.clone(),
+            package.size,
+            "https://example.com/aliased-systemd.rpm".to_string(),
+        );
+        alias.architecture = package.architecture.clone();
+        alias.insert(&conn).unwrap();
+        let alias_id = alias.id.unwrap();
+        let mut provide = RepositoryProvide::new(
+            alias_id,
+            "/usr/bin/kernel-install".to_string(),
+            None,
+            "file".to_string(),
+            Some("/usr/bin/kernel-install".to_string()),
+            VersionScheme::Rpm,
+        );
+        provide.insert(&conn).unwrap();
+        assert_eq!(
+            RepositoryProvide::conversion_capabilities_digest(&conn, alias_id).unwrap(),
+            current_digest
+        );
+        drop(conn);
+
+        let error = service
+            .cached_conversion_result_async("fedora-44", &alias, &source_checksum, &current_digest)
+            .await
+            .expect_err("one checksum cannot alias two current package identities")
+            .to_string();
+
+        assert!(error.contains("conflicting repository package identity"));
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        assert!(
+            ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", &source_checksum)
+                .unwrap()
+                .is_some(),
+            "the current artifact for the original identity must not be deleted"
+        );
     }
 }

@@ -1,5 +1,6 @@
 // apps/remi/src/server/handlers/packages/tests.rs
 use super::*;
+use crate::server::conversion::test_support::seed_repository_conversion_source;
 use crate::server::native_publish::test_support::seed_native_publication;
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{CONVERSION_VERSION, ChunkAccess, ConvertedPackage};
@@ -98,12 +99,14 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
         3,
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     let summary = ScriptletBundleSummary {
         scriptlet_fidelity: "native-free".to_string(),
         ..ScriptletBundleSummary::default()
     };
     converted.set_scriptlet_metadata(&summary).unwrap();
+    seed_repository_conversion_source(&conn, &mut converted);
     converted.insert(&conn).unwrap();
     ChunkAccess::new("sha256:chunk".to_string(), 3)
         .upsert(&conn)
@@ -143,10 +146,12 @@ fn malformed_current_conversion_metadata_is_an_internal_data_error() {
         8,
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     converted
         .set_scriptlet_metadata(&ScriptletBundleSummary::default())
         .unwrap();
+    seed_repository_conversion_source(&conn, &mut converted);
     converted.insert(&conn).unwrap();
     conn.execute(
         "UPDATE converted_packages SET scriptlet_summary_json = '{broken' WHERE original_checksum = ?1",
@@ -182,6 +187,7 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
         17,
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     converted.conversion_version = CONVERSION_VERSION - 1;
     converted.insert(&conn).unwrap();

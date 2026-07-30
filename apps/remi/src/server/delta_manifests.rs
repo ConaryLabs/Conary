@@ -416,6 +416,7 @@ pub fn get_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::conversion::test_support::seed_repository_conversion_source;
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use conary_core::db::schema;
     use tempfile::NamedTempFile;
@@ -468,8 +469,12 @@ mod tests {
             total_size,
             format!("sha256:content-{name}-{version}"),
             format!("/data/{name}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         pkg.conversion_version = conversion_version;
+        if conversion_version == CONVERSION_VERSION {
+            seed_repository_conversion_source(conn, &mut pkg);
+        }
         pkg.insert(conn).unwrap();
     }
 
@@ -493,6 +498,7 @@ mod tests {
             total_size,
             format!("sha256:content-{name}-{version}"),
             format!("/data/{name}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         pkg.conversion_version = CONVERSION_VERSION - 1;
         pkg.insert(conn).unwrap();
