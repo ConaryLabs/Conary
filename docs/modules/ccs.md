@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 55
+last_updated: 2026-07-30
+revision: 56
 summary: Convert foreign packages through typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -214,13 +214,16 @@ uses the projected node and CAS authority.
 **convert/** -- RPM, Debian, and Arch to CCS conversion. Source package parsers
 produce a typed native ABI before conversion: exact lifecycle slots, body
 bytes, interpreters, invocation contracts, trigger/control metadata, and
-package-manager ordering. Conversion persists every executable entry with a
-digest; entry presence is lifecycle authority. It does not decide event order
-by inspecting the script body and it does not suppress an entry because a
-command appears to have a declarative replacement. The resulting CCS is
-executed by Conary on any supported target; conversion and install do not
-delegate lifecycle planning, database mutation, or transaction completion to
-`rpm`, `dpkg`, or `pacman`.
+package-manager ordering. Source-defined strong requirement order, including
+Debian `Pre-Depends` and RPM install prerequisites, is preserved as
+`PreDepends` through repository metadata, signed CCS v2 authority, and
+installed state. Conversion persists every executable entry with a digest;
+entry presence is lifecycle authority. It does not decide event order by
+inspecting the script body and it does not suppress an entry because a command
+appears to have a declarative replacement. The resulting CCS is executed by
+Conary on any supported target; conversion and install do not delegate
+lifecycle planning, database mutation, or transaction completion to `rpm`,
+`dpkg`, or `pacman`.
 Source format and target host are orthogonal: the running system exposes typed
 ABI/libc/loader, init, LSM, filesystem, boot/kernel, and helper capabilities.
 The implemented hook inventory currently records init/systemd, sysusers,

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 36
+last_updated: 2026-07-30
+revision: 37
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -700,6 +700,7 @@ Authoritative references:
 - [`rpm-version(7)`](https://rpm.org/docs/latest/man/rpm-version.7)
 - [RPM package state machine (`lib/psm.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/psm.cc)
 - [RPM transaction orchestration (`lib/transaction.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/transaction.cc)
+- [RPM transaction ordering (`lib/order.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/order.cc)
 - [RPM trigger implementation (`lib/rpmtriggers.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmtriggers.cc)
 - [RPM dependency-set comparison (`lib/rpmds.cc`)](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc)
 
@@ -726,6 +727,18 @@ before native RPM version evaluation, while `!=` is not an RPM dependency
 operator. Requires-like and conflict-like tag contexts retain RPM's distinct
 `if`/`unless` nesting checks. The implementation never recognizes a dependency
 by package name or adds a skip/allowlist for repository metadata.
+
+RPM install prerequisites are typed ordering authority, not ordinary
+dependency text. Direct RPM headers map legacy `Prereq` and `%pre`/`%post`
+dependency senses to `PreDepends`; RPM-MD maps the exact signed `pre="1"`
+Requires marker to the same kind. `%pretrans`, `%posttrans`, erase, verification,
+runtime-feature, and meta senses remain ordinary dependency satisfaction
+without becoming strong install edges, matching RPM's `isInstallPreReq()` and
+`isUnorderedReq()` transaction-order masks. Conversion preserves the kind in
+signed CCS authority and installed requirement state. Within a dependency
+cycle, transaction ordering must satisfy those strong edges before applying
+the deterministic fallback for the remaining cycle; package names and
+capability strings never establish that priority.
 
 ### RPM Lifecycle Surface
 

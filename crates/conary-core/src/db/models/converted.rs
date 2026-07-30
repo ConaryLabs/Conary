@@ -17,9 +17,9 @@ use strum_macros::{AsRefStr, Display, EnumString};
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// Revision 12 binds repository conversions to the exact normalized repository
-/// capability projection that influenced their signed CCS authority.
-pub const CONVERSION_VERSION: i32 = 12;
+/// Revision 13 preserves source-defined strong dependency ordering in signed
+/// CCS authority.
+pub const CONVERSION_VERSION: i32 = 13;
 /// Canonical digest of an empty repository-provide projection.
 pub const EMPTY_REPOSITORY_PROVIDES_DIGEST: &str =
     "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";

@@ -104,6 +104,40 @@ fn rpm_artifact_requirement_canonicalizes_empty_epoch_at_typed_boundary() {
 }
 
 #[test]
+fn rpm_header_requirement_preserves_strong_install_order() {
+    for flags in [
+        DependencyFlags::PREREQ,
+        DependencyFlags::SCRIPT_PRE,
+        DependencyFlags::SCRIPT_POST,
+    ] {
+        let requirement = decode_rpm_requirement("setup", "", flags).unwrap().unwrap();
+        assert_eq!(
+            requirement.kind,
+            RepositoryRequirementKind::PreDepends,
+            "{flags:?}"
+        );
+    }
+
+    for flags in [
+        DependencyFlags::PRETRANS,
+        DependencyFlags::POSTTRANS,
+        DependencyFlags::INTERP,
+        DependencyFlags::SCRIPT_PREUN,
+        DependencyFlags::SCRIPT_POSTUN,
+        DependencyFlags::SCRIPT_VERIFY,
+        DependencyFlags::META,
+        DependencyFlags::SCRIPT_PRE | DependencyFlags::MISSINGOK,
+    ] {
+        let requirement = decode_rpm_requirement("setup", "", flags).unwrap().unwrap();
+        assert_eq!(
+            requirement.kind,
+            RepositoryRequirementKind::Depends,
+            "{flags:?}"
+        );
+    }
+}
+
+#[test]
 fn rpm_header_relations_preserve_conflicts_and_obsoletes_as_typed_authority() {
     let mut builder =
         rpm::PackageBuilder::new("newpkg", "2", "MIT", "x86_64", "package relation fixture");
