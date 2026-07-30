@@ -12,11 +12,9 @@
 //! <https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/rpmio/rpmver.cc#L59-L106>.
 
 use crate::error::{Error, Result};
-use crate::repository::dependency_model::{
-    ConditionalRequirementBehavior, ProvideVersionRelation, RepositoryRequirementGroup,
-    RepositoryRequirementKind,
-};
+use crate::repository::dependency_model::{ProvideVersionRelation, RepositoryRequirementGroup};
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_repo_constraint};
+use rpm::DependencyFlags;
 
 #[derive(Debug)]
 pub(super) struct RpmProvideConstraint {
@@ -34,6 +32,52 @@ fn rpm_flags_to_op(flags: &str) -> Option<&'static str> {
         "LT" => Some("<"),
         "GT" => Some(">"),
         _ => None,
+    }
+}
+
+fn rpm_flags_to_dependency_flags(name: &str, flags: Option<&str>) -> Result<DependencyFlags> {
+    match flags {
+        None => Ok(DependencyFlags::empty()),
+        Some("GE") => Ok(DependencyFlags::GREATER | DependencyFlags::EQUAL),
+        Some("LE") => Ok(DependencyFlags::LESS | DependencyFlags::EQUAL),
+        Some("EQ") => Ok(DependencyFlags::EQUAL),
+        Some("LT") => Ok(DependencyFlags::LESS),
+        Some("GT") => Ok(DependencyFlags::GREATER),
+        Some(flags) => Err(Error::ParseError(format!(
+            "unsupported RPM relation flags '{flags}' for {name}"
+        ))),
+    }
+}
+
+fn rpm_evr_native_text(
+    name: &str,
+    flags: Option<&str>,
+    epoch: Option<&str>,
+    version: Option<&str>,
+    release: Option<&str>,
+) -> Result<String> {
+    match (flags, version) {
+        (None, None) if epoch.is_none() && release.is_none() => Ok(String::new()),
+        (Some(_), Some(version)) => {
+            let mut evr = String::new();
+            if let Some(epoch) = epoch
+                && epoch != "0"
+            {
+                evr.push_str(epoch);
+                evr.push(':');
+            }
+            evr.push_str(version);
+            if let Some(release) = release
+                && !release.is_empty()
+            {
+                evr.push('-');
+                evr.push_str(release);
+            }
+            Ok(evr)
+        }
+        _ => Err(Error::ParseError(format!(
+            "malformed RPM relation entry for {name}: comparison flags and version must appear together"
+        ))),
     }
 }
 
@@ -59,34 +103,19 @@ pub(super) fn rpm_constraint_native_text(
     version: Option<&str>,
     release: Option<&str>,
 ) -> Result<String> {
-    match (flags, version) {
-        (None, None) if epoch.is_none() && release.is_none() => Ok(String::new()),
-        (Some(flags), Some(version)) => {
-            let operator = rpm_flags_to_op(flags).ok_or_else(|| {
-                Error::ParseError(format!(
-                    "unsupported RPM relation flags '{flags}' for {name}"
-                ))
-            })?;
-            let mut evr = String::new();
-            if let Some(epoch) = epoch
-                && epoch != "0"
-            {
-                evr.push_str(epoch);
-                evr.push(':');
-            }
-            evr.push_str(version);
-            if let Some(release) = release
-                && !release.is_empty()
-            {
-                evr.push('-');
-                evr.push_str(release);
-            }
-            Ok(format!("{operator} {evr}"))
-        }
-        _ => Err(Error::ParseError(format!(
-            "malformed RPM relation entry for {name}: comparison flags and version must appear together"
-        ))),
-    }
+    let Some(flags) = flags else {
+        return rpm_evr_native_text(name, None, epoch, version, release);
+    };
+    let operator = rpm_flags_to_op(flags).ok_or_else(|| {
+        Error::ParseError(format!(
+            "unsupported RPM relation flags '{flags}' for {name}"
+        ))
+    })?;
+    let evr = rpm_evr_native_text(name, Some(flags), epoch, version, release)?;
+    Ok(format!(
+        "{operator} {}",
+        crate::packages::rpm::canonicalize_rpm_evr(&evr)
+    ))
 }
 
 pub(super) fn rpm_provide_constraint(
@@ -135,39 +164,14 @@ pub(super) fn rpm_provide_constraint(
 /// Build a typed requirement group from one exact RPM primary-metadata entry.
 pub(super) fn rpm_require_to_group(
     name: &str,
-    constraint: &str,
+    flags: Option<&str>,
+    epoch: Option<&str>,
+    version: Option<&str>,
+    release: Option<&str>,
 ) -> Result<Option<RepositoryRequirementGroup>> {
-    let native_text = if constraint.is_empty() {
-        name.to_string()
-    } else {
-        format!("{name} {constraint}")
-    };
-    let expression = crate::repository::rpm_dependency::parse_rpm_dependency(
-        RepositoryRequirementKind::Depends,
-        &native_text,
-    )
-    .map_err(Error::ParseError)?;
-    let clauses = expression.atoms().into_iter().cloned().collect::<Vec<_>>();
-    let behavior = if expression.is_conditional() {
-        ConditionalRequirementBehavior::Conditional
-    } else {
-        ConditionalRequirementBehavior::Hard
-    };
-    let first = clauses.first().cloned().ok_or_else(|| {
-        Error::ParseError(format!(
-            "RPM dependency produced no atomic requirements: {native_text}"
-        ))
-    })?;
-    let mut group = RepositoryRequirementGroup::simple(RepositoryRequirementKind::Depends, first)
-        .with_behavior(behavior)
-        .with_expression(expression)
-        .with_native_text(native_text);
-    group.alternatives = clauses;
-    crate::repository::rpm_runtime::simplify_runtime_requirement_group(
-        group,
-        crate::repository::versioning::VersionScheme::Rpm,
-    )
-    .map_err(|error| Error::ParseError(error.to_string()))
+    let dependency_flags = rpm_flags_to_dependency_flags(name, flags)?;
+    let evr = rpm_evr_native_text(name, flags, epoch, version, release)?;
+    crate::packages::rpm::decode_rpm_requirement(name, &evr, dependency_flags)
 }
 
 #[cfg(test)]
@@ -187,6 +191,44 @@ mod tests {
             .unwrap(),
             ">= 2:3.2.0-4.fc44"
         );
+    }
+
+    #[test]
+    fn requirement_canonicalizes_zero_epochs_through_shared_rpm_decoder() {
+        for epoch in ["", "0"] {
+            let requirement = rpm_require_to_group(
+                "device-mapper-libs",
+                Some("EQ"),
+                Some(epoch),
+                Some("1.02.212"),
+                Some("2.fc44"),
+            )
+            .unwrap()
+            .unwrap();
+
+            assert_eq!(
+                requirement.alternatives[0].version_constraint.as_deref(),
+                Some("= 1.02.212-2.fc44")
+            );
+            assert_eq!(
+                requirement.native_text.as_deref(),
+                Some("device-mapper-libs = 1.02.212-2.fc44")
+            );
+        }
+    }
+
+    #[test]
+    fn requirement_rejects_non_decimal_epoch_through_shared_rpm_decoder() {
+        let error = rpm_require_to_group(
+            "device-mapper-libs",
+            Some("EQ"),
+            Some("invalid"),
+            Some("1.02.212"),
+            Some("2.fc44"),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("epoch"));
     }
 
     #[test]

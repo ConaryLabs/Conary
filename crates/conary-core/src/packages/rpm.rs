@@ -69,63 +69,13 @@ impl RpmPackage {
 
     /// Parse RPM Requires into the formal Boolean requirement grammar.
     fn extract_requirements(pkg: &Package) -> Result<Vec<RepositoryRequirementGroup>> {
-        // RPMSENSE_CONFIG is not disposable annotation. RPM generates paired
-        // config(NAME) requires/provides for packages containing %config files:
-        // https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/build/rpmfc.cc#L1748-L1762
-        // Conary installs those files, so preserve the exact package
-        // capability instead of silently discarding the flag.
         let groups = pkg
             .metadata
             .get_requires()
             .map_err(|error| Error::ParseError(format!("Failed to read RPM requires: {error}")))?
             .into_iter()
             .map(|requirement| {
-                let runtime_feature =
-                    crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(
-                        &requirement.name,
-                    )
-                    .map_err(|error| Error::ParseError(error.to_string()))?;
-                if requirement.flags.intersects(DependencyFlags::RPMLIB)
-                    && runtime_feature.is_none()
-                {
-                    return Err(Error::ParseError(format!(
-                        "RPM requirement '{}' carries RPMLIB sense outside the rpmlib(Feature) grammar",
-                        requirement.name
-                    )));
-                }
-                validate_rpm_config_sense(&requirement.name, requirement.flags)?;
-                let native_text = if requirement.name.starts_with('(') {
-                    if !requirement.version.is_empty()
-                        || requirement.flags.intersects(
-                            DependencyFlags::LESS
-                                | DependencyFlags::GREATER
-                                | DependencyFlags::EQUAL,
-                        )
-                    {
-                        return Err(Error::ParseError(format!(
-                            "RPM rich dependency '{}' carries an invalid separate version constraint",
-                            requirement.name
-                        )));
-                    }
-                    requirement.name.to_string()
-                } else {
-                    rpm_relation_text(
-                        &requirement.name,
-                        &requirement.version,
-                        requirement.flags,
-                    )?
-                };
-                let group = crate::repository::requirement::parse_native_requirement(
-                    RepositoryRequirementKind::Depends,
-                    VersionScheme::Rpm,
-                    &native_text,
-                )
-                .map_err(Error::ParseError)?;
-                crate::repository::rpm_runtime::simplify_runtime_requirement_group(
-                    group,
-                    VersionScheme::Rpm,
-                )
-                .map_err(|error| Error::ParseError(error.to_string()))
+                decode_rpm_requirement(&requirement.name, &requirement.version, requirement.flags)
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(groups.into_iter().flatten().collect())
@@ -219,6 +169,62 @@ impl RpmPackage {
         }
         Ok(relations)
     }
+}
+
+/// Decode one aligned RPM Requires header record into Conary's typed model.
+///
+/// Artifact parsing and installed-rpmdb adoption share this boundary so query
+/// formatting cannot create a second dependency grammar. RPM itself accepts an
+/// empty serialized epoch before `:` as epoch zero in `parseEVR()` at pinned
+/// upstream commit a8f0192a; Conary canonicalizes that source spelling to an
+/// omitted epoch while retaining the stricter canonical EVR grammar elsewhere.
+pub(crate) fn decode_rpm_requirement(
+    name: &str,
+    version: &str,
+    flags: DependencyFlags,
+) -> Result<Option<RepositoryRequirementGroup>> {
+    // RPMSENSE_CONFIG is not disposable annotation. RPM generates paired
+    // config(NAME) requires/provides for packages containing %config files:
+    // https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/build/rpmfc.cc#L1748-L1762
+    // Conary installs those files, so preserve the exact package capability.
+    let runtime_feature = crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(name)
+        .map_err(|error| Error::ParseError(error.to_string()))?;
+    if flags.intersects(DependencyFlags::RPMLIB) && runtime_feature.is_none() {
+        return Err(Error::ParseError(format!(
+            "RPM requirement '{name}' carries RPMLIB sense outside the rpmlib(Feature) grammar"
+        )));
+    }
+    validate_rpm_config_sense(name, flags)?;
+
+    let native_text = if name.starts_with('(') {
+        if !version.is_empty()
+            || flags.intersects(
+                DependencyFlags::LESS | DependencyFlags::GREATER | DependencyFlags::EQUAL,
+            )
+        {
+            return Err(Error::ParseError(format!(
+                "RPM rich dependency '{name}' carries an invalid separate version constraint"
+            )));
+        }
+        name.to_string()
+    } else {
+        let canonical_version = canonicalize_rpm_evr(version);
+        rpm_relation_text(name, canonical_version, flags)?
+    };
+    let group = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        &native_text,
+    )
+    .map_err(Error::ParseError)?;
+    crate::repository::rpm_runtime::simplify_runtime_requirement_group(group, VersionScheme::Rpm)
+        .map_err(|error| Error::ParseError(error.to_string()))
+}
+
+/// Canonicalize RPM's source-defined empty serialized epoch to omitted epoch
+/// zero without weakening the repository-wide EVR grammar.
+pub(crate) fn canonicalize_rpm_evr(version: &str) -> &str {
+    version.strip_prefix(':').unwrap_or(version)
 }
 
 fn validate_rpm_config_sense(name: &str, flags: DependencyFlags) -> Result<()> {
