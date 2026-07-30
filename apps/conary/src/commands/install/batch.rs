@@ -15,8 +15,10 @@
 //! 5. **Typed lifecycle ordering** - native events preserve package-manager transaction order
 
 use super::super::open_db;
+mod ccs;
 mod config;
 mod execution;
+mod ordering;
 mod preparation;
 mod relations;
 
@@ -25,14 +27,15 @@ use super::inner;
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::{UpgradeCheck, check_upgrade_status, parse_package};
 use super::{
-    InstallIntent, InstallSemantics, NativeLifecycleInstallState, PackageFormatType,
-    RepositoryInstallProvenance, build_execution_mode, detect_package_format,
+    InstallIntent, InstallSemantics, NativeLifecycleInstallState, RepositoryInstallProvenance,
+    build_execution_mode, detect_package_format,
 };
 use anyhow::{Context, Result};
+pub(crate) use ccs::prepare_ccs_package_for_batch;
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
-    Changeset, Component, InstallReason, InstalledNativeLifecycleBundle, InstalledRequirementGroup,
-    Trove,
+    Changeset, Component, InstallReason, InstalledCcsRemoveHook, InstalledFileCapability,
+    InstalledNativeLifecycleBundle, InstalledRequirementGroup, Trove,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::packages::payload::PackagePayloadFile;
@@ -57,8 +60,13 @@ pub struct PreparedPackage {
     pub name: String,
     /// Package version
     pub version: String,
-    /// Package format (RPM, DEB, Arch)
-    pub format: PackageFormatType,
+    /// Exact install semantics recovered from the source artifact or CCS
+    /// lifecycle authority.
+    pub(crate) semantics: InstallSemantics,
+    /// Monotonic signed CCS build release, absent for a source-native artifact.
+    pub package_release: Option<String>,
+    /// Exact Debian Multi-Arch behavior, when source-owned.
+    pub debian_multi_arch: Option<conary_core::repository::dependency_model::DebianMultiArch>,
     /// Architecture
     pub architecture: Option<String>,
     /// Package description
@@ -91,10 +99,23 @@ pub struct PreparedPackage {
     pub installed_components: Vec<ComponentType>,
     /// Files assigned by exact component metadata.
     pub classified_files: HashMap<ComponentType, Vec<String>>,
+    /// Exact CCS component names selected for this transaction.
+    pub installed_component_names: Option<Vec<String>>,
+    /// Exact CCS component ownership by normalized payload path.
+    pub component_names_by_path: Option<HashMap<String, String>>,
     /// Repository metadata for packages resolved from synced repository rows.
     pub repository_provenance: Option<RepositoryInstallProvenance>,
     /// Bundle replay plans accepted during preflight, carried through commit.
     pub native_lifecycle_state: NativeLifecycleInstallState,
+    /// CCS-only lifecycle and capability authority.
+    pub(crate) ccs: Option<PreparedCcsMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedCcsMetadata {
+    hooks: conary_core::ccs::manifest::Hooks,
+    capabilities: Option<conary_core::capability::CapabilityDeclaration>,
+    file_capabilities: Vec<conary_core::ccs::manifest::FileCapability>,
 }
 
 pub(super) struct BatchDbRows {
@@ -121,7 +142,7 @@ impl PreparedPackage {
 
     /// Create a Trove model from this prepared package
     pub fn to_trove(&self, changeset_id: i64) -> Result<Trove> {
-        let version_scheme = super::prepare::version_scheme_for_format(self.format);
+        let version_scheme = self.semantics.version_scheme;
         if let Some(provenance) = self.repository_provenance.as_ref()
             && provenance.version_scheme != version_scheme
         {
@@ -139,6 +160,8 @@ impl PreparedPackage {
             version_scheme,
         );
         trove.architecture = self.architecture.clone();
+        trove.package_release = self.package_release.clone();
+        trove.debian_multi_arch = self.debian_multi_arch;
         trove.description = self.description.clone();
         trove.installed_by_changeset_id = Some(changeset_id);
         trove.install_reason = self.install_reason.clone();
@@ -169,6 +192,51 @@ pub struct BatchInstaller<'a> {
     sandbox_mode: SandboxMode,
 }
 
+pub(crate) struct BatchInstallResult {
+    installed: Vec<BatchInstalledPackage>,
+}
+
+struct BatchInstalledPackage {
+    name: String,
+    version: String,
+    package_release: Option<String>,
+    architecture: Option<String>,
+    trove_id: i64,
+}
+
+impl BatchInstallResult {
+    pub(crate) fn exact_trove_id(
+        &self,
+        package: &dyn conary_core::packages::PackageFormat,
+    ) -> Result<i64> {
+        let matches = self
+            .installed
+            .iter()
+            .filter(|installed| {
+                installed.name == package.name()
+                    && installed.version == package.version()
+                    && installed.package_release.as_deref() == package.package_release()
+                    && installed.architecture.as_deref() == package.architecture()
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [installed] => Ok(installed.trove_id),
+            [] => anyhow::bail!(
+                "atomic package transaction did not return installed identity {}-{} ({})",
+                package.name(),
+                package.version(),
+                package.architecture().unwrap_or("no-arch")
+            ),
+            _ => anyhow::bail!(
+                "atomic package transaction returned duplicate installed identity {}-{} ({})",
+                package.name(),
+                package.version(),
+                package.architecture().unwrap_or("no-arch")
+            ),
+        }
+    }
+}
+
 impl<'a> BatchInstaller<'a> {
     /// Create a new batch installer
     pub fn new(db_path: &'a str, sandbox_mode: SandboxMode) -> Self {
@@ -191,9 +259,18 @@ impl<'a> BatchInstaller<'a> {
     /// # Returns
     ///
     /// Ok(()) on success, or an error if any package fails to install.
-    pub fn install_batch(self, mut packages: Vec<PreparedPackage>) -> Result<()> {
+    pub fn install_batch(self, packages: Vec<PreparedPackage>) -> Result<()> {
+        self.install_batch_with_result(packages).map(|_| ())
+    }
+
+    pub(crate) fn install_batch_with_result(
+        self,
+        mut packages: Vec<PreparedPackage>,
+    ) -> Result<BatchInstallResult> {
         if packages.is_empty() {
-            return Ok(());
+            return Ok(BatchInstallResult {
+                installed: Vec::new(),
+            });
         }
         let package_count = packages.len();
         let main_pkg_name = packages
@@ -208,14 +285,43 @@ impl<'a> BatchInstaller<'a> {
 
         // Open database connection
         let mut conn = open_db(self.db_path)?;
+        ordering::order_packages_for_transaction(&conn, &mut packages)?;
         self.plan_package_relations_for_batch(&conn, &mut packages)?;
+        // Build transaction description
+        let tx_description = if package_count == 1 {
+            format!("Install {}-{}", packages[0].name, packages[0].version)
+        } else {
+            format!(
+                "Install {} + {} dependencies",
+                main_pkg_name,
+                package_count - 1
+            )
+        };
+        let mut selected_root =
+            crate::commands::generation::selected_root::SelectedRootSession::begin(
+                &conn,
+                self.db_path,
+                &tx_description,
+            )?;
+        let selected_path = selected_root.selected_root().to_path_buf();
+        for package in &mut packages {
+            package.normalize_ccs_for_selected_root(&selected_path)?;
+            super::transaction::preflight_generation_file_capabilities(
+                package
+                    .ccs
+                    .as_ref()
+                    .map(|ccs| ccs.file_capabilities.as_slice()),
+                false,
+                &package.extracted_files,
+            )?;
+        }
         let native_inputs = packages
             .iter()
             .map(|package| NativeInstallInput {
                 package_name: &package.name,
                 package_version: &package.version,
                 package_arch: package.architecture.as_deref(),
-                version_scheme: super::prepare::version_scheme_for_format(package.format),
+                version_scheme: package.semantics.version_scheme,
                 provides: &package.provides,
                 new_bundle: package.native_lifecycle_state.bundle_to_persist.as_ref(),
                 old_trove: package.old_trove.as_deref(),
@@ -238,27 +344,11 @@ impl<'a> BatchInstaller<'a> {
                 .iter()
                 .flat_map(|package| package.relation_removals.iter()),
         )?;
-        // Build transaction description
-        let tx_description = if package_count == 1 {
-            format!("Install {}-{}", packages[0].name, packages[0].version)
-        } else {
-            format!(
-                "Install {} + {} dependencies",
-                main_pkg_name,
-                package_count - 1
-            )
-        };
-        let mut selected_root =
-            crate::commands::generation::selected_root::SelectedRootSession::begin(
-                &conn,
-                self.db_path,
-                &tx_description,
-            )?;
-        let selected_path = selected_root.selected_root().to_path_buf();
         let native_execution_mode = build_execution_mode(None);
         native_transaction.preflight(&selected_path, &native_execution_mode)?;
         let preflighted_ccs_removal_hooks =
             ccs_removal_hook_plan.preflight(&selected_path, self.sandbox_mode)?;
+        let mut ccs_hook_executors = ccs::prepare_hook_executors(&conn, &packages, &selected_path)?;
         let rollback_root = selected_root.capture_rollback_authority()?;
         let cas = selected_root.cas().clone();
 
@@ -304,6 +394,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Phase 2: Run exact typed lifecycle events before payload mutation.
         preflighted_ccs_removal_hooks.execute()?;
+        ccs::execute_pre_hooks(&packages, &mut ccs_hook_executors)?;
 
         // Phase 3: Store all package files in CAS, capturing the
         // authoritative hash returned by the store for each file.
@@ -324,6 +415,7 @@ impl<'a> BatchInstaller<'a> {
             &native_execution_mode,
             &mut selected_root,
             rollback_root,
+            &mut ccs_hook_executors,
         );
         let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = transaction_result?;
 
@@ -346,7 +438,18 @@ impl<'a> BatchInstaller<'a> {
             );
         }
 
-        Ok(())
+        let installed = packages
+            .iter()
+            .zip(trove_ids)
+            .map(|(package, trove_id)| BatchInstalledPackage {
+                name: package.name.clone(),
+                version: package.version.clone(),
+                package_release: package.package_release.clone(),
+                architecture: package.architecture.clone(),
+                trove_id,
+            })
+            .collect();
+        Ok(BatchInstallResult { installed })
     }
 
     fn preflight_file_ownership_for_batch(
@@ -513,17 +616,34 @@ impl<'a> BatchInstaller<'a> {
         files: &[inner::ResolvedInstallFile],
         directory_plan: &super::shared_directory::DirectoryInstallPlan,
     ) -> Result<()> {
-        let mut component_ids = HashMap::new();
-        for comp_type in &pkg.installed_components {
-            let mut component = Component::from_type(trove_id, *comp_type);
-            component.description = Some(format!("{} files", comp_type.as_str()));
-            component_ids.insert(*comp_type, component.insert(tx)?);
-        }
         let mut path_to_component = HashMap::new();
-        for (comp_type, paths) in &pkg.classified_files {
-            if let Some(component_id) = component_ids.get(comp_type) {
-                for path in paths {
+        if let (Some(component_names), Some(component_names_by_path)) = (
+            pkg.installed_component_names.as_ref(),
+            pkg.component_names_by_path.as_ref(),
+        ) {
+            let mut component_ids = HashMap::new();
+            for component_name in component_names {
+                let mut component = Component::new(trove_id, component_name.clone());
+                component.description = Some(format!("{component_name} files"));
+                component_ids.insert(component_name.as_str(), component.insert(tx)?);
+            }
+            for (path, component_name) in component_names_by_path {
+                if let Some(component_id) = component_ids.get(component_name.as_str()) {
                     path_to_component.insert(path.as_str(), *component_id);
+                }
+            }
+        } else {
+            let mut component_ids = HashMap::new();
+            for comp_type in &pkg.installed_components {
+                let mut component = Component::from_type(trove_id, *comp_type);
+                component.description = Some(format!("{} files", comp_type.as_str()));
+                component_ids.insert(*comp_type, component.insert(tx)?);
+            }
+            for (comp_type, paths) in &pkg.classified_files {
+                if let Some(component_id) = component_ids.get(comp_type) {
+                    for path in paths {
+                        path_to_component.insert(path.as_str(), *component_id);
+                    }
                 }
             }
         }
@@ -574,7 +694,50 @@ impl<'a> BatchInstaller<'a> {
                 )?;
             }
         }
-        Self::insert_config_rows(tx, pkg, trove_id, &installed_file_metadata, files)
+        Self::insert_config_rows(tx, pkg, trove_id, &installed_file_metadata, files)?;
+        if let Some(ccs) = pkg.ccs.as_ref() {
+            let files_by_path = files
+                .iter()
+                .map(|file| (file.path.as_str(), file))
+                .collect::<HashMap<_, _>>();
+            let selected_capabilities = ccs
+                .file_capabilities
+                .iter()
+                .filter(|capability| installed_file_metadata.contains_key(&capability.path))
+                .map(|capability| {
+                    let file = files_by_path
+                        .get(capability.path.as_str())
+                        .with_context(|| {
+                            format!(
+                                "file capability target {} for {} is missing stored file metadata",
+                                capability.path, pkg.name
+                            )
+                        })?;
+                    if !super::file_capabilities::is_regular_file_capability_payload(
+                        &file.node.source.kind,
+                    ) {
+                        anyhow::bail!(
+                            "file capability target {} for {} is not a regular installed file",
+                            capability.path,
+                            pkg.name
+                        );
+                    }
+                    Ok(capability.clone())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            InstalledFileCapability::replace_for_trove(tx, trove_id, &selected_capabilities)
+                .with_context(|| {
+                    format!("Failed to persist CCS file capabilities for {}", pkg.name)
+                })?;
+            if let Some(hook) = ccs.hooks.pre_remove.as_ref() {
+                InstalledCcsRemoveHook::new(trove_id, hook.script.clone(), hook.reversible)
+                    .insert_or_replace(tx)?;
+            }
+            if let Some(capabilities) = ccs.capabilities.as_ref() {
+                conary_core::capability::store_capabilities(tx, trove_id, capabilities)?;
+            }
+        }
+        Ok(())
     }
 }
 

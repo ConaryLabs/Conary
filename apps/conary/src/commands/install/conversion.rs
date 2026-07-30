@@ -7,7 +7,7 @@
 
 use super::super::open_db;
 use super::PackageFormatType;
-use super::batch::{BatchInstaller, prepare_package_for_batch};
+use super::batch::{BatchInstaller, prepare_ccs_package_for_batch, prepare_package_for_batch};
 use super::dep_resolution;
 use super::dependencies::resolved_repository_deps_from_sat_result;
 use super::{
@@ -26,17 +26,9 @@ use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{SatPackage, SatSource};
 use conary_core::scriptlet::SandboxMode;
-use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tracing::info;
-
-/// Bounded dependency expansion for live CCS installs.
-///
-/// Kernel installs need to reach the initramfs toolchain without allowing a
-/// full unbounded distro dependency takeover:
-/// kernel -> kernel-core -> dracut -> cpio.
-pub const DEFAULT_CCS_DEPENDENCY_PASSES: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingCcsProvider {
@@ -159,6 +151,87 @@ fn validate_selected_repository_ccs_identity(
     Ok(())
 }
 
+fn validate_selected_repository_native_identity(
+    artifact_name: &str,
+    artifact_version: &str,
+    artifact_package_release: Option<&str>,
+    artifact_architecture: Option<&str>,
+    artifact_version_scheme: VersionScheme,
+    selected: &SatPackage,
+    repository_provenance: &RepositoryInstallProvenance,
+) -> Result<()> {
+    if selected.source != SatSource::Repository {
+        anyhow::bail!(
+            "native dependency '{}' was not selected from a repository row",
+            selected.name
+        );
+    }
+    let selected_row_id = selected.repo_package_id.with_context(|| {
+        format!(
+            "SAT-selected native dependency '{}-{}' has no repository package row",
+            selected.name, selected.version
+        )
+    })?;
+    let selected_repository_id = selected.repository_id.with_context(|| {
+        format!(
+            "SAT-selected native dependency '{}-{}' has no repository identity",
+            selected.name, selected.version
+        )
+    })?;
+
+    let mut mismatches = Vec::new();
+    if repository_provenance.repository_id != selected_repository_id {
+        mismatches.push(format!(
+            "repository {} != {}",
+            repository_provenance.repository_id, selected_repository_id
+        ));
+    }
+    if artifact_name != selected.name {
+        mismatches.push(format!("name '{artifact_name}' != '{}'", selected.name));
+    }
+    if artifact_version != selected.version {
+        mismatches.push(format!(
+            "version '{artifact_version}' != '{}'",
+            selected.version
+        ));
+    }
+    if artifact_package_release != selected.package_release.as_deref() {
+        mismatches.push(format!(
+            "package release {artifact_package_release:?} != {:?}",
+            selected.package_release
+        ));
+    }
+    if artifact_architecture != selected.architecture.as_deref() {
+        mismatches.push(format!(
+            "architecture {artifact_architecture:?} != {:?}",
+            selected.architecture
+        ));
+    }
+    if artifact_version_scheme != selected.version_scheme {
+        mismatches.push(format!(
+            "version scheme '{}' != '{}'",
+            artifact_version_scheme.as_str(),
+            selected.version_scheme.as_str()
+        ));
+    }
+    if repository_provenance.version_scheme != selected.version_scheme {
+        mismatches.push(format!(
+            "provenance version scheme '{}' != '{}'",
+            repository_provenance.version_scheme.as_str(),
+            selected.version_scheme.as_str()
+        ));
+    }
+
+    if !mismatches.is_empty() {
+        anyhow::bail!(
+            "native dependency identity does not match SAT-selected repository row {}: {}",
+            selected_row_id,
+            mismatches.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Result of attempting CCS conversion
 pub enum ConversionResult {
     /// Package was converted, install via CCS path
@@ -205,7 +278,6 @@ pub struct CcsArtifactInstallOptions<'a> {
     pub allow_downgrade: bool,
     pub intent: InstallIntent,
     pub yes: bool,
-    pub dependency_passes_remaining: usize,
     pub envelope_authority: CcsEnvelopeAuthority,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
     /// Exact transaction source policy established by explicit scope,
@@ -377,15 +449,6 @@ pub async fn try_convert_to_ccs(
 ///
 /// The artifact may be Conary-native or converted from another package format.
 pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result<Option<i64>> {
-    install_ccs_artifact_with_pending(opts, Vec::new(), false, None).await
-}
-
-async fn install_ccs_artifact_with_pending(
-    opts: CcsArtifactInstallOptions<'_>,
-    pending_providers: Vec<PendingCcsProvider>,
-    defer_generation: bool,
-    expected_repository_package: Option<&SatPackage>,
-) -> Result<Option<i64>> {
     let CcsArtifactInstallOptions {
         ccs_path,
         db_path,
@@ -396,7 +459,6 @@ async fn install_ccs_artifact_with_pending(
         allow_downgrade,
         intent,
         yes,
-        dependency_passes_remaining,
         envelope_authority,
         repository_provenance,
         resolution_policy,
@@ -411,19 +473,11 @@ async fn install_ccs_artifact_with_pending(
 
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
         .context("Failed to construct verified CCS package")?;
-    if let Some(expected) = expected_repository_package {
-        validate_selected_repository_ccs_identity(
-            &ccs_pkg,
-            expected,
-            repository_provenance.as_ref(),
-        )?;
-    }
     crate::commands::ccs::validate_ccs_capability_declaration(&ccs_pkg)?;
 
-    if !no_deps {
+    let mut selected_dependencies = Vec::new();
+    if !no_deps && !ccs_pkg.requirements().is_empty() {
         let conn = open_db(db_path)?;
-        let mut scoped_pending_providers = pending_providers;
-        scoped_pending_providers.push(PendingCcsProvider::from_package(&ccs_pkg));
         let sat_result = conary_core::resolver::solve_requirement_groups_with_policy(
             &conn,
             ccs_pkg.requirements(),
@@ -442,225 +496,181 @@ async fn install_ccs_artifact_with_pending(
                 ccs_pkg.name()
             );
         }
-        let selected = resolved_repository_deps_from_sat_result(&sat_result, ccs_pkg.name());
+        let pending_root = PendingCcsProvider::from_package(&ccs_pkg);
+        selected_dependencies =
+            resolved_repository_deps_from_sat_result(&sat_result, ccs_pkg.name())
+                .into_iter()
+                .filter(|dependency| !pending_root.matches(&dependency.package))
+                .collect();
+    }
 
-        if !selected.is_empty() {
-            let mut pending_satisfied = Vec::new();
-            let mut to_install = Vec::new();
-            for dependency in selected {
-                if scoped_pending_providers
-                    .iter()
-                    .any(|pending| pending.matches(&dependency.package))
-                {
-                    pending_satisfied.push(dependency);
-                } else {
-                    to_install.push(dependency);
-                }
-            }
-            for dependency in &pending_satisfied {
-                info!(
-                    "Dependency {} already selected in pending CCS transaction",
-                    dependency.package.name
-                );
-            }
-            let dep_plan = dep_resolution::DepResolutionPlan {
-                to_install,
-                unresolvable: Vec::new(),
-            };
+    if selected_dependencies.is_empty() || dry_run {
+        if dry_run && !selected_dependencies.is_empty() {
+            let conn = open_db(db_path)?;
+            dep_resolution::exact_repository_downloads(&conn, &selected_dependencies)
+                .with_context(|| {
+                    format!(
+                        "SAT-selected dependency identity drifted before dry-run for '{}'",
+                        ccs_pkg.name()
+                    )
+                })?;
+        }
+        println!("Installing CCS package...");
+        let mut conn = open_db(db_path)?;
+        let result = super::install_ccs_package_transactionally(
+            &mut conn,
+            &ccs_pkg,
+            CcsTransactionInstallOptions {
+                db_path,
+                root,
+                dry_run,
+                defer_generation: false,
+                quiet: false,
+                sandbox_mode,
+                allow_downgrade,
+                intent,
+                reinstall: false,
+                selection_reason: None,
+                selected_manifest_components: None,
+                repository_provenance,
+            },
+        )?;
+        return Ok(result.trove_id);
+    }
 
-            if !dep_plan.to_install.is_empty() {
-                if dry_run {
-                    dep_resolution::exact_repository_downloads(&conn, &dep_plan.to_install)
-                        .with_context(|| {
-                            format!(
-                                "SAT-selected dependency identity drifted before dry-run for '{}'",
-                                ccs_pkg.name()
-                            )
-                        })?;
-                } else {
-                    if !yes {
-                        println!();
-                        print!(
-                            "Proceed with {} dependency changes? [Y/n] ",
-                            dep_plan.to_install.len()
-                        );
-                        use std::io::Write;
-                        std::io::stdout().flush()?;
+    if !yes {
+        println!();
+        print!(
+            "Proceed with {} dependency changes? [Y/n] ",
+            selected_dependencies.len()
+        );
+        use std::io::Write;
+        std::io::stdout().flush()?;
 
-                        let mut input = String::new();
-                        std::io::stdin().read_line(&mut input)?;
-                        let input = input.trim().to_lowercase();
-                        if input == "n" || input == "no" {
-                            println!("Cancelled.");
-                            return Ok(None);
-                        }
-                    }
-
-                    let to_download =
-                        dep_resolution::exact_repository_downloads(&conn, &dep_plan.to_install)?;
-                    if !to_download.is_empty() {
-                        let temp_dir = TempDir::new()?;
-                        let keyring_dir = keyring_dir(db_path);
-                        let mut provenance_by_dep = HashMap::new();
-                        for (dep_name, pkg_with_repo) in &to_download {
-                            provenance_by_dep.insert(
-                                dep_name.clone(),
-                                repository_install_provenance_from_package(
-                                    &pkg_with_repo.package,
-                                    &pkg_with_repo.repository,
-                                )?,
-                            );
-                        }
-                        let downloaded = repository::download_dependencies(
-                            &to_download,
-                            temp_dir.path(),
-                            &keyring_dir,
-                        )
-                        .await?;
-                        let parent_name = ccs_pkg.name().to_string();
-                        let mut prepared_packages = Vec::with_capacity(downloaded.len());
-
-                        for (dep_name, dep_path) in &downloaded {
-                            if dep_path
-                                .extension()
-                                .and_then(|ext| ext.to_str())
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("ccs"))
-                            {
-                                let dep_ccs_path = dep_path.to_str().ok_or_else(|| {
-                                    anyhow::anyhow!("Invalid CCS path (non-UTF8)")
-                                })?;
-                                // Allow one nested dependency pass for
-                                // downloaded CCS dependencies. Kernel meta
-                                // packages need this for kernel-core -> dracut,
-                                // but grandchildren remain non-recursive inside
-                                // that child call so dependency expansion stays
-                                // bounded.
-                                let nested_dependency_passes =
-                                    dependency_passes_remaining.saturating_sub(1);
-                                let child_pending_providers = scoped_pending_providers.clone();
-                                let dependency_provenance = provenance_by_dep
-                                    .get(dep_name)
-                                    .cloned()
-                                    .with_context(|| {
-                                        format!(
-                                            "CCS dependency {dep_name} is missing exact repository provenance"
-                                        )
-                                    })?;
-                                let expected_dependency = dep_plan
-                                    .to_install
-                                    .iter()
-                                    .find(|dependency| dependency.package.name == *dep_name)
-                                    .with_context(|| {
-                                        format!(
-                                            "downloaded CCS dependency {dep_name} has no SAT-selected identity"
-                                        )
-                                    })?;
-                                let install_result = Box::pin(install_ccs_artifact_with_pending(
-                                    CcsArtifactInstallOptions {
-                                        ccs_path: dep_ccs_path,
-                                        db_path,
-                                        root,
-                                        dry_run,
-                                        sandbox_mode,
-                                        no_deps: dependency_passes_remaining == 0,
-                                        allow_downgrade,
-                                        intent,
-                                        yes,
-                                        dependency_passes_remaining: nested_dependency_passes,
-                                        envelope_authority: CcsEnvelopeAuthority::Repository,
-                                        repository_provenance: Some(dependency_provenance),
-                                        resolution_policy: resolution_policy.clone(),
-                                    },
-                                    child_pending_providers,
-                                    true,
-                                    Some(&expected_dependency.package),
-                                ))
-                                .await;
-                                install_result.with_context(|| {
-                                    format!("Failed to install CCS dependency {}", dep_name)
-                                })?;
-                                continue;
-                            }
-
-                            let reason = format!("Required by {}", parent_name);
-                            match prepare_package_for_batch(
-                                dep_path,
-                                db_path,
-                                conary_core::db::models::InstallReason::Dependency,
-                                &reason,
-                                allow_downgrade,
-                                provenance_by_dep
-                                    .get(dep_name)
-                                    .and_then(|provenance| provenance.source_profile.as_deref()),
-                            ) {
-                                Ok(Some(prepared)) => {
-                                    let mut prepared = prepared;
-                                    prepared.repository_provenance =
-                                        provenance_by_dep.get(dep_name).cloned();
-                                    prepared_packages.push(prepared);
-                                }
-                                Ok(None) => {
-                                    info!("Dependency {} already installed, skipping", dep_name);
-                                }
-                                Err(e) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Failed to prepare dependency {}: {}",
-                                        dep_name,
-                                        e
-                                    ));
-                                }
-                            }
-                        }
-
-                        if !prepared_packages.is_empty() {
-                            let installer = BatchInstaller::new(db_path, sandbox_mode);
-                            installer.install_batch(prepared_packages)?;
-                        }
-                    }
-                }
-            }
-
-            if !dep_plan.unresolvable.is_empty() {
-                let mut detail_lines = Vec::new();
-                for dep in &dep_plan.unresolvable {
-                    detail_lines.push(format!(
-                        "  {} {} (required by: {})",
-                        dep.name,
-                        dep.constraint,
-                        dep.required_by.join(", "),
-                    ));
-                }
-                return Err(anyhow::anyhow!(
-                    "Cannot install {}: {} requirements have no installed or repository provider:\n{}",
-                    ccs_pkg.name(),
-                    dep_plan.unresolvable.len(),
-                    detail_lines.join("\n"),
-                ));
-            }
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        if input == "n" || input == "no" {
+            println!("Cancelled.");
+            return Ok(None);
         }
     }
 
-    println!("Installing CCS package...");
-    let mut conn = open_db(db_path)?;
-    let result = super::install_ccs_package_transactionally(
-        &mut conn,
+    let conn = open_db(db_path)?;
+    let to_download = dep_resolution::exact_repository_downloads(&conn, &selected_dependencies)?;
+    let temp_dir = TempDir::new()?;
+    let keyring_dir = keyring_dir(db_path);
+    let downloaded =
+        repository::download_dependencies(&to_download, temp_dir.path(), &keyring_dir).await?;
+    if downloaded.len() != to_download.len() {
+        anyhow::bail!(
+            "repository dependency downloader returned {} artifacts for {} exact selections",
+            downloaded.len(),
+            to_download.len()
+        );
+    }
+    let mut prepared_packages = Vec::with_capacity(downloaded.len() + 1);
+    // `download_dependencies` preserves request order. Pair each artifact with
+    // the exact row already checked by `exact_repository_downloads` so
+    // co-installable identities with the same package name cannot alias.
+    for ((dep_name, package_with_repo), (downloaded_name, dep_path)) in
+        to_download.iter().zip(&downloaded)
+    {
+        if dep_name != downloaded_name {
+            anyhow::bail!(
+                "repository dependency download order drifted: expected {dep_name}, received {downloaded_name}"
+            );
+        }
+        let provenance = repository_install_provenance_from_package(
+            &package_with_repo.package,
+            &package_with_repo.repository,
+        )?;
+        let expected = selected_dependencies
+            .iter()
+            .find(|dependency| {
+                dependency.package.repo_package_id == package_with_repo.package.id
+                    && dependency.package.repository_id == package_with_repo.repository.id
+            })
+            .with_context(|| {
+                format!(
+                    "downloaded dependency {dep_name} has no exact SAT-selected repository identity"
+                )
+            })?;
+        let reason = format!("Required by {}", ccs_pkg.name());
+        if dep_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("ccs"))
+        {
+            let dep_ccs_path = dep_path
+                .to_str()
+                .context("Invalid CCS dependency path (non-UTF8)")?;
+            let verified_dependency = verify_ccs_package_authority(
+                db_path,
+                dep_path,
+                &CcsEnvelopeAuthority::Repository,
+                Some(&provenance),
+            )?;
+            let dependency = CcsPackage::from_verified_archive(dep_ccs_path, &verified_dependency)
+                .with_context(|| {
+                    format!("Failed to construct verified CCS dependency {dep_name}")
+                })?;
+            validate_selected_repository_ccs_identity(
+                &dependency,
+                &expected.package,
+                Some(&provenance),
+            )?;
+            crate::commands::ccs::validate_ccs_capability_declaration(&dependency)?;
+            prepared_packages.push(prepare_ccs_package_for_batch(
+                &dependency,
+                db_path,
+                conary_core::db::models::InstallReason::Dependency,
+                &reason,
+                allow_downgrade,
+                intent,
+                Some(provenance),
+            )?);
+        } else {
+            let Some(mut prepared) = prepare_package_for_batch(
+                dep_path,
+                db_path,
+                conary_core::db::models::InstallReason::Dependency,
+                &reason,
+                allow_downgrade,
+                provenance.source_profile.as_deref(),
+            )?
+            else {
+                anyhow::bail!(
+                    "SAT selected dependency {dep_name}, but its exact artifact is already installed"
+                );
+            };
+            validate_selected_repository_native_identity(
+                &prepared.name,
+                &prepared.version,
+                prepared.package_release.as_deref(),
+                prepared.architecture.as_deref(),
+                prepared.semantics.version_scheme,
+                &expected.package,
+                &provenance,
+            )?;
+            prepared.repository_provenance = Some(provenance);
+            prepared_packages.push(prepared);
+        }
+    }
+    prepared_packages.push(prepare_ccs_package_for_batch(
         &ccs_pkg,
-        CcsTransactionInstallOptions {
-            db_path,
-            root,
-            dry_run,
-            defer_generation,
-            quiet: false,
-            sandbox_mode,
-            allow_downgrade,
-            intent,
-            reinstall: false,
-            selection_reason: None,
-            selected_manifest_components: None,
-            repository_provenance,
-        },
-    )?;
-    Ok(result.trove_id)
+        db_path,
+        conary_core::db::models::InstallReason::Explicit,
+        "Explicit package request",
+        allow_downgrade,
+        intent,
+        repository_provenance,
+    )?);
+
+    println!("Installing CCS package...");
+    let result =
+        BatchInstaller::new(db_path, sandbox_mode).install_batch_with_result(prepared_packages)?;
+    Ok(Some(result.exact_trove_id(&ccs_pkg)?))
 }
 
 #[cfg(test)]

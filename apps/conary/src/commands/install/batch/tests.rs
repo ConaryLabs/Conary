@@ -1,5 +1,6 @@
 // apps/conary/src/commands/install/batch/tests.rs
 use super::*;
+use crate::commands::PackageFormatType;
 use conary_core::db::models::{
     ChangesetStatus, ConfigFile, ConfigSource, FileEntry, InstalledRequirementGroup, Trove,
     TroveType,
@@ -111,7 +112,9 @@ fn test_batch_plan_detects_cross_package_conflict() {
     let pkg1 = PreparedPackage {
         name: "pkg1".to_string(),
         version: "1.0".to_string(),
-        format: PackageFormatType::Rpm,
+        semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
+        package_release: None,
+        debian_multi_arch: None,
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular("/usr/bin/foo", b"pkg1 content", 0o755)],
@@ -127,14 +130,19 @@ fn test_batch_plan_detects_cross_package_conflict() {
         old_trove: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::new(),
+        installed_component_names: None,
+        component_names_by_path: None,
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
+        ccs: None,
     };
 
     let pkg2 = PreparedPackage {
         name: "pkg2".to_string(),
         version: "1.0".to_string(),
-        format: PackageFormatType::Rpm,
+        semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
+        package_release: None,
+        debian_multi_arch: None,
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular(
@@ -154,8 +162,11 @@ fn test_batch_plan_detects_cross_package_conflict() {
         old_trove: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::new(),
+        installed_component_names: None,
+        component_names_by_path: None,
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
+        ccs: None,
     };
 
     let installer = BatchInstaller::new("/tmp/test.db", SandboxMode::Always);
@@ -183,7 +194,9 @@ fn test_prepared_package_to_trove() {
     let pkg = PreparedPackage {
         name: "test-pkg".to_string(),
         version: "1.2.3".to_string(),
-        format: PackageFormatType::Deb,
+        semantics: InstallSemantics::native_package(PackageFormatType::Deb),
+        package_release: None,
+        debian_multi_arch: Some(conary_core::repository::dependency_model::DebianMultiArch::No),
         architecture: Some("amd64".to_string()),
         description: Some("Test package".to_string()),
         extracted_files: Vec::new(),
@@ -199,8 +212,11 @@ fn test_prepared_package_to_trove() {
         old_trove: None,
         installed_components: Vec::new(),
         classified_files: HashMap::new(),
+        installed_component_names: None,
+        component_names_by_path: None,
         repository_provenance: None,
         native_lifecycle_state: super::super::NativeLifecycleInstallState::default(),
+        ccs: None,
     };
 
     assert!(pkg.native_lifecycle_state.bundle_to_persist.is_none());
@@ -226,7 +242,9 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
     let mut pkg = PreparedPackage {
         name: "dep-pkg".to_string(),
         version: "2.0.0-1".to_string(),
-        format: PackageFormatType::Arch,
+        semantics: InstallSemantics::native_package(PackageFormatType::Arch),
+        package_release: None,
+        debian_multi_arch: None,
         architecture: Some("x86_64".to_string()),
         description: Some("Repo dependency".to_string()),
         extracted_files: Vec::new(),
@@ -242,6 +260,8 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         old_trove: None,
         installed_components: Vec::new(),
         classified_files: HashMap::new(),
+        installed_component_names: None,
+        component_names_by_path: None,
         repository_provenance: Some(RepositoryInstallProvenance {
             repository_id: 9,
             source_profile: Some("arch".to_string()),
@@ -249,6 +269,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
             source_kind: conary_core::repository::RepositorySourceKind::Native,
         }),
         native_lifecycle_state: NativeLifecycleInstallState::default(),
+        ccs: None,
     };
 
     let trove = pkg.to_trove(42).unwrap();
@@ -275,7 +296,9 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
     PreparedPackage {
         name: name.to_string(),
         version: "1.0.0".to_string(),
-        format: PackageFormatType::Rpm,
+        semantics: InstallSemantics::native_package(PackageFormatType::Rpm),
+        package_release: None,
+        debian_multi_arch: None,
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular(path, content, 0o755)],
@@ -295,8 +318,11 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         old_trove: None,
         installed_components: vec![ComponentType::Runtime],
         classified_files: HashMap::from([(ComponentType::Runtime, vec![path.to_string()])]),
+        installed_component_names: None,
+        component_names_by_path: None,
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
+        ccs: None,
     }
 }
 
@@ -304,6 +330,75 @@ fn prepared_test_symlink_package(name: &str, path: &str, target: &str) -> Prepar
     let mut package = prepared_test_package(name, path, &[]);
     package.extracted_files[0] = extracted_symlink(path, target);
     package
+}
+
+fn depends_on(name: &str) -> conary_core::repository::dependency_model::RepositoryRequirementGroup {
+    conary_core::repository::dependency_model::RepositoryRequirementGroup::simple(
+        conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+        conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+            name.to_string(),
+        ),
+    )
+}
+
+fn empty_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    (temp, conn)
+}
+
+#[test]
+fn exact_requirement_order_handles_dependency_chains_deeper_than_two() {
+    let (_temp, conn) = empty_test_db();
+    let mut a = prepared_test_package("a", "/a", b"a");
+    let mut b = prepared_test_package("b", "/b", b"b");
+    let mut c = prepared_test_package("c", "/c", b"c");
+    let mut d = prepared_test_package("d", "/d", b"d");
+    let mut root = prepared_test_package("root", "/root", b"root");
+    for dependency in [&mut a, &mut b, &mut c, &mut d] {
+        dependency.install_reason = InstallReason::Dependency;
+    }
+    b.requirements = vec![depends_on("a")];
+    c.requirements = vec![depends_on("b")];
+    d.requirements = vec![depends_on("c")];
+    root.requirements = vec![depends_on("d")];
+    let mut packages = vec![root, c, a, d, b];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "c", "d", "root"]
+    );
+}
+
+#[test]
+fn exact_requirement_order_collapses_cycles_before_downstream_dependents() {
+    let (_temp, conn) = empty_test_db();
+    let mut a = prepared_test_package("a", "/a", b"a");
+    let mut b = prepared_test_package("b", "/b", b"b");
+    let mut root = prepared_test_package("root", "/root", b"root");
+    a.install_reason = InstallReason::Dependency;
+    b.install_reason = InstallReason::Dependency;
+    a.requirements = vec![depends_on("b")];
+    b.requirements = vec![depends_on("a")];
+    root.requirements = vec![depends_on("a")];
+    let mut packages = vec![root, b, a];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "root"]
+    );
 }
 
 #[test]

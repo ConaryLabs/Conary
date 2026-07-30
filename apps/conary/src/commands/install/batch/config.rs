@@ -8,7 +8,7 @@ use conary_core::config_transaction::{is_config_artifact_kind, is_etc_config_pay
 use conary_core::db::models::{ConfigFile, ConfigSource, InstalledNativeLifecycleBundle};
 use rusqlite::{Connection, Transaction};
 
-use super::{BatchInstaller, PackageFormatType, PreparedPackage, inner};
+use super::{BatchInstaller, PreparedPackage, inner};
 
 impl BatchInstaller<'_> {
     pub(super) fn retains_old_payload_for_lifecycle(
@@ -33,7 +33,7 @@ impl BatchInstaller<'_> {
         installed_file_metadata: &HashMap<String, (i64, Option<String>)>,
         stored_files: &[inner::ResolvedInstallFile],
     ) -> Result<()> {
-        let declared_source = source_for_format(pkg.format);
+        let declared_source = super::super::config_files::source_for_semantics(pkg.semantics);
 
         let mut declarations = HashMap::new();
         for config_info in &pkg.config_files {
@@ -154,13 +154,5 @@ impl BatchInstaller<'_> {
         }
 
         Ok(())
-    }
-}
-
-fn source_for_format(format: PackageFormatType) -> ConfigSource {
-    match format {
-        PackageFormatType::Rpm => ConfigSource::Rpm,
-        PackageFormatType::Deb => ConfigSource::Deb,
-        PackageFormatType::Arch => ConfigSource::Arch,
     }
 }
