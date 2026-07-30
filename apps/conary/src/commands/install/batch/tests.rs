@@ -341,6 +341,17 @@ fn depends_on(name: &str) -> conary_core::repository::dependency_model::Reposito
     )
 }
 
+fn pre_depends_on(
+    name: &str,
+) -> conary_core::repository::dependency_model::RepositoryRequirementGroup {
+    conary_core::repository::dependency_model::RepositoryRequirementGroup::simple(
+        conary_core::repository::dependency_model::RepositoryRequirementKind::PreDepends,
+        conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+            name.to_string(),
+        ),
+    )
+}
+
 fn empty_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("conary.db");
@@ -398,6 +409,82 @@ fn exact_requirement_order_collapses_cycles_before_downstream_dependents() {
             .map(|package| package.name.as_str())
             .collect::<Vec<_>>(),
         vec!["a", "b", "root"]
+    );
+}
+
+#[test]
+fn strong_requirement_orders_provider_first_inside_mixed_cycle() {
+    let (_temp, conn) = empty_test_db();
+    let mut filesystem = prepared_test_package("filesystem", "/filesystem", b"filesystem");
+    let mut setup = prepared_test_package("setup", "/setup", b"setup");
+    filesystem.install_reason = InstallReason::Dependency;
+    setup.install_reason = InstallReason::Dependency;
+    filesystem.requirements = vec![pre_depends_on("setup")];
+    setup.requirements = vec![depends_on("filesystem")];
+    let mut packages = vec![filesystem, setup];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["setup", "filesystem"]
+    );
+}
+
+#[test]
+fn every_acyclic_strong_edge_wins_inside_an_ordinary_dependency_cycle() {
+    let (_temp, conn) = empty_test_db();
+    let mut a = prepared_test_package("a", "/a", b"a");
+    let mut b = prepared_test_package("b", "/b", b"b");
+    let mut c = prepared_test_package("c", "/c", b"c");
+    let mut d = prepared_test_package("d", "/d", b"d");
+    for dependency in [&mut a, &mut b, &mut c, &mut d] {
+        dependency.install_reason = InstallReason::Dependency;
+    }
+    a.requirements = vec![depends_on("d")];
+    b.requirements = vec![pre_depends_on("a")];
+    c.requirements = vec![pre_depends_on("b")];
+    d.requirements = vec![depends_on("c")];
+    let mut packages = vec![d, c, b, a];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    let names = packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<Vec<_>>();
+    let position = |name| {
+        names
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap()
+    };
+    assert!(position("a") < position("b"), "{names:?}");
+    assert!(position("b") < position("c"), "{names:?}");
+}
+
+#[test]
+fn irreducible_strong_requirement_cycle_uses_stable_fallback() {
+    let (_temp, conn) = empty_test_db();
+    let mut a = prepared_test_package("a", "/a", b"a");
+    let mut b = prepared_test_package("b", "/b", b"b");
+    a.install_reason = InstallReason::Dependency;
+    b.install_reason = InstallReason::Dependency;
+    a.requirements = vec![pre_depends_on("b")];
+    b.requirements = vec![pre_depends_on("a")];
+    let mut packages = vec![b, a];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
     );
 }
 

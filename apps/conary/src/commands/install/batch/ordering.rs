@@ -5,7 +5,7 @@
 use super::*;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use conary_core::resolver::identity::{PackageIdentity, ProvidedCapability};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn order_packages_for_transaction(
     conn: &Connection,
@@ -31,6 +31,7 @@ pub(super) fn order_packages_for_transaction(
         .collect::<Vec<_>>();
     let stable_indices = stable_package_indices(packages);
     let mut edges = vec![BTreeSet::new(); packages.len()];
+    let mut strong_edges = vec![BTreeSet::new(); packages.len()];
 
     for (dependent_index, package) in packages.iter().enumerate() {
         let depending_architecture = package
@@ -117,11 +118,14 @@ pub(super) fn order_packages_for_transaction(
             }
             for provider_index in selected_witnesses {
                 edges[provider_index].insert(dependent_index);
+                if requirement.kind == RepositoryRequirementKind::PreDepends {
+                    strong_edges[provider_index].insert(dependent_index);
+                }
             }
         }
     }
 
-    let order = dependency_first_scc_order(packages, &edges);
+    let order = dependency_first_scc_order(packages, &edges, &strong_edges);
     let mut slots = packages.drain(..).map(Some).collect::<Vec<_>>();
     packages.extend(
         order
@@ -214,9 +218,18 @@ fn stable_package_indices(packages: &[PreparedPackage]) -> Vec<usize> {
     indices
 }
 
+fn stable_component_key(packages: &[PreparedPackage], component: &[usize]) -> StablePackageKey {
+    component
+        .iter()
+        .map(|index| stable_package_key(&packages[*index], *index))
+        .min()
+        .expect("dependency component must contain a package")
+}
+
 fn dependency_first_scc_order(
     packages: &[PreparedPackage],
     edges: &[BTreeSet<usize>],
+    strong_edges: &[BTreeSet<usize>],
 ) -> Vec<usize> {
     let finish_order = graph_finish_order(edges);
     let reverse = reverse_edges(edges);
@@ -239,7 +252,7 @@ fn dependency_first_scc_order(
                 }
             }
         }
-        component.sort_by_key(|index| stable_package_key(&packages[*index], *index));
+        component = strong_first_component_order(packages, &component, strong_edges);
         components.push(component);
     }
 
@@ -260,10 +273,7 @@ fn dependency_first_scc_order(
     for (component_index, degree) in indegree.iter().enumerate() {
         if *degree == 0 {
             ready.insert((
-                stable_package_key(
-                    &packages[components[component_index][0]],
-                    components[component_index][0],
-                ),
+                stable_component_key(packages, &components[component_index]),
                 component_index,
             ));
         }
@@ -274,14 +284,83 @@ fn dependency_first_scc_order(
         for target in component_edges[component_index].iter().copied() {
             indegree[target] -= 1;
             if indegree[target] == 0 {
-                ready.insert((
-                    stable_package_key(&packages[components[target][0]], components[target][0]),
-                    target,
-                ));
+                ready.insert((stable_component_key(packages, &components[target]), target));
             }
         }
     }
     debug_assert_eq!(ordered.len(), packages.len());
+    ordered
+}
+
+/// Order one dependency SCC by the source-defined strong edges it contains.
+///
+/// Ordinary dependency edges made the component cyclic, so they cannot all be
+/// honored. An acyclic strong subset remains authoritative and is exhausted
+/// before the stable fallback. If the strong subset is itself cyclic, no
+/// linear order can satisfy it; selecting the least stable key breaks exactly
+/// that irreducible cycle and keeps the result deterministic.
+fn strong_first_component_order(
+    packages: &[PreparedPackage],
+    component: &[usize],
+    strong_edges: &[BTreeSet<usize>],
+) -> Vec<usize> {
+    if component.len() < 2 {
+        return component.to_vec();
+    }
+
+    let in_component = component.iter().copied().collect::<BTreeSet<_>>();
+    let mut indegree = component
+        .iter()
+        .copied()
+        .map(|member| (member, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    for source in component {
+        for target in strong_edges[*source]
+            .iter()
+            .filter(|target| in_component.contains(target))
+        {
+            *indegree
+                .get_mut(target)
+                .expect("strong edge target belongs to its dependency component") += 1;
+        }
+    }
+
+    let mut ready = BTreeSet::new();
+    let mut remaining = in_component;
+    for member in component {
+        if indegree[member] == 0 {
+            ready.insert((stable_package_key(&packages[*member], *member), *member));
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(component.len());
+    while ordered.len() < component.len() {
+        let member = if let Some((_key, member)) = ready.pop_first() {
+            member
+        } else {
+            component
+                .iter()
+                .copied()
+                .filter(|member| remaining.contains(member))
+                .min_by_key(|member| stable_package_key(&packages[*member], *member))
+                .expect("strong dependency cycle has no remaining member")
+        };
+        if !remaining.remove(&member) {
+            continue;
+        }
+        ordered.push(member);
+        for target in &strong_edges[member] {
+            if remaining.contains(target) {
+                let target_indegree = indegree
+                    .get_mut(target)
+                    .expect("remaining strong edge target belongs to its dependency component");
+                *target_indegree -= 1;
+                if *target_indegree == 0 {
+                    ready.insert((stable_package_key(&packages[*target], *target), *target));
+                }
+            }
+        }
+    }
     ordered
 }
 
