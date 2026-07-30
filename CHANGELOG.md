@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.9.5] - 2026-07-30
+
+### Fixed
+- support source-defined shared payload claims (#226)
+- preserve prerequisite ordering authority (#225)
+- serialize conversion database writes (#222)
+
 ## [remi-v0.9.4] - 2026-07-30
 
 ### Fixed
