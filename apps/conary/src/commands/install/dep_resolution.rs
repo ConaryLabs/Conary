@@ -32,6 +32,10 @@ pub struct DepResolutionPlan {
     pub unresolvable: Vec<MissingDependency>,
 }
 
+fn normalized_package_release(release: &str) -> Option<&str> {
+    (!release.is_empty()).then_some(release)
+}
+
 #[cfg(test)]
 pub(super) fn version_satisfies_constraint(
     scheme: VersionScheme,
@@ -104,7 +108,8 @@ pub fn exact_repository_downloads(
             let exact = package.repository_id == repository_id
                 && package.name == expected.name
                 && package.version == expected.version
-                && Some(package.package_release.as_str()) == expected.package_release.as_deref()
+                && normalized_package_release(&package.package_release)
+                    == expected.package_release.as_deref()
                 && package.architecture == expected.architecture
                 && package.version_scheme == expected.version_scheme
                 && expected.repository_name.as_deref() == Some(repository.name.as_str());
@@ -171,7 +176,8 @@ mod tests {
             package: SatPackage {
                 name: package.name.clone(),
                 version: package.version.clone(),
-                package_release: Some(package.package_release.clone()),
+                package_release: normalized_package_release(&package.package_release)
+                    .map(str::to_string),
                 architecture: package.architecture.clone(),
                 version_scheme: package.version_scheme,
                 repo_package_id: package.id,
@@ -202,6 +208,21 @@ mod tests {
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].1.package.id, package.id);
         assert_eq!(downloads[0].1.package.package_release, "7");
+    }
+
+    #[test]
+    fn exact_repository_download_accepts_normalized_empty_release() {
+        let conn = test_db();
+        let package = add_repository_package(&conn, "glibc", "2.43-2.fc44");
+        let repository = Repository::find_by_name(&conn, "test").unwrap().unwrap();
+        let selected = selected(&package, &repository);
+
+        assert_eq!(selected.package.package_release, None);
+        let downloads = exact_repository_downloads(&conn, &[selected]).unwrap();
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].1.package.id, package.id);
+        assert!(downloads[0].1.package.package_release.is_empty());
     }
 
     #[test]

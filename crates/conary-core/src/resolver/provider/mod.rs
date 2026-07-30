@@ -24,7 +24,7 @@ use crate::repository::versioning::{VersionScheme, validate_repo_version};
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provides_index::ProvidesIndex;
 use resolvo::{
-    Condition, ConditionalRequirement, NameId, SolvableId, StringId, VersionSetId,
+    Condition, ConditionalRequirement, DenseIndex, NameId, SolvableId, StringId, VersionSetId,
     VersionSetUnionId,
 };
 
@@ -198,7 +198,7 @@ impl<'db> ConaryProvider<'db> {
         if let Some(&id) = self.name_to_id.get(name) {
             return Ok(id);
         }
-        let id = NameId(Self::pool_u32(self.names.len(), "name")?);
+        let id = NameId::from_raw(Self::pool_u32(self.names.len(), "name")?);
         let owned = name.to_string();
         self.names.push(owned.clone());
         self.name_to_id.insert(owned, id);
@@ -225,18 +225,18 @@ impl<'db> ConaryProvider<'db> {
                 "RPM runtime capability reached package version-set interning".to_string(),
             ));
         }
-        if name_id.0 as usize >= self.names.len() {
+        if name_id.to_index() >= self.names.len() {
             return Err(Error::ResolutionError(format!(
                 "cannot intern a version set for unknown resolver name ID {}",
-                name_id.0
+                name_id.into_raw()
             )));
         }
-        let cache_key = (name_id.0, constraint.clone());
+        let cache_key = (name_id.into_raw(), constraint.clone());
         if let Some(&existing) = self.version_set_cache.get(&cache_key) {
             return Ok(existing);
         }
         if matches!(constraint, ConaryConstraint::ProviderExpression { .. }) {
-            self.provider_expression_name_ids.insert(name_id.0);
+            self.provider_expression_name_ids.insert(name_id.into_raw());
         }
         let id = VersionSetId(Self::pool_u32(self.version_sets.len(), "version_set")?);
         self.version_sets.push((name_id, constraint));
@@ -268,7 +268,7 @@ impl<'db> ConaryProvider<'db> {
         sets: Vec<VersionSetId>,
     ) -> Result<VersionSetUnionId> {
         for set in &sets {
-            if set.0 as usize >= self.version_sets.len() {
+            if set.to_index() >= self.version_sets.len() {
                 return Err(Error::ResolutionError(format!(
                     "cannot intern a version-set union containing unknown version-set ID {}",
                     set.0
@@ -317,7 +317,7 @@ impl<'db> ConaryProvider<'db> {
             }
         }
         let idx = self.solvables.len();
-        let id = SolvableId(Self::pool_u32(idx, "solvable")?);
+        let id = SolvableId::from_raw(Self::pool_u32(idx, "solvable")?);
         // Update name-to-solvable index for O(1) lookup by name.
         self.name_to_solvable_ids
             .entry(pkg.name.clone())
@@ -329,8 +329,8 @@ impl<'db> ConaryProvider<'db> {
         }
         self.solvables.push(pkg);
         self.solvable_ids.push(id);
-        self.dependencies.insert(id.0, Vec::new());
-        self.relations.insert(id.0, Vec::new());
+        self.dependencies.insert(id.into_raw(), Vec::new());
+        self.relations.insert(id.into_raw(), Vec::new());
         Ok(id)
     }
 
@@ -358,8 +358,8 @@ impl<'db> ConaryProvider<'db> {
                         .map(relation_to_solver_dep)
                         .collect::<Result<Vec<_>>>()?,
                 );
-                self.dependencies.insert(solvable_id.0, dep_list);
-                self.relations.insert(solvable_id.0, relations);
+                self.dependencies.insert(solvable_id.into_raw(), dep_list);
+                self.relations.insert(solvable_id.into_raw(), relations);
             }
         }
         Ok(())
@@ -384,7 +384,7 @@ impl<'db> ConaryProvider<'db> {
                     .get(name.as_str())
                     .is_some_and(|ids| {
                         ids.iter()
-                            .any(|id| self.solvables[id.0 as usize].repo_package_id.is_some())
+                            .any(|id| self.solvables[id.to_index()].repo_package_id.is_some())
                     });
             if already_has_repo {
                 continue;
@@ -492,8 +492,8 @@ impl<'db> ConaryProvider<'db> {
                         .map(relation_to_solver_dep)
                         .collect::<Result<Vec<_>>>()?,
                 );
-                self.dependencies.insert(solvable_id.0, sub_deps);
-                self.relations.insert(solvable_id.0, relations);
+                self.dependencies.insert(solvable_id.into_raw(), sub_deps);
+                self.relations.insert(solvable_id.into_raw(), relations);
             }
         }
 
@@ -589,7 +589,7 @@ impl<'db> ConaryProvider<'db> {
 
     /// Get the solvable package at a given index.
     pub fn get_solvable(&self, id: SolvableId) -> &PackageIdentity {
-        &self.solvables[id.0 as usize]
+        &self.solvables[id.to_index()]
     }
 
     /// Get the total number of solvables.
@@ -604,16 +604,19 @@ impl<'db> ConaryProvider<'db> {
 
     /// Get the dependency list for a solvable (if loaded).
     pub fn get_dependency_list(&self, id: SolvableId) -> Option<&[SolverDep]> {
-        self.dependencies.get(&id.0).map(Vec::as_slice)
+        self.dependencies.get(&id.into_raw()).map(Vec::as_slice)
     }
 
     pub fn get_relation_list(&self, id: SolvableId) -> Result<&[SolverRelation]> {
-        self.relations.get(&id.0).map(Vec::as_slice).ok_or_else(|| {
-            Error::ResolutionError(format!(
-                "solver candidate {} has no registered relation authority",
-                id.0
-            ))
-        })
+        self.relations
+            .get(&id.into_raw())
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                Error::ResolutionError(format!(
+                    "solver candidate {} has no registered relation authority",
+                    id.into_raw()
+                ))
+            })
     }
 
     /// Collect all unique dependency names from loaded packages.
@@ -663,47 +666,54 @@ impl<'db> ConaryProvider<'db> {
 
         for (index, (package, id)) in self.solvables.iter().zip(&self.solvable_ids).enumerate() {
             let expected = Self::pool_u32(index, "solvable")?;
-            if id.0 != expected {
+            if id.into_raw() != expected {
                 return Err(Error::ResolutionError(format!(
                     "resolver candidate '{}' has ID {} at pool position {expected}",
-                    package.name, id.0
+                    package.name,
+                    id.into_raw()
                 )));
             }
-            if !self.dependencies.contains_key(&id.0)
-                || !self.relations.contains_key(&id.0)
-                || !self.compiled_dependencies.contains_key(&id.0)
+            if !self.dependencies.contains_key(&id.into_raw())
+                || !self.relations.contains_key(&id.into_raw())
+                || !self.compiled_dependencies.contains_key(&id.into_raw())
             {
                 return Err(Error::ResolutionError(format!(
                     "resolver candidate '{}' ({}) is missing registered dependency, relation, or compiled authority",
-                    package.name, id.0
+                    package.name,
+                    id.into_raw()
                 )));
             }
             let Some(ids) = self.name_to_solvable_ids.get(&package.name) else {
                 return Err(Error::ResolutionError(format!(
                     "resolver candidate '{}' ({}) is absent from the name index",
-                    package.name, id.0
+                    package.name,
+                    id.into_raw()
                 )));
             };
             if !ids.contains(id) {
                 return Err(Error::ResolutionError(format!(
                     "resolver candidate '{}' ({}) is absent from its name index entry",
-                    package.name, id.0
+                    package.name,
+                    id.into_raw()
                 )));
             }
         }
 
         for (name, ids) in &self.name_to_solvable_ids {
             for id in ids {
-                let Some(package) = self.solvables.get(id.0 as usize) else {
+                let Some(package) = self.solvables.get(id.to_index()) else {
                     return Err(Error::ResolutionError(format!(
                         "resolver name index '{}' references unknown candidate ID {}",
-                        name, id.0
+                        name,
+                        id.into_raw()
                     )));
                 };
                 if package.name != *name {
                     return Err(Error::ResolutionError(format!(
                         "resolver name index '{}' references candidate '{}' ({})",
-                        name, package.name, id.0
+                        name,
+                        package.name,
+                        id.into_raw()
                     )));
                 }
             }
@@ -717,7 +727,7 @@ impl<'db> ConaryProvider<'db> {
                 )));
             }
             for set in sets {
-                if set.0 as usize >= self.version_sets.len() {
+                if set.to_index() >= self.version_sets.len() {
                     return Err(Error::ResolutionError(format!(
                         "resolver version-set union {index} references unknown version-set ID {}",
                         set.0
@@ -758,7 +768,7 @@ impl<'db> ConaryProvider<'db> {
 
     /// Find all solvables that match a given package name.
     pub(super) fn solvables_for_name(&self, name_id: NameId) -> Vec<SolvableId> {
-        let name = &self.names[name_id.0 as usize];
+        let name = &self.names[name_id.to_index()];
         self.name_to_solvable_ids
             .get(name)
             .cloned()
@@ -781,10 +791,10 @@ impl<'db> ConaryProvider<'db> {
 
     /// Find the installed solvable for a name, if any.
     pub(super) fn installed_solvable_for_name(&self, name_id: NameId) -> Option<SolvableId> {
-        let name = &self.names[name_id.0 as usize];
+        let name = &self.names[name_id.to_index()];
         self.name_to_solvable_ids.get(name).and_then(|ids| {
             ids.iter()
-                .find(|id| self.solvables[id.0 as usize].installed_trove_id.is_some())
+                .find(|id| self.solvables[id.to_index()].installed_trove_id.is_some())
                 .copied()
         })
     }
@@ -827,7 +837,7 @@ impl<'db> ConaryProvider<'db> {
             let dep_list =
                 load_installed_dependency_requests(self.conn, tid, package_architecture)?;
 
-            self.removal_deps.insert(sid.0, dep_list);
+            self.removal_deps.insert(sid.into_raw(), dep_list);
         }
 
         Ok(())
@@ -870,7 +880,7 @@ impl<'db> ConaryProvider<'db> {
     /// Unlike `get_dependency_list()` this includes virtual provides such as
     /// soname deps, perl modules, etc. that the regular list strips out.
     pub fn get_removal_dependency_list(&self, id: SolvableId) -> Option<&[SolverDep]> {
-        self.removal_deps.get(&id.0).map(Vec::as_slice)
+        self.removal_deps.get(&id.into_raw()).map(Vec::as_slice)
     }
 
     /// Load canonical equivalents from the local DB.

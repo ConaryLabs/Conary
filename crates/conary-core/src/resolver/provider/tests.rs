@@ -13,7 +13,7 @@ use crate::repository::versioning::RepoVersionConstraint;
 use crate::resolver::identity::ProvidedCapability;
 use crate::version::VersionConstraint;
 use futures::executor::block_on;
-use resolvo::{DependencyProvider, SolverCache};
+use resolvo::{DenseIndex, DependencyProvider, SolverCache};
 
 fn setup_test_db() -> (tempfile::TempDir, rusqlite::Connection) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -167,6 +167,7 @@ fn resolver_uses_loaded_pin_authority_and_excludes_uncompiled_candidates() {
 
     let candidates = block_on(provider.get_candidates(name)).unwrap();
     assert_eq!(candidates.locked, Some(installed_id));
+    assert!(!candidates.allow_multiple);
     assert!(matches!(
         block_on(provider.get_dependencies(installed_id)),
         resolvo::Dependencies::Unknown(_)
@@ -376,8 +377,8 @@ fn test_intern_name_roundtrip() {
 
     assert_eq!(id1, id2);
     assert_ne!(id1, id3);
-    assert_eq!(provider.names[id1.0 as usize], "nginx");
-    assert_eq!(provider.names[id3.0 as usize], "curl");
+    assert_eq!(provider.names[id1.to_index()], "nginx");
+    assert_eq!(provider.names[id3.to_index()], "curl");
 }
 
 #[test]
@@ -403,12 +404,12 @@ fn test_version_set_filtering() {
     let candidates = [s1, s2, s3];
 
     // Test the filtering logic directly
-    let (_, ref constraint) = provider.version_sets[vs_id.0 as usize];
+    let (_, ref constraint) = provider.version_sets[vs_id.to_index()];
     let matching: Vec<SolvableId> = candidates
         .iter()
         .copied()
         .filter(|&sid| {
-            let pkg = &provider.solvables[sid.0 as usize];
+            let pkg = &provider.solvables[sid.to_index()];
             constraint_matches_package(constraint, &pkg.version, pkg.version_scheme)
                 .expect("valid test versions")
         })
@@ -462,7 +463,7 @@ fn test_unknown_version_set_ids_are_rejected_before_solver_callbacks() {
 
     let err = provider
         .intern_version_set(
-            NameId(u32::MAX),
+            NameId::from_raw(u32::MAX),
             VersionConstraint::parse("*").expect("valid test constraint"),
         )
         .expect_err("unknown name IDs must be rejected");
@@ -490,7 +491,7 @@ fn test_corrupt_solvable_name_index_is_a_typed_invariant_error() {
         .name_to_solvable_ids
         .get_mut("pkg")
         .unwrap()
-        .push(SolvableId(99));
+        .push(SolvableId::from_raw(99));
 
     let err = provider
         .intern_all_dependency_version_sets()
@@ -637,12 +638,12 @@ fn filter_candidates_uses_provide_version_for_virtual_capabilities() {
     }];
     let candidate = provider.add_solvable(identity).unwrap();
 
-    let requested_name = &provider.names[capability_name.0 as usize];
-    let (_, constraint) = &provider.version_sets[version_set.0 as usize];
+    let requested_name = &provider.names[capability_name.to_index()];
+    let (_, constraint) = &provider.version_sets[version_set.to_index()];
     let matching: Vec<SolvableId> = [candidate]
         .into_iter()
         .filter(|sid| {
-            let pkg = &provider.solvables[sid.0 as usize];
+            let pkg = &provider.solvables[sid.to_index()];
             let provided = pkg
                 .provided_capabilities
                 .iter()

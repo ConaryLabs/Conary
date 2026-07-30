@@ -107,6 +107,22 @@ fn root_if_else_preserves_boolean_semantics() {
 }
 
 #[test]
+fn root_if_missing_required_returns_conflict_without_panic() {
+    let (_temp, conn) = setup_test_db();
+    let repository_id = repository(&conn);
+    package(&conn, repository_id, "condition", &[]);
+
+    let result = solve_rpm_roots(&conn, &["(required if condition)", "condition"]);
+    let conflict = result
+        .conflict_message
+        .as_ref()
+        .expect("triggered conditional with no required provider must be unsatisfiable");
+
+    assert!(!conflict.trim().is_empty());
+    assert!(result.install_order.is_empty(), "{result:?}");
+}
+
+#[test]
 fn root_with_and_without_require_same_provider_facts() {
     let (_temp, conn) = setup_test_db();
     let repository_id = repository(&conn);
