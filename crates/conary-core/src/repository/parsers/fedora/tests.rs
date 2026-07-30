@@ -165,6 +165,31 @@ fn test_parse_primary_xml_captures_namespaced_requires_and_provides() {
 }
 
 #[test]
+fn primary_xml_canonicalizes_empty_requirement_epoch_through_rpm_decoder() {
+    let xml = primary_package_with_format(
+        r#"
+      <rpm:requires>
+        <rpm:entry name="device-mapper-libs" flags="EQ" epoch="" ver="1.02.212" rel="2.fc44"/>
+      </rpm:requires>
+"#,
+    );
+
+    let packages = parser()
+        .parse_primary_xml(&xml, "https://example.com")
+        .unwrap();
+    let requirement = packages[0].requirements.first().unwrap();
+
+    assert_eq!(
+        requirement.native_text.as_deref(),
+        Some("device-mapper-libs = 1.02.212-2.fc44")
+    );
+    assert_eq!(
+        requirement.alternatives[0].version_constraint.as_deref(),
+        Some("= 1.02.212-2.fc44")
+    );
+}
+
+#[test]
 fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
     // Structure derived from createrepo_c 5cf41fe5d703901d78078ed18c67ab667e446c1a
     // tests/testdata/repodata_snippets/primary_snippet_02.xml. The repository

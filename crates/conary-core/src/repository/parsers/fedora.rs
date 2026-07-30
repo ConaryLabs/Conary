@@ -30,8 +30,7 @@ mod metalink;
 mod relation;
 use metalink::parse_metalink_repomd_identity;
 use relation::{
-    RpmProvideConstraint, rpm_constraint_native_text, rpm_provide_constraint,
-    rpm_relation_native_text, rpm_require_to_group,
+    RpmProvideConstraint, rpm_provide_constraint, rpm_relation_native_text, rpm_require_to_group,
 };
 
 /// Fedora/RPM repository parser
@@ -560,14 +559,15 @@ impl FedoraParser {
                                     })?;
                                     match section {
                                         FormatSection::Requires => {
-                                            let constraint = rpm_constraint_native_text(
+                                            if let Some(requirement) = rpm_require_to_group(
                                                 &name,
                                                 dep_flags.as_deref(),
                                                 dep_epoch.as_deref(),
                                                 dep_ver.as_deref(),
                                                 dep_rel.as_deref(),
-                                            )?;
-                                            pkg.dependencies.push((name, constraint));
+                                            )? {
+                                                pkg.dependencies.push(requirement);
+                                            }
                                         }
                                         FormatSection::Provides => {
                                             let provide = rpm_provide_constraint(
@@ -771,7 +771,7 @@ struct PackageBuilder {
     size: Option<String>,
     location: Option<String>,
     url: Option<String>,
-    dependencies: Vec<(String, String)>,
+    dependencies: Vec<RepositoryRequirementGroup>,
     provides: Vec<(String, RpmProvideConstraint)>,
     primary_files: Vec<String>,
     relations: Vec<(RepositoryRequirementKind, String)>,
@@ -839,14 +839,7 @@ impl PackageBuilder {
         };
 
         // Build structured requirements
-        let mut requirements: Vec<RepositoryRequirementGroup> = self
-            .dependencies
-            .iter()
-            .map(|(dep_name, constraint)| rpm_require_to_group(dep_name, constraint))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+        let mut requirements = self.dependencies;
         requirements.extend(
             self.relations
                 .iter()

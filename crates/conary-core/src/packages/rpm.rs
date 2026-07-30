@@ -208,7 +208,7 @@ pub(crate) fn decode_rpm_requirement(
         }
         name.to_string()
     } else {
-        let canonical_version = version.strip_prefix(':').unwrap_or(version);
+        let canonical_version = canonicalize_rpm_evr(version);
         rpm_relation_text(name, canonical_version, flags)?
     };
     let group = crate::repository::requirement::parse_native_requirement(
@@ -219,6 +219,12 @@ pub(crate) fn decode_rpm_requirement(
     .map_err(Error::ParseError)?;
     crate::repository::rpm_runtime::simplify_runtime_requirement_group(group, VersionScheme::Rpm)
         .map_err(|error| Error::ParseError(error.to_string()))
+}
+
+/// Canonicalize RPM's source-defined empty serialized epoch to omitted epoch
+/// zero without weakening the repository-wide EVR grammar.
+pub(crate) fn canonicalize_rpm_evr(version: &str) -> &str {
+    version.strip_prefix(':').unwrap_or(version)
 }
 
 fn validate_rpm_config_sense(name: &str, flags: DependencyFlags) -> Result<()> {
