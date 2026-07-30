@@ -855,8 +855,10 @@ the install target, never on the conversion host. Native commands use the
 target `PATH`, sanitized environment, timeout, and sandbox mode. Removed RPM
 fork/exec/wait APIs retain their upstream removal errors; the safe `debug`
 projection exposes introspection but cannot replace Conary's instruction
-deadline hook. All target paths use one symlink-aware root-confinement
-resolver.
+deadline hook. `posix.stat` returns RPM's selected value or table on success
+and `(nil, path-qualified strerror, errno)` when target `lstat` fails, while a
+root-confinement violation remains fatal. All target paths use one
+symlink-aware root-confinement resolver.
 
 ### RPM Upgrade Order
 

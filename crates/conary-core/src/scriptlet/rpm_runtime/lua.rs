@@ -263,6 +263,7 @@ mod tests {
         )
         .expect("module");
         std::fs::write(root.path().join("macros.test"), "%loaded target\n").expect("macro file");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
         let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
 
         execute_embedded_lua(
@@ -277,6 +278,15 @@ mod tests {
                 assert(input:read() == "payload")
                 input:close()
                 assert(posix.stat("/var/value", "size") == 7)
+                assert(select('#', posix.stat("/var/value", "size")) == 1)
+                local missing, message, errno = posix.stat("/media")
+                assert(missing == nil)
+                assert(message == "/media: No such file or directory")
+                assert(errno == 2)
+                local confined, confinement_error = pcall(posix.stat, "/loop")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
                 assert(rpm.glob("/var/*")[1] == "/var/value")
                 assert(posix.chdir("/var") == 0)
                 assert(posix.getcwd() == "/var")

@@ -468,11 +468,15 @@ fn install_posix_metadata(
     table.set(
         "stat",
         lua.create_function(move |lua, (path, selector): (String, Option<String>)| {
-            let metadata = std::fs::symlink_metadata(
-                stat_context.resolve(&path).map_err(mlua::Error::external)?,
-            )
-            .map_err(mlua::Error::external)?;
-            stat_value(lua, &metadata, selector.as_deref())
+            let target = stat_context.resolve(&path).map_err(mlua::Error::external)?;
+            match std::fs::symlink_metadata(target) {
+                Ok(metadata) => Ok(MultiValue::from_vec(vec![stat_value(
+                    lua,
+                    &metadata,
+                    selector.as_deref(),
+                )?])),
+                Err(error) => posix_path_error(lua, &path, error),
+            }
         })?,
     )?;
     let utime_context = context.clone();
@@ -696,6 +700,22 @@ fn directory_entries(context: &LuaRuntimeContext, guest: &str) -> mlua::Result<V
         );
     }
     Ok(values)
+}
+
+fn posix_path_error(lua: &Lua, path: &str, error: std::io::Error) -> mlua::Result<MultiValue> {
+    let errno = error.raw_os_error().unwrap_or(0);
+    let description = if errno == 0 {
+        error.to_string()
+    } else {
+        // RPM 6.0.1's lposix `pusherror` returns strerror(errno), not a Lua
+        // exception or Rust's parenthesized OS-error suffix.
+        nix::errno::Errno::from_raw(errno).desc().to_string()
+    };
+    Ok(MultiValue::from_vec(vec![
+        Value::Nil,
+        Value::String(lua.create_string(format!("{path}: {description}"))?),
+        Value::Integer(i64::from(errno)),
+    ]))
 }
 
 fn stat_value(
