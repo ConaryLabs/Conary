@@ -5,15 +5,15 @@
 mod materialized_directories;
 
 use crate::commands::installed_authority_snapshot::{
-    ComponentSnapshot, ConfigFileSnapshot, DirectoryClaimSnapshot, InstalledConversionSnapshot,
+    ComponentSnapshot, ConfigFileSnapshot, InstalledConversionSnapshot, PayloadClaimSnapshot,
     ProvenanceSnapshot, TroveSnapshot,
 };
 use conary_core::Error;
 use conary_core::db::models::{
     CollectionMember, Component, ComponentDependency, ComponentProvide, ConfigFile,
-    ConvertedArtifactKind, ConvertedPackage, DirectoryClaim, FileEntry, Flavor,
-    InstalledCcsRemoveHook, InstalledFileCapability, InstalledRequirementGroup,
-    NativeLifecycleResidualState, ProvideEntry, Trove,
+    ConvertedArtifactKind, ConvertedPackage, FileEntry, Flavor, InstalledCcsRemoveHook,
+    InstalledFileCapability, InstalledRequirementGroup, NativeLifecycleResidualState, PayloadClaim,
+    ProvideEntry, Trove,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::BTreeMap;
@@ -59,7 +59,7 @@ pub(super) fn restore_snapshots(
         restore_directory_anchors(tx, authority)?;
     }
     for authority in &mut restored {
-        restore_directory_claims(tx, authority)?;
+        restore_payload_claims(tx, authority)?;
     }
 
     // These projections reference restored paths or otherwise depend on the
@@ -74,7 +74,7 @@ fn validate_snapshot_set(snapshots: &[TroveSnapshot]) -> conary_core::Result<()>
     let mut anchors = BTreeMap::new();
     for snapshot in snapshots {
         snapshot.validate().map_err(snapshot_error)?;
-        for claim in &snapshot.directory_claims {
+        for claim in &snapshot.payload_claims {
             if claim.anchor.is_some()
                 && let Some(existing) = anchors.insert(claim.path.as_str(), snapshot.name.as_str())
             {
@@ -147,7 +147,7 @@ fn restore_directory_anchors(
 ) -> conary_core::Result<()> {
     for claim in authority
         .snapshot
-        .directory_claims
+        .payload_claims
         .iter()
         .filter(|claim| claim.anchor.is_some())
     {
@@ -172,7 +172,7 @@ fn restore_directory_anchors(
 
 fn directory_anchor_component_id(
     authority: &RestoredSnapshot<'_>,
-    claim: &DirectoryClaimSnapshot,
+    claim: &PayloadClaimSnapshot,
 ) -> conary_core::Result<Option<i64>> {
     claim
         .anchor
@@ -193,56 +193,60 @@ fn directory_anchor_component_id(
         .transpose()
 }
 
-fn restore_directory_claims(
+fn restore_payload_claims(
     tx: &Transaction<'_>,
     authority: &mut RestoredSnapshot<'_>,
 ) -> conary_core::Result<()> {
-    for claim in &authority.snapshot.directory_claims {
+    for claim in &authority.snapshot.payload_claims {
         let existing = FileEntry::find_by_path(tx, &claim.path)?.ok_or_else(|| {
             Error::ConflictError(format!(
-                "rollback directory claim '{}' has no materialized anchor",
+                "rollback payload claim '{}' has no materialized anchor",
                 claim.path
             ))
         })?;
-        if !claim.anchor_policy.accepts(&existing.node.source.kind) {
+        if !claim.anchor_policy.accepts_kind(&existing.node.source.kind) {
             return Err(Error::ConflictError(format!(
-                "rollback directory claim '{}' anchor is not accepted by policy '{}'",
+                "rollback payload claim '{}' anchor is not accepted by policy '{}'",
                 claim.path,
                 claim.anchor_policy.as_str()
             )));
         }
         let file_id = existing.id.ok_or_else(|| {
             Error::MissingId(format!(
-                "rollback directory anchor '{}' has no database identity",
+                "rollback payload anchor '{}' has no database identity",
                 claim.path
             ))
         })?;
-        DirectoryClaim::new(claim.path.clone(), authority.trove_id, claim.node.clone())?
-            .with_component(directory_claim_component_id(authority, claim)?)
-            .with_anchor_policy(claim.anchor_policy)
-            .with_materialization_target(claim.materialization_target_path.clone())
-            .insert(tx)?;
+        PayloadClaim::new(
+            claim.path.clone(),
+            authority.trove_id,
+            claim.node.clone(),
+            claim.content.clone(),
+            claim.sharing_policy,
+        )?
+        .with_component(payload_claim_component_id(authority, claim)?)
+        .with_anchor_policy(claim.anchor_policy)
+        .with_materialization_target(claim.materialization_target_path.clone())
+        .insert(tx)?;
         let changed = tx.execute(
-            "UPDATE directory_claims SET claimed_at = ?1
+            "UPDATE payload_claims SET claimed_at = ?1
              WHERE path = ?2 AND trove_id = ?3",
             params![&claim.claimed_at, &claim.path, authority.trove_id],
         )?;
         if changed != 1 {
             return Err(Error::InternalError(format!(
-                "rollback directory claim '{}' was not restored exactly",
+                "rollback payload claim '{}' was not restored exactly",
                 claim.path
             )));
         }
-        if claim.anchor.is_some() {
-            authority.file_ids.insert(claim.path.clone(), file_id);
-        }
+        authority.file_ids.insert(claim.path.clone(), file_id);
     }
     Ok(())
 }
 
-fn directory_claim_component_id(
+fn payload_claim_component_id(
     authority: &RestoredSnapshot<'_>,
-    claim: &DirectoryClaimSnapshot,
+    claim: &PayloadClaimSnapshot,
 ) -> conary_core::Result<Option<i64>> {
     claim
         .component
@@ -429,7 +433,7 @@ fn restore_files(
                 tx,
                 &file.path,
                 &file.node,
-                conary_core::db::models::DirectoryClaimAnchorPolicy::Directory,
+                conary_core::db::models::PayloadClaimAnchorPolicy::Directory,
                 trove_id,
                 component_id,
                 &file.installed_at,
@@ -486,7 +490,7 @@ fn restore_exact_reanchored_file(
             snapshot.path
         )));
     }
-    let retainers = DirectoryClaim::find_retaining_path(tx, &snapshot.path)?;
+    let retainers = PayloadClaim::find_retaining_path(tx, &snapshot.path)?;
     if !retainers
         .iter()
         .any(|claim| claim.trove_id == existing.trove_id)

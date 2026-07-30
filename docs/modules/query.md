@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 6
+last_updated: 2026-07-30
+revision: 7
 summary: Route exact installed package, claim-aware payload, and native lifecycle query contracts
 ---
 
@@ -57,7 +57,8 @@ conary system sbom <package|all> [--format cyclonedx]
 | `DependencyEntry` | db/models/ | Typed dependency link (runtime, build, etc.) |
 | `ProvideEntry` | db/models/ | Capability declaration (soname, pkgconfig, virtual) |
 | `FileEntry` | db/models/ | Installed file (path, hash, perms, component) |
-| `PackagePayloadOwnership` | db/models/ | Exact package-facing payload, including shared-directory claims whose materialized anchor belongs to a peer |
+| `PayloadClaim` | db/models/ | Exact package claim over a materialized payload anchor |
+| `PackagePayloadOwnership` | db/models/ | Exact package-facing payload, including shared claims whose materialized anchor belongs to a peer |
 | `Component` | db/models/ | Logical subpackage (:runtime, :lib, :devel, :doc) |
 | `RepositoryPackage` | db/models/ | Available package from synced repo metadata |
 | `InstalledCcsRemoveHook` | db/models/ | Exact persisted CCS-authored pre-remove hook |
@@ -73,6 +74,7 @@ Primary tables hit by queries:
 | `dependencies` | trove_id, depends_on_name | depends, rdepends, deptree, whatbreaks |
 | `provides` | trove_id, capability | whatprovides |
 | `files` | path, trove_id, component_id | component, conflicts |
+| `payload_claims` | path, trove_id | package-facing payload ownership, shared-anchor retention |
 | `components` | parent_trove_id, name | component, components |
 | `repository_packages` | name, repository_id | repquery |
 | `installed_ccs_remove_hooks` | trove_id | scripts |

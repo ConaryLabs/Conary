@@ -314,58 +314,60 @@ fn validate_hardlinks(entries: &[GenerationRootEntry]) -> crate::Result<()> {
     let by_path = entries_by_path(entries);
     let mut identities = BTreeMap::<&str, (&GenerationRootEntry, usize)>::new();
     for entry in entries {
-        match &entry.node.source.kind {
-            PayloadNodeKind::Regular {
-                hardlink_identity: Some(identity),
-            } => {
-                if identities.insert(identity, (entry, 1)).is_some() {
-                    return Err(crate::Error::InvalidPath(format!(
-                        "hardlink identity {identity:?} has more than one primary node"
-                    )));
-                }
-            }
-            PayloadNodeKind::Hardlink { target, identity } => {
-                let target_entry = by_path.get(target.as_str()).ok_or_else(|| {
-                    crate::Error::InvalidPath(format!(
-                        "hardlink {} targets missing path {target}",
-                        entry.path
-                    ))
-                })?;
-                let Some((primary, count)) = identities.get_mut(identity.as_str()) else {
-                    return Err(crate::Error::InvalidPath(format!(
-                        "hardlink {} uses identity {identity:?} before its primary node",
-                        entry.path
-                    )));
-                };
-                if primary.path != target_entry.path {
-                    return Err(crate::Error::InvalidPath(format!(
-                        "hardlink {} identity {identity:?} targets {}, expected {}",
-                        entry.path, target, primary.path
-                    )));
-                }
-                if classify_root_path(&entry.path)? != classify_root_path(&primary.path)? {
-                    return Err(crate::Error::InvalidPath(format!(
-                        "hardlink group crosses generation publication domains at {}",
-                        primary.path
-                    )));
-                }
-                if entry.node.source.mode != primary.node.source.mode
-                    || entry.node.source.user != primary.node.source.user
-                    || entry.node.source.group != primary.node.source.group
-                    || entry.node.source.mtime != primary.node.source.mtime
-                    || entry.node.source.xattrs != primary.node.source.xattrs
-                    || entry.node.uid != primary.node.uid
-                    || entry.node.gid != primary.node.gid
-                {
-                    return Err(crate::Error::InvalidPath(format!(
-                        "hardlink {} metadata differs from primary {}",
-                        entry.path, primary.path
-                    )));
-                }
-                *count += 1;
-            }
-            _ => {}
+        let PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity),
+        } = &entry.node.source.kind
+        else {
+            continue;
+        };
+        if identities.insert(identity, (entry, 1)).is_some() {
+            return Err(crate::Error::InvalidPath(format!(
+                "hardlink identity {identity:?} has more than one primary node"
+            )));
         }
+    }
+    for entry in entries {
+        let PayloadNodeKind::Hardlink { target, identity } = &entry.node.source.kind else {
+            continue;
+        };
+        let target_entry = by_path.get(target.as_str()).ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "hardlink {} targets missing path {target}",
+                entry.path
+            ))
+        })?;
+        let Some((primary, count)) = identities.get_mut(identity.as_str()) else {
+            return Err(crate::Error::InvalidPath(format!(
+                "hardlink {} uses identity {identity:?} without a primary node",
+                entry.path
+            )));
+        };
+        if primary.path != target_entry.path {
+            return Err(crate::Error::InvalidPath(format!(
+                "hardlink {} identity {identity:?} targets {}, expected {}",
+                entry.path, target, primary.path
+            )));
+        }
+        if classify_root_path(&entry.path)? != classify_root_path(&primary.path)? {
+            return Err(crate::Error::InvalidPath(format!(
+                "hardlink group crosses generation publication domains at {}",
+                primary.path
+            )));
+        }
+        if entry.node.source.mode != primary.node.source.mode
+            || entry.node.source.user != primary.node.source.user
+            || entry.node.source.group != primary.node.source.group
+            || entry.node.source.mtime != primary.node.source.mtime
+            || entry.node.source.xattrs != primary.node.source.xattrs
+            || entry.node.uid != primary.node.uid
+            || entry.node.gid != primary.node.gid
+        {
+            return Err(crate::Error::InvalidPath(format!(
+                "hardlink {} metadata differs from primary {}",
+                entry.path, primary.path
+            )));
+        }
+        *count += 1;
     }
     if let Some((identity, _)) = identities.iter().find(|(_, (_, count))| *count < 2) {
         return Err(crate::Error::InvalidPath(format!(

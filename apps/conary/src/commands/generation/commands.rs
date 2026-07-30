@@ -314,11 +314,11 @@ fn find_side_effect_package_warning(
         return Ok(None);
     };
 
-    let files = conary_core::db::models::FileEntry::find_by_trove(conn, trove_id)?;
+    let payload = conary_core::db::models::PackagePayloadOwnership::load(conn, trove_id)?;
     let ccs_remove_hook =
         conary_core::db::models::InstalledCcsRemoveHook::find_by_trove(conn, trove_id)?;
     let reasons = classify_side_effect_reasons(
-        files.iter().map(|file| file.path.as_str()),
+        payload.entries().iter().map(|file| file.path.as_str()),
         ccs_remove_hook.iter().map(|hook| hook.script.as_str()),
     );
 

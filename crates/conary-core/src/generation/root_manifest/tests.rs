@@ -278,6 +278,61 @@ fn hardlink_identities_are_stable_across_inode_reallocation() {
 }
 
 #[test]
+fn hardlink_consumers_follow_the_graph_when_the_edge_sorts_before_its_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("destination");
+    let generation = temp.path().join("generation");
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    let content = b"shared hardlink content";
+    cas.store(content).unwrap();
+
+    let identity = "path:/usr/share/z-target".to_string();
+    let mut target = regular_entry("/usr/share/z-target", content);
+    target.node.source.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.clone()),
+    };
+    let mut edge = target.clone();
+    edge.path = "/usr/share/a-edge".to_string();
+    edge.node.source.kind = PayloadNodeKind::Hardlink {
+        target: target.path.clone(),
+        identity,
+    };
+    edge.content = None;
+    let manifest = GenerationRootManifest {
+        version: GENERATION_ROOT_MANIFEST_VERSION,
+        root: directory_node(0o755),
+        entries: vec![
+            directory_entry("/usr", 0o755),
+            directory_entry("/usr/share", 0o755),
+            edge,
+            target,
+        ],
+    };
+
+    manifest.validate().unwrap();
+    materialize_generation_root(&manifest, &cas, &destination).unwrap();
+    assert_eq!(
+        std::fs::metadata(destination.join("usr/share/a-edge"))
+            .unwrap()
+            .ino(),
+        std::fs::metadata(destination.join("usr/share/z-target"))
+            .unwrap()
+            .ino()
+    );
+
+    #[cfg(feature = "composefs-rs")]
+    {
+        let result = build_erofs_image_from_root_manifest(&manifest, &generation).unwrap();
+        assert!(result.image_path.is_file());
+        assert_eq!(result.cas_objects_referenced, 1);
+        assert_eq!(
+            GenerationRootManifest::read_from(&generation).unwrap(),
+            manifest
+        );
+    }
+}
+
+#[test]
 fn config_state_projection_removes_exactly_one_etc_prefix() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source");

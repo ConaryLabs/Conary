@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use conary_core::db::models::{
-    DirectoryClaim, ExistingDirectoryMaterialization, FileEntry, InstallSource, ProvideEntry,
-    Trove, TroveType,
+    ExistingDirectoryMaterialization, FileEntry, InstallSource, PayloadClaim, ProvideEntry, Trove,
+    TroveType,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::generation::root_manifest::{
@@ -147,7 +147,7 @@ fn matching_existing_authority(
         .into_iter()
         .map(|file| file.path)
         .chain(
-            DirectoryClaim::find_by_trove(tx, captured_trove_id)?
+            PayloadClaim::find_by_trove(tx, captured_trove_id)?
                 .into_iter()
                 .map(|claim| claim.path),
         )
@@ -172,7 +172,7 @@ fn matching_existing_authority(
         if existing.node != entry.node || existing.content != entry.content {
             return Ok(None);
         }
-        let claims = DirectoryClaim::find_retaining_path(tx, &entry.path)?;
+        let claims = PayloadClaim::find_retaining_path(tx, &entry.path)?;
         let has_package_owner = existing.trove_id != captured_trove_id
             || claims
                 .iter()

@@ -1,7 +1,7 @@
 // conary-core/src/db/models/package_payload_ownership/tests.rs
 
 use super::*;
-use crate::db::models::{DirectoryClaimAnchorPolicy, TroveType};
+use crate::db::models::{PayloadClaimAnchorPolicy, TroveType};
 use crate::db::testing::create_test_db;
 use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
 use crate::repository::versioning::VersionScheme;
@@ -50,28 +50,28 @@ fn insert_anchor(conn: &Connection, path: &str, node: ResolvedPayloadNode, trove
     anchor.insert(conn).unwrap()
 }
 
-fn insert_symlink_directory_claim(
+fn insert_symlink_payload_claim(
     conn: &Connection,
     path: &str,
     trove_id: i64,
     node: ResolvedPayloadNode,
 ) {
-    DirectoryClaim::new(path.to_string(), trove_id, node)
+    PayloadClaim::new_directory(path.to_string(), trove_id, node)
         .unwrap()
-        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
         .insert(conn)
         .unwrap();
 }
 
 #[test]
-fn non_anchor_package_projects_its_exact_directory_claim() {
+fn non_anchor_package_projects_its_exact_payload_claim() {
     let (_temp, conn) = create_test_db();
     let anchor_owner = insert_trove(&conn, "anchor");
     let claimant = insert_trove(&conn, "claimant");
     let anchor_node = directory(0o755, 1);
     let claimed_node = directory(0o700, 99);
     let materialized_file_id = insert_anchor(&conn, "/shared", anchor_node, anchor_owner);
-    DirectoryClaim::new("/shared".to_string(), claimant, claimed_node.clone())
+    PayloadClaim::new_directory("/shared".to_string(), claimant, claimed_node.clone())
         .unwrap()
         .insert(&conn)
         .unwrap();
@@ -96,7 +96,7 @@ fn removing_symlink_anchor_owner_first_reanchors_without_rewriting_leaf() {
     let directory_owner = insert_trove(&conn, "directory-owner");
     let leaf = symlink("/real");
     insert_anchor(&conn, "/shared", leaf.clone(), symlink_owner);
-    insert_symlink_directory_claim(&conn, "/shared", directory_owner, directory(0o755, 2));
+    insert_symlink_payload_claim(&conn, "/shared", directory_owner, directory(0o755, 2));
 
     let symlink_projection = PackagePayloadOwnership::load(&conn, symlink_owner).unwrap();
     assert_eq!(symlink_projection.entries().len(), 1);
@@ -123,24 +123,26 @@ fn removing_symlink_anchor_owner_first_reanchors_without_rewriting_leaf() {
 }
 
 #[test]
-fn removing_directory_claimant_first_retains_symlink_owner_and_leaf() {
+fn removing_payload_claimant_first_retains_symlink_owner_and_leaf() {
     let (_temp, conn) = create_test_db();
     let symlink_owner = insert_trove(&conn, "symlink-owner");
     let directory_owner = insert_trove(&conn, "directory-owner");
     let leaf = symlink("/real");
     insert_anchor(&conn, "/shared", leaf.clone(), symlink_owner);
-    insert_symlink_directory_claim(&conn, "/shared", directory_owner, directory(0o755, 2));
+    insert_symlink_payload_claim(&conn, "/shared", directory_owner, directory(0o755, 2));
 
     Trove::delete(&conn, directory_owner).unwrap();
 
     let retained = FileEntry::find_by_path(&conn, "/shared").unwrap().unwrap();
     assert_eq!(retained.trove_id, symlink_owner);
     assert_eq!(retained.node, leaf);
-    assert!(
-        DirectoryClaim::find_by_path(&conn, "/shared")
-            .unwrap()
-            .is_empty()
-    );
+    let claims = PayloadClaim::find_by_path(&conn, "/shared").unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].trove_id, symlink_owner);
+    assert!(matches!(
+        claims[0].node.source.kind,
+        PayloadNodeKind::Symlink { .. }
+    ));
     assert_eq!(
         PackagePayloadOwnership::load(&conn, symlink_owner)
             .unwrap()
@@ -150,12 +152,12 @@ fn removing_directory_claimant_first_retains_symlink_owner_and_leaf() {
 }
 
 #[test]
-fn same_trove_symlink_anchor_and_directory_claim_project_once() {
+fn same_trove_symlink_anchor_and_payload_claim_project_once() {
     let (_temp, conn) = create_test_db();
     let package = insert_trove(&conn, "package");
     let materialized_file_id = insert_anchor(&conn, "/shared", symlink("/real"), package);
     let claim = directory(0o755, 2);
-    insert_symlink_directory_claim(&conn, "/shared", package, claim.clone());
+    insert_symlink_payload_claim(&conn, "/shared", package, claim.clone());
 
     let ownership = PackagePayloadOwnership::load(&conn, package).unwrap();
 
@@ -180,9 +182,9 @@ fn removing_through_symlink_claim_before_target_owner_releases_only_the_target_e
     let target = directory(0o755, 1);
     insert_anchor(&conn, "/real", target, target_owner);
     insert_anchor(&conn, "/shared", symlink("/real"), symlink_owner);
-    DirectoryClaim::new("/shared".to_string(), claimant, directory(0o700, 2))
+    PayloadClaim::new_directory("/shared".to_string(), claimant, directory(0o700, 2))
         .unwrap()
-        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
         .with_materialization_target(Some("/real".to_string()))
         .insert(&conn)
         .unwrap();
@@ -192,7 +194,7 @@ fn removing_through_symlink_claim_before_target_owner_releases_only_the_target_e
     let retained_target = FileEntry::find_by_path(&conn, "/real").unwrap().unwrap();
     assert_eq!(retained_target.trove_id, target_owner);
     assert!(
-        DirectoryClaim::find_retaining_path(&conn, "/real")
+        PayloadClaim::find_retaining_path(&conn, "/real")
             .unwrap()
             .iter()
             .all(|claim| claim.trove_id == target_owner)

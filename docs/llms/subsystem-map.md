@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 57
+last_updated: 2026-07-30
+revision: 58
 summary: Route exact Remi signing, serialized selected-root mutation, full-adoption captured-root continuity, typed rollback lineage, canonical-map authority, carrier security, typed generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 
@@ -78,7 +78,7 @@ commands.
   materialization starts in
   `apps/conary/src/commands/install/shared_directory.rs`; exact persisted
   claims and package-facing payload ownership start in
-  `crates/conary-core/src/db/models/directory_claim.rs` and
+  `crates/conary-core/src/db/models/payload_claim.rs` and
   `crates/conary-core/src/db/models/package_payload_ownership.rs`; bounded
   selected-root node inspection starts in
   `crates/conary-core/src/filesystem/selected_root.rs`. Debian dpkg process

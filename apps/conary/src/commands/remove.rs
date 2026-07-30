@@ -4,8 +4,8 @@
 mod autoremove;
 mod ccs_hook;
 mod command;
-mod directory_ownership;
 mod native_graph;
+mod payload_ownership;
 #[cfg(test)]
 pub(super) mod test_support;
 mod transaction;
@@ -17,7 +17,7 @@ pub(crate) use ccs_hook::{
     preflight_loaded_ccs_remove_hook,
 };
 pub use command::cmd_remove;
-pub(crate) use directory_ownership::PackagePayloadOwnership;
+pub(crate) use payload_ownership::PackagePayloadOwnership;
 pub(crate) use transaction::{commit_remove_db, prepare_remove_for_state_restore, snapshot_trove};
 #[allow(unused_imports)]
 pub(crate) use types::RemoveInnerResult;

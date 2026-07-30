@@ -138,7 +138,16 @@ pub fn overlay_payload_entries(
         .collect::<Vec<_>>();
     let leaves = entries
         .iter()
-        .filter(|entry| !matches!(entry.node.source.kind, PayloadNodeKind::Directory))
+        .filter(|entry| {
+            !matches!(
+                entry.node.source.kind,
+                PayloadNodeKind::Directory | PayloadNodeKind::Hardlink { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let hardlinks = entries
+        .iter()
+        .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Hardlink { .. }))
         .collect::<Vec<_>>();
 
     for entry in &directories {
@@ -158,14 +167,21 @@ pub fn overlay_payload_entries(
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
     }
 
-    for entry in &leaves {
+    for entry in leaves.iter().chain(&hardlinks) {
         entry.validate()?;
         let path = destination_path(destination, &entry.path)?;
         remove_existing_node(&path)?;
+    }
+    for entry in &leaves {
+        let path = destination_path(destination, &entry.path)?;
+        create_leaf(entry, cas, destination, &path)?;
+    }
+    for entry in &hardlinks {
+        let path = destination_path(destination, &entry.path)?;
         create_leaf(entry, cas, destination, &path)?;
     }
 
-    for entry in &leaves {
+    for entry in leaves.iter().chain(&hardlinks) {
         apply_resolved_payload_metadata(&destination_path(destination, &entry.path)?, &entry.node)?;
     }
     for entry in directories.iter().rev() {
@@ -247,7 +263,16 @@ fn materialize_entries(
         .collect::<Vec<_>>();
     let leaves = entries
         .iter()
-        .filter(|entry| !matches!(entry.node.source.kind, PayloadNodeKind::Directory))
+        .filter(|entry| {
+            !matches!(
+                entry.node.source.kind,
+                PayloadNodeKind::Directory | PayloadNodeKind::Hardlink { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let hardlinks = entries
+        .iter()
+        .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Hardlink { .. }))
         .collect::<Vec<_>>();
 
     for entry in &directories {
@@ -268,11 +293,15 @@ fn materialize_entries(
         let path = destination_path(destination, &entry.path)?;
         create_leaf(entry, cas, destination, &path)?;
     }
+    for entry in &hardlinks {
+        let path = destination_path(destination, &entry.path)?;
+        create_leaf(entry, cas, destination, &path)?;
+    }
 
     // File metadata must precede directory metadata because leaf creation
     // changes parent mtimes. Deepest directories are restored first and the
     // selected-root metadata is restored by the caller last.
-    for entry in &leaves {
+    for entry in leaves.iter().chain(&hardlinks) {
         apply_resolved_payload_metadata(&destination_path(destination, &entry.path)?, &entry.node)?;
     }
     for entry in directories.iter().rev() {
