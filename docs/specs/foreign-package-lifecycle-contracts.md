@@ -858,7 +858,11 @@ projection exposes introspection but cannot replace Conary's instruction
 deadline hook. `posix.stat` returns RPM's selected value or table on success
 and `(nil, path-qualified strerror, errno)` when target `lstat` fails, while a
 root-confinement violation remains fatal. All target paths use one
-symlink-aware root-confinement resolver.
+symlink-aware root-confinement resolver. APIs backed by leaf-sensitive
+filesystem calls (`lstat`, `readlink`, removal, rename, and link creation)
+resolve selected-root aliases only in the parent path and retain the exact
+final directory entry; APIs whose source syscall follows the leaf retain full
+dereferencing.
 
 ### RPM Upgrade Order
 

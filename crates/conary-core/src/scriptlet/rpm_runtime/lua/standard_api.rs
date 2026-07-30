@@ -79,12 +79,13 @@ pub(super) fn install_os(lua: &Lua, context: LuaRuntimeContext) -> mlua::Result<
         "remove",
         lua.create_function(move |_, path: String| {
             let path = remove_context
-                .resolve(&path)
+                .resolve_without_following_leaf(&path)
                 .map_err(mlua::Error::external)?;
-            if path.is_dir() {
-                std::fs::remove_dir(path).map_err(mlua::Error::external)?;
+            let metadata = std::fs::symlink_metadata(&path).map_err(mlua::Error::external)?;
+            if metadata.file_type().is_dir() {
+                std::fs::remove_dir(&path).map_err(mlua::Error::external)?;
             } else {
-                std::fs::remove_file(path).map_err(mlua::Error::external)?;
+                std::fs::remove_file(&path).map_err(mlua::Error::external)?;
             }
             Ok(true)
         })?,
@@ -94,9 +95,11 @@ pub(super) fn install_os(lua: &Lua, context: LuaRuntimeContext) -> mlua::Result<
         "rename",
         lua.create_function(move |_, (from, to): (String, String)| {
             let from = rename_context
-                .resolve(&from)
+                .resolve_without_following_leaf(&from)
                 .map_err(mlua::Error::external)?;
-            let to = rename_context.resolve(&to).map_err(mlua::Error::external)?;
+            let to = rename_context
+                .resolve_without_following_leaf(&to)
+                .map_err(mlua::Error::external)?;
             std::fs::rename(from, to).map_err(mlua::Error::external)?;
             Ok(true)
         })?,
@@ -255,7 +258,7 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
         "mkdir",
         lua.create_function(move |_, (path, mode): (String, Option<u32>)| {
             let path = mkdir_context
-                .resolve(&path)
+                .resolve_without_following_leaf(&path)
                 .map_err(mlua::Error::external)?;
             std::fs::create_dir(&path).map_err(mlua::Error::external)?;
             let mode = mode.unwrap_or(0o777) & !mkdir_context.umask();
@@ -270,7 +273,7 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
         lua.create_function(move |_, path: String| {
             std::fs::remove_dir(
                 rmdir_context
-                    .resolve(&path)
+                    .resolve_without_following_leaf(&path)
                     .map_err(mlua::Error::external)?,
             )
             .map_err(mlua::Error::external)?;
@@ -281,7 +284,9 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
     table.set(
         "mkfifo",
         lua.create_function(move |_, path: String| {
-            let path = fifo_context.resolve(&path).map_err(mlua::Error::external)?;
+            let path = fifo_context
+                .resolve_without_following_leaf(&path)
+                .map_err(mlua::Error::external)?;
             let path = CString::new(path.as_os_str().as_bytes())
                 .map_err(|_| mlua::Error::runtime("path contains NUL"))?;
             let rc = unsafe { libc::mkfifo(path.as_ptr(), 0o777 & !fifo_context.umask()) };
@@ -297,7 +302,7 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
         lua.create_function(move |_, path: String| {
             std::fs::remove_file(
                 unlink_context
-                    .resolve(&path)
+                    .resolve_without_following_leaf(&path)
                     .map_err(mlua::Error::external)?,
             )
             .map_err(mlua::Error::external)?;
@@ -308,8 +313,12 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
     table.set(
         "link",
         lua.create_function(move |_, (old, new): (String, String)| {
-            let old = link_context.resolve(&old).map_err(mlua::Error::external)?;
-            let new = link_context.resolve(&new).map_err(mlua::Error::external)?;
+            let old = link_context
+                .resolve_without_following_leaf(&old)
+                .map_err(mlua::Error::external)?;
+            let new = link_context
+                .resolve_without_following_leaf(&new)
+                .map_err(mlua::Error::external)?;
             std::fs::hard_link(old, new).map_err(mlua::Error::external)?;
             Ok(0)
         })?,
@@ -319,7 +328,7 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
         "symlink",
         lua.create_function(move |_, (old, new): (String, String)| {
             let new = symlink_context
-                .resolve(&new)
+                .resolve_without_following_leaf(&new)
                 .map_err(mlua::Error::external)?;
             std::os::unix::fs::symlink(old, new).map_err(mlua::Error::external)?;
             Ok(0)
@@ -330,7 +339,7 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
         "readlink",
         lua.create_function(move |_, path: String| {
             let path = readlink_context
-                .resolve(&path)
+                .resolve_without_following_leaf(&path)
                 .map_err(mlua::Error::external)?;
             Ok(std::fs::read_link(path)
                 .map_err(mlua::Error::external)?
@@ -468,7 +477,9 @@ fn install_posix_metadata(
     table.set(
         "stat",
         lua.create_function(move |lua, (path, selector): (String, Option<String>)| {
-            let target = stat_context.resolve(&path).map_err(mlua::Error::external)?;
+            let target = stat_context
+                .resolve_without_following_leaf(&path)
+                .map_err(mlua::Error::external)?;
             match std::fs::symlink_metadata(target) {
                 Ok(metadata) => Ok(MultiValue::from_vec(vec![stat_value(
                     lua,

@@ -283,7 +283,8 @@ mod tests {
                 assert(missing == nil)
                 assert(message == "/media: No such file or directory")
                 assert(errno == 2)
-                local confined, confinement_error = pcall(posix.stat, "/loop")
+                assert(posix.stat("/loop", "type") == "link")
+                local confined, confinement_error = pcall(posix.stat, "/loop/child")
                 assert(confined == false)
                 assert(string.find(tostring(confinement_error),
                     "RpmTargetPathError: symlink depth exceeds 64", 1, true))
@@ -318,6 +319,76 @@ mod tests {
         assert_eq!(
             std::fs::read(root.path().join("var/value")).expect("written value"),
             b"payload"
+        );
+    }
+
+    #[test]
+    fn embedded_lua_leaf_sensitive_filesystem_calls_preserve_symlink_entries() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("usr/bin")).expect("usr bin");
+        std::fs::write(root.path().join("usr/bin/kept"), b"kept").expect("target file");
+        std::os::unix::fs::symlink("bin", root.path().join("usr/sbin")).expect("usr sbin symlink");
+        std::os::unix::fs::symlink("usr", root.path().join("alias")).expect("ancestor alias");
+        let executor =
+            ScriptletExecutor::new(root.path(), "filesystem", "3.18", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "post-transaction",
+            r#"
+                assert(posix.stat("/usr/sbin", "type") == "link")
+                assert(posix.readlink("/usr/sbin") == "bin")
+
+                -- This is the decisive branch in Fedora filesystem's
+                -- usrmerge post-transaction script. A leaf-following stat
+                -- incorrectly enters it and deletes /usr/bin.
+                local st = posix.stat("/usr/sbin")
+                if st and st.type ~= "link" then
+                    os.remove("/usr/sbin")
+                    posix.symlink("bin", "/usr/sbin")
+                end
+                assert(posix.stat("/usr/bin", "type") == "directory")
+                assert(posix.readlink("/usr/sbin") == "bin")
+
+                assert(os.remove("/usr/sbin"))
+                assert(posix.stat("/usr/bin", "type") == "directory")
+                assert(posix.stat("/usr/bin/kept", "size") == 4)
+
+                assert(posix.symlink("bin", "/usr/sbin") == 0)
+                assert(posix.unlink("/usr/sbin") == 0)
+                assert(posix.stat("/usr/bin", "type") == "directory")
+
+                assert(posix.symlink("bin", "/usr/sbin") == 0)
+                assert(os.rename("/usr/sbin", "/usr/admin"))
+                assert(posix.readlink("/usr/admin") == "bin")
+                assert(posix.stat("/usr/bin", "type") == "directory")
+
+                assert(posix.link("/usr/admin", "/usr/admin-hard") == 0)
+                assert(posix.stat("/usr/admin-hard", "type") == "link")
+                assert(posix.readlink("/usr/admin-hard") == "bin")
+
+                assert(posix.symlink("bin", "/alias/sbin") == 0)
+                assert(posix.readlink("/usr/sbin") == "bin")
+            "#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("leaf-sensitive target-root APIs");
+
+        assert!(root.path().join("usr/bin").is_dir());
+        assert_eq!(
+            std::fs::read_link(root.path().join("usr/admin")).expect("renamed symlink"),
+            std::path::PathBuf::from("bin")
+        );
+        assert_eq!(
+            std::fs::read_link(root.path().join("usr/admin-hard")).expect("linked symlink"),
+            std::path::PathBuf::from("bin")
+        );
+        assert_eq!(
+            std::fs::read_link(root.path().join("usr/sbin")).expect("ancestor-resolved symlink"),
+            std::path::PathBuf::from("bin")
         );
     }
 

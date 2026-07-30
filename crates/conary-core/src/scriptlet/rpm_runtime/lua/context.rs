@@ -72,6 +72,14 @@ impl LuaRuntimeContext {
         super::super::target::resolve_guest_path(self.root(), &self.cwd(), guest)
     }
 
+    pub(super) fn resolve_without_following_leaf(&self, guest: &str) -> Result<PathBuf> {
+        super::super::target::resolve_guest_path_without_following_leaf(
+            self.root(),
+            &self.cwd(),
+            guest,
+        )
+    }
+
     pub(super) fn guest_path(&self, guest: &str) -> Result<String> {
         super::super::target::guest_path(self.root(), &self.cwd(), guest)
     }
