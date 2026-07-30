@@ -624,7 +624,7 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
     // Total current converted packages.
     let mut total_converted = 0_i64;
     for converted in ConvertedPackage::list_repository_conversions(&conn)? {
-        if !converted.needs_reconversion() {
+        if converted.repository_metadata_is_current(&conn)? {
             converted.repository_artifact()?;
             converted.scriptlet_summary()?;
             total_converted += 1;
@@ -839,8 +839,14 @@ mod tests {
         conn.execute(
             "INSERT INTO repository_packages
              (repository_id, name, version, architecture, description, checksum, size, download_url, version_scheme)
-             VALUES (?1, ?2, ?3, ?4, 'test package', 'sha256:repo', 3, 'https://example.invalid/pkg.rpm', 'rpm')",
-            rusqlite::params![repository_id, name, version, architecture],
+             VALUES (?1, ?2, ?3, ?4, 'test package', ?5, 3, 'https://example.invalid/pkg.rpm', 'rpm')",
+            rusqlite::params![
+                repository_id,
+                name,
+                version,
+                architecture,
+                format!("sha256:source-{name}-{version}")
+            ],
         )
         .unwrap();
     }
@@ -865,6 +871,7 @@ mod tests {
             3,
             format!("sha256:content-{name}-{version}"),
             format!("/tmp/{name}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = conversion_version;
         converted.insert(conn).unwrap();
@@ -889,6 +896,7 @@ mod tests {
             3,
             format!("sha256:content-{name}-{version}"),
             format!("/tmp/{name}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();
@@ -947,6 +955,7 @@ mod tests {
             "x86_64",
             CONVERSION_VERSION,
         );
+        seed_repository_package(&conn, "fedora", "current", "1.0", Some("x86_64"));
 
         let overview = query_overview(temp_file.path()).unwrap();
 

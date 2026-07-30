@@ -5,7 +5,7 @@ use crate::server::native_publish::test_support::seed_native_publication;
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{
     ConvertedPackage, Repository, RepositoryPackage, RepositoryRequirement,
-    RepositoryRequirementGroup as DbRequirementGroup, Trove, TroveType,
+    RepositoryRequirementGroup as DbRequirementGroup,
 };
 use conary_core::db::schema;
 use conary_core::repository::dependency_model::{
@@ -43,6 +43,7 @@ fn insert_converted_with_summary(
         42,
         format!("sha256:{package}-{version}-content"),
         format!("/tmp/{package}-{version}.ccs"),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     converted.set_scriptlet_metadata(&summary).unwrap();
     converted.insert(conn).unwrap();
@@ -415,6 +416,7 @@ fn test_build_metadata_with_converted_packages() {
         2048,
         "sha256:content".to_string(),
         "/path/to/nginx.ccs".to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     converted.insert(&conn).unwrap();
 
@@ -437,7 +439,7 @@ fn test_build_metadata_with_converted_packages() {
 }
 
 #[test]
-fn test_build_metadata_with_converted_only_package() {
+fn metadata_omits_conversion_without_current_repository_source() {
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
@@ -455,27 +457,24 @@ fn test_build_metadata_with_converted_only_package() {
         1277,
         "fixture-hash".to_string(),
         "/conary/cache/packages/conary-test-fixture-1.0.0.ccs".to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     converted.insert(&conn).unwrap();
 
     let metadata = build_metadata(temp_file.path(), "fedora").unwrap();
 
-    assert_eq!(metadata.package_count, 1);
-    assert_eq!(metadata.converted_count, 1);
-
-    let fixture = metadata
-        .packages
-        .iter()
-        .find(|p| p.name == "conary-test-fixture")
-        .unwrap();
-    assert_eq!(fixture.version, "1.0.0");
-    assert!(fixture.converted);
-    assert!(fixture.provides.is_empty());
-    assert!(fixture.requirement_groups.is_empty());
+    assert_eq!(metadata.package_count, 0);
+    assert_eq!(metadata.converted_count, 0);
+    assert!(
+        metadata
+            .packages
+            .iter()
+            .all(|package| package.name != "conary-test-fixture")
+    );
 }
 
 #[test]
-fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_rows() {
+fn metadata_merges_public_scriptlet_metadata_only_for_current_repository_rows() {
     let (temp_file, conn) = create_test_db();
 
     let mut repo = Repository::new("fedora".to_string(), "https://example.com".to_string());
@@ -516,6 +515,7 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
         2048,
         "sha256:repo-backed-content".to_string(),
         "/cache/repo-backed.ccs".to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     repo_backed
         .set_scriptlet_metadata(&ScriptletBundleSummary {
@@ -536,6 +536,7 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
         4096,
         "sha256:converted-only-content".to_string(),
         "/cache/converted-only.ccs".to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     converted_only
         .set_scriptlet_metadata(&ScriptletBundleSummary {
@@ -566,23 +567,11 @@ fn metadata_merges_public_scriptlet_metadata_for_repo_backed_and_converted_only_
         Some("native-lifecycle")
     );
 
-    let converted_only = metadata
-        .packages
-        .iter()
-        .find(|pkg| pkg.name == "converted-only")
-        .unwrap();
-    assert!(converted_only.converted);
-    let converted_only_scriptlets = converted_only
-        .metadata
-        .as_ref()
-        .unwrap()
-        .get("scriptlets")
-        .unwrap();
-    assert_eq!(
-        converted_only_scriptlets
-            .get("scriptlet_fidelity")
-            .and_then(serde_json::Value::as_str),
-        Some("native-lifecycle")
+    assert!(
+        metadata
+            .packages
+            .iter()
+            .all(|package| package.name != "converted-only")
     );
 
     let unconverted = metadata
@@ -710,96 +699,6 @@ fn test_find_repository_not_found() {
 
     let found = find_repository_for_profile(&conn, "fedora-44").unwrap();
     assert!(found.is_none());
-}
-
-#[test]
-fn test_build_converted_packages() {
-    let (_temp_file, conn) = create_test_db();
-
-    // Add converted packages for different distros
-    let mut fedora_pkg = ConvertedPackage::new_repository(
-        "fedora-44".to_string(),
-        "nginx".to_string(),
-        "1.24.0".to_string(),
-        "x86_64".to_string(),
-        "rpm".to_string(),
-        "sha256:fed1".to_string(),
-        &[],
-        1024,
-        "sha256:c1".to_string(),
-        "/path/1.ccs".to_string(),
-    );
-    fedora_pkg.insert(&conn).unwrap();
-
-    let mut arch_pkg = ConvertedPackage::new_repository(
-        "arch".to_string(),
-        "nginx".to_string(),
-        "1.24.0".to_string(),
-        "x86_64".to_string(),
-        "arch".to_string(),
-        "sha256:arch1".to_string(),
-        &[],
-        1024,
-        "sha256:c2".to_string(),
-        "/path/2.ccs".to_string(),
-    );
-    arch_pkg.insert(&conn).unwrap();
-
-    // Query for fedora - should only get fedora packages
-    let fedora_set = build_converted_packages(&conn, "fedora-44").unwrap();
-    assert_eq!(fedora_set.len(), 1);
-    assert_eq!(fedora_set[0].name, "nginx");
-    assert_eq!(fedora_set[0].version, "1.24.0");
-    assert!(fedora_set[0].converted);
-
-    // Query for arch - should only get arch packages
-    let arch_set = build_converted_packages(&conn, "arch").unwrap();
-    assert_eq!(arch_set.len(), 1);
-    assert_eq!(arch_set[0].name, "nginx");
-    assert_eq!(arch_set[0].version, "1.24.0");
-
-    // Query for ubuntu - should be empty
-    let ubuntu_set = build_converted_packages(&conn, "ubuntu-26.04").unwrap();
-    assert!(ubuntu_set.is_empty());
-}
-
-#[test]
-fn test_build_converted_packages_ignores_null_fields() {
-    let (_temp_file, conn) = create_test_db();
-
-    // Add a client-side converted package (no package_name/version/distro)
-    let mut trove = Trove::new(
-        "installed-client".to_string(),
-        "1.0".to_string(),
-        TroveType::Package,
-        conary_core::repository::versioning::VersionScheme::Conary,
-    );
-    let trove_id = trove.insert(&conn).unwrap();
-    let mut client_pkg =
-        ConvertedPackage::new_installed(trove_id, "rpm".to_string(), "sha256:client".to_string());
-    client_pkg.insert(&conn).unwrap();
-
-    // Add a server-side converted package
-    let mut server_pkg = ConvertedPackage::new_repository(
-        "fedora-44".to_string(),
-        "curl".to_string(),
-        "8.5.0".to_string(),
-        "x86_64".to_string(),
-        "rpm".to_string(),
-        "sha256:server".to_string(),
-        &[],
-        512,
-        "sha256:c".to_string(),
-        "/path/curl.ccs".to_string(),
-    );
-    server_pkg.insert(&conn).unwrap();
-
-    let set = build_converted_packages(&conn, "fedora-44").unwrap();
-
-    // Should only include the server-side package with non-null fields
-    assert_eq!(set.len(), 1);
-    assert_eq!(set[0].name, "curl");
-    assert_eq!(set[0].version, "8.5.0");
 }
 
 #[test]

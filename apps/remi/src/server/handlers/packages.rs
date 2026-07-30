@@ -357,7 +357,7 @@ fn check_converted(
     )?;
 
     if let Some(converted) = existing {
-        if converted.needs_reconversion() {
+        if !converted.repository_metadata_is_current(&conn)? {
             return Ok(ConvertedManifestLookup::Missing);
         }
         let artifact = converted.repository_artifact()?;
@@ -729,7 +729,7 @@ fn converted_ccs_path_for_download(
         return Ok(ConvertedDownloadLookup::Missing);
     };
 
-    if converted.needs_reconversion() {
+    if !converted.repository_metadata_is_current(&conn)? {
         return Ok(ConvertedDownloadLookup::Missing);
     }
     converted.scriptlet_summary()?;

@@ -547,14 +547,13 @@ fn build_manifest(
         )?
     };
 
-    let converted = match converted {
-        Some(converted) if !converted.needs_reconversion() => {
-            converted.scriptlet_summary()?;
-            converted
-        }
-        None => return Ok(None),
-        Some(_) => return Ok(None),
+    let Some(converted) = converted else {
+        return Ok(None);
     };
+    if !converted.repository_metadata_is_current(&conn)? {
+        return Ok(None);
+    }
+    converted.scriptlet_summary()?;
 
     let artifact = converted.repository_artifact()?;
     let chunk_hashes = &artifact.chunk_hashes;
@@ -651,7 +650,7 @@ fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error>
     let conn = Connection::open(db_path)?;
     let mut repositories = Vec::new();
     for converted in ConvertedPackage::list_repository_conversions(&conn)? {
-        if converted.needs_reconversion() {
+        if !converted.repository_metadata_is_current(&conn)? {
             continue;
         }
         converted.scriptlet_summary()?;

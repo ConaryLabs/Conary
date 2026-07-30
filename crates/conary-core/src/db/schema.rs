@@ -12,15 +12,15 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 21 of the current-only schema epoch.
+/// Revision 22 of the current-only schema epoch.
 ///
-/// Revision 21 hard-cuts installed and native-lifecycle provenance from its
-/// ambiguous former name to one exact public `source_profile`. It
-/// retains revision 20's exact package release, source-native architecture,
-/// Debian Multi-Arch behavior, typed provider range boundaries, and identity
-/// indexes. Pre-alpha databases from revision 20 must be rebuilt; no
+/// Revision 22 binds every repository conversion to the exact normalized
+/// repository-provide projection signed into its CCS authority. It retains
+/// revision 21's exact public `source_profile`, package release, source-native
+/// architecture, Debian Multi-Arch behavior, typed provider range boundaries,
+/// and identity indexes. Pre-alpha databases from revision 21 must be rebuilt; no
 /// compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 21;
+pub const SCHEMA_VERSION: i32 = 22;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -404,10 +404,12 @@ mod tests {
                 "INSERT INTO converted_packages (
                      artifact_kind, original_format, original_checksum,
                      package_name, package_version, source_profile, package_architecture,
-                     chunk_hashes_json, total_size, content_hash, ccs_path
+                     repository_provides_digest, chunk_hashes_json, total_size,
+                     content_hash, ccs_path
                  ) VALUES (
                      'repository', 'rpm', ?1, 'fixture', '1.0-1', 'fedora-44',
-                     ?2, '[\"sha256:chunk\"]', 42, 'sha256:content',
+                     ?2, 'sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+                     '[\"sha256:chunk\"]', 42, 'sha256:content',
                      '/tmp/fixture.ccs'
                  )",
                 params![checksum, architecture],
