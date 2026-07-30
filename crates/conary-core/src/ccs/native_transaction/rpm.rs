@@ -54,11 +54,6 @@ pub(super) fn plan(
                         entry.id
                     );
                 }
-                let mut argv = vec![entry.interpreter.clone()];
-                if let Some(path) = &sysusers.source_path {
-                    argv.extend(["--replace".to_string(), path.clone()]);
-                }
-                argv.push("-".to_string());
                 let transaction_index = owner_change(view, changes)
                     .map(|change| change.transaction_index)
                     .unwrap_or(usize::MAX);
@@ -68,7 +63,9 @@ pub(super) fn plan(
                     owner_arch: view.bundle.source_arch.clone(),
                     source_format: view.bundle.source_format.as_str().to_string(),
                     stage: NativeEventStage::RpmSysusers,
-                    program: NativeEventProgram::Command { argv },
+                    program: NativeEventProgram::RpmSysusers {
+                        source_path: sysusers.source_path.clone(),
+                    },
                     args: Vec::new(),
                     stdin: lines_stdin(&sysusers.lines),
                     matched_targets: sysusers.source_path.iter().cloned().collect(),

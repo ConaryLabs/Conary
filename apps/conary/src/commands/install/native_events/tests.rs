@@ -21,7 +21,7 @@ use conary_core::repository::dependency_model::{
 use conary_core::scriptlet::ExecutionMode;
 use conary_core::transaction::{PackageRelationIncomingIdentity, PackageRelationRemoval};
 use std::collections::BTreeSet;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 #[path = "tests/arch.rs"]
 mod arch;
@@ -134,6 +134,48 @@ fn prepared_with_projected_event(
         path_projection,
         ..PreparedNativeTransaction::default()
     }
+}
+
+fn rpm_sysusers_event(bundle: &NativeLifecycleBundle) -> NativeTransactionEvent {
+    NativeTransactionEvent {
+        owner_package: bundle.source_package.clone(),
+        owner_version: bundle.source_version.clone(),
+        owner_arch: bundle.source_arch.clone(),
+        source_format: "rpm".to_string(),
+        stage: NativeEventStage::RpmSysusers,
+        program: NativeEventProgram::RpmSysusers {
+            source_path: Some("/usr/lib/sysusers.d/owner.conf".to_string()),
+        },
+        args: Vec::new(),
+        stdin: b"u owner -\n".to_vec(),
+        matched_targets: vec!["/usr/lib/sysusers.d/owner.conf".to_string()],
+        rpm_trigger_owner: None,
+        deb_package_refcount: None,
+        order_key: "rpm:sysusers:owner".to_string(),
+        placement: NativeEventPlacement::TransactionElement {
+            transaction_index: 0,
+        },
+    }
+}
+
+#[cfg(unix)]
+fn persisted_sysusers_inventory() -> (tempfile::TempDir, conary_core::ccs::HostCapabilityInventory)
+{
+    let interface_dir = tempfile::tempdir().unwrap();
+    let executable = interface_dir.path().join("systemd-sysusers");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/conary-core/tests/fixtures/host-tools/systemd")
+        .canonicalize()
+        .unwrap();
+    symlink(fixture, &executable).unwrap();
+    let interface = conary_core::ccs::ExecutableInterface::probe_sysusers(executable).unwrap();
+    (
+        interface_dir,
+        conary_core::ccs::HostCapabilityInventory {
+            sysusers: Some(interface),
+            ..conary_core::ccs::HostCapabilityInventory::default()
+        },
+    )
 }
 
 fn deb_entry(
@@ -601,6 +643,86 @@ fn transaction_preflight_walks_exact_command_events() {
     assert!(
         error.to_string().contains("native transaction preflight"),
         "unexpected error: {error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rpm_sysusers_event_uses_the_persisted_interface_for_an_empty_root() {
+    let bundle = pre_remove_bundle("sysusers-owner", "1");
+    let event = rpm_sysusers_event(&bundle);
+    let mut prepared = prepared_with_projected_event(
+        bundle,
+        event.clone(),
+        NativeEventPathProjection::CurrentRoot,
+    );
+    let (_interface_dir, inventory) = persisted_sysusers_inventory();
+    prepared.host_capabilities = Some(inventory);
+    let target_root = tempfile::tempdir().unwrap();
+
+    assert!(!target_root.path().join("usr/bin/systemd-sysusers").exists());
+    prepared
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .unwrap();
+    prepared
+        .execute_event(&event, target_root.path(), &ExecutionMode::Install, None)
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read(
+            target_root
+                .path()
+                .join("var/lib/conary-test/systemd-sysusers-stdin")
+        )
+        .unwrap(),
+        b"u owner -\n"
+    );
+}
+
+#[test]
+fn rpm_sysusers_event_rejects_a_missing_persisted_interface() {
+    let bundle = pre_remove_bundle("sysusers-owner", "1");
+    let event = rpm_sysusers_event(&bundle);
+    let mut prepared =
+        prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
+    prepared.host_capabilities = Some(conary_core::ccs::HostCapabilityInventory::default());
+    let target_root = tempfile::tempdir().unwrap();
+
+    let error = prepared
+        .preflight(target_root.path(), &ExecutionMode::Install)
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("systemd-sysusers target interface"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn typed_sysusers_plan_loads_host_capabilities_without_an_arch_selector() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let bundle = pre_remove_bundle("sysusers-owner", "1");
+    let plan = NativeTransactionPlan {
+        events: vec![rpm_sysusers_event(&bundle)],
+        graph: NativeTransactionGraph::default(),
+        deb: Default::default(),
+    };
+
+    let missing = host_capabilities_for_plan(&conn, false, &plan).unwrap_err();
+    assert!(
+        format!("{missing:#}").contains("host capability inventory is not initialized"),
+        "unexpected error: {missing:#}"
+    );
+
+    let (_interface_dir, inventory) = persisted_sysusers_inventory();
+    inventory.persist(&conn).unwrap();
+    assert!(
+        host_capabilities_for_plan(&conn, false, &plan)
+            .unwrap()
+            .is_some()
     );
 }
 

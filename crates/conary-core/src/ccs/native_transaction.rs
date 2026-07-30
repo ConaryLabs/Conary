@@ -292,8 +292,17 @@ pub enum NativeEventStage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeEventProgram {
-    BundleEntry { entry_id: String },
-    Command { argv: Vec<String> },
+    BundleEntry {
+        entry_id: String,
+    },
+    Command {
+        argv: Vec<String>,
+    },
+    /// RPM's pre-payload sysusers semantic, executed through the persisted
+    /// target interface rather than a program projected inside the payload.
+    RpmSysusers {
+        source_path: Option<String>,
+    },
 }
 
 /// Which RPM package set supplied a trigger owner.
@@ -354,6 +363,15 @@ impl NativeTransactionPlan {
         stage: NativeEventStage,
     ) -> impl Iterator<Item = &NativeTransactionEvent> {
         self.events.iter().filter(move |event| event.stage == stage)
+    }
+
+    /// Whether this exact plan requires the persisted target sysusers
+    /// interface. This is derived from the typed event graph, never a source
+    /// distro or package-name selector.
+    pub fn requires_sysusers_interface(&self) -> bool {
+        self.events
+            .iter()
+            .any(|event| matches!(event.program, NativeEventProgram::RpmSysusers { .. }))
     }
 }
 

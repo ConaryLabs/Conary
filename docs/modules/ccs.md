@@ -528,7 +528,11 @@ Core event planning lives in `crates/conary-core/src/ccs/native_transaction.rs`.
 `apps/conary/src/commands/install/native_events.rs` binds that plan to the
 shared install/remove executor. Command, batch, CCS, restore, remove, and
 autoremove paths call the same stage groups instead of maintaining
-format-specific copies.
+format-specific copies. RPM's pre-payload sysusers event is executed through
+the persisted target interface in
+`crates/conary-core/src/scriptlet/sysusers.rs`; generic native commands remain
+owned by `crates/conary-core/src/scriptlet/native_command.rs` inside the
+selected root.
 
 Applied package transactions cannot suppress lifecycle execution. Install,
 update, remove, restore, batch, autoremove, CCS install, automation, and daemon
