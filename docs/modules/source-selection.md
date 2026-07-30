@@ -356,11 +356,16 @@ it never treats an empty profile as an empty candidate set and never derives
 one from a package name, repository label, URL, or package format. Local files
 with repository dependencies therefore require an explicit scope or system
 pin. Guarded mixing prefers an established profile and may fall back;
-permissive mixing does not add a profile preference. Once eligibility and any
-guarded preference are fixed, repository priority is authoritative. Candidates at
-the same priority are compared only with their source ecosystem's native
-version scheme. Equal-priority candidates from different schemes, or candidates
-whose exact native identity remains tied, produce a typed ambiguity. Repository
+permissive mixing does not add a profile preference. An exact installed
+package-name or declared capability provider that satisfies a transitive
+requirement is favored before repository ranking, so dependency planning does
+not reinstall its repository copy. An explicit root with an exact package-name
+candidate retains that root identity instead of being replaced by a differently
+named installed virtual provider. Once eligibility and installed-provider
+preference are fixed, repository priority is authoritative. Candidates at the
+same priority are compared only with their source ecosystem's native version
+scheme. Equal-priority candidates from different schemes, or candidates whose
+exact native identity remains tied, produce a typed ambiguity. Repository
 names, cache iteration order, and external discovery metadata never break that
 tie.
 
