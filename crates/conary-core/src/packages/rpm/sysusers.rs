@@ -54,27 +54,53 @@ impl RpmPackage {
         }
 
         let provider_files = rpm_provider_files(&pkg.metadata, provides.len())?;
-        let mut groups = Vec::<RpmSysusersMetadata>::new();
-        for decoded in decoded {
-            let source_path = provider_files
-                .get(decoded.provide_index)
-                .and_then(Clone::clone);
-            let group_index = groups
-                .iter()
-                .position(|group| group.source_path == source_path)
-                .unwrap_or_else(|| {
-                    groups.push(RpmSysusersMetadata {
-                        source_path: source_path.clone(),
-                        lines: Vec::new(),
-                        directives: Vec::new(),
-                    });
-                    groups.len() - 1
-                });
-            groups[group_index].lines.push(decoded.line);
-            groups[group_index].directives.push(decoded.directive);
-        }
-        Ok(groups)
+        group_decoded_sysusers(decoded, &provider_files)
     }
+}
+
+fn group_decoded_sysusers(
+    decoded: Vec<DecodedSysuser>,
+    provider_files: &[Vec<String>],
+) -> Result<Vec<RpmSysusersMetadata>> {
+    let mut groups = Vec::<RpmSysusersMetadata>::new();
+    for decoded in decoded {
+        let source_paths = provider_files.get(decoded.provide_index).ok_or_else(|| {
+            Error::ParseError(format!(
+                "RPM %sysusers provide index {} has no file dependency mapping",
+                decoded.provide_index
+            ))
+        })?;
+        if source_paths.is_empty() {
+            append_decoded_sysuser(&mut groups, None, &decoded);
+        } else {
+            for source_path in source_paths {
+                append_decoded_sysuser(&mut groups, Some(source_path.clone()), &decoded);
+            }
+        }
+    }
+    Ok(groups)
+}
+
+fn append_decoded_sysuser(
+    groups: &mut Vec<RpmSysusersMetadata>,
+    source_path: Option<String>,
+    decoded: &DecodedSysuser,
+) {
+    let group_index = groups
+        .iter()
+        .position(|group| group.source_path == source_path)
+        .unwrap_or_else(|| {
+            groups.push(RpmSysusersMetadata {
+                source_path: source_path.clone(),
+                lines: Vec::new(),
+                directives: Vec::new(),
+            });
+            groups.len() - 1
+        });
+    groups[group_index].lines.push(decoded.line.clone());
+    groups[group_index]
+        .directives
+        .push(decoded.directive.clone());
 }
 
 #[derive(Debug)]
@@ -230,18 +256,34 @@ fn invalid_sysusers_shape(line: &str, expectation: &str) -> Error {
 fn rpm_provider_files(
     metadata: &rpm::PackageMetadata,
     provide_count: usize,
-) -> Result<Vec<Option<String>>> {
+) -> Result<Vec<Vec<String>>> {
     let file_starts = optional_u32_array(metadata, rpm::IndexTag::RPMTAG_FILEDEPENDSX)?;
     let file_counts = optional_u32_array(metadata, rpm::IndexTag::RPMTAG_FILEDEPENDSN)?;
     let dependency_dictionary = optional_u32_array(metadata, rpm::IndexTag::RPMTAG_DEPENDSDICT)?;
     if file_starts.is_empty() && file_counts.is_empty() && dependency_dictionary.is_empty() {
-        return Ok(vec![None; provide_count]);
+        return Ok(vec![Vec::new(); provide_count]);
     }
     let paths = metadata.get_file_paths().map_err(|error| {
         Error::ParseError(format!(
             "Failed to read RPM file paths for %sysusers: {error}"
         ))
     })?;
+    provider_files_from_dependency_arrays(
+        &paths,
+        &file_starts,
+        &file_counts,
+        &dependency_dictionary,
+        provide_count,
+    )
+}
+
+fn provider_files_from_dependency_arrays(
+    paths: &[std::path::PathBuf],
+    file_starts: &[u32],
+    file_counts: &[u32],
+    dependency_dictionary: &[u32],
+    provide_count: usize,
+) -> Result<Vec<Vec<String>>> {
     if file_starts.len() != paths.len() || file_counts.len() != paths.len() {
         return Err(Error::ParseError(format!(
             "RPM file dependency arrays do not match file count: starts={}, counts={}, files={}",
@@ -251,7 +293,7 @@ fn rpm_provider_files(
         )));
     }
 
-    let mut provider_files = vec![None; provide_count];
+    let mut provider_files = vec![Vec::new(); provide_count];
     for (file_index, path) in paths.iter().enumerate() {
         let start = usize::try_from(file_starts[file_index]).map_err(|_| {
             Error::ParseError("RPM file dependency start does not fit usize".to_string())
@@ -280,14 +322,8 @@ fn rpm_provider_files(
                 ))
             })?;
             let normalized = normalize_rpm_header_path(path);
-            match target {
-                Some(existing) if existing != &normalized => {
-                    return Err(Error::ParseError(format!(
-                        "RPM provide index {provide_index} is attached to multiple files"
-                    )));
-                }
-                Some(_) => {}
-                None => *target = Some(normalized),
+            if !target.contains(&normalized) {
+                target.push(normalized);
             }
         }
     }
@@ -318,6 +354,10 @@ fn normalize_rpm_header_path(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn packed_provide(index: u32) -> u32 {
+        (FILE_DEPENDENCY_KIND_PROVIDE << 24) | index
+    }
 
     fn identity_user() -> SysuserProvideIdentity {
         SysuserProvideIdentity::User("dnsmasq".to_string())
@@ -366,5 +406,100 @@ mod tests {
 
         let encoded = base64::engine::general_purpose::STANDARD.encode(b"g input\0x");
         assert!(decode_sysusers_line(&encoded, "group(input)").is_err());
+    }
+
+    #[test]
+    fn one_provide_index_preserves_every_attached_file() {
+        let paths = vec![
+            std::path::PathBuf::from("./usr/lib/sysusers.d/first.conf"),
+            std::path::PathBuf::from("./usr/lib/sysusers.d/second.conf"),
+        ];
+        let provider_files = provider_files_from_dependency_arrays(
+            &paths,
+            &[0, 1],
+            &[1, 1],
+            &[packed_provide(0), packed_provide(0)],
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(
+            provider_files,
+            vec![vec![
+                "/usr/lib/sysusers.d/first.conf".to_string(),
+                "/usr/lib/sysusers.d/second.conf".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn decoded_declaration_is_grouped_under_every_source_file() {
+        let decoded = vec![DecodedSysuser {
+            provide_index: 0,
+            line: "u dnsmasq -".to_string(),
+            directive: RpmSysusersDirective::User {
+                name: "dnsmasq".to_string(),
+                id: None,
+                description: None,
+                home: None,
+                shell: None,
+                locked: false,
+            },
+        }];
+        let groups = group_decoded_sysusers(
+            decoded,
+            &[vec![
+                "/usr/lib/sysusers.d/first.conf".to_string(),
+                "/usr/lib/sysusers.d/second.conf".to_string(),
+            ]],
+        )
+        .unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0].source_path.as_deref(),
+            Some("/usr/lib/sysusers.d/first.conf")
+        );
+        assert_eq!(
+            groups[1].source_path.as_deref(),
+            Some("/usr/lib/sysusers.d/second.conf")
+        );
+        assert!(groups.iter().all(|group| group.lines == ["u dnsmasq -"]));
+    }
+
+    #[test]
+    fn package_level_declaration_keeps_absent_source_path() {
+        let decoded = vec![DecodedSysuser {
+            provide_index: 0,
+            line: "g dnsmasq -".to_string(),
+            directive: RpmSysusersDirective::Group {
+                name: "dnsmasq".to_string(),
+                id: None,
+            },
+        }];
+
+        let groups = group_decoded_sysusers(decoded, &[Vec::new()]).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].source_path, None);
+        assert_eq!(groups[0].lines, ["g dnsmasq -"]);
+    }
+
+    #[test]
+    fn malformed_file_dependency_index_still_fails_closed() {
+        let error = provider_files_from_dependency_arrays(
+            &[std::path::PathBuf::from("./usr/bin/example")],
+            &[0],
+            &[1],
+            &[packed_provide(1)],
+            1,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("references missing provide index 1")
+        );
     }
 }
