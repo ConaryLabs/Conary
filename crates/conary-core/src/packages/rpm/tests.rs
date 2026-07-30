@@ -81,6 +81,29 @@ fn rpm_artifact_parser_preserves_nonzero_epoch_in_version_identity() {
 }
 
 #[test]
+fn rpm_artifact_requirement_canonicalizes_empty_epoch_at_typed_boundary() {
+    let mut builder = rpm::PackageBuilder::new(
+        "empty-epoch-consumer",
+        "1",
+        "MIT",
+        "x86_64",
+        "RPM empty requirement epoch fixture",
+    );
+    builder.requires(rpm::Dependency {
+        name: "device-mapper-libs".to_string(),
+        flags: DependencyFlags::EQUAL,
+        version: ":1.02.212-2.fc44".to_string(),
+    });
+
+    let requirements = RpmPackage::extract_requirements(&builder.build().unwrap()).unwrap();
+
+    assert_eq!(
+        requirements[0].native_text.as_deref(),
+        Some("device-mapper-libs = 1.02.212-2.fc44")
+    );
+}
+
+#[test]
 fn rpm_header_relations_preserve_conflicts_and_obsoletes_as_typed_authority() {
     let mut builder =
         rpm::PackageBuilder::new("newpkg", "2", "MIT", "x86_64", "package relation fixture");

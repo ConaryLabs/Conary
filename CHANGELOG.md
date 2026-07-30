@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.9.3] - 2026-07-30
+
+### Fixed
+- accept Fedora empty-epoch requirements and valid many-to-many RPM file
+  dependency mappings during on-demand conversion (#173, #203, #205)
+
 ## [remi-v0.9.2] - 2026-07-30
 
 ### Fixed
