@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 57
+last_updated: 2026-07-30
+revision: 58
 summary: Route exact Remi signing, serialized selected-root mutation, full-adoption captured-root continuity, typed rollback lineage, canonical-map authority, carrier security, typed generation GC, exact release authority, and subsystem proof through current feature owners.
 ---
 

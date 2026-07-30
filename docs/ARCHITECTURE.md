@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 37
+last_updated: 2026-07-30
+revision: 38
 summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -395,7 +395,7 @@ the limited preview.
 
 Full system adoption establishes the first complete generation input without
 turning unowned host state into package ownership. One exact selected-root scan
-preserves package-owned anchors and directory claims, reconciles their
+preserves package-owned anchors and payload claims, reconciles their
 materialized node/content authority, and assigns only the remaining retained
 paths to one `CapturedRoot` trove. `AdoptedFull`, `Taken`, `Repository`, `File`,
 and `CapturedRoot` are the finite complete generation-input sources;

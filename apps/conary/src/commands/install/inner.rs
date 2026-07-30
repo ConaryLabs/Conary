@@ -25,7 +25,7 @@ use conary_core::transaction::PackageRelationRemoval;
 #[cfg(test)]
 use conary_core::transaction::TransactionEngine;
 use rusqlite::{OptionalExtension, Transaction};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -390,6 +390,7 @@ pub(super) fn install_inner_with_stored_files(
                 )?;
             }
         }
+        reconcile_installed_hardlink_materializations(tx, stored_files)?;
 
         persist_config_files(
             tx,
@@ -730,8 +731,9 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
         }
     }
     let Some(existing) = FileEntry::find_by_path(tx, &file_entry.path)? else {
+        let file_id = file_entry.insert(tx)?;
         return Ok(InsertedFileAuthority {
-            file_id: file_entry.insert(tx)?,
+            file_id,
             materialized: true,
         });
     };
@@ -744,8 +746,9 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
             "Recording shared directory claim {} for {}",
             file_entry.path, package_name
         );
+        let file_id = file_entry.insert_or_replace(tx, directory_materialization)?;
         return Ok(InsertedFileAuthority {
-            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            file_id,
             materialized: directory_materialization.applies_incoming(),
         });
     }
@@ -755,8 +758,9 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
             "Recording compatible shared payload claim {} for {}",
             file_entry.path, package_name
         );
+        let file_id = file_entry.insert_or_replace(tx, directory_materialization)?;
         return Ok(InsertedFileAuthority {
-            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            file_id,
             materialized: false,
         });
     }
@@ -779,8 +783,9 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
             "Claiming {} from tracked package {} for {}",
             file_entry.path, owner.name, package_name
         );
+        let file_id = file_entry.insert_or_replace(tx, directory_materialization)?;
         return Ok(InsertedFileAuthority {
-            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            file_id,
             materialized: true,
         });
     }
@@ -790,6 +795,23 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
         file_entry.path,
         owner.name
     ))
+}
+
+pub(super) fn reconcile_installed_hardlink_materializations(
+    tx: &Transaction<'_>,
+    files: &[ResolvedInstallFile],
+) -> Result<()> {
+    let targets = files
+        .iter()
+        .filter_map(|file| match &file.node.source.kind {
+            PayloadNodeKind::Hardlink { target, .. } => Some(target.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for target in targets {
+        FileEntry::reconcile_hardlink_materialization(tx, target)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

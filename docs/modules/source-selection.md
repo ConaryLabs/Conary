@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-30
-revision: 22
+revision: 23
 summary: Document exact profile-owned source policy, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -447,7 +447,7 @@ directory are explicit normalized exclusions under both their lexical and
 resolved paths, so path aliases cannot make the CAS or database inputs to their
 own capture. A runtime root resolving to `/` fails closed.
 
-Persisted package file anchors and directory claims partition that exact scan.
+Persisted package file anchors and payload claims partition that exact scan.
 Package-owned paths retain their owner and claim graph while their materialized
 node/content authority is reconciled to the one global scan, preserving xattrs
 and hardlinks even when an inode group crosses ownership boundaries. Every

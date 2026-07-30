@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-30
-revision: 56
+revision: 57
 summary: Convert foreign packages through typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -627,9 +627,9 @@ existing directory. A converted CCS package instead retains the exact
 RPM, Debian, or Arch directory and configuration behavior selected by its
 validated `native_lifecycle.source_format`; that source format must agree with
 the package version scheme. The installed database stores every package's
-exact directory claim even when dpkg or libalpm semantics preserve the
+exact payload claim even when dpkg or libalpm semantics preserve the
 currently visible directory metadata. See
-[`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md#shared-directory-ownership-and-materialization).
+[`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md#shared-payload-ownership-and-materialization).
 
 For `[[file_capabilities]]`, the v2 writer canonicalizes the declarations into
 signed authority and verification proves each unique path names an exact

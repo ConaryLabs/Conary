@@ -90,96 +90,111 @@ pub fn build_erofs_image_from_root_manifest(
     let mut hardlink_leaves = BTreeMap::<String, LeafId>::new();
     let mut cas_objects_referenced = 0_u64;
 
-    for entry in &manifest.entries {
+    for entry in manifest
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Directory))
+    {
         let (parent, name) = parent_and_name(&entry.path)?;
-        match &entry.node.source.kind {
-            PayloadNodeKind::Directory => {
-                let directory = Directory::new(stat(&entry.node, &entry.path)?);
-                parent_directory_mut(&mut fs.root, parent, &entry.path)?
-                    .insert(OsStr::new(name), Inode::Directory(Box::new(directory)));
-            }
-            PayloadNodeKind::Hardlink { identity, .. } => {
-                let leaf_id = hardlink_leaves.get(identity).copied().ok_or_else(|| {
+        let directory = Directory::new(stat(&entry.node, &entry.path)?);
+        parent_directory_mut(&mut fs.root, parent, &entry.path)?
+            .insert(OsStr::new(name), Inode::Directory(Box::new(directory)));
+    }
+
+    for entry in manifest.entries.iter().filter(|entry| {
+        !matches!(
+            entry.node.source.kind,
+            PayloadNodeKind::Directory | PayloadNodeKind::Hardlink { .. }
+        )
+    }) {
+        let (parent, name) = parent_and_name(&entry.path)?;
+        let kind = &entry.node.source.kind;
+        let content = match kind {
+            PayloadNodeKind::Regular { .. } => {
+                let authority = entry.content.as_ref().ok_or_else(|| {
                     crate::Error::InvalidPath(format!(
-                        "hardlink {} refers to unavailable identity {identity:?}",
+                        "regular manifest entry has no content authority: {}",
                         entry.path
                     ))
                 })?;
-                parent_directory_mut(&mut fs.root, parent, &entry.path)?
-                    .insert(OsStr::new(name), Inode::leaf(leaf_id));
+                let digest = authority
+                    .sha256
+                    .strip_prefix("sha256:")
+                    .unwrap_or(&authority.sha256);
+                let digest = Sha256HashValue::from_hex(digest).map_err(|error| {
+                    crate::Error::InvalidPath(format!(
+                        "invalid SHA-256 digest for {}: {error}",
+                        entry.path
+                    ))
+                })?;
+                cas_objects_referenced += 1;
+                LeafContent::Regular(RegularFile::External(digest, authority.size))
             }
-            kind => {
-                let content = match kind {
-                    PayloadNodeKind::Regular { .. } => {
-                        let authority = entry.content.as_ref().ok_or_else(|| {
-                            crate::Error::InvalidPath(format!(
-                                "regular manifest entry has no content authority: {}",
-                                entry.path
-                            ))
-                        })?;
-                        let digest = authority
-                            .sha256
-                            .strip_prefix("sha256:")
-                            .unwrap_or(&authority.sha256);
-                        let digest = Sha256HashValue::from_hex(digest).map_err(|error| {
-                            crate::Error::InvalidPath(format!(
-                                "invalid SHA-256 digest for {}: {error}",
-                                entry.path
-                            ))
-                        })?;
-                        cas_objects_referenced += 1;
-                        LeafContent::Regular(RegularFile::External(digest, authority.size))
-                    }
-                    PayloadNodeKind::Symlink { target } => {
-                        LeafContent::Symlink(OsStr::new(target).into())
-                    }
-                    PayloadNodeKind::BlockDevice { major, minor } => {
-                        let major = libc::c_uint::try_from(*major).map_err(|_| {
-                            crate::Error::InvalidPath(format!(
-                                "block-device major is not representable at {}",
-                                entry.path
-                            ))
-                        })?;
-                        let minor = libc::c_uint::try_from(*minor).map_err(|_| {
-                            crate::Error::InvalidPath(format!(
-                                "block-device minor is not representable at {}",
-                                entry.path
-                            ))
-                        })?;
-                        LeafContent::BlockDevice(libc::makedev(major, minor))
-                    }
-                    PayloadNodeKind::CharacterDevice { major, minor } => {
-                        let major = libc::c_uint::try_from(*major).map_err(|_| {
-                            crate::Error::InvalidPath(format!(
-                                "character-device major is not representable at {}",
-                                entry.path
-                            ))
-                        })?;
-                        let minor = libc::c_uint::try_from(*minor).map_err(|_| {
-                            crate::Error::InvalidPath(format!(
-                                "character-device minor is not representable at {}",
-                                entry.path
-                            ))
-                        })?;
-                        LeafContent::CharacterDevice(libc::makedev(major, minor))
-                    }
-                    PayloadNodeKind::Fifo => LeafContent::Fifo,
-                    PayloadNodeKind::Socket => LeafContent::Socket,
-                    PayloadNodeKind::Directory | PayloadNodeKind::Hardlink { .. } => {
-                        unreachable!("handled above")
-                    }
-                };
-                let leaf_id = fs.push_leaf(stat(&entry.node, &entry.path)?, content);
-                if let PayloadNodeKind::Regular {
-                    hardlink_identity: Some(identity),
-                } = kind
-                {
-                    hardlink_leaves.insert(identity.clone(), leaf_id);
-                }
-                parent_directory_mut(&mut fs.root, parent, &entry.path)?
-                    .insert(OsStr::new(name), Inode::leaf(leaf_id));
+            PayloadNodeKind::Symlink { target } => LeafContent::Symlink(OsStr::new(target).into()),
+            PayloadNodeKind::BlockDevice { major, minor } => {
+                let major = libc::c_uint::try_from(*major).map_err(|_| {
+                    crate::Error::InvalidPath(format!(
+                        "block-device major is not representable at {}",
+                        entry.path
+                    ))
+                })?;
+                let minor = libc::c_uint::try_from(*minor).map_err(|_| {
+                    crate::Error::InvalidPath(format!(
+                        "block-device minor is not representable at {}",
+                        entry.path
+                    ))
+                })?;
+                LeafContent::BlockDevice(libc::makedev(major, minor))
             }
+            PayloadNodeKind::CharacterDevice { major, minor } => {
+                let major = libc::c_uint::try_from(*major).map_err(|_| {
+                    crate::Error::InvalidPath(format!(
+                        "character-device major is not representable at {}",
+                        entry.path
+                    ))
+                })?;
+                let minor = libc::c_uint::try_from(*minor).map_err(|_| {
+                    crate::Error::InvalidPath(format!(
+                        "character-device minor is not representable at {}",
+                        entry.path
+                    ))
+                })?;
+                LeafContent::CharacterDevice(libc::makedev(major, minor))
+            }
+            PayloadNodeKind::Fifo => LeafContent::Fifo,
+            PayloadNodeKind::Socket => LeafContent::Socket,
+            PayloadNodeKind::Directory | PayloadNodeKind::Hardlink { .. } => {
+                unreachable!("filtered above")
+            }
+        };
+        let leaf_id = fs.push_leaf(stat(&entry.node, &entry.path)?, content);
+        if let PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity),
+        } = kind
+        {
+            hardlink_leaves.insert(identity.clone(), leaf_id);
         }
+        parent_directory_mut(&mut fs.root, parent, &entry.path)?
+            .insert(OsStr::new(name), Inode::leaf(leaf_id));
+    }
+
+    for entry in manifest
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Hardlink { .. }))
+    {
+        let PayloadNodeKind::Hardlink { identity, .. } = &entry.node.source.kind else {
+            unreachable!("filtered above");
+        };
+        let (parent, name) = parent_and_name(&entry.path)?;
+        let leaf_id = hardlink_leaves.get(identity).copied().ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "hardlink {} refers to unavailable identity {identity:?}",
+                entry.path
+            ))
+        })?;
+        parent_directory_mut(&mut fs.root, parent, &entry.path)?
+            .insert(OsStr::new(name), Inode::leaf(leaf_id));
     }
 
     fs.compact();

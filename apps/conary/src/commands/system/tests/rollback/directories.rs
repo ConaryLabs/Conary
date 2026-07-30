@@ -132,13 +132,33 @@ async fn assert_additive_shared_directory_rollback(
         .insert(&conn)
         .unwrap();
     if symlink_anchor {
-        assert!(
-            PayloadClaim::find_by_path(&conn, path)
-                .unwrap()
-                .iter()
-                .all(|claim| claim.trove_id != anchor_id),
-            "a peer-owned verified symlink anchor does not need its own directory claim"
+        let claims = PayloadClaim::find_by_path(&conn, path).unwrap();
+        assert_eq!(
+            claims.len(),
+            2,
+            "the symlink owner and directory claimant retain independent authority"
         );
+        let symlink_claim = claims
+            .iter()
+            .find(|claim| claim.trove_id == anchor_id)
+            .unwrap();
+        assert_eq!(symlink_claim.anchor_policy, PayloadClaimAnchorPolicy::Exact);
+        assert!(matches!(
+            symlink_claim.node.source.kind,
+            PayloadNodeKind::Symlink { .. }
+        ));
+        let directory_claim = claims
+            .iter()
+            .find(|claim| claim.trove_id == claim_owner_id)
+            .unwrap();
+        assert_eq!(
+            directory_claim.anchor_policy,
+            PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+        );
+        assert!(matches!(
+            directory_claim.node.source.kind,
+            PayloadNodeKind::Directory
+        ));
     }
 
     let rollback_root =
@@ -210,7 +230,7 @@ async fn assert_additive_shared_directory_rollback(
     }
     assert_eq!(
         PayloadClaim::find_by_path(&conn, path).unwrap().len(),
-        additions.len() + 1
+        additions.len() + if symlink_anchor { 2 } else { 1 }
     );
     if !symlink_anchor || apply_through_symlink {
         let mut forward_root = rollback_root.clone();

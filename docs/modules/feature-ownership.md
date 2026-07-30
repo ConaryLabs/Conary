@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 61
+last_updated: 2026-07-30
+revision: 62
 summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -208,6 +208,7 @@ mutation flows for local package operations.
 `apps/conary/src/commands/system/tests/rollback.rs`;
 `apps/conary/src/commands/system/tests/rollback/*`;
 `crates/conary-core/src/db/current_schema/sql/package_manager.sql`;
+`crates/conary-core/src/db/current_schema/sql/payload_claims.sql`;
 `crates/conary-core/src/db/models/payload_claim.rs`;
 `crates/conary-core/src/db/models/payload_claim/*`;
 `crates/conary-core/src/db/models/package_payload_ownership.rs`;
@@ -235,7 +236,7 @@ mutation flows for local package operations.
 `cargo test -p conary-core --lib filesystem::selected_root`;
 `cargo test -p conary-core --lib config_transaction`;
 `cargo test -p conary --lib commands::generation::config_transaction`;
-`cargo test -p conary --lib commands::install::transaction::upgrade_rollback`;
+`cargo test -p conary --lib commands::install::rollback_snapshot::tests`;
 `cargo test -p conary-core native_transaction`;
 `cargo test -p conary --test live_host_mutation_safety`;
 `cargo test -p conary-core native_lifecycle`.
@@ -263,11 +264,12 @@ Installed package version schemes are mandatory typed state supplied at
 construction. Parsed package identity, repository provenance, install
 semantics, persisted installed provides, and exact native identity must agree;
 no distro/name/version inference or post-construction placeholder replacement
-may establish that authority. Shared directories retain one exact claim per
-package; query, lifecycle, removal, derived-package, and rollback projections
-must use claim-aware payload ownership rather than treating the materialized
-file anchor as the only owner. A converted CCS archive retains the validated
-native source format's directory materialization contract.
+may establish that authority. Every shared payload path retains one exact claim
+per package; query, lifecycle, removal, derived-package, and rollback
+projections must use claim-aware payload ownership rather than treating the
+materialized file anchor as the only owner. A converted CCS archive retains the
+validated native source format's typed payload-sharing and
+directory-materialization contracts.
 
 ## Adoption, Unadoption, And Native-Authority Handoff
 

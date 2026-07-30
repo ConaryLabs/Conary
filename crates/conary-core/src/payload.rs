@@ -586,9 +586,19 @@ mod sharing_tests {
     }
 
     #[test]
-    fn rpm_regular_compatibility_uses_source_identity_mode_size_and_digest() {
-        let left = PayloadNode::regular(0o644);
-        let right = left.clone();
+    fn rpm_regular_compatibility_uses_mode_source_identity_size_and_digest() {
+        let mut left = PayloadNode::regular(0o644);
+        left.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some("rpm:1:1".to_string()),
+        };
+        let mut right = left.clone();
+        right.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some("rpm:9:9".to_string()),
+        };
+        right.mtime.seconds = 99;
+        right
+            .xattrs
+            .insert("security.example".to_string(), b"ignored".to_vec());
         assert_eq!(
             PayloadSharingPolicy::Rpm.compare(
                 PayloadSharingPolicy::Rpm,
@@ -599,6 +609,63 @@ mod sharing_tests {
             ),
             Ok(())
         );
+
+        right.mode = libc::S_IFREG | 0o600;
+        assert!(matches!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &left,
+                    Some(&content(b"same")),
+                    &right,
+                    Some(&content(b"same")),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::Mode { .. }
+        ));
+        right.mode = left.mode;
+        right.user = PayloadIdentity::Numeric { id: 1 };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &left,
+                    Some(&content(b"same")),
+                    &right,
+                    Some(&content(b"same")),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::User
+        );
+        right.user = left.user.clone();
+        right.group = PayloadIdentity::Numeric { id: 1 };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &left,
+                    Some(&content(b"same")),
+                    &right,
+                    Some(&content(b"same")),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::Group
+        );
+        right.group = left.group.clone();
+        let mut wrong_size = content(b"same");
+        wrong_size.size += 1;
+        assert!(matches!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &left,
+                    Some(&content(b"same")),
+                    &right,
+                    Some(&wrong_size),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::ContentSize { .. }
+        ));
         assert_eq!(
             PayloadSharingPolicy::Rpm
                 .compare(
@@ -611,6 +678,18 @@ mod sharing_tests {
                 .unwrap_err(),
             PayloadCompatibilityMismatch::ContentDigest
         );
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &left,
+                    None,
+                    &right,
+                    Some(&content(b"same")),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::MissingContent
+        );
     }
 
     #[test]
@@ -621,7 +700,7 @@ mod sharing_tests {
         };
         left.mode = libc::S_IFLNK | 0o777;
         let mut right = left.clone();
-        right.mode = libc::S_IFLNK | 0o000;
+        right.mode = libc::S_IFLNK;
         assert_eq!(
             PayloadSharingPolicy::Rpm.compare(PayloadSharingPolicy::Rpm, &left, None, &right, None),
             Ok(())
@@ -635,6 +714,113 @@ mod sharing_tests {
                 .unwrap_err(),
             PayloadCompatibilityMismatch::SymlinkTarget
         );
+        right.kind = left.kind.clone();
+        right.user = PayloadIdentity::Numeric { id: 1 };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &left, None, &right, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::User
+        );
+    }
+
+    #[test]
+    fn rpm_device_compatibility_uses_typed_kind_mode_and_device_identity() {
+        let mut left = PayloadNode::regular(0o600);
+        left.kind = PayloadNodeKind::BlockDevice { major: 8, minor: 1 };
+        left.mode = libc::S_IFBLK | 0o600;
+        let mut right = left.clone();
+        assert_eq!(
+            PayloadSharingPolicy::Rpm.compare(PayloadSharingPolicy::Rpm, &left, None, &right, None),
+            Ok(())
+        );
+
+        right.kind = PayloadNodeKind::BlockDevice { major: 8, minor: 2 };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &left, None, &right, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::DeviceIdentity
+        );
+        right.kind = PayloadNodeKind::CharacterDevice { major: 8, minor: 1 };
+        right.mode = libc::S_IFCHR | 0o600;
+        assert!(matches!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &left, None, &right, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::NodeKind { .. }
+        ));
+        right.kind = left.kind.clone();
+        right.mode = libc::S_IFBLK | 0o640;
+        assert!(matches!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &left, None, &right, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::Mode { .. }
+        ));
+    }
+
+    #[test]
+    fn rpm_hardlink_compatibility_uses_target_topology_not_archive_identity() {
+        let mut left = PayloadNode::regular(0o644);
+        left.kind = PayloadNodeKind::Hardlink {
+            target: "/usr/share/target".to_string(),
+            identity: "rpm:1:1".to_string(),
+        };
+        let mut right = left.clone();
+        right.kind = PayloadNodeKind::Hardlink {
+            target: "/usr/share/target".to_string(),
+            identity: "rpm:9:9".to_string(),
+        };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm.compare(PayloadSharingPolicy::Rpm, &left, None, &right, None),
+            Ok(())
+        );
+
+        right.kind = PayloadNodeKind::Hardlink {
+            target: "/usr/share/other".to_string(),
+            identity: "rpm:9:9".to_string(),
+        };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &left, None, &right, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::HardlinkTopology
+        );
+
+        let regular = PayloadNode::regular(0o644);
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &regular,
+                    Some(&content(b"same")),
+                    &left,
+                    None,
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::MissingContent
+        );
+    }
+
+    #[test]
+    fn rpm_non_content_node_classes_remain_typed() {
+        let mut fifo = PayloadNode::regular(0o600);
+        fifo.kind = PayloadNodeKind::Fifo;
+        fifo.mode = libc::S_IFIFO | 0o600;
+        assert_eq!(
+            PayloadSharingPolicy::Rpm.compare(PayloadSharingPolicy::Rpm, &fifo, None, &fifo, None),
+            Ok(())
+        );
+        let mut socket = fifo.clone();
+        socket.kind = PayloadNodeKind::Socket;
+        socket.mode = libc::S_IFSOCK | 0o600;
+        assert!(matches!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &fifo, None, &socket, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::NodeKind { .. }
+        ));
     }
 
     #[test]

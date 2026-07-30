@@ -1,7 +1,7 @@
 // conary-core/src/db/models/package_payload_ownership.rs
 //! Claim-aware installed package payload projection.
 
-use super::{FileEntry, PayloadClaim, PayloadClaimAnchorPolicy, Trove};
+use super::{FileEntry, PayloadClaim, Trove};
 use crate::error::{Error, Result};
 use crate::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 use rusqlite::Connection;
@@ -122,32 +122,12 @@ impl PackagePayloadOwnership {
                     claim.path
                 ))
             })?;
-            if !claim.anchor_policy.accepts_kind(&anchor.node.source.kind) {
-                return Err(Error::ConfigError(format!(
-                    "payload claim {} for trove {trove_id} violates anchor policy '{}'",
-                    claim.path,
-                    claim.anchor_policy.as_str()
-                )));
-            }
-            if claim.anchor_policy == PayloadClaimAnchorPolicy::Exact
-                && (claim.node != anchor.node || claim.content != anchor.content)
-            {
-                claim
-                    .sharing_policy
-                    .compare(
-                        claim.sharing_policy,
-                        &claim.node.source,
-                        claim.content.as_ref(),
-                        &anchor.node.source,
-                        anchor.content.as_ref(),
-                    )
-                    .map_err(|mismatch| {
-                        Error::ConfigError(format!(
-                            "payload claim {} for trove {trove_id} is incompatible with its materialized anchor: {mismatch}",
-                            claim.path
-                        ))
-                    })?;
-            }
+            claim.validate_anchor(&anchor).map_err(|error| {
+                Error::ConfigError(format!(
+                    "payload claim {} for trove {trove_id} has invalid materialized authority: {error}",
+                    claim.path
+                ))
+            })?;
             if PayloadClaim::find_retaining_path(conn, &claim.path)?
                 .iter()
                 .all(|retainer| retainer.trove_id == trove_id)

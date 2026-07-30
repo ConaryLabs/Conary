@@ -518,7 +518,7 @@ fn validate_selected_root_plan_against_database(
         for claim in PayloadClaim::find_by_path(conn, package_path)? {
             if !claim.anchor_policy.accepts_kind(&leaf_node.source.kind) {
                 return Err(anyhow!(
-                    "Selected-root node {package_path} violates package {} directory anchor policy '{}'",
+                    "Selected-root node {package_path} violates package {} payload anchor policy '{}'",
                     claim.trove_id,
                     claim.anchor_policy.as_str()
                 ));

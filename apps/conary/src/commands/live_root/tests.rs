@@ -6,7 +6,7 @@ use conary_core::payload::{
 };
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -44,6 +44,20 @@ fn live_symlink(path: &str, target: &str, mode: u32) -> LiveRootFile {
                 target: target.to_string(),
             },
             libc::S_IFLNK | (mode & 0o7777),
+        ),
+    }
+}
+
+fn live_hardlink(path: &str, target: &str, identity: &str, mode: u32) -> LiveRootFile {
+    LiveRootFile {
+        path: path.to_string(),
+        content: LiveRootContent::absent(),
+        node: resolved_node(
+            PayloadNodeKind::Hardlink {
+                target: target.to_string(),
+                identity: identity.to_string(),
+            },
+            libc::S_IFREG | (mode & 0o7777),
         ),
     }
 }
@@ -125,6 +139,51 @@ fn install_rejects_symlink_parent_without_writing_outside_root() {
 
     assert!(err.contains("unsafe parent"));
     assert!(!outside.join("bin/fixture").exists());
+}
+
+#[test]
+fn preserved_regular_reference_extends_hardlink_graph_without_replacing_target() {
+    const TEST_NAME: &str = "commands::live_root::tests::preserved_regular_reference_extends_hardlink_graph_without_replacing_target";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("root");
+    fs::create_dir_all(root.join("usr/share")).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    let target = root.join("usr/share/shared");
+    fs::write(&target, b"shared").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    let inode_before = fs::metadata(&target).unwrap().ino();
+
+    let identity = "path:/usr/share/shared";
+    let mut reference = live_regular("/usr/share/shared", b"shared", 0o644);
+    reference.node.source.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.to_string()),
+    };
+    let link = live_hardlink("/usr/share/peer", "/usr/share/shared", identity, 0o644);
+    let mut tx = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "extend shared hardlink graph",
+    )
+    .unwrap();
+
+    let stats = tx
+        .apply_install_files_with_references(&[link], &[reference])
+        .unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(stats.files_written, 1);
+    assert_eq!(fs::metadata(&target).unwrap().ino(), inode_before);
+    assert_eq!(
+        fs::metadata(root.join("usr/share/peer")).unwrap().ino(),
+        inode_before
+    );
+    assert_eq!(fs::read(root.join("usr/share/peer")).unwrap(), b"shared");
 }
 
 #[test]

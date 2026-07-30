@@ -305,6 +305,32 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
     }
 }
 
+fn prepared_test_hardlink_package(
+    name: &str,
+    target: &str,
+    edge: &str,
+    identity: &str,
+) -> PreparedPackage {
+    let mut package = prepared_test_package(name, target, b"shared");
+    package.extracted_files[0].node.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.to_string()),
+    };
+    let mut edge_node = package.extracted_files[0].node.clone();
+    edge_node.kind = PayloadNodeKind::Hardlink {
+        target: target.to_string(),
+        identity: identity.to_string(),
+    };
+    package
+        .extracted_files
+        .push(PackagePayloadFile::new(edge.to_string(), edge_node, None, None).unwrap());
+    package
+        .classified_files
+        .get_mut(&ComponentType::Runtime)
+        .unwrap()
+        .push(edge.to_string());
+    package
+}
+
 #[test]
 fn batch_plan_accepts_source_compatible_identical_rpm_regular_files() {
     let first = prepared_test_package("first", "/usr/share/licenses/shared", b"license");
@@ -359,6 +385,63 @@ fn batch_install_persists_two_rpm_claims_on_one_identical_regular_anchor() {
         let payload =
             conary_core::db::models::PackagePayloadOwnership::load(&conn, claim.trove_id).unwrap();
         assert_eq!(payload.lifecycle_paths(), &["/usr/share/licenses/shared"]);
+    }
+}
+
+#[test]
+fn batch_install_extends_a_compatible_shared_rpm_hardlink_target() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let target = "/usr/share/shared-target";
+    let mut first =
+        prepared_test_hardlink_package("first", target, "/usr/share/first-edge", "rpm:1:7");
+    let mut second =
+        prepared_test_hardlink_package("second", target, "/usr/share/second-edge", "rpm:9:42");
+    first.extracted_files.reverse();
+    second.extracted_files.reverse();
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![first, second])
+        .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::PayloadClaim::find_by_path(&conn, target)
+            .unwrap()
+            .len(),
+        2
+    );
+    let identity = format!("path:{target}");
+    assert!(matches!(
+        FileEntry::find_by_path(&conn, target)
+            .unwrap()
+            .unwrap()
+            .node
+            .source
+            .kind,
+        PayloadNodeKind::Regular {
+            hardlink_identity: Some(actual)
+        } if actual == identity
+    ));
+    for path in ["/usr/share/first-edge", "/usr/share/second-edge"] {
+        assert_eq!(
+            FileEntry::find_by_path(&conn, path)
+                .unwrap()
+                .unwrap()
+                .node
+                .source
+                .kind,
+            PayloadNodeKind::Hardlink {
+                target: target.to_string(),
+                identity: identity.clone()
+            }
+        );
     }
 }
 

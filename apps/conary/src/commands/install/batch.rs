@@ -580,6 +580,7 @@ impl<'a> BatchInstaller<'a> {
                 )?;
             }
         }
+        inner::reconcile_installed_hardlink_materializations(tx, files)?;
         Self::insert_config_rows(tx, pkg, trove_id, &installed_file_metadata, files)
     }
 }

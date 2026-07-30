@@ -268,12 +268,9 @@ impl FileEntry {
             return Ok(false);
         }
         for claim in super::PayloadClaim::find_retaining_path(conn, path)? {
-            let accepted = if claim.path == path {
-                claim.anchor_policy.accepts_kind(&node.source.kind)
-            } else {
-                matches!(node.source.kind, PayloadNodeKind::Directory)
-            };
-            if !accepted {
+            if claim.path == path {
+                claim.validate_anchor(&candidate)?;
+            } else if !matches!(node.source.kind, PayloadNodeKind::Directory) {
                 return Err(Error::ConflictError(format!(
                     "selected-root node {path} is incompatible with claim {} anchor policy '{}'",
                     claim.trove_id,
@@ -300,6 +297,158 @@ impl FileEntry {
             )));
         }
         Ok(true)
+    }
+
+    /// Replace one package's claim and the selected-root materialization
+    /// together without changing the anchor row's owner or history.
+    ///
+    /// Full adoption uses this when a track-only package acquires exact
+    /// captured payload authority. Peer claims must independently admit the
+    /// replacement before either durable authority is changed.
+    pub fn replace_claimed_selected_root_materialization(
+        conn: &Connection,
+        path: &str,
+        claimant_trove_id: i64,
+        node: &ResolvedPayloadNode,
+        content: Option<&PayloadContentAuthority>,
+    ) -> Result<bool> {
+        let candidate = Self::new(
+            path.to_string(),
+            node.clone(),
+            content.cloned(),
+            claimant_trove_id,
+        );
+        candidate.validate()?;
+        let existing = Self::find_by_path(conn, path)?.ok_or_else(|| {
+            Error::NotFound(format!(
+                "selected-root materialization {path} has no files anchor"
+            ))
+        })?;
+        let mut replacement_claim = super::PayloadClaim::find_by_path(conn, path)?
+            .into_iter()
+            .find(|claim| claim.trove_id == claimant_trove_id)
+            .ok_or_else(|| {
+                Error::NotFound(format!(
+                    "payload claim {path} for trove {claimant_trove_id}"
+                ))
+            })?;
+        let claim_changed =
+            replacement_claim.node != *node || replacement_claim.content.as_ref() != content;
+        replacement_claim.node = node.clone();
+        replacement_claim.content = content.cloned();
+        replacement_claim.validate()?;
+        replacement_claim.validate_anchor(&candidate)?;
+
+        for peer in super::PayloadClaim::find_retaining_path(conn, path)?
+            .into_iter()
+            .filter(|claim| claim.path != path || claim.trove_id != replacement_claim.trove_id)
+        {
+            if peer.path == path {
+                replacement_claim
+                    .compatible_with(&peer)
+                    .map_err(|mismatch| {
+                        Error::ConflictError(format!(
+                            "replacement payload claim {path} from trove {claimant_trove_id} is incompatible with trove {}: {mismatch}",
+                            peer.trove_id
+                        ))
+                    })?;
+                peer.validate_anchor(&candidate)?;
+            } else if !matches!(node.source.kind, PayloadNodeKind::Directory) {
+                return Err(Error::ConflictError(format!(
+                    "selected-root node {path} is incompatible with claim {} anchor policy '{}'",
+                    peer.trove_id,
+                    peer.anchor_policy.as_str()
+                )));
+            }
+        }
+
+        let materialization_changed =
+            existing.node != *node || existing.content.as_ref() != content;
+        if !materialization_changed && !claim_changed {
+            return Ok(false);
+        }
+        let existing_id = existing.id.ok_or_else(|| {
+            Error::MissingId(format!(
+                "selected-root materialization {path} has no database identity"
+            ))
+        })?;
+        with_file_entry_savepoint(conn, || {
+            let node_json = canonical_node_json(node)?;
+            let content_size = persisted_content_size(content)?;
+            let updated = conn.execute(
+                "UPDATE files
+                 SET payload_node_json = ?1, content_sha256 = ?2, content_size = ?3
+                 WHERE id = ?4",
+                params![
+                    node_json,
+                    content.map(|authority| &authority.sha256),
+                    content_size,
+                    existing_id
+                ],
+            )?;
+            if updated != 1 {
+                return Err(Error::InternalError(format!(
+                    "selected-root materialization {path} was not replaced exactly"
+                )));
+            }
+            replacement_claim.insert(conn)
+        })?;
+        Ok(true)
+    }
+
+    /// Canonicalize one materialized hardlink group around its target path.
+    ///
+    /// Source claims retain their native archive identities. The selected-root
+    /// anchor graph instead uses a path-derived identity so independently
+    /// converted packages that extend the same compatible RPM inode group
+    /// converge on one deterministic physical topology.
+    pub fn reconcile_hardlink_materialization(conn: &Connection, target_path: &str) -> Result<()> {
+        let target = Self::find_by_path(conn, target_path)?.ok_or_else(|| {
+            Error::NotFound(format!(
+                "hardlink materialization target {target_path} has no files anchor"
+            ))
+        })?;
+        if !matches!(target.node.source.kind, PayloadNodeKind::Regular { .. }) {
+            return Err(Error::ConflictError(format!(
+                "hardlink materialization target {target_path} is not a regular file"
+            )));
+        }
+
+        let identity = format!("path:{target_path}");
+        let mut target_node = target.node.clone();
+        target_node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.clone()),
+        };
+        Self::reconcile_selected_root_materialization(
+            conn,
+            target_path,
+            &target_node,
+            target.content.as_ref(),
+        )?;
+
+        let linked = Self::find_all_ordered(conn)?
+            .into_iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.node.source.kind,
+                    PayloadNodeKind::Hardlink { target, .. } if target == target_path
+                )
+            })
+            .collect::<Vec<_>>();
+        if linked.is_empty() {
+            return Err(Error::ConfigError(format!(
+                "hardlink materialization target {target_path} has no linked file anchor"
+            )));
+        }
+        for entry in linked {
+            let mut node = target_node.clone();
+            node.source.kind = PayloadNodeKind::Hardlink {
+                target: target_path.to_string(),
+                identity: identity.clone(),
+            };
+            Self::reconcile_selected_root_materialization(conn, &entry.path, &node, None)?;
+        }
+        Ok(())
     }
 
     /// Restore one exact materialized directory anchor inside a caller-owned

@@ -673,9 +673,10 @@ fn promote_track_package(
                 identity.selector()
             )));
         }
-        FileEntry::reconcile_selected_root_materialization(
+        FileEntry::replace_claimed_selected_root_materialization(
             tx,
             path,
+            trove_id,
             &captured.node,
             captured.content.as_ref(),
         )?;

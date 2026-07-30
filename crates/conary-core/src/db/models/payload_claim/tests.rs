@@ -742,7 +742,9 @@ fn selected_root_reconciliation_never_broadens_existing_claim_policy() {
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("incompatible with claim"),
+        error
+            .to_string()
+            .contains("anchor kind is not accepted by policy 'directory'"),
         "{error}"
     );
     tx.rollback().unwrap();

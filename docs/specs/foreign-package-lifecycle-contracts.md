@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-07-30
-revision: 37
+revision: 38
 summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -471,20 +471,41 @@ zero payload content, and completeness. It accepts only an unflagged directory
 without a digest, link target, file capabilities, IMA signature, or device-node
 identity.
 Conversion then consumes the source ownership anchor without creating a CCS
-payload node, installed file row, directory claim, or remove authority for
+payload node, installed file row, payload claim, or remove authority for
 `/`. Every non-root path still must become one canonical below-root deployment
 path through the shared source-path authority; the root exception cannot
 normalize another spelling into mutation authority.
 
-### Shared Directory Ownership And Materialization
+### Shared Payload Ownership And Materialization
 
-A directory path can be declared by more than one installed package. Conary
-persists one exact `payload_claims` row per declaring trove, including that
-package's resolved directory node and optional component. The corresponding
-`files` row is not the complete ownership list: it is the currently
-materialized node plus the one claimant used as its referential anchor.
-Composite foreign keys prevent a component from being attached to another
-trove's claim or anchor.
+Every installed non-root payload path has one exact `payload_claims` row per
+declaring trove. A claim retains the source node, content authority, component,
+source-format sharing policy, and any typed directory materialization edge.
+The corresponding `files` row is not an ownership list: it is the one
+currently materialized selected-root node plus the claimant used as its
+referential anchor. Composite foreign keys prevent a component from being
+attached to another trove's claim or anchor.
+
+Non-directory overlap remains exclusive unless both claims carry the same
+source-owned sharing policy and its typed comparator accepts them. RPM uses
+the pinned
+[`rpmfilesCompare()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L898-L949)
+contract: node type and mode must agree except that symlink permissions are
+ignored; source user and group must agree; regular size and digest, symlink
+target, and device identity must agree. Mtime and xattrs do not establish RPM
+file-conflict authority. RPM ghost declarations have no payload node and
+remain configuration ownership rather than fabricated payload claims.
+Conary's explicit hardlink edges can share only when their target topology
+agrees; the target claims independently prove the regular content. When a
+compatible package extends an existing hardlink group, root mutation validates
+the preserved regular target as an explicit graph reference and never rewrites
+that target as a second payload. Materialized anchors use one deterministic
+path-derived hardlink identity and target metadata across every edge, while
+each claim retains its source archive identity. Generation validation resolves
+that typed graph independent of lexical entry order. Debian, Arch, and
+author-native CCS non-directory payloads remain exclusive until their own
+pinned source contract establishes otherwise. Names, paths, distribution
+labels, and allowlists never select compatibility.
 
 An existing directory-directory overlap is therefore not a conflict and does
 not discard either package's authority. The source package format, not the
@@ -512,15 +533,18 @@ contract. A CCS archive converted from a native package remains governed by
 its validated `native_lifecycle.source_format` and matching version scheme;
 the CCS container does not erase the RPM, Debian, or Arch source ABI.
 
-Removing a package deletes only its claim while peers remain. The materialized
-row is re-anchored to one exact surviving claimant without rewriting the
-visible node bytes. The last claimant authorizes a physical removal attempt;
-the reported removal count reflects the filesystem result, so a nonempty
-directory that remains is not reported as removed. Package query, component,
-SBOM, runtime, derived-package, native-lifecycle, and removal projections use a
-claim-aware payload view rather than treating the anchor as the sole owner.
+Compatible overlap materializes the path once. Removing or upgrading a package
+deletes only its claims while peers remain. Each affected `files` row is
+re-anchored deterministically to the lowest surviving `(trove_id, claim_path)`
+without rewriting visible node bytes. The final retainer authorizes physical
+removal. The reported removal count reflects the filesystem result, so a
+nonempty directory that remains is not reported as removed. Package query,
+component, SBOM, runtime, derived-package, native-lifecycle, configuration
+capture, file-capability projection, rollback, and removal all resolve package
+ownership through claims. Generation export and CAS reachability consume the
+single materialized anchor, which remains present until the final claim.
 
-Rollback captures directory claims and the independently materialized node
+Rollback captures payload claims and the independently materialized node
 before any package in a single or batch transaction mutates the selected root.
 It resolves only the package path's existing selected-root ancestor symlinks
 before applying the finite publication-domain contract. Thus a native spelling
@@ -532,9 +556,14 @@ Restoration first rebuilds all package bases, then all anchors, then all claims,
 so cross-package and cyclic claim graphs do not depend on insertion order.
 Additive RPM or CCS metadata changes restore the prior materialized node even
 when the pre-existing anchor package itself was not removed. Native adoption
-commits each package's files, directory claims, requirements, and provides
+commits each package's files, payload claims, requirements, and provides
 atomically under `AdoptedTrack` or `AdoptedFull`; package names and partial
 warning paths are not ownership authority.
+
+Schema revision 23 is a pre-alpha hard cut: it replaces
+`directory_claims` with `payload_claims` and does not migrate revision 22
+databases. Operators rebuild disposable local state from authoritative package
+and repository inputs.
 
 A complete unfiltered full-system adoption also performs one exact global
 selected-root capture after every native package capture succeeds. Existing

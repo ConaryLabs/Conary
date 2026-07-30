@@ -316,7 +316,7 @@ impl PayloadClaim {
         Ok(())
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         validate_absolute_path(&self.path, "payload claim")?;
         if let Some(target_path) = self.materialization_target_path.as_deref() {
             validate_absolute_path(target_path, "payload materialization target")?;
@@ -368,7 +368,7 @@ impl PayloadClaim {
         Ok(())
     }
 
-    fn validate_anchor(&self, anchor: &FileEntry) -> Result<()> {
+    pub(super) fn validate_anchor(&self, anchor: &FileEntry) -> Result<()> {
         if !self.anchor_policy.accepts_kind(&anchor.node.source.kind) {
             return Err(Error::ConfigError(format!(
                 "payload claim {} anchor kind is not accepted by policy '{}'",
@@ -377,7 +377,7 @@ impl PayloadClaim {
             )));
         }
         if self.anchor_policy == PayloadClaimAnchorPolicy::Exact
-            && (self.node != anchor.node || self.content != anchor.content)
+            && !same_materialized_payload(self, anchor)
         {
             self.sharing_policy
                 .compare(
@@ -446,6 +446,37 @@ impl PayloadClaim {
     }
 }
 
+/// Whether a package claim and selected-root anchor describe the same physical
+/// node after graph-local hardlink labels and source identity spelling are
+/// erased.
+///
+/// A selected-root scan can assign a deterministic hardlink identity and can
+/// only observe resolved numeric ownership. The claim remains the authority
+/// for the source format's named or numeric spelling; the anchor remains the
+/// authority for the one materialized inode graph.
+fn same_materialized_payload(claim: &PayloadClaim, anchor: &FileEntry) -> bool {
+    claim.content == anchor.content
+        && claim.node.uid == anchor.node.uid
+        && claim.node.gid == anchor.node.gid
+        && claim.node.source.mode == anchor.node.source.mode
+        && claim.node.source.mtime == anchor.node.source.mtime
+        && claim.node.source.xattrs == anchor.node.source.xattrs
+        && match (&claim.node.source.kind, &anchor.node.source.kind) {
+            (PayloadNodeKind::Regular { .. }, PayloadNodeKind::Regular { .. }) => true,
+            (
+                PayloadNodeKind::Hardlink {
+                    target: claim_target,
+                    ..
+                },
+                PayloadNodeKind::Hardlink {
+                    target: anchor_target,
+                    ..
+                },
+            ) => claim_target == anchor_target,
+            (claim_kind, anchor_kind) => claim_kind == anchor_kind,
+        }
+}
+
 fn reconcile_anchor_after_claim_delete(
     tx: &Transaction<'_>,
     path: &str,
@@ -508,3 +539,7 @@ fn validate_absolute_path(path: &str, authority: &str) -> Result<()> {
 #[cfg(test)]
 #[path = "payload_claim/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "payload_claim/sharing_tests.rs"]
+mod sharing_tests;

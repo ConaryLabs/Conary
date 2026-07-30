@@ -289,7 +289,8 @@ mod tests {
     use crate::db::models::{FileEntry, PayloadClaimAnchorPolicy, Trove, TroveType};
     use crate::db::testing::create_test_db;
     use crate::payload::{
-        PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+        PayloadContentAuthority, PayloadNode, PayloadNodeKind, PayloadSharingPolicy,
+        ResolvedPayloadNode,
     };
 
     fn resolved(node: PayloadNode) -> ResolvedPayloadNode {
@@ -563,6 +564,123 @@ mod tests {
                 .map(|entry| entry.path.as_str())
                 .collect::<Vec<_>>(),
             ["/shared-directory", "/shared-link"]
+        );
+    }
+
+    #[test]
+    fn database_recovery_projects_a_cross_package_hardlink_group_coherently() {
+        let (_tmp, conn) = create_test_db();
+        let root = selected_root();
+        let first = trove(1, "first", InstallSource::Repository)
+            .insert(&conn)
+            .unwrap();
+        let second = trove(2, "second", InstallSource::Repository)
+            .insert(&conn)
+            .unwrap();
+        directory("/usr", first).insert(&conn).unwrap();
+        directory("/usr/share", first).insert(&conn).unwrap();
+
+        let target_path = "/usr/share/shared-target";
+        let content = PayloadContentAuthority {
+            sha256: crate::hash::sha256(b"shared"),
+            size: 6,
+        };
+        let mut first_target_node = PayloadNode::regular(0o644);
+        first_target_node.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some("rpm:1:7".to_string()),
+        };
+        let mut first_target = FileEntry::new(
+            target_path.to_string(),
+            resolved(first_target_node),
+            Some(content.clone()),
+            first,
+        )
+        .with_claim_policy(PayloadSharingPolicy::Rpm);
+        first_target.insert(&conn).unwrap();
+        let mut first_edge_node = PayloadNode::regular(0o644);
+        first_edge_node.kind = PayloadNodeKind::Hardlink {
+            target: target_path.to_string(),
+            identity: "rpm:1:7".to_string(),
+        };
+        let mut first_edge = FileEntry::new(
+            "/usr/share/first-edge".to_string(),
+            resolved(first_edge_node),
+            None,
+            first,
+        )
+        .with_claim_policy(PayloadSharingPolicy::Rpm);
+        first_edge.insert(&conn).unwrap();
+
+        let mut second_target_node = PayloadNode::regular(0o644);
+        second_target_node.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some("rpm:9:42".to_string()),
+        };
+        let mut second_target = FileEntry::new(
+            target_path.to_string(),
+            resolved(second_target_node),
+            Some(content),
+            second,
+        )
+        .with_claim_policy(PayloadSharingPolicy::Rpm);
+        second_target
+            .insert_or_replace(
+                &conn,
+                crate::db::models::ExistingDirectoryMaterialization::ApplyIncoming,
+            )
+            .unwrap();
+        let mut second_edge_node = PayloadNode::regular(0o644);
+        second_edge_node.kind = PayloadNodeKind::Hardlink {
+            target: target_path.to_string(),
+            identity: "rpm:9:42".to_string(),
+        };
+        let mut second_edge = FileEntry::new(
+            "/usr/share/second-edge".to_string(),
+            resolved(second_edge_node),
+            None,
+            second,
+        )
+        .with_claim_policy(PayloadSharingPolicy::Rpm);
+        second_edge.insert(&conn).unwrap();
+        FileEntry::reconcile_hardlink_materialization(&conn, target_path).unwrap();
+
+        let inputs = collect_runtime_generation_inputs(
+            &conn,
+            &Trove::list_packages(&conn).unwrap(),
+            FileEntry::find_all_ordered(&conn).unwrap(),
+            root.path(),
+        )
+        .unwrap();
+
+        inputs.generation.validate().unwrap();
+        let identity = format!("path:{target_path}");
+        assert!(matches!(
+            &inputs
+                .generation
+                .entries
+                .iter()
+                .find(|entry| entry.path == target_path)
+                .unwrap()
+                .node
+                .source
+                .kind,
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some(actual)
+            } if actual == &identity
+        ));
+        assert!(
+            inputs
+                .generation
+                .entries
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        &entry.node.source.kind,
+                        PayloadNodeKind::Hardlink { identity: actual, .. }
+                            if actual == &identity
+                    )
+                })
+                .count()
+                == 2
         );
     }
 
