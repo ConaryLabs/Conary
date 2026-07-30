@@ -13,8 +13,8 @@ use super::outcome::{BulkAdoptionFailure, BulkAdoptionFailureStage, BulkAdoption
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, DirectoryClaim, ExistingDirectoryMaterialization, FileEntry,
-    InstallReason, InstallSource, ProvideEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallReason,
+    InstallSource, PayloadClaim, ProvideEntry, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
@@ -664,7 +664,7 @@ fn promote_track_package(
             ))
         })?;
         let owns_path = existing.trove_id == trove_id
-            || DirectoryClaim::find_by_path(tx, path)?
+            || PayloadClaim::find_by_path(tx, path)?
                 .iter()
                 .any(|claim| claim.trove_id == trove_id);
         if !owns_path {

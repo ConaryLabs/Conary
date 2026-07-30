@@ -9,12 +9,13 @@ use conary_core::capability::CapabilityDeclaration;
 use conary_core::ccs::manifest::FileCapability;
 use conary_core::ccs::native_transaction::NativePackageIdentity;
 use conary_core::db::models::{
-    ComponentDepType, ConfigSource, ConfigStatus, DirectoryClaimAnchorPolicy, InstallReason,
-    InstallSource, TroveType,
+    ComponentDepType, ConfigSource, ConfigStatus, InstallReason, InstallSource,
+    PayloadClaimAnchorPolicy, TroveType,
 };
 use conary_core::packages::InstalledPackageIdentity;
-use conary_core::payload::PayloadNodeKind;
-use conary_core::payload::{PayloadContentAuthority, ResolvedPayloadNode};
+use conary_core::payload::{
+    PayloadContentAuthority, PayloadNodeKind, PayloadSharingPolicy, ResolvedPayloadNode,
+};
 use conary_core::repository::dependency_model::{
     DebianMultiArch, ProvideVersionRelation, RepositoryRequirementGroup,
 };
@@ -56,7 +57,7 @@ pub(crate) struct TroveSnapshot {
     pub config_files: Vec<ConfigFileSnapshot>,
     pub package_capabilities: Option<PackageCapabilitySnapshot>,
     pub installed_file_capabilities: Vec<InstalledFileCapabilitySnapshot>,
-    pub directory_claims: Vec<DirectoryClaimSnapshot>,
+    pub payload_claims: Vec<PayloadClaimSnapshot>,
     pub native_lifecycle: Option<NativeLifecycleSnapshot>,
     pub ccs_remove_hook: Option<CcsRemoveHookSnapshot>,
     pub derived_package_references: Vec<DerivedPackageReferenceSnapshot>,
@@ -158,10 +159,8 @@ impl TroveSnapshot {
             self.files.iter().map(|file| file.path.as_str()),
         )?;
         unique_text(
-            "directory claim path",
-            self.directory_claims
-                .iter()
-                .map(|claim| claim.path.as_str()),
+            "payload claim path",
+            self.payload_claims.iter().map(|claim| claim.path.as_str()),
         )?;
 
         let component_names = self
@@ -172,13 +171,13 @@ impl TroveSnapshot {
         for component in &self.components {
             component.validate()?;
         }
-        let file_paths = self
-            .files
+        let package_paths = self
+            .payload_claims
             .iter()
-            .map(|file| file.path.as_str())
+            .map(|claim| claim.path.as_str())
             .collect::<BTreeSet<_>>();
         let materialization_target_paths = self
-            .directory_claims
+            .payload_claims
             .iter()
             .filter_map(|claim| claim.materialization_target_path.as_deref())
             .collect::<BTreeSet<_>>();
@@ -202,13 +201,13 @@ impl TroveSnapshot {
                 );
             }
         }
-        for claim in &self.directory_claims {
-            require_text("directory claim claimed_at", &claim.claimed_at)?;
+        for claim in &self.payload_claims {
+            require_text("payload claim claimed_at", &claim.claimed_at)?;
             if let Some(target_path) = claim.materialization_target_path.as_deref() {
-                require_text("directory claim materialization target", target_path)?;
+                require_text("payload claim materialization target", target_path)?;
                 if target_path == claim.path {
                     bail!(
-                        "rollback snapshot directory claim '{}' cannot target itself",
+                        "rollback snapshot payload claim '{}' cannot target itself",
                         claim.path
                     );
                 }
@@ -216,23 +215,46 @@ impl TroveSnapshot {
             claim
                 .node
                 .validate()
-                .context("rollback snapshot directory claim node is invalid")?;
-            if !matches!(claim.node.source.kind, PayloadNodeKind::Directory) {
-                bail!(
-                    "rollback snapshot directory claim '{}' is not a directory",
-                    claim.path
-                );
+                .and_then(|()| claim.node.source.validate_content(claim.content.as_ref()))
+                .context("rollback snapshot payload claim authority is invalid")?;
+            match (&claim.node.source.kind, claim.anchor_policy) {
+                (PayloadNodeKind::Directory, PayloadClaimAnchorPolicy::Directory)
+                | (
+                    PayloadNodeKind::Directory,
+                    PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
+                )
+                | (
+                    PayloadNodeKind::Regular { .. }
+                    | PayloadNodeKind::Symlink { .. }
+                    | PayloadNodeKind::Hardlink { .. }
+                    | PayloadNodeKind::BlockDevice { .. }
+                    | PayloadNodeKind::CharacterDevice { .. }
+                    | PayloadNodeKind::Fifo
+                    | PayloadNodeKind::Socket,
+                    PayloadClaimAnchorPolicy::Exact,
+                ) => {}
+                _ => bail!(
+                    "rollback snapshot payload claim '{}' has an incompatible anchor policy '{}'",
+                    claim.path,
+                    claim.anchor_policy.as_str()
+                ),
             }
             if let Some(component) = claim.component.as_deref()
                 && !component_names.contains(component)
             {
                 bail!(
-                    "rollback snapshot directory claim '{}' references missing component '{}'",
+                    "rollback snapshot payload claim '{}' references missing component '{}'",
                     claim.path,
                     component
                 );
             }
             if let Some(anchor) = &claim.anchor {
+                if !matches!(claim.node.source.kind, PayloadNodeKind::Directory) {
+                    bail!(
+                        "rollback snapshot non-directory claim '{}' cannot embed a directory anchor",
+                        claim.path
+                    );
+                }
                 require_text("directory anchor installed_at", &anchor.installed_at)?;
                 anchor
                     .materialized_node
@@ -240,7 +262,7 @@ impl TroveSnapshot {
                     .context("rollback snapshot directory anchor node is invalid")?;
                 if !claim
                     .anchor_policy
-                    .accepts(&anchor.materialized_node.source.kind)
+                    .accepts_kind(&anchor.materialized_node.source.kind)
                 {
                     bail!(
                         "rollback snapshot materialized directory anchor '{}' is not accepted by policy '{}'",
@@ -260,7 +282,7 @@ impl TroveSnapshot {
             }
         }
         for config in &self.config_files {
-            if config.file_backed && !file_paths.contains(config.path.as_str()) {
+            if config.file_backed && !package_paths.contains(config.path.as_str()) {
                 bail!(
                     "rollback snapshot config '{}' references a missing payload file",
                     config.path
@@ -308,7 +330,7 @@ impl TroveSnapshot {
                 "installed file capability created_at",
                 &capability.created_at,
             )?;
-            if !file_paths.contains(capability.capability.path.as_str()) {
+            if !package_paths.contains(capability.capability.path.as_str()) {
                 bail!(
                     "rollback snapshot file capability '{}' references a missing payload file",
                     capability.capability.path
@@ -390,6 +412,24 @@ impl TroveSnapshot {
         version: impl Into<String>,
         files: Vec<FileSnapshot>,
     ) -> Self {
+        let payload_claims = files
+            .iter()
+            .map(|file| PayloadClaimSnapshot {
+                path: file.path.clone(),
+                node: file.node.clone(),
+                content: file.content.clone(),
+                component: file.component.clone(),
+                sharing_policy: PayloadSharingPolicy::Exclusive,
+                anchor_policy: if matches!(file.node.source.kind, PayloadNodeKind::Directory) {
+                    PayloadClaimAnchorPolicy::Directory
+                } else {
+                    PayloadClaimAnchorPolicy::Exact
+                },
+                materialization_target_path: None,
+                claimed_at: file.installed_at.clone(),
+                anchor: None,
+            })
+            .collect();
         Self {
             name: name.into(),
             version: version.into(),
@@ -420,7 +460,7 @@ impl TroveSnapshot {
             config_files: Vec::new(),
             package_capabilities: None,
             installed_file_capabilities: Vec::new(),
-            directory_claims: Vec::new(),
+            payload_claims,
             native_lifecycle: None,
             ccs_remove_hook: None,
             derived_package_references: Vec::new(),
@@ -552,11 +592,13 @@ pub(crate) struct InstalledFileCapabilitySnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DirectoryClaimSnapshot {
+pub(crate) struct PayloadClaimSnapshot {
     pub path: String,
     pub node: ResolvedPayloadNode,
+    pub content: Option<PayloadContentAuthority>,
     pub component: Option<String>,
-    pub anchor_policy: DirectoryClaimAnchorPolicy,
+    pub sharing_policy: PayloadSharingPolicy,
+    pub anchor_policy: PayloadClaimAnchorPolicy,
     pub materialization_target_path: Option<String>,
     pub claimed_at: String,
     pub anchor: Option<DirectoryAnchorSnapshot>,
@@ -575,7 +617,7 @@ pub(crate) struct DirectoryAnchorSnapshot {
 pub(crate) struct MaterializedDirectorySnapshot {
     pub path: String,
     pub materialized_node: ResolvedPayloadNode,
-    pub anchor_policy: DirectoryClaimAnchorPolicy,
+    pub anchor_policy: PayloadClaimAnchorPolicy,
     pub installed_at: String,
     pub anchor_trove: StableTroveIdentitySnapshot,
     pub anchor_component: Option<String>,
@@ -590,7 +632,7 @@ impl MaterializedDirectorySnapshot {
             .context("rollback materialized directory node is invalid")?;
         if !self
             .anchor_policy
-            .accepts(&self.materialized_node.source.kind)
+            .accepts_kind(&self.materialized_node.source.kind)
         {
             bail!(
                 "rollback materialized directory '{}' is not accepted by policy '{}'",

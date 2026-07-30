@@ -5,7 +5,7 @@ use super::inner::ResolvedInstallFile;
 use super::{InstallSemantics, PackageFormatType, PreparedSourceKind};
 use anyhow::{Result, anyhow};
 use conary_core::db::models::{
-    DirectoryClaim, ExistingDirectoryMaterialization, FileEntry, InstallSource, Trove,
+    ExistingDirectoryMaterialization, FileEntry, InstallSource, PayloadClaim, Trove,
 };
 use conary_core::generation::root_manifest::{RootPathDomain, classify_root_path};
 use conary_core::payload::PayloadNodeKind;
@@ -85,6 +85,7 @@ pub(super) struct DirectoryInstallPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DirectoryPathPlan {
     CreateOrReplace,
+    PreserveCompatiblePayload,
     PreserveLeaf {
         leaf_node: conary_core::payload::ResolvedPayloadNode,
         materialization: ExistingDirectoryMaterialization,
@@ -109,7 +110,8 @@ impl DirectoryInstallPlan {
         matches!(
             self.path(path),
             Some(
-                DirectoryPathPlan::PreserveLeaf { .. }
+                DirectoryPathPlan::PreserveCompatiblePayload
+                    | DirectoryPathPlan::PreserveLeaf { .. }
                     | DirectoryPathPlan::ApplyThroughSymlink { .. }
             )
         )
@@ -125,6 +127,7 @@ impl DirectoryInstallPlan {
                 Some(leaf_before)
             }
             Some(DirectoryPathPlan::ApplyThroughSymlink { leaf_node, .. }) => Some(leaf_node),
+            Some(DirectoryPathPlan::PreserveCompatiblePayload) => None,
             _ => None,
         }
     }
@@ -196,7 +199,7 @@ impl DirectoryInstallPlan {
                 resolved_target_path
             ));
         }
-        if DirectoryClaim::find_retaining_path(tx, resolved_target_path)?.is_empty() {
+        if directory_retainers(tx, resolved_target_path)?.is_empty() {
             return Err(anyhow!(
                 "Tracked RPM directory target {} has no package claim or materialization-target authority",
                 resolved_target_path
@@ -224,7 +227,7 @@ impl DirectoryInstallPlan {
         else {
             return Ok(());
         };
-        DirectoryClaim::set_materialization_target(
+        PayloadClaim::set_materialization_target(
             tx,
             &incoming.path,
             trove_id,
@@ -246,7 +249,7 @@ pub(crate) fn capture_existing_directory_materializations(
 ) -> Result<Vec<FileEntry>> {
     let mut captured = BTreeMap::new();
     for anchor in FileEntry::find_all_ordered(conn)? {
-        let claims = DirectoryClaim::find_retaining_path(conn, &anchor.path)?;
+        let claims = directory_retainers(conn, &anchor.path)?;
         if claims.is_empty() && !matches!(anchor.node.source.kind, PayloadNodeKind::Directory) {
             continue;
         }
@@ -303,7 +306,7 @@ fn capture_materialized_anchor(
     let Some(mut existing) = FileEntry::find_by_path(conn, path)? else {
         return Ok(());
     };
-    let claims = DirectoryClaim::find_retaining_path(conn, path)?;
+    let claims = directory_retainers(conn, path)?;
     if claims.is_empty() {
         if matches!(existing.node.source.kind, PayloadNodeKind::Directory) {
             return Err(anyhow!(
@@ -321,7 +324,10 @@ fn capture_materialized_anchor(
         ));
     }
     for claim in &claims {
-        if !claim.anchor_policy.accepts(&selected_root_node.source.kind) {
+        if !claim
+            .anchor_policy
+            .accepts_kind(&selected_root_node.source.kind)
+        {
             return Err(anyhow!(
                 "Selected-root node {path} violates package {} directory anchor policy '{}'",
                 claim.trove_id,
@@ -374,7 +380,7 @@ pub(super) fn preflight_resolved_file_ownership(
         };
         if matches!(file.node.source.kind, PayloadNodeKind::Directory) {
             if matches!(existing.node.source.kind, PayloadNodeKind::Directory)
-                && DirectoryClaim::find_by_path(conn, &file.path)?.is_empty()
+                && PayloadClaim::find_by_path(conn, &file.path)?.is_empty()
             {
                 return Err(anyhow!(
                     "Tracked directory materialization {} has no package claim",
@@ -393,6 +399,7 @@ pub(super) fn preflight_resolved_file_ownership(
                             materialization, ..
                         } => *materialization,
                         DirectoryPathPlan::CreateOrReplace
+                        | DirectoryPathPlan::PreserveCompatiblePayload
                         => {
                             ExistingDirectoryMaterialization::ApplyIncoming
                         }
@@ -408,8 +415,73 @@ pub(super) fn preflight_resolved_file_ownership(
                 continue;
             }
         }
-        if owner_allows_replacement(conn, &existing, package_name, relation_removals)? {
+        let sharing_mismatch = if matches!(file.node.source.kind, PayloadNodeKind::Directory) {
+            None
+        } else {
+            let claims = PayloadClaim::find_by_path(conn, &file.path)?;
+            if claims.is_empty() {
+                return Err(anyhow!(
+                    "Tracked payload materialization {} has no package claim",
+                    file.path
+                ));
+            }
+            let incoming_policy = semantics.payload_sharing_policy();
+            let mismatch = claims.iter().find_map(|claim| {
+                incoming_policy
+                    .compare(
+                        claim.sharing_policy,
+                        &file.node.source,
+                        file.content.as_ref(),
+                        &claim.node.source,
+                        claim.content.as_ref(),
+                    )
+                    .err()
+                    .map(|reason| (claim.trove_id, reason))
+            });
+            if mismatch.is_none() {
+                paths.insert(
+                    file.path.clone(),
+                    DirectoryPathPlan::PreserveCompatiblePayload,
+                );
+                continue;
+            }
+            mismatch
+        };
+        if sharing_mismatch.is_some() {
+            let claimants = PayloadClaim::find_by_path(conn, &file.path)?;
+            let mut every_claimant_replaced = true;
+            for claimant in claimants {
+                if !trove_allows_replacement(
+                    conn,
+                    claimant.trove_id,
+                    package_name,
+                    relation_removals,
+                )? {
+                    every_claimant_replaced = false;
+                    break;
+                }
+            }
+            if every_claimant_replaced {
+                continue;
+            }
+        } else if owner_allows_replacement(conn, &existing, package_name, relation_removals)? {
             continue;
+        }
+        if let Some((claimant_id, mismatch)) = sharing_mismatch {
+            let claimant = Trove::find_by_id(conn, claimant_id)?.ok_or_else(|| {
+                anyhow!(
+                    "Path {} has a payload claim from missing trove {}",
+                    file.path,
+                    claimant_id
+                )
+            })?;
+            return Err(anyhow!(
+                "Path {} from {} is incompatible with package {}: {}",
+                file.path,
+                package_name,
+                claimant.name,
+                mismatch
+            ));
         }
         let owner = Trove::find_by_id(conn, existing.trove_id)?.ok_or_else(|| {
             anyhow!(
@@ -440,11 +512,11 @@ fn validate_selected_root_plan_against_database(
             ..
         }
         | DirectoryPathPlan::ApplyThroughSymlink { leaf_node, .. } => Some(leaf_node),
-        DirectoryPathPlan::CreateOrReplace => None,
+        DirectoryPathPlan::CreateOrReplace | DirectoryPathPlan::PreserveCompatiblePayload => None,
     };
     if let Some(leaf_node) = leaf_node {
-        for claim in DirectoryClaim::find_by_path(conn, package_path)? {
-            if !claim.anchor_policy.accepts(&leaf_node.source.kind) {
+        for claim in PayloadClaim::find_by_path(conn, package_path)? {
+            if !claim.anchor_policy.accepts_kind(&leaf_node.source.kind) {
                 return Err(anyhow!(
                     "Selected-root node {package_path} violates package {} directory anchor policy '{}'",
                     claim.trove_id,
@@ -468,14 +540,14 @@ fn validate_selected_root_plan_against_database(
             "RPM directory target {resolved_target_path} is tracked as a non-directory"
         ));
     }
-    let target_claims = DirectoryClaim::find_retaining_path(conn, resolved_target_path)?;
+    let target_claims = directory_retainers(conn, resolved_target_path)?;
     if target_claims.is_empty() {
         return Err(anyhow!(
             "Tracked RPM directory target {resolved_target_path} has no package claim or materialization-target authority"
         ));
     }
     for claim in target_claims {
-        if !claim.anchor_policy.accepts(&incoming_node.source.kind) {
+        if !claim.anchor_policy.accepts_kind(&incoming_node.source.kind) {
             return Err(anyhow!(
                 "RPM directory target {resolved_target_path} violates package {} anchor policy '{}'",
                 claim.trove_id,
@@ -596,23 +668,34 @@ const fn rpm_symlink_owner_may_apply(symlink_uid: u64, target_directory_uid: u64
     symlink_uid == 0 || symlink_uid == target_directory_uid
 }
 
+fn directory_retainers(conn: &rusqlite::Connection, path: &str) -> Result<Vec<PayloadClaim>> {
+    Ok(PayloadClaim::find_retaining_path(conn, path)?
+        .into_iter()
+        .filter(|claim| matches!(claim.node.source.kind, PayloadNodeKind::Directory))
+        .collect())
+}
+
 pub(super) fn owner_allows_replacement(
     conn: &rusqlite::Connection,
     existing: &FileEntry,
     package_name: &str,
     relation_removals: &[PackageRelationRemoval],
 ) -> Result<bool> {
-    let owner = Trove::find_by_id(conn, existing.trove_id)?.ok_or_else(|| {
-        anyhow!(
-            "Path {} is already tracked by missing trove {}",
-            existing.path,
-            existing.trove_id
-        )
-    })?;
+    trove_allows_replacement(conn, existing.trove_id, package_name, relation_removals)
+}
+
+fn trove_allows_replacement(
+    conn: &rusqlite::Connection,
+    trove_id: i64,
+    package_name: &str,
+    relation_removals: &[PackageRelationRemoval],
+) -> Result<bool> {
+    let owner = Trove::find_by_id(conn, trove_id)?
+        .ok_or_else(|| anyhow!("Payload claimant trove {} is missing", trove_id))?;
     Ok(owner.install_source == InstallSource::CapturedRoot
         || owner.name == package_name
         || relation_removals.iter().any(|removal| {
-            removal.trove_id == existing.trove_id
+            removal.trove_id == trove_id
                 && removal.mode == PackageRelationRemovalMode::OwnershipTransfer
                 && removal
                     .ownership_transfer_packages

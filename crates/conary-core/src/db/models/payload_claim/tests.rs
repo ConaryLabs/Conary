@@ -1,7 +1,7 @@
-// conary-core/src/db/models/directory_claim/tests.rs
+// conary-core/src/db/models/payload_claim/tests.rs
 
 use super::*;
-use crate::db::models::{Component, Trove, TroveType};
+use crate::db::models::{Component, ExistingDirectoryMaterialization, Trove, TroveType};
 use crate::db::testing::create_test_db;
 use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
 use crate::repository::versioning::VersionScheme;
@@ -61,6 +61,16 @@ fn symlink(target: &str, uid: u64, gid: u64, mtime: i64) -> ResolvedPayloadNode 
     }
 }
 
+fn regular(bytes: &[u8]) -> (ResolvedPayloadNode, PayloadContentAuthority) {
+    (
+        ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap(),
+        PayloadContentAuthority {
+            sha256: crate::hash::sha256(bytes),
+            size: bytes.len() as u64,
+        },
+    )
+}
+
 fn insert_anchor(
     conn: &Connection,
     path: &str,
@@ -73,7 +83,7 @@ fn insert_anchor(
 }
 
 #[test]
-fn exact_directory_claims_are_many_to_many_and_keep_source_metadata() {
+fn exact_payload_claims_are_many_to_many_and_keep_source_metadata() {
     let (_temp, conn) = create_test_db();
     let first = insert_trove(&conn, "first");
     let second = insert_trove(&conn, "second");
@@ -81,19 +91,102 @@ fn exact_directory_claims_are_many_to_many_and_keep_source_metadata() {
     insert_anchor(&conn, "/etc", first, &anchor_node);
     let second_node = directory(0o755, 0, 0, 99);
 
-    DirectoryClaim::new("/etc".to_string(), first, anchor_node.clone())
+    PayloadClaim::new_directory("/etc".to_string(), first, anchor_node.clone())
         .unwrap()
         .insert(&conn)
         .unwrap();
-    DirectoryClaim::new("/etc".to_string(), second, second_node.clone())
+    PayloadClaim::new_directory("/etc".to_string(), second, second_node.clone())
         .unwrap()
         .insert(&conn)
         .unwrap();
 
-    let claims = DirectoryClaim::find_by_path(&conn, "/etc").unwrap();
+    let claims = PayloadClaim::find_by_path(&conn, "/etc").unwrap();
     assert_eq!(claims.len(), 2);
     assert_eq!(claims[0].node, anchor_node);
     assert_eq!(claims[1].node, second_node);
+}
+
+#[test]
+fn compatible_rpm_regular_claims_share_one_anchor_until_the_final_owner_is_removed() {
+    let (_temp, conn) = create_test_db();
+    let first = insert_trove(&conn, "first");
+    let second = insert_trove(&conn, "second");
+    let (node, content) = regular(b"shared");
+    let mut first_entry = FileEntry::new(
+        "/usr/share/licenses/shared".to_string(),
+        node.clone(),
+        Some(content.clone()),
+        first,
+    )
+    .with_claim_policy(PayloadSharingPolicy::Rpm);
+    let first_file_id = first_entry.insert(&conn).unwrap();
+    let mut second_entry = FileEntry::new(
+        "/usr/share/licenses/shared".to_string(),
+        node,
+        Some(content),
+        second,
+    )
+    .with_claim_policy(PayloadSharingPolicy::Rpm);
+
+    let second_file_id = second_entry
+        .insert_or_replace(&conn, ExistingDirectoryMaterialization::ApplyIncoming)
+        .unwrap();
+
+    assert_eq!(second_file_id, first_file_id);
+    assert_eq!(
+        PayloadClaim::find_by_path(&conn, "/usr/share/licenses/shared")
+            .unwrap()
+            .len(),
+        2
+    );
+    Trove::delete(&conn, first).unwrap();
+    let reanchored = FileEntry::find_by_path(&conn, "/usr/share/licenses/shared")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reanchored.trove_id, second);
+    assert_eq!(
+        PayloadClaim::find_by_path(&conn, "/usr/share/licenses/shared")
+            .unwrap()
+            .len(),
+        1
+    );
+    Trove::delete(&conn, second).unwrap();
+    assert!(
+        FileEntry::find_by_path(&conn, "/usr/share/licenses/shared")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn incompatible_rpm_regular_claim_reports_the_exact_source_comparison_reason() {
+    let (_temp, conn) = create_test_db();
+    let first = insert_trove(&conn, "first");
+    let second = insert_trove(&conn, "second");
+    let (node, first_content) = regular(b"first");
+    let mut first_entry = FileEntry::new(
+        "/shared".to_string(),
+        node.clone(),
+        Some(first_content),
+        first,
+    )
+    .with_claim_policy(PayloadSharingPolicy::Rpm);
+    first_entry.insert(&conn).unwrap();
+    let (_, second_content) = regular(b"other");
+
+    let error = PayloadClaim::new(
+        "/shared".to_string(),
+        second,
+        node,
+        Some(second_content),
+        PayloadSharingPolicy::Rpm,
+    )
+    .unwrap()
+    .insert(&conn)
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("content digests differ"), "{error}");
 }
 
 #[test]
@@ -107,14 +200,14 @@ fn typed_materialization_target_reanchors_and_guards_the_target_directory() {
     let symlink_node = symlink("/real", 0, 0, 1);
     insert_anchor(&conn, "/shared", symlink_owner, &symlink_node);
 
-    DirectoryClaim::new("/shared".to_string(), claimant, directory(0o700, 0, 0, 2))
+    PayloadClaim::new_directory("/shared".to_string(), claimant, directory(0o700, 0, 0, 2))
         .unwrap()
-        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
         .with_materialization_target(Some("/real".to_string()))
         .insert(&conn)
         .unwrap();
 
-    let retainers = DirectoryClaim::find_retaining_path(&conn, "/real").unwrap();
+    let retainers = PayloadClaim::find_retaining_path(&conn, "/real").unwrap();
     assert_eq!(
         retainers
             .iter()
@@ -130,7 +223,7 @@ fn typed_materialization_target_reanchors_and_guards_the_target_directory() {
         )
         .unwrap_err()
         .to_string()
-        .contains("materialized directory anchor violates")
+        .contains("materialized payload anchor violates")
     );
 
     Trove::delete(&conn, target_owner).unwrap();
@@ -152,18 +245,18 @@ fn conflicting_directory_metadata_is_retained_as_independent_claim_authority() {
     let second = insert_trove(&conn, "second");
     let anchor_node = directory(0o755, 0, 0, 1);
     insert_anchor(&conn, "/etc", first, &anchor_node);
-    DirectoryClaim::new("/etc".to_string(), first, anchor_node.clone())
+    PayloadClaim::new_directory("/etc".to_string(), first, anchor_node.clone())
         .unwrap()
         .insert(&conn)
         .unwrap();
 
     let second_node = directory(0o700, 1, 2, 1);
-    DirectoryClaim::new("/etc".to_string(), second, second_node.clone())
+    PayloadClaim::new_directory("/etc".to_string(), second, second_node.clone())
         .unwrap()
         .insert(&conn)
         .unwrap();
 
-    let claims = DirectoryClaim::find_by_path(&conn, "/etc").unwrap();
+    let claims = PayloadClaim::find_by_path(&conn, "/etc").unwrap();
     assert_eq!(claims.len(), 2);
     assert_eq!(claims[1].node, second_node);
     assert_eq!(
@@ -184,7 +277,7 @@ fn deleting_anchor_transfers_to_lowest_remaining_claim_without_rewriting_metadat
     let anchor_node = directory(0o755, 0, 0, 1);
     insert_anchor(&conn, "/etc", first, &anchor_node);
     for (trove_id, mtime) in [(first, 1), (third, 3), (second, 2)] {
-        DirectoryClaim::new("/etc".to_string(), trove_id, directory(0o755, 0, 0, mtime))
+        PayloadClaim::new_directory("/etc".to_string(), trove_id, directory(0o755, 0, 0, mtime))
             .unwrap()
             .insert(&conn)
             .unwrap();
@@ -212,7 +305,7 @@ fn deleting_anchor_transfers_to_lowest_remaining_claim_without_rewriting_metadat
     assert_eq!(anchor.node, anchor_node);
     assert_eq!(node_json_after, node_json_before);
     assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc")
+        PayloadClaim::find_by_path(&conn, "/etc")
             .unwrap()
             .iter()
             .map(|claim| claim.trove_id)
@@ -240,7 +333,7 @@ fn deleting_non_anchor_claim_keeps_the_materialized_anchor() {
     let node = directory(0o755, 0, 0, 1);
     insert_anchor(&conn, "/etc", first, &node);
     for trove_id in [first, second] {
-        DirectoryClaim::new("/etc".to_string(), trove_id, node.clone())
+        PayloadClaim::new_directory("/etc".to_string(), trove_id, node.clone())
             .unwrap()
             .insert(&conn)
             .unwrap();
@@ -255,10 +348,7 @@ fn deleting_non_anchor_claim_keeps_the_materialized_anchor() {
             .trove_id,
         first
     );
-    assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc").unwrap().len(),
-        1
-    );
+    assert_eq!(PayloadClaim::find_by_path(&conn, "/etc").unwrap().len(), 1);
 }
 
 #[test]
@@ -270,7 +360,7 @@ fn schema_rejects_orphan_non_directory_and_duplicate_claims() {
 
     assert!(
         conn.execute(
-            "INSERT INTO directory_claims (path, trove_id, payload_node_json)
+            "INSERT INTO payload_claims (path, trove_id, payload_node_json)
              VALUES ('/missing', ?1, ?2)",
             params![package, &directory_json],
         )
@@ -280,7 +370,7 @@ fn schema_rejects_orphan_non_directory_and_duplicate_claims() {
     insert_anchor(&conn, "/etc", package, &directory);
     assert!(
         conn.execute(
-            "INSERT INTO directory_claims (path, trove_id, payload_node_json)
+            "INSERT INTO payload_claims (path, trove_id, payload_node_json)
              VALUES ('/etc', ?1, ?2)",
             params![package, &directory_json],
         )
@@ -292,7 +382,7 @@ fn schema_rejects_orphan_non_directory_and_duplicate_claims() {
     let regular_json = super::super::file_entry::canonical_node_json(&regular).unwrap();
     assert!(
         conn.execute(
-            "INSERT INTO directory_claims (path, trove_id, payload_node_json)
+            "INSERT INTO payload_claims (path, trove_id, payload_node_json)
              VALUES ('/etc', ?1, ?2)",
             params![other, regular_json],
         )
@@ -321,7 +411,7 @@ fn file_entry_shared_insert_preserves_anchor_and_records_incoming_claim() {
     assert_eq!(materialized.trove_id, first);
     assert_eq!(materialized.node, directory(0o755, 0, 0, 99));
     assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc")
+        PayloadClaim::find_by_path(&conn, "/etc")
             .unwrap()
             .iter()
             .map(|claim| claim.trove_id)
@@ -338,7 +428,7 @@ fn latest_directory_install_updates_materialized_metadata_without_erasing_peer_c
     let third = insert_trove(&conn, "third");
     let node = directory(0o755, 0, 0, 1);
     insert_anchor(&conn, "/etc", first, &node);
-    DirectoryClaim::new("/etc".to_string(), second, node)
+    PayloadClaim::new_directory("/etc".to_string(), second, node)
         .unwrap()
         .insert(&conn)
         .unwrap();
@@ -361,10 +451,7 @@ fn latest_directory_install_updates_materialized_metadata_without_erasing_peer_c
             .mode,
         libc::S_IFDIR | 0o700
     );
-    assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc").unwrap().len(),
-        3
-    );
+    assert_eq!(PayloadClaim::find_by_path(&conn, "/etc").unwrap().len(), 3);
 }
 
 #[test]
@@ -412,13 +499,13 @@ fn anchor_delete_transfers_exact_component_and_preserves_materialized_node_bytes
 }
 
 #[test]
-fn direct_file_delete_refuses_to_cascade_peer_directory_claims() {
+fn direct_file_delete_refuses_to_cascade_peer_payload_claims() {
     let (_temp, conn) = create_test_db();
     let first = insert_trove(&conn, "first");
     let second = insert_trove(&conn, "second");
     let node = directory(0o755, 0, 0, 1);
     insert_anchor(&conn, "/etc", first, &node);
-    DirectoryClaim::new("/etc".to_string(), second, node)
+    PayloadClaim::new_directory("/etc".to_string(), second, node)
         .unwrap()
         .insert(&conn)
         .unwrap();
@@ -435,10 +522,7 @@ fn direct_file_delete_refuses_to_cascade_peer_directory_claims() {
         "schema must reject raw deletion too"
     );
     assert!(FileEntry::find_by_path(&conn, "/etc").unwrap().is_some());
-    assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc").unwrap().len(),
-        2
-    );
+    assert_eq!(PayloadClaim::find_by_path(&conn, "/etc").unwrap().len(), 2);
 }
 
 #[test]
@@ -451,23 +535,20 @@ fn typed_claim_delete_reanchors_inside_the_caller_transaction() {
     let mut anchor = FileEntry::new("/etc".to_string(), directory(0o755, 0, 0, 1), None, first);
     anchor.component_id = Some(first_component);
     anchor.insert(&conn).unwrap();
-    DirectoryClaim::new("/etc".to_string(), second, directory(0o700, 1, 2, 3))
+    PayloadClaim::new_directory("/etc".to_string(), second, directory(0o700, 1, 2, 3))
         .unwrap()
         .with_component(Some(second_component))
         .insert(&conn)
         .unwrap();
 
     let tx = conn.transaction().unwrap();
-    DirectoryClaim::delete(&tx, "/etc", first).unwrap();
+    PayloadClaim::delete(&tx, "/etc", first).unwrap();
     tx.commit().unwrap();
 
     let materialized = FileEntry::find_by_path(&conn, "/etc").unwrap().unwrap();
     assert_eq!(materialized.trove_id, second);
     assert_eq!(materialized.component_id, Some(second_component));
-    assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc").unwrap().len(),
-        1
-    );
+    assert_eq!(PayloadClaim::find_by_path(&conn, "/etc").unwrap().len(), 1);
 }
 
 #[test]
@@ -494,7 +575,7 @@ fn preserve_existing_records_the_incoming_claim_without_rewriting_materialized_s
             .node,
         materialized_node
     );
-    let claims = DirectoryClaim::find_by_path(&conn, "/etc").unwrap();
+    let claims = PayloadClaim::find_by_path(&conn, "/etc").unwrap();
     assert_eq!(claims.len(), 2);
     assert_eq!(claims[1].trove_id, second);
     assert_eq!(claims[1].node, claimed_node);
@@ -505,8 +586,8 @@ fn bare_connection_directory_insert_is_atomic_when_claim_persistence_fails() {
     let (_temp, conn) = create_test_db();
     let owner = insert_trove(&conn, "owner");
     conn.execute_batch(
-        "CREATE TRIGGER inject_directory_claim_insert_failure
-         BEFORE INSERT ON directory_claims
+        "CREATE TRIGGER inject_payload_claim_insert_failure
+         BEFORE INSERT ON payload_claims
          BEGIN
              SELECT RAISE(ABORT, 'injected directory claim failure');
          END;",
@@ -522,7 +603,7 @@ fn bare_connection_directory_insert_is_atomic_when_claim_persistence_fails() {
     assert!(file.insert(&conn).is_err());
     assert!(FileEntry::find_by_path(&conn, "/atomic").unwrap().is_none());
     assert!(
-        DirectoryClaim::find_by_path(&conn, "/atomic")
+        PayloadClaim::find_by_path(&conn, "/atomic")
             .unwrap()
             .is_empty()
     );
@@ -562,7 +643,7 @@ fn shared_directory_update_rolls_back_the_new_claim_when_materialization_fails()
         original
     );
     assert_eq!(
-        DirectoryClaim::find_by_path(&conn, "/etc")
+        PayloadClaim::find_by_path(&conn, "/etc")
             .unwrap()
             .iter()
             .map(|claim| claim.trove_id)
@@ -606,13 +687,13 @@ fn materialized_directory_restore_persists_exact_canonical_bytes_and_component()
         &tx,
         "/restored",
         &node,
-        DirectoryClaimAnchorPolicy::Directory,
+        PayloadClaimAnchorPolicy::Directory,
         owner,
         Some(component),
         "2026-07-25 12:00:00",
     )
     .unwrap();
-    DirectoryClaim::new("/restored".to_string(), owner, node.clone())
+    PayloadClaim::new_directory("/restored".to_string(), owner, node.clone())
         .unwrap()
         .with_component(Some(component))
         .insert(&tx)
@@ -646,7 +727,7 @@ fn selected_root_reconciliation_never_broadens_existing_claim_policy() {
     let incoming = insert_trove(&conn, "incoming");
     let original = directory(0o755, 0, 0, 1);
     insert_anchor(&conn, "/shared", owner, &original);
-    DirectoryClaim::new("/shared".to_string(), incoming, directory(0o700, 1, 2, 3))
+    PayloadClaim::new_directory("/shared".to_string(), incoming, directory(0o700, 1, 2, 3))
         .unwrap()
         .insert(&conn)
         .unwrap();
@@ -666,11 +747,11 @@ fn selected_root_reconciliation_never_broadens_existing_claim_policy() {
     );
     tx.rollback().unwrap();
 
-    let claims = DirectoryClaim::find_by_path(&conn, "/shared").unwrap();
+    let claims = PayloadClaim::find_by_path(&conn, "/shared").unwrap();
     assert!(
         claims
             .iter()
-            .all(|claim| claim.anchor_policy == DirectoryClaimAnchorPolicy::Directory)
+            .all(|claim| claim.anchor_policy == PayloadClaimAnchorPolicy::Directory)
     );
     assert_eq!(
         FileEntry::find_by_path(&conn, "/shared")
@@ -695,7 +776,7 @@ fn materialized_directory_restore_accepts_an_existing_symlink_anchor() {
         &tx,
         "/shared",
         &restored,
-        DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
+        PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory,
         owner,
         None,
         "2026-07-25 13:00:00",
@@ -731,7 +812,7 @@ fn schema_guards_typed_claim_policies_against_raw_anchor_drift() {
     );
 
     conn.execute(
-        "UPDATE directory_claims
+        "UPDATE payload_claims
          SET anchor_policy = 'directory-or-symlink-to-directory'
          WHERE path = '/shared' AND trove_id = ?1",
         [owner],
@@ -747,7 +828,7 @@ fn schema_guards_typed_claim_policies_against_raw_anchor_drift() {
 
     assert!(
         conn.execute(
-            "UPDATE directory_claims
+            "UPDATE payload_claims
              SET anchor_policy = 'directory'
              WHERE path = '/shared' AND trove_id = ?1",
             [owner],

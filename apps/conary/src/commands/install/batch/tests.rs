@@ -169,11 +169,16 @@ fn test_batch_plan_detects_cross_package_conflict() {
             path,
             package1,
             package2,
+            ..
         } => {
             assert_eq!(path, "/usr/bin/foo");
             assert!(package1 == "pkg1" || package1 == "pkg2");
             assert!(package2 == "pkg1" || package2 == "pkg2");
             assert_ne!(package1, package2);
+            assert_eq!(
+                plan.conflicts[0].to_string(),
+                "/usr/bin/foo: conflict between pkg1 and pkg2: content digests differ"
+            );
         }
     }
 }
@@ -297,6 +302,63 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         classified_files: HashMap::from([(ComponentType::Runtime, vec![path.to_string()])]),
         repository_provenance: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
+    }
+}
+
+#[test]
+fn batch_plan_accepts_source_compatible_identical_rpm_regular_files() {
+    let first = prepared_test_package("first", "/usr/share/licenses/shared", b"license");
+    let second = prepared_test_package("second", "/usr/share/licenses/shared", b"license");
+    let installer = BatchInstaller::new("/tmp/test.db", SandboxMode::Always);
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+    let plan = installer.plan_batch(&[first, second], &conn).unwrap();
+
+    assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+    assert_eq!(plan.total_files, 2);
+}
+
+#[test]
+fn batch_install_persists_two_rpm_claims_on_one_identical_regular_anchor() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let first = prepared_test_package("first", "/usr/share/licenses/shared", b"license");
+    let second = prepared_test_package("second", "/usr/share/licenses/shared", b"license");
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![first, second])
+        .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let claims =
+        conary_core::db::models::PayloadClaim::find_by_path(&conn, "/usr/share/licenses/shared")
+            .unwrap();
+    assert_eq!(claims.len(), 2);
+    assert!(
+        claims.iter().all(|claim| {
+            claim.sharing_policy == conary_core::payload::PayloadSharingPolicy::Rpm
+        })
+    );
+    let anchor = FileEntry::find_by_path(&conn, "/usr/share/licenses/shared")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|claim| claim.trove_id == anchor.trove_id)
+            .count(),
+        1
+    );
+    for claim in claims {
+        let payload =
+            conary_core::db::models::PackagePayloadOwnership::load(&conn, claim.trove_id).unwrap();
+        assert_eq!(payload.lifecycle_paths(), &["/usr/share/licenses/shared"]);
     }
 }
 
@@ -529,7 +591,7 @@ fn selected_root_batch_conflict_preflight_runs_before_lifecycle() {
     assert!(
         error
             .to_string()
-            .contains("Path /usr/bin/batch-fixture is already tracked by package other-owner"),
+            .contains("Path /usr/bin/batch-fixture from batch-fixture is incompatible with package other-owner: sharing policies differ ('rpm' versus 'exclusive')"),
         "{error:#}"
     );
     assert!(!marker.exists(), "pre-install scriptlet must not run");

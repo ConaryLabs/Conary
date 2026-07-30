@@ -37,6 +37,18 @@ impl InstallSemantics {
             version_scheme,
         }
     }
+
+    pub(super) const fn payload_sharing_policy(self) -> conary_core::payload::PayloadSharingPolicy {
+        match self.source {
+            PreparedSourceKind::NativePackage {
+                format: PackageFormatType::Rpm,
+            } => conary_core::payload::PayloadSharingPolicy::Rpm,
+            PreparedSourceKind::NativePackage {
+                format: PackageFormatType::Deb | PackageFormatType::Arch,
+            }
+            | PreparedSourceKind::Ccs => conary_core::payload::PayloadSharingPolicy::Exclusive,
+        }
+    }
 }
 
 pub(super) fn build_execution_mode(old_version: Option<&str>) -> ExecutionMode {

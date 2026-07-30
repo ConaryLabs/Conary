@@ -479,7 +479,7 @@ normalize another spelling into mutation authority.
 ### Shared Directory Ownership And Materialization
 
 A directory path can be declared by more than one installed package. Conary
-persists one exact `directory_claims` row per declaring trove, including that
+persists one exact `payload_claims` row per declaring trove, including that
 package's resolved directory node and optional component. The corresponding
 `files` row is not the complete ownership list: it is the currently
 materialized node plus the one claimant used as its referential anchor.

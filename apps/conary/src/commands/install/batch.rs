@@ -547,7 +547,13 @@ impl<'a> BatchInstaller<'a> {
                 file.node.clone(),
                 file.content.clone(),
                 trove_id,
-            );
+            )
+            .with_claim_policy(match pkg.format {
+                PackageFormatType::Rpm => conary_core::payload::PayloadSharingPolicy::Rpm,
+                PackageFormatType::Deb | PackageFormatType::Arch => {
+                    conary_core::payload::PayloadSharingPolicy::Exclusive
+                }
+            });
             entry.component_id = path_to_component.get(file.path.as_str()).copied();
             directory_plan.reconcile_through_symlink_target(tx, file)?;
             let inserted = inner::insert_file_entry_claiming_live_root_overlap(

@@ -158,7 +158,7 @@ mutation flows for local package operations.
 `apps/conary/src/commands/remove/transaction.rs`;
 `apps/conary/src/commands/remove/ccs_hook.rs`;
 `apps/conary/src/commands/remove/native_graph.rs`;
-`apps/conary/src/commands/remove/directory_ownership.rs`;
+`apps/conary/src/commands/remove/payload_ownership.rs`;
 `apps/conary/src/commands/remove/types.rs`;
 `apps/conary/src/commands/installed_authority_snapshot.rs`;
 `apps/conary/src/commands/installed_authority_snapshot/`;
@@ -170,8 +170,8 @@ mutation flows for local package operations.
 `apps/conary/src/commands/system/rollback_restore/`;
 `crates/conary-core/src/transaction/mod.rs`;
 `crates/conary-core/src/db/models/changeset.rs`;
-`crates/conary-core/src/db/models/directory_claim.rs`;
-`crates/conary-core/src/db/models/directory_claim/`;
+`crates/conary-core/src/db/models/payload_claim.rs`;
+`crates/conary-core/src/db/models/payload_claim/`;
 `crates/conary-core/src/db/models/package_payload_ownership.rs`;
 `crates/conary-core/src/db/models/package_payload_ownership/`;
 `crates/conary-core/src/filesystem/selected_root.rs`;
@@ -208,8 +208,8 @@ mutation flows for local package operations.
 `apps/conary/src/commands/system/tests/rollback.rs`;
 `apps/conary/src/commands/system/tests/rollback/*`;
 `crates/conary-core/src/db/current_schema/sql/package_manager.sql`;
-`crates/conary-core/src/db/models/directory_claim.rs`;
-`crates/conary-core/src/db/models/directory_claim/*`;
+`crates/conary-core/src/db/models/payload_claim.rs`;
+`crates/conary-core/src/db/models/payload_claim/*`;
 `crates/conary-core/src/db/models/package_payload_ownership.rs`;
 `crates/conary-core/src/db/models/package_payload_ownership/*`;
 `crates/conary-core/src/db/models/file_entry.rs`;
@@ -230,7 +230,7 @@ mutation flows for local package operations.
 **Focused proof:** `cargo test -p conary --lib commands::install`;
 `cargo test -p conary --lib commands::remove`;
 `cargo test -p conary --lib exact_installed_authority_round_trips_and_rejects_broken_relations`;
-`cargo test -p conary-core --lib db::models::directory_claim`;
+`cargo test -p conary-core --lib db::models::payload_claim`;
 `cargo test -p conary-core --lib db::models::package_payload_ownership`;
 `cargo test -p conary-core --lib filesystem::selected_root`;
 `cargo test -p conary-core --lib config_transaction`;

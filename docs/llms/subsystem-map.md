@@ -78,7 +78,7 @@ commands.
   materialization starts in
   `apps/conary/src/commands/install/shared_directory.rs`; exact persisted
   claims and package-facing payload ownership start in
-  `crates/conary-core/src/db/models/directory_claim.rs` and
+  `crates/conary-core/src/db/models/payload_claim.rs` and
   `crates/conary-core/src/db/models/package_payload_ownership.rs`; bounded
   selected-root node inspection starts in
   `crates/conary-core/src/filesystem/selected_root.rs`. Debian dpkg process

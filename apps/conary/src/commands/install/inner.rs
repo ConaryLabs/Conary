@@ -362,7 +362,8 @@ pub(super) fn install_inner_with_stored_files(
                 file.node.clone(),
                 file.content.clone(),
                 trove_id,
-            );
+            )
+            .with_claim_policy(ctx.semantics.payload_sharing_policy());
             file_entry.component_id = component_id;
             directory_plan.reconcile_through_symlink_target(tx, file)?;
             let inserted = insert_file_entry_claiming_live_root_overlap(
@@ -640,41 +641,18 @@ fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
 pub(super) fn preflight_file_ownership(
     conn: &rusqlite::Connection,
     paths: impl IntoIterator<Item = impl AsRef<str>>,
-    package_name: &str,
-    relation_removals: &[PackageRelationRemoval],
+    _package_name: &str,
+    _relation_removals: &[PackageRelationRemoval],
 ) -> Result<()> {
     for path in paths {
         let path = path.as_ref();
-        let Some(existing) = FileEntry::find_by_path(conn, path)? else {
-            continue;
-        };
-
-        // Raw package identities are not authoritative until they have been
-        // resolved against the selected root. Defer existing directories to
-        // the definitive resolved-node preflight before root mutation.
-        if matches!(existing.node.source.kind, PayloadNodeKind::Directory)
-            || super::shared_directory::owner_allows_replacement(
-                conn,
-                &existing,
-                package_name,
-                relation_removals,
-            )?
-        {
+        if FileEntry::find_by_path(conn, path)?.is_none() {
             continue;
         }
 
-        let owner = Trove::find_by_id(conn, existing.trove_id)?.ok_or_else(|| {
-            anyhow!(
-                "Path {} is already tracked by missing trove {}",
-                path,
-                existing.trove_id
-            )
-        })?;
-        return Err(anyhow!(
-            "Path {} is already tracked by package {}",
-            path,
-            owner.name
-        ));
+        // Raw package identities and content are not authoritative until the
+        // payload is resolved and stored. Defer every tracked overlap to the
+        // definitive typed preflight that runs before root mutation.
     }
 
     Ok(())
@@ -769,6 +747,17 @@ pub(super) fn insert_file_entry_claiming_live_root_overlap(
         return Ok(InsertedFileAuthority {
             file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
             materialized: directory_materialization.applies_incoming(),
+        });
+    }
+
+    if file_entry.can_share_existing(tx, directory_materialization)? {
+        info!(
+            "Recording compatible shared payload claim {} for {}",
+            file_entry.path, package_name
+        );
+        return Ok(InsertedFileAuthority {
+            file_id: file_entry.insert_or_replace(tx, directory_materialization)?,
+            materialized: false,
         });
     }
 

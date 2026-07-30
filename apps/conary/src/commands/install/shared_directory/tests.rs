@@ -1,7 +1,7 @@
 // apps/conary/src/commands/install/shared_directory/tests.rs
 
 use super::*;
-use conary_core::db::models::{DirectoryClaimAnchorPolicy, TroveType};
+use conary_core::db::models::{PayloadClaimAnchorPolicy, TroveType};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
 use conary_core::repository::versioning::VersionScheme;
 use std::collections::BTreeSet;
@@ -269,7 +269,7 @@ fn live_directory_never_reclassifies_a_peer_owned_regular_database_row() {
 }
 
 #[test]
-fn peer_owned_symlink_anchor_accepts_a_debian_directory_claim() {
+fn peer_owned_symlink_anchor_accepts_a_debian_payload_claim() {
     let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
     let mut conn = conary_core::db::open(db_path).unwrap();
     let symlink_owner = insert_trove(&conn, "symlink-owner");
@@ -319,12 +319,12 @@ fn peer_owned_symlink_anchor_accepts_a_debian_directory_claim() {
     let materialized = FileEntry::find_by_path(&conn, "/shared").unwrap().unwrap();
     assert_eq!(materialized.trove_id, symlink_owner);
     assert_eq!(materialized.node, leaf);
-    let claims = DirectoryClaim::find_by_path(&conn, "/shared").unwrap();
+    let claims = PayloadClaim::find_by_path(&conn, "/shared").unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].trove_id, incoming_owner);
     assert_eq!(
         claims[0].anchor_policy,
-        DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+        PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
     );
 }
 
@@ -407,7 +407,7 @@ fn rpm_through_symlink_reconciles_tracked_target_and_retains_leaf() {
             .node,
         leaf
     );
-    let incoming_claim = DirectoryClaim::find_by_path(&conn, "/shared")
+    let incoming_claim = PayloadClaim::find_by_path(&conn, "/shared")
         .unwrap()
         .into_iter()
         .find(|claim| claim.trove_id == incoming_owner)
@@ -502,7 +502,7 @@ fn rollback_capture_precedes_a_later_batch_symlink_target_mutation() {
 }
 
 #[test]
-fn rollback_capture_excludes_only_generation_ephemeral_directory_claims() {
+fn rollback_capture_excludes_only_generation_ephemeral_payload_claims() {
     let (_db_root, db_path) = crate::commands::test_helpers::create_test_db();
     let conn = conary_core::db::open(db_path).unwrap();
     let owner = insert_trove(&conn, "root-layout");

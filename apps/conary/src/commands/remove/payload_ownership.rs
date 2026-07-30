@@ -1,4 +1,4 @@
-// apps/conary/src/commands/remove/directory_ownership.rs
+// apps/conary/src/commands/remove/payload_ownership.rs
 //! Exact package-path and materialized-removal authority.
 
 pub(crate) use conary_core::db::models::PackagePayloadOwnership;
@@ -6,8 +6,12 @@ pub(crate) use conary_core::db::models::PackagePayloadOwnership;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{DirectoryClaim, FileEntry, Trove, TroveType};
-    use conary_core::payload::{PayloadNode, ResolvedPayloadNode};
+    use conary_core::db::models::{
+        ExistingDirectoryMaterialization, FileEntry, PayloadClaim, Trove, TroveType,
+    };
+    use conary_core::payload::{
+        PayloadContentAuthority, PayloadNode, PayloadSharingPolicy, ResolvedPayloadNode,
+    };
     use conary_core::repository::versioning::VersionScheme;
 
     fn insert_trove(conn: &rusqlite::Connection, name: &str) -> i64 {
@@ -41,7 +45,7 @@ mod tests {
         let second = insert_trove(&conn, "second");
 
         directory("/etc", first).insert(&conn).unwrap();
-        DirectoryClaim::new(
+        PayloadClaim::new_directory(
             "/etc".to_string(),
             second,
             directory("/unused", second).node,
@@ -88,6 +92,47 @@ mod tests {
         assert_eq!(
             ownership.materialized_removal_paths(),
             &["/usr/share/owner", "/usr/share/owner/data"]
+        );
+    }
+
+    #[test]
+    fn shared_regular_payload_is_removed_only_by_the_final_claimant() {
+        let (_root, db_path) = crate::commands::test_helpers::create_test_db();
+        let conn = conary_core::db::open(db_path).unwrap();
+        let first = insert_trove(&conn, "first");
+        let second = insert_trove(&conn, "second");
+        let content = PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"shared"),
+            size: 6,
+        };
+        let node = ResolvedPayloadNode::from_numeric_source(PayloadNode::regular(0o644)).unwrap();
+        let mut first_entry = FileEntry::new(
+            "/usr/share/shared".to_string(),
+            node.clone(),
+            Some(content.clone()),
+            first,
+        )
+        .with_claim_policy(PayloadSharingPolicy::Rpm);
+        first_entry.insert(&conn).unwrap();
+        let mut second_entry =
+            FileEntry::new("/usr/share/shared".to_string(), node, Some(content), second)
+                .with_claim_policy(PayloadSharingPolicy::Rpm);
+        second_entry
+            .insert_or_replace(&conn, ExistingDirectoryMaterialization::ApplyIncoming)
+            .unwrap();
+
+        for trove_id in [first, second] {
+            let ownership = PackagePayloadOwnership::load(&conn, trove_id).unwrap();
+            assert_eq!(ownership.lifecycle_paths(), &["/usr/share/shared"]);
+            assert!(ownership.materialized_removal_paths().is_empty());
+        }
+
+        Trove::delete(&conn, first).unwrap();
+        assert_eq!(
+            PackagePayloadOwnership::load(&conn, second)
+                .unwrap()
+                .materialized_removal_paths(),
+            &["/usr/share/shared"]
         );
     }
 

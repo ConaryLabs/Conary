@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::ccs::manifest::FileCapability;
-use crate::db::models::{DirectoryClaim, FileEntry, InstallSource, InstalledFileCapability, Trove};
+use crate::db::models::{FileEntry, InstallSource, InstalledFileCapability, PayloadClaim, Trove};
 use crate::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
     MutableStateManifest, RootPathDomain, capture_root_node, classify_root_path,
@@ -75,7 +75,8 @@ pub(super) fn collect_runtime_generation_inputs(
         let mut generation_owner = anchor_source
             .is_generation_input()
             .then_some((*anchor_package_name, file.trove_id));
-        for claim in DirectoryClaim::find_retaining_path(conn, &file.path)? {
+        let claims = PayloadClaim::find_retaining_path(conn, &file.path)?;
+        for claim in &claims {
             let Some((claim_package_name, claim_source)) = trove_map.get(&claim.trove_id) else {
                 return Err(crate::Error::InternalError(format!(
                     "orphaned directory claim in generation input: path {} references missing trove_id {}",
@@ -100,8 +101,13 @@ pub(super) fn collect_runtime_generation_inputs(
             node: file.node,
             content: file.content,
         };
-        if let Some(capability) = capability_xattrs.remove(&(file.trove_id, entry.path.clone())) {
-            merge_capability_xattrs(package_name, &mut entry, capability)?;
+        let entry_path = entry.path.clone();
+        for claim in claims.iter().filter(|claim| claim.path == entry_path) {
+            if let Some(capability) =
+                capability_xattrs.remove(&(claim.trove_id, entry_path.clone()))
+            {
+                merge_capability_xattrs(package_name, &mut entry, capability)?;
+            }
         }
         entry
             .validate()
@@ -150,10 +156,12 @@ fn collect_runtime_capability_xattrs(
         return Ok(HashMap::new());
     }
 
-    let files_by_trove_path = files
-        .iter()
-        .map(|file| ((file.trove_id, file.path.as_str()), file))
-        .collect::<HashMap<_, _>>();
+    let mut files_by_trove_path = HashMap::new();
+    for file in files {
+        for claim in PayloadClaim::find_by_path(conn, &file.path)? {
+            files_by_trove_path.insert((claim.trove_id, file.path.as_str()), file);
+        }
+    }
     let mut xattrs = HashMap::new();
     for row in capability_rows {
         let Some((package_name, source)) = trove_map.get(&row.trove_id) else {
@@ -278,7 +286,7 @@ fn capability_input_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{DirectoryClaimAnchorPolicy, FileEntry, Trove, TroveType};
+    use crate::db::models::{FileEntry, PayloadClaimAnchorPolicy, Trove, TroveType};
     use crate::db::testing::create_test_db;
     use crate::payload::{
         PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
@@ -512,7 +520,7 @@ mod tests {
             anchor_trove_id,
         );
         directory_anchor.insert(&conn).unwrap();
-        DirectoryClaim::new(
+        PayloadClaim::new_directory(
             "/shared-directory".to_string(),
             claimant_trove_id,
             directory_node,
@@ -529,13 +537,13 @@ mod tests {
             anchor_trove_id,
         );
         symlink_anchor.insert(&conn).unwrap();
-        DirectoryClaim::new(
+        PayloadClaim::new_directory(
             "/shared-link".to_string(),
             claimant_trove_id,
             directory("/shared-link", claimant_trove_id).node,
         )
         .unwrap()
-        .with_anchor_policy(DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
         .insert(&conn)
         .unwrap();
 

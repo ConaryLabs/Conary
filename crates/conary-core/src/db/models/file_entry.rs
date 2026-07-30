@@ -3,11 +3,13 @@
 //! Exact installed payload-node state.
 
 use crate::error::{Error, Result};
-use crate::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
+use crate::payload::{
+    PayloadContentAuthority, PayloadNodeKind, PayloadSharingPolicy, ResolvedPayloadNode,
+};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params, types::Type};
 
 /// One package-owned node in the selected filesystem.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FileEntry {
     pub id: Option<i64>,
     pub path: String,
@@ -16,7 +18,26 @@ pub struct FileEntry {
     pub trove_id: i64,
     pub installed_at: Option<String>,
     pub component_id: Option<i64>,
+    /// Source policy used only when this entry creates or joins a claim set.
+    ///
+    /// The durable copy lives on each `payload_claims` row; `files` remains
+    /// only the selected-root materialization anchor.
+    pub claim_policy: PayloadSharingPolicy,
 }
+
+impl PartialEq for FileEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.path == other.path
+            && self.node == other.node
+            && self.content == other.content
+            && self.trove_id == other.trove_id
+            && self.installed_at == other.installed_at
+            && self.component_id == other.component_id
+    }
+}
+
+impl Eq for FileEntry {}
 
 /// Source-format behavior when a directory already exists at install time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,20 +55,20 @@ pub enum ExistingDirectoryMaterialization {
 }
 
 impl ExistingDirectoryMaterialization {
-    const fn anchor_policy(self) -> super::DirectoryClaimAnchorPolicy {
+    const fn anchor_policy(self) -> super::PayloadClaimAnchorPolicy {
         match self {
             Self::ApplyIncoming | Self::PreserveExistingDirectory => {
-                super::DirectoryClaimAnchorPolicy::Directory
+                super::PayloadClaimAnchorPolicy::Directory
             }
             Self::ApplyIncomingDirectoryOrSymlinkToDirectory
             | Self::PreserveExistingDirectoryOrSymlinkToDirectory => {
-                super::DirectoryClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
+                super::PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory
             }
         }
     }
 
     pub const fn accepts_anchor_kind(self, kind: &PayloadNodeKind) -> bool {
-        self.anchor_policy().accepts(kind)
+        self.anchor_policy().accepts_kind(kind)
     }
 
     pub const fn applies_incoming(self) -> bool {
@@ -76,7 +97,14 @@ impl FileEntry {
             trove_id,
             installed_at: None,
             component_id: None,
+            claim_policy: PayloadSharingPolicy::Exclusive,
         }
+    }
+
+    #[must_use]
+    pub fn with_claim_policy(mut self, claim_policy: PayloadSharingPolicy) -> Self {
+        self.claim_policy = claim_policy;
+        self
     }
 
     pub fn new_with_component(
@@ -94,15 +122,11 @@ impl FileEntry {
 
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         self.validate()?;
-        let id = if matches!(self.node.source.kind, PayloadNodeKind::Directory) {
-            with_file_entry_savepoint(conn, || {
-                let id = self.insert_row(conn, false)?;
-                self.insert_directory_claim(conn)?;
-                Ok(id)
-            })?
-        } else {
-            self.insert_row(conn, false)?
-        };
+        let id = with_file_entry_savepoint(conn, || {
+            let id = self.insert_row(conn, false)?;
+            self.insert_payload_claim(conn, ExistingDirectoryMaterialization::ApplyIncoming)?;
+            Ok(id)
+        })?;
         self.id = Some(id);
         Ok(id)
     }
@@ -114,60 +138,80 @@ impl FileEntry {
         directory_materialization: ExistingDirectoryMaterialization,
     ) -> Result<i64> {
         self.validate()?;
-        if let Some(existing) = Self::find_by_path(conn, &self.path)?
-            && matches!(self.node.source.kind, PayloadNodeKind::Directory)
-            && (matches!(existing.node.source.kind, PayloadNodeKind::Directory)
-                || (matches!(existing.node.source.kind, PayloadNodeKind::Symlink { .. })
-                    && directory_materialization.accepts_anchor_kind(&existing.node.source.kind)))
-        {
+        if let Some(existing) = Self::find_by_path(conn, &self.path)? {
             let existing_id = existing.id.ok_or_else(|| {
                 Error::InternalError(format!(
                     "persisted file entry {} has no database identity",
                     self.path
                 ))
             })?;
-            with_file_entry_savepoint(conn, || {
-                super::DirectoryClaim::new(self.path.clone(), self.trove_id, self.node.clone())?
-                    .with_component(self.component_id)
-                    .with_anchor_policy(directory_materialization.anchor_policy())
-                    .insert(conn)?;
-                if directory_materialization.applies_incoming() {
-                    let node_json = canonical_node_json(&self.node)?;
-                    conn.execute(
-                        "UPDATE files
-                         SET payload_node_json = ?1,
-                             content_sha256 = NULL,
-                             content_size = NULL
-                         WHERE path = ?2",
-                        params![node_json, &self.path],
-                    )?;
-                }
-                Ok(())
-            })?;
-            self.id = Some(existing_id);
-            return Ok(existing_id);
+            if self.can_share_existing(conn, directory_materialization)? {
+                let incoming_claim = self.payload_claim(directory_materialization)?;
+                with_file_entry_savepoint(conn, || {
+                    incoming_claim.insert(conn)?;
+                    if matches!(self.node.source.kind, PayloadNodeKind::Directory)
+                        && directory_materialization.applies_incoming()
+                    {
+                        let node_json = canonical_node_json(&self.node)?;
+                        conn.execute(
+                            "UPDATE files
+                             SET payload_node_json = ?1,
+                                 content_sha256 = NULL,
+                                 content_size = NULL
+                             WHERE path = ?2",
+                            params![node_json, &self.path],
+                        )?;
+                    }
+                    Ok(())
+                })?;
+                self.id = Some(existing_id);
+                return Ok(existing_id);
+            }
         }
         if let Some(existing) = Self::find_by_path(conn, &self.path)?
-            && super::DirectoryClaim::find_retaining_path(conn, &self.path)?
+            && super::PayloadClaim::find_retaining_path(conn, &self.path)?
                 .iter()
                 .any(|claim| claim.trove_id != existing.trove_id)
         {
             return Err(Error::ConflictError(format!(
-                "cannot replace shared directory materialization {} while peer claims remain",
+                "cannot replace shared payload materialization {} while peer claims remain",
                 self.path
             )));
         }
-        let id = if matches!(self.node.source.kind, PayloadNodeKind::Directory) {
-            with_file_entry_savepoint(conn, || {
-                let id = self.insert_row(conn, true)?;
-                self.insert_directory_claim(conn)?;
-                Ok(id)
-            })?
-        } else {
-            self.insert_row(conn, true)?
-        };
+        let id = with_file_entry_savepoint(conn, || {
+            let id = self.insert_row(conn, true)?;
+            self.insert_payload_claim(conn, directory_materialization)?;
+            Ok(id)
+        })?;
         self.id = Some(id);
         Ok(id)
+    }
+
+    pub fn can_share_existing(
+        &self,
+        conn: &Connection,
+        directory_materialization: ExistingDirectoryMaterialization,
+    ) -> Result<bool> {
+        let Some(existing) = Self::find_by_path(conn, &self.path)? else {
+            return Ok(false);
+        };
+        let direct_claims = super::PayloadClaim::find_by_path(conn, &self.path)?;
+        if direct_claims.is_empty() {
+            return Err(Error::ConfigError(format!(
+                "materialized payload {} has no package claim",
+                self.path
+            )));
+        }
+        if matches!(self.node.source.kind, PayloadNodeKind::Directory)
+            && (matches!(existing.node.source.kind, PayloadNodeKind::Directory)
+                || directory_materialization.accepts_anchor_kind(&existing.node.source.kind))
+        {
+            return Ok(true);
+        }
+        let incoming_claim = self.payload_claim(directory_materialization)?;
+        Ok(direct_claims
+            .iter()
+            .all(|claim| incoming_claim.compatible_with(claim).is_ok()))
     }
 
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
@@ -191,7 +235,7 @@ impl FileEntry {
             ))
         })?;
         let anchor_policy = materialization.anchor_policy();
-        if !anchor_policy.accepts(&node.source.kind) {
+        if !anchor_policy.accepts_kind(&node.source.kind) {
             return Err(Error::ConfigError(format!(
                 "selected-root node {path} is not accepted by directory materialization policy '{}'",
                 anchor_policy.as_str()
@@ -223,9 +267,9 @@ impl FileEntry {
         if existing.node == *node && existing.content.as_ref() == content {
             return Ok(false);
         }
-        for claim in super::DirectoryClaim::find_retaining_path(conn, path)? {
+        for claim in super::PayloadClaim::find_retaining_path(conn, path)? {
             let accepted = if claim.path == path {
-                claim.anchor_policy.accepts(&node.source.kind)
+                claim.anchor_policy.accepts_kind(&node.source.kind)
             } else {
                 matches!(node.source.kind, PayloadNodeKind::Directory)
             };
@@ -265,11 +309,100 @@ impl FileEntry {
     /// deliberately does not fabricate a claim from the materialized node.
     /// The caller must restore the captured independent claim set before
     /// committing the transaction.
+    pub fn restore_materialized_anchor(
+        tx: &Transaction<'_>,
+        path: &str,
+        node: &ResolvedPayloadNode,
+        content: Option<&PayloadContentAuthority>,
+        trove_id: i64,
+        component_id: Option<i64>,
+        installed_at: &str,
+    ) -> Result<i64> {
+        node.validate()
+            .and_then(|()| node.source.validate_content(content))
+            .map_err(|error| {
+                Error::ParseError(format!(
+                    "restored payload anchor {path} has invalid authority: {error}"
+                ))
+            })?;
+        if installed_at.is_empty() {
+            return Err(Error::ConfigError(format!(
+                "restored payload anchor {path} has no installed-at authority"
+            )));
+        }
+        let owner_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM troves WHERE id = ?1)",
+            [trove_id],
+            |row| row.get(0),
+        )?;
+        if !owner_exists {
+            return Err(Error::ConfigError(format!(
+                "restored payload anchor {path} references missing trove {trove_id}"
+            )));
+        }
+        validate_component_owner(tx, path, trove_id, component_id)?;
+
+        let node_json = canonical_node_json(node)?;
+        let content_size = persisted_content_size(content)?;
+        if let Some(existing) = Self::find_by_path(tx, path)? {
+            if existing.node != *node || existing.content.as_ref() != content {
+                return Err(Error::ConflictError(format!(
+                    "cannot restore payload anchor {path} over a different materialization"
+                )));
+            }
+            let id = existing.id.ok_or_else(|| {
+                Error::MissingId(format!(
+                    "restored payload anchor {path} has no database identity"
+                ))
+            })?;
+            tx.execute(
+                "UPDATE files
+                 SET payload_node_json = ?1, content_sha256 = ?2,
+                     content_size = ?3, trove_id = ?4, component_id = ?5,
+                     installed_at = ?6
+                 WHERE id = ?7",
+                params![
+                    node_json,
+                    content.map(|authority| &authority.sha256),
+                    content_size,
+                    trove_id,
+                    component_id,
+                    installed_at,
+                    id
+                ],
+            )?;
+            Ok(id)
+        } else {
+            tx.execute(
+                "INSERT INTO files (
+                    path, payload_node_json, content_sha256, content_size,
+                    trove_id, installed_at, component_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    path,
+                    node_json,
+                    content.map(|authority| &authority.sha256),
+                    content_size,
+                    trove_id,
+                    installed_at,
+                    component_id
+                ],
+            )?;
+            Ok(tx.last_insert_rowid())
+        }
+    }
+
+    /// Restore a captured directory or verified symlink-to-directory
+    /// materialization without fabricating package ownership.
+    ///
+    /// Directory metadata is mutable under the source package ABI, so rollback
+    /// may intentionally replace the current materialized node before the
+    /// independent payload claim graph is restored.
     pub fn restore_materialized_directory_anchor(
         tx: &Transaction<'_>,
         path: &str,
         node: &ResolvedPayloadNode,
-        anchor_policy: super::DirectoryClaimAnchorPolicy,
+        anchor_policy: super::PayloadClaimAnchorPolicy,
         trove_id: i64,
         component_id: Option<i64>,
         installed_at: &str,
@@ -279,7 +412,7 @@ impl FileEntry {
                 "restored directory anchor {path} has invalid payload authority: {error}"
             ))
         })?;
-        if !anchor_policy.accepts(&node.source.kind) {
+        if !anchor_policy.accepts_kind(&node.source.kind) {
             return Err(Error::ConfigError(format!(
                 "restored directory anchor {path} is incompatible with policy '{}'",
                 anchor_policy.as_str()
@@ -301,7 +434,6 @@ impl FileEntry {
             )));
         }
         validate_component_owner(tx, path, trove_id, component_id)?;
-
         let node_json = canonical_node_json(node)?;
         if let Some(existing) = Self::find_by_path(tx, path)? {
             if !matches!(
@@ -378,13 +510,13 @@ impl FileEntry {
 
     pub fn delete(conn: &Connection, path: &str) -> Result<()> {
         if let Some(existing) = Self::find_by_path(conn, path)? {
-            let claims = super::DirectoryClaim::find_retaining_path(conn, path)?;
+            let claims = super::PayloadClaim::find_retaining_path(conn, path)?;
             if claims
                 .iter()
                 .any(|claim| claim.trove_id != existing.trove_id)
             {
                 return Err(Error::ConflictError(format!(
-                    "cannot delete directory materialization anchor {path} while peer package claims remain"
+                    "cannot delete payload materialization anchor {path} while peer package claims remain"
                 )));
             }
         }
@@ -405,13 +537,33 @@ impl FileEntry {
         Ok(entries.len())
     }
 
-    fn insert_directory_claim(&self, conn: &Connection) -> Result<()> {
-        if matches!(self.node.source.kind, PayloadNodeKind::Directory) {
-            super::DirectoryClaim::new(self.path.clone(), self.trove_id, self.node.clone())?
-                .with_component(self.component_id)
-                .insert(conn)?;
-        }
-        Ok(())
+    fn insert_payload_claim(
+        &self,
+        conn: &Connection,
+        directory_materialization: ExistingDirectoryMaterialization,
+    ) -> Result<()> {
+        self.payload_claim(directory_materialization)?.insert(conn)
+    }
+
+    fn payload_claim(
+        &self,
+        directory_materialization: ExistingDirectoryMaterialization,
+    ) -> Result<super::PayloadClaim> {
+        let claim = super::PayloadClaim::new(
+            self.path.clone(),
+            self.trove_id,
+            self.node.clone(),
+            self.content.clone(),
+            self.claim_policy,
+        )?
+        .with_component(self.component_id);
+        Ok(
+            if matches!(self.node.source.kind, PayloadNodeKind::Directory) {
+                claim.with_anchor_policy(directory_materialization.anchor_policy())
+            } else {
+                claim
+            },
+        )
     }
 
     fn insert_row(&self, conn: &Connection, replace: bool) -> Result<i64> {
@@ -493,6 +645,7 @@ impl FileEntry {
             trove_id: row.get(5)?,
             installed_at: row.get(6)?,
             component_id: row.get(7)?,
+            claim_policy: PayloadSharingPolicy::Exclusive,
         })
     }
 }
@@ -501,7 +654,7 @@ fn with_file_entry_savepoint<T>(
     conn: &Connection,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    const SAVEPOINT: &str = "conary_file_entry_directory_authority";
+    const SAVEPOINT: &str = "conary_file_entry_payload_authority";
     conn.execute_batch(&format!("SAVEPOINT {SAVEPOINT}"))?;
     match operation() {
         Ok(value) => {

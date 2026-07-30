@@ -570,19 +570,8 @@ fn replace_refresh_children_for_package(
 }
 
 fn delete_refresh_payload_authority(tx: &rusqlite::Transaction<'_>, trove_id: i64) -> Result<()> {
-    for file in conary_core::db::models::FileEntry::find_by_trove(tx, trove_id)?
-        .into_iter()
-        .filter(|file| {
-            !matches!(
-                file.node.source.kind,
-                conary_core::payload::PayloadNodeKind::Directory
-            )
-        })
-    {
-        conary_core::db::models::FileEntry::delete(tx, &file.path)?;
-    }
-    for claim in conary_core::db::models::DirectoryClaim::find_by_trove(tx, trove_id)? {
-        conary_core::db::models::DirectoryClaim::delete(tx, &claim.path, trove_id)?;
+    for claim in conary_core::db::models::PayloadClaim::find_by_trove(tx, trove_id)? {
+        conary_core::db::models::PayloadClaim::delete(tx, &claim.path, trove_id)?;
     }
     Ok(())
 }

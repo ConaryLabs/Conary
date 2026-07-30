@@ -5,6 +5,7 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 const MODE_TYPE_MASK: u32 = libc::S_IFMT;
 const MODE_PERMISSION_MASK: u32 = 0o7777;
@@ -22,6 +23,131 @@ pub struct PayloadContentAuthority {
     pub sha256: String,
     pub size: u64,
 }
+
+/// Source-format authority for deciding whether two package claims may share
+/// one selected-root materialization.
+///
+/// `Exclusive` is deliberately not an "exact bytes" fallback: a source format
+/// must own and prove its overlap behavior before Conary can retain multiple
+/// owners for a non-directory node. RPM's policy is pinned to
+/// `rpmfilesCompare()` at revision
+/// `a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PayloadSharingPolicy {
+    Exclusive,
+    Rpm,
+}
+
+impl PayloadSharingPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exclusive => "exclusive",
+            Self::Rpm => "rpm",
+        }
+    }
+
+    pub fn parse(value: &str) -> std::result::Result<Self, PayloadCompatibilityMismatch> {
+        match value {
+            "exclusive" => Ok(Self::Exclusive),
+            "rpm" => Ok(Self::Rpm),
+            other => Err(PayloadCompatibilityMismatch::UnknownPolicy(
+                other.to_string(),
+            )),
+        }
+    }
+
+    /// Compare two claims using only source-owned compatibility authority.
+    ///
+    /// Directory co-ownership has separate typed materialization semantics and
+    /// is handled by the claim anchor policy. This comparator owns every
+    /// non-directory RPM overlap.
+    pub fn compare(
+        self,
+        other_policy: Self,
+        left_node: &PayloadNode,
+        left_content: Option<&PayloadContentAuthority>,
+        right_node: &PayloadNode,
+        right_content: Option<&PayloadContentAuthority>,
+    ) -> std::result::Result<(), PayloadCompatibilityMismatch> {
+        if self != other_policy {
+            return Err(PayloadCompatibilityMismatch::Policy {
+                left: self,
+                right: other_policy,
+            });
+        }
+        match self {
+            Self::Exclusive => Err(PayloadCompatibilityMismatch::Exclusive),
+            Self::Rpm => compare_rpm_payload(left_node, left_content, right_node, right_content),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PayloadCompatibilityMismatch {
+    UnknownPolicy(String),
+    Policy {
+        left: PayloadSharingPolicy,
+        right: PayloadSharingPolicy,
+    },
+    Exclusive,
+    NodeKind {
+        left: &'static str,
+        right: &'static str,
+    },
+    Mode {
+        left: u32,
+        right: u32,
+    },
+    User,
+    Group,
+    ContentSize {
+        left: u64,
+        right: u64,
+    },
+    ContentDigest,
+    SymlinkTarget,
+    DeviceIdentity,
+    HardlinkTopology,
+    MissingContent,
+}
+
+impl fmt::Display for PayloadCompatibilityMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownPolicy(policy) => {
+                write!(formatter, "unknown payload sharing policy {policy:?}")
+            }
+            Self::Policy { left, right } => write!(
+                formatter,
+                "sharing policies differ ('{}' versus '{}')",
+                left.as_str(),
+                right.as_str()
+            ),
+            Self::Exclusive => formatter.write_str("source policy is exclusive"),
+            Self::NodeKind { left, right } => {
+                write!(formatter, "node kinds differ ({left} versus {right})")
+            }
+            Self::Mode { left, right } => {
+                write!(formatter, "modes differ ({left:#o} versus {right:#o})")
+            }
+            Self::User => formatter.write_str("source users differ"),
+            Self::Group => formatter.write_str("source groups differ"),
+            Self::ContentSize { left, right } => {
+                write!(formatter, "content sizes differ ({left} versus {right})")
+            }
+            Self::ContentDigest => formatter.write_str("content digests differ"),
+            Self::SymlinkTarget => formatter.write_str("symlink targets differ"),
+            Self::DeviceIdentity => formatter.write_str("device identities differ"),
+            Self::HardlinkTopology => formatter.write_str("hardlink topology differs"),
+            Self::MissingContent => {
+                formatter.write_str("regular node lacks comparable content authority")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PayloadCompatibilityMismatch {}
 
 /// Source-native ownership authority.
 ///
@@ -287,5 +413,257 @@ impl PayloadNodeKind {
 
     pub fn is_symlink(&self) -> bool {
         matches!(self, Self::Symlink { .. })
+    }
+}
+
+fn compare_rpm_payload(
+    left: &PayloadNode,
+    left_content: Option<&PayloadContentAuthority>,
+    right: &PayloadNode,
+    right_content: Option<&PayloadContentAuthority>,
+) -> std::result::Result<(), PayloadCompatibilityMismatch> {
+    left.validate_content(left_content)
+        .map_err(|_| PayloadCompatibilityMismatch::MissingContent)?;
+    right
+        .validate_content(right_content)
+        .map_err(|_| PayloadCompatibilityMismatch::MissingContent)?;
+
+    let left_class = RpmNodeClass::of(&left.kind);
+    let right_class = RpmNodeClass::of(&right.kind);
+    if left_class != right_class {
+        return Err(PayloadCompatibilityMismatch::NodeKind {
+            left: left.kind.name(),
+            right: right.kind.name(),
+        });
+    }
+
+    // rpmfilesCompare() deliberately ignores symlink modes.
+    if left_class != RpmNodeClass::Symlink && left.mode != right.mode {
+        return Err(PayloadCompatibilityMismatch::Mode {
+            left: left.mode,
+            right: right.mode,
+        });
+    }
+    if left.user != right.user {
+        return Err(PayloadCompatibilityMismatch::User);
+    }
+    if left.group != right.group {
+        return Err(PayloadCompatibilityMismatch::Group);
+    }
+
+    match (&left.kind, &right.kind) {
+        (PayloadNodeKind::Regular { .. }, PayloadNodeKind::Regular { .. }) => {
+            compare_regular_content(left_content, right_content)
+        }
+        (
+            PayloadNodeKind::Symlink {
+                target: left_target,
+            },
+            PayloadNodeKind::Symlink {
+                target: right_target,
+            },
+        ) => {
+            if left_target == right_target {
+                Ok(())
+            } else {
+                Err(PayloadCompatibilityMismatch::SymlinkTarget)
+            }
+        }
+        (
+            PayloadNodeKind::BlockDevice {
+                major: left_major,
+                minor: left_minor,
+            }
+            | PayloadNodeKind::CharacterDevice {
+                major: left_major,
+                minor: left_minor,
+            },
+            PayloadNodeKind::BlockDevice {
+                major: right_major,
+                minor: right_minor,
+            }
+            | PayloadNodeKind::CharacterDevice {
+                major: right_major,
+                minor: right_minor,
+            },
+        ) => {
+            if (left_major, left_minor) == (right_major, right_minor) {
+                Ok(())
+            } else {
+                Err(PayloadCompatibilityMismatch::DeviceIdentity)
+            }
+        }
+        (
+            PayloadNodeKind::Hardlink {
+                target: left_target,
+                ..
+            },
+            PayloadNodeKind::Hardlink {
+                target: right_target,
+                ..
+            },
+        ) => {
+            // Conary preserves archive hardlinks as typed graph edges instead
+            // of duplicating the RPM digest on every member. The target path
+            // is therefore the comparable topology authority; the target
+            // claims independently prove the shared regular content.
+            if left_target == right_target {
+                Ok(())
+            } else {
+                Err(PayloadCompatibilityMismatch::HardlinkTopology)
+            }
+        }
+        (PayloadNodeKind::Directory, PayloadNodeKind::Directory)
+        | (PayloadNodeKind::Fifo, PayloadNodeKind::Fifo)
+        | (PayloadNodeKind::Socket, PayloadNodeKind::Socket) => Ok(()),
+        // RPM models hardlinks as regular file records with duplicated digest
+        // authority. Conary's explicit hardlink edge does not carry such a
+        // digest, so regular/hardlink sharing cannot be proven locally.
+        (PayloadNodeKind::Regular { .. }, PayloadNodeKind::Hardlink { .. })
+        | (PayloadNodeKind::Hardlink { .. }, PayloadNodeKind::Regular { .. }) => {
+            Err(PayloadCompatibilityMismatch::MissingContent)
+        }
+        _ => Err(PayloadCompatibilityMismatch::NodeKind {
+            left: left.kind.name(),
+            right: right.kind.name(),
+        }),
+    }
+}
+
+fn compare_regular_content(
+    left: Option<&PayloadContentAuthority>,
+    right: Option<&PayloadContentAuthority>,
+) -> std::result::Result<(), PayloadCompatibilityMismatch> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Err(PayloadCompatibilityMismatch::MissingContent);
+    };
+    if left.size != right.size {
+        return Err(PayloadCompatibilityMismatch::ContentSize {
+            left: left.size,
+            right: right.size,
+        });
+    }
+    if left.sha256 != right.sha256 {
+        return Err(PayloadCompatibilityMismatch::ContentDigest);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RpmNodeClass {
+    Regular,
+    Directory,
+    Symlink,
+    BlockDevice,
+    CharacterDevice,
+    Fifo,
+    Socket,
+}
+
+impl RpmNodeClass {
+    const fn of(kind: &PayloadNodeKind) -> Self {
+        match kind {
+            PayloadNodeKind::Regular { .. } | PayloadNodeKind::Hardlink { .. } => Self::Regular,
+            PayloadNodeKind::Directory => Self::Directory,
+            PayloadNodeKind::Symlink { .. } => Self::Symlink,
+            PayloadNodeKind::BlockDevice { .. } => Self::BlockDevice,
+            PayloadNodeKind::CharacterDevice { .. } => Self::CharacterDevice,
+            PayloadNodeKind::Fifo => Self::Fifo,
+            PayloadNodeKind::Socket => Self::Socket,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sharing_tests {
+    use super::*;
+
+    fn content(bytes: &[u8]) -> PayloadContentAuthority {
+        PayloadContentAuthority {
+            sha256: crate::hash::sha256(bytes),
+            size: bytes.len() as u64,
+        }
+    }
+
+    #[test]
+    fn rpm_regular_compatibility_uses_source_identity_mode_size_and_digest() {
+        let left = PayloadNode::regular(0o644);
+        let right = left.clone();
+        assert_eq!(
+            PayloadSharingPolicy::Rpm.compare(
+                PayloadSharingPolicy::Rpm,
+                &left,
+                Some(&content(b"same")),
+                &right,
+                Some(&content(b"same")),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Rpm,
+                    &left,
+                    Some(&content(b"same")),
+                    &right,
+                    Some(&content(b"diff")),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::ContentDigest
+        );
+    }
+
+    #[test]
+    fn rpm_symlink_compatibility_ignores_permissions_but_not_target_or_owner() {
+        let mut left = PayloadNode::regular(0o777);
+        left.kind = PayloadNodeKind::Symlink {
+            target: "target".to_string(),
+        };
+        left.mode = libc::S_IFLNK | 0o777;
+        let mut right = left.clone();
+        right.mode = libc::S_IFLNK | 0o000;
+        assert_eq!(
+            PayloadSharingPolicy::Rpm.compare(PayloadSharingPolicy::Rpm, &left, None, &right, None),
+            Ok(())
+        );
+        right.kind = PayloadNodeKind::Symlink {
+            target: "other".to_string(),
+        };
+        assert_eq!(
+            PayloadSharingPolicy::Rpm
+                .compare(PayloadSharingPolicy::Rpm, &left, None, &right, None)
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::SymlinkTarget
+        );
+    }
+
+    #[test]
+    fn exclusive_and_mixed_policies_never_create_shared_authority() {
+        let node = PayloadNode::regular(0o644);
+        let authority = content(b"same");
+        assert_eq!(
+            PayloadSharingPolicy::Exclusive
+                .compare(
+                    PayloadSharingPolicy::Exclusive,
+                    &node,
+                    Some(&authority),
+                    &node,
+                    Some(&authority),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::Exclusive
+        );
+        assert!(matches!(
+            PayloadSharingPolicy::Rpm
+                .compare(
+                    PayloadSharingPolicy::Exclusive,
+                    &node,
+                    Some(&authority),
+                    &node,
+                    Some(&authority),
+                )
+                .unwrap_err(),
+            PayloadCompatibilityMismatch::Policy { .. }
+        ));
     }
 }

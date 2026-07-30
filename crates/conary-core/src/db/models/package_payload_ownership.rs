@@ -1,20 +1,20 @@
 // conary-core/src/db/models/package_payload_ownership.rs
 //! Claim-aware installed package payload projection.
 
-use super::{DirectoryClaim, FileEntry, Trove};
+use super::{FileEntry, PayloadClaim, PayloadClaimAnchorPolicy, Trove};
 use crate::error::{Error, Result};
 use crate::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 use rusqlite::Connection;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
-use std::collections::{BTreeMap, BTreeSet};
 
 /// One installed trove's exact package-owned payload.
 ///
 /// `files` stores one materialized anchor per path, while
-/// `directory_claims` stores every package's independent directory node.
-/// Package-facing consumers must use this projection so a non-anchor
-/// directory never disappears from query, runtime, SBOM, derivation, or
-/// lifecycle behavior.
+/// `payload_claims` stores every package's independent payload declaration.
+/// Package-facing consumers must use this projection so a non-anchor owner
+/// never disappears from query, runtime, SBOM, derivation, or lifecycle
+/// behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackagePayloadOwnership {
     entries: Vec<PackagePayloadEntry>,
@@ -110,77 +110,45 @@ impl PackagePayloadOwnership {
     }
 
     pub fn load(conn: &Connection, trove_id: i64) -> Result<Self> {
-        let files = FileEntry::find_by_trove(conn, trove_id)?;
-        let claims = DirectoryClaim::find_by_trove(conn, trove_id)?;
-        let claims_by_path = claims
-            .iter()
-            .map(|claim| (claim.path.as_str(), claim))
-            .collect::<BTreeMap<_, _>>();
-
-        let mut entries = Vec::with_capacity(files.len() + claims.len());
+        let claims = PayloadClaim::find_by_trove(conn, trove_id)?;
+        let mut entries = Vec::with_capacity(claims.len());
         let mut included_paths = BTreeSet::new();
         let mut materialized_removal_paths = BTreeSet::new();
-
-        for file in files {
-            let path_retainers = DirectoryClaim::find_retaining_path(conn, &file.path)?;
-            if let Some(claim) = claims_by_path.get(file.path.as_str()) {
-                if !claim.anchor_policy.accepts(&file.node.source.kind) {
-                    return Err(Error::ConfigError(format!(
-                        "materialized node {} violates trove {trove_id} claim anchor policy '{}'",
-                        file.path,
-                        claim.anchor_policy.as_str()
-                    )));
-                }
-                continue;
-            }
-            if matches!(file.node.source.kind, PayloadNodeKind::Directory) {
-                let retained_by_package_target = claims.iter().any(|claim| {
-                    claim.materialization_target_path.as_deref() == Some(file.path.as_str())
-                });
-                if !retained_by_package_target {
-                    return Err(Error::ConfigError(format!(
-                        "materialized directory {} owned by trove {trove_id} has no exact package claim or materialization-target authority",
-                        file.path
-                    )));
-                }
-                if path_retainers
-                    .iter()
-                    .all(|claim| claim.trove_id == trove_id)
-                {
-                    materialized_removal_paths.insert(file.path);
-                }
-                continue;
-            }
-            if path_retainers.is_empty() {
-                materialized_removal_paths.insert(file.path.clone());
-            }
-            included_paths.insert(file.path.clone());
-            entries.push(PackagePayloadEntry {
-                path: file.path,
-                node: file.node,
-                content: file.content,
-                trove_id: file.trove_id,
-                installed_at: file.installed_at,
-                component_id: file.component_id,
-                materialized_file_id: file.id,
-            });
-        }
 
         for claim in claims {
             let anchor = FileEntry::find_by_path(conn, &claim.path)?.ok_or_else(|| {
                 Error::ConfigError(format!(
-                    "directory claim {} for trove {trove_id} has no materialized anchor",
+                    "payload claim {} for trove {trove_id} has no materialized anchor",
                     claim.path
                 ))
             })?;
-            if !claim.anchor_policy.accepts(&anchor.node.source.kind) {
+            if !claim.anchor_policy.accepts_kind(&anchor.node.source.kind) {
                 return Err(Error::ConfigError(format!(
-                    "directory claim {} for trove {trove_id} violates anchor policy '{}'",
+                    "payload claim {} for trove {trove_id} violates anchor policy '{}'",
                     claim.path,
                     claim.anchor_policy.as_str()
                 )));
             }
-            if DirectoryClaim::find_retaining_path(conn, &claim.path)?
+            if claim.anchor_policy == PayloadClaimAnchorPolicy::Exact
+                && (claim.node != anchor.node || claim.content != anchor.content)
+            {
+                claim
+                    .sharing_policy
+                    .compare(
+                        claim.sharing_policy,
+                        &claim.node.source,
+                        claim.content.as_ref(),
+                        &anchor.node.source,
+                        anchor.content.as_ref(),
+                    )
+                    .map_err(|mismatch| {
+                        Error::ConfigError(format!(
+                            "payload claim {} for trove {trove_id} is incompatible with its materialized anchor: {mismatch}",
+                            claim.path
+                        ))
+                    })?;
+            }
+            if PayloadClaim::find_retaining_path(conn, &claim.path)?
                 .iter()
                 .all(|retainer| retainer.trove_id == trove_id)
                 && anchor.trove_id == trove_id
@@ -190,13 +158,13 @@ impl PackagePayloadOwnership {
             if let Some(target_path) = claim.materialization_target_path.as_deref() {
                 let target = FileEntry::find_by_path(conn, target_path)?.ok_or_else(|| {
                     Error::ConfigError(format!(
-                        "directory claim {} for trove {trove_id} has no materialization target {}",
+                        "payload claim {} for trove {trove_id} has no materialization target {}",
                         claim.path, target_path
                     ))
                 })?;
                 if !matches!(target.node.source.kind, PayloadNodeKind::Directory) {
                     return Err(Error::ConfigError(format!(
-                        "directory claim {} for trove {trove_id} materialization target {} is not a directory",
+                        "payload claim {} for trove {trove_id} materialization target {} is not a directory",
                         claim.path, target_path
                     )));
                 }
@@ -205,12 +173,28 @@ impl PackagePayloadOwnership {
             entries.push(PackagePayloadEntry {
                 path: claim.path,
                 node: claim.node,
-                content: None,
+                content: claim.content,
                 trove_id: claim.trove_id,
                 installed_at: claim.claimed_at,
                 component_id: claim.component_id,
                 materialized_file_id: anchor.id,
             });
+        }
+
+        for anchor in FileEntry::find_by_trove(conn, trove_id)? {
+            let retainers = PayloadClaim::find_retaining_path(conn, &anchor.path)?;
+            if retainers.is_empty() {
+                return Err(Error::ConfigError(format!(
+                    "materialized payload {} owned by trove {trove_id} has no package claim",
+                    anchor.path
+                )));
+            }
+            if retainers
+                .iter()
+                .all(|retainer| retainer.trove_id == trove_id)
+            {
+                materialized_removal_paths.insert(anchor.path);
+            }
         }
 
         entries.sort_by(|left, right| left.path.cmp(&right.path));
