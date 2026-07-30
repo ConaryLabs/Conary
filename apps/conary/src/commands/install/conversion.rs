@@ -24,7 +24,7 @@ use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
-use conary_core::resolver::SatPackage;
+use conary_core::resolver::{SatPackage, SatSource};
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
 use std::path::Path;
@@ -65,6 +65,98 @@ impl PendingCcsProvider {
             && self.architecture == selected.architecture
             && self.version_scheme == selected.version_scheme
     }
+}
+
+fn validate_selected_repository_ccs_identity(
+    ccs_pkg: &CcsPackage,
+    selected: &SatPackage,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+) -> Result<()> {
+    if selected.source != SatSource::Repository {
+        anyhow::bail!(
+            "verified CCS dependency '{}' was not selected from a repository row",
+            selected.name
+        );
+    }
+    let selected_row_id = selected.repo_package_id.with_context(|| {
+        format!(
+            "SAT-selected CCS dependency '{}-{}' has no repository package row",
+            selected.name, selected.version
+        )
+    })?;
+    let selected_repository_id = selected.repository_id.with_context(|| {
+        format!(
+            "SAT-selected CCS dependency '{}-{}' has no repository identity",
+            selected.name, selected.version
+        )
+    })?;
+    let provenance = repository_provenance.with_context(|| {
+        format!(
+            "verified CCS dependency '{}-{}' has no repository provenance",
+            selected.name, selected.version
+        )
+    })?;
+
+    let mut mismatches = Vec::new();
+    if provenance.repository_id != selected_repository_id {
+        mismatches.push(format!(
+            "repository {} != {}",
+            provenance.repository_id, selected_repository_id
+        ));
+    }
+    if ccs_pkg.name() != selected.name {
+        mismatches.push(format!("name '{}' != '{}'", ccs_pkg.name(), selected.name));
+    }
+    if ccs_pkg.version() != selected.version {
+        mismatches.push(format!(
+            "version '{}' != '{}'",
+            ccs_pkg.version(),
+            selected.version
+        ));
+    }
+    if ccs_pkg.architecture() != selected.architecture.as_deref() {
+        mismatches.push(format!(
+            "architecture {:?} != {:?}",
+            ccs_pkg.architecture(),
+            selected.architecture
+        ));
+    }
+    if ccs_pkg.version_scheme() != selected.version_scheme {
+        mismatches.push(format!(
+            "version scheme '{}' != '{}'",
+            ccs_pkg.version_scheme().as_str(),
+            selected.version_scheme.as_str()
+        ));
+    }
+    if provenance.version_scheme != selected.version_scheme {
+        mismatches.push(format!(
+            "provenance version scheme '{}' != '{}'",
+            provenance.version_scheme.as_str(),
+            selected.version_scheme.as_str()
+        ));
+    }
+    // Remi repository rows carry the exact source-native EVR in `version`,
+    // while the signed CCS `release` is the conversion build release. Static
+    // CCS rows that explicitly publish a release must still match it.
+    if let Some(selected_release) = selected.package_release.as_deref()
+        && ccs_pkg.package_release() != Some(selected_release)
+    {
+        mismatches.push(format!(
+            "package release {:?} != {:?}",
+            ccs_pkg.package_release(),
+            selected.package_release
+        ));
+    }
+
+    if !mismatches.is_empty() {
+        anyhow::bail!(
+            "verified CCS dependency identity does not match SAT-selected repository row {}: {}",
+            selected_row_id,
+            mismatches.join(", ")
+        );
+    }
+
+    Ok(())
 }
 
 /// Result of attempting CCS conversion
@@ -285,13 +377,14 @@ pub async fn try_convert_to_ccs(
 ///
 /// The artifact may be Conary-native or converted from another package format.
 pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result<Option<i64>> {
-    install_ccs_artifact_with_pending(opts, Vec::new(), false).await
+    install_ccs_artifact_with_pending(opts, Vec::new(), false, None).await
 }
 
 async fn install_ccs_artifact_with_pending(
     opts: CcsArtifactInstallOptions<'_>,
     pending_providers: Vec<PendingCcsProvider>,
     defer_generation: bool,
+    expected_repository_package: Option<&SatPackage>,
 ) -> Result<Option<i64>> {
     let CcsArtifactInstallOptions {
         ccs_path,
@@ -318,6 +411,13 @@ async fn install_ccs_artifact_with_pending(
 
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
         .context("Failed to construct verified CCS package")?;
+    if let Some(expected) = expected_repository_package {
+        validate_selected_repository_ccs_identity(
+            &ccs_pkg,
+            expected,
+            repository_provenance.as_ref(),
+        )?;
+    }
     crate::commands::ccs::validate_ccs_capability_declaration(&ccs_pkg)?;
 
     if !no_deps {
@@ -446,6 +546,15 @@ async fn install_ccs_artifact_with_pending(
                                             "CCS dependency {dep_name} is missing exact repository provenance"
                                         )
                                     })?;
+                                let expected_dependency = dep_plan
+                                    .to_install
+                                    .iter()
+                                    .find(|dependency| dependency.package.name == *dep_name)
+                                    .with_context(|| {
+                                        format!(
+                                            "downloaded CCS dependency {dep_name} has no SAT-selected identity"
+                                        )
+                                    })?;
                                 let install_result = Box::pin(install_ccs_artifact_with_pending(
                                     CcsArtifactInstallOptions {
                                         ccs_path: dep_ccs_path,
@@ -464,6 +573,7 @@ async fn install_ccs_artifact_with_pending(
                                     },
                                     child_pending_providers,
                                     true,
+                                    Some(&expected_dependency.package),
                                 ))
                                 .await;
                                 install_result.with_context(|| {
