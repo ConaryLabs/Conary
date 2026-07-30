@@ -323,6 +323,81 @@ mod tests {
     }
 
     #[test]
+    fn embedded_lua_file_read_uses_the_pinned_selector_grammar() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::write(root.path().join("values"), b"42\nsecond\n").expect("fixture values");
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"
+                local function read(format)
+                    local file = assert(io.open("/values", "r"))
+                    local value = file:read(format)
+                    file:close()
+                    return value
+                end
+
+                assert(read("*number") == 42)
+                assert(read("*line") == "42")
+                assert(read("*Line") == "42\n")
+                assert(read("*all") == "42\nsecond\n")
+                assert(read("all-compatible-suffix") == "42\nsecond\n")
+
+                local ok, message = pcall(read, "*unknown")
+                assert(ok == false)
+                assert(string.find(tostring(message),
+                    "invalid file read format '*unknown'", 1, true))
+            "#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("pinned file:read selector grammar");
+    }
+
+    #[test]
+    fn embedded_lua_runs_the_fedora_bash_shell_registration_body() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir(root.path().join("etc")).expect("etc directory");
+        std::fs::write(root.path().join("etc/shells"), b"/bin/sh\n").expect("shell registry");
+        let executor =
+            ScriptletExecutor::new(root.path(), "bash", "5.3.9-3.fc44", PackageFormat::Rpm);
+        let body = r#"
+            nl='\n'
+            sh='/bin/sh'..nl
+            bash='/bin/bash'..nl
+            f=io.open('/etc/shells','a+')
+            if f then
+              local shells=nl..f:read('*all')..nl
+              if not shells:find(nl..sh) then f:write(sh) end
+              if not shells:find(nl..bash) then f:write(bash) end
+              f:close()
+            end
+        "#;
+
+        for _ in 0..2 {
+            execute_embedded_lua(
+                &executor,
+                "post-install",
+                body,
+                &["1".to_string()],
+                &[],
+                &runtime(),
+                Duration::from_secs(5),
+            )
+            .expect("Fedora Bash post-install body");
+        }
+
+        assert_eq!(
+            std::fs::read(root.path().join("etc/shells")).expect("updated shell registry"),
+            b"/bin/sh\n/bin/bash\n"
+        );
+    }
+
+    #[test]
     fn embedded_lua_leaf_sensitive_filesystem_calls_preserve_symlink_entries() {
         let root = tempfile::tempdir().expect("target root");
         std::fs::create_dir_all(root.path().join("usr/bin")).expect("usr bin");

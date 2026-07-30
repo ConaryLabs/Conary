@@ -845,6 +845,16 @@ interpreters such as `<lua>`. Those are executable ABI semantics. A plain
 process executor cannot run such an entry; the corresponding RPM expansion or
 embedded-interpreter contract is required Conary implementation.
 
+The persisted effective critical flag owns RPM script-result handling. Matching
+the pinned RPM
+[`runScript()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/transaction.cc#L1709-L1762),
+a failed non-critical script is reported but does not fail its transaction
+element, while a critical script failure remains fatal. Conary applies that
+source policy only to a program exit or timeout after exact preflight and the
+selected-root enforcement boundary have succeeded. Missing interpreters,
+malformed contracts, process or sandbox setup failures, and enforcement
+failures remain fatal; RPM criticality is not a security-boundary bypass.
+
 ### RPM Runtime Compatibility
 
 Conary persists the typed package-header facts, transaction-derived installed
@@ -913,6 +923,13 @@ filesystem calls (`lstat`, `readlink`, removal, rename, and link creation)
 resolve selected-root aliases only in the parent path and retain the exact
 final directory entry; APIs whose source syscall follows the leaf retain full
 dereferencing.
+
+Target-confined `io` file reads preserve the pinned Lua
+[`g_read()`](https://github.com/lua/lua/blob/v5.4.8/liolib.c#L534-L581)
+format grammar: an optional leading `*` is skipped and the first remaining
+format character selects number, line, line-with-newline, or read-all
+behavior. This includes compatible spellings such as `*all`; Conary does not
+replace the upstream grammar with a curated spelling list.
 
 ### RPM Upgrade Order
 

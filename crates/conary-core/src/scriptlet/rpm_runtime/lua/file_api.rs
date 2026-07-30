@@ -100,15 +100,24 @@ impl LuaFile {
             Value::Nil if self.rpm_default_read_all => self.read_all(lua),
             Value::Nil => self.read_line(lua, false),
             Value::Integer(size) if size >= 0 => self.read_count(lua, size as usize),
-            Value::String(format) => match format.to_str()?.as_ref() {
-                "*a" | "a" => self.read_all(lua),
-                "*l" | "l" => self.read_line(lua, false),
-                "*L" | "L" => self.read_line(lua, true),
-                "*n" | "n" => self.read_number(lua),
-                format => Err(mlua::Error::runtime(format!(
-                    "invalid file read format '{format}'"
-                ))),
-            },
+            Value::String(format) => {
+                let format = format.to_str()?;
+                let format = format.as_ref();
+                let selector = format
+                    .strip_prefix('*')
+                    .unwrap_or(format)
+                    .as_bytes()
+                    .first();
+                match selector {
+                    Some(b'a') => self.read_all(lua),
+                    Some(b'l') => self.read_line(lua, false),
+                    Some(b'L') => self.read_line(lua, true),
+                    Some(b'n') => self.read_number(lua),
+                    _ => Err(mlua::Error::runtime(format!(
+                        "invalid file read format '{format}'"
+                    ))),
+                }
+            }
             value => Err(mlua::Error::runtime(format!(
                 "invalid file read argument {}",
                 value.type_name()

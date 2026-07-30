@@ -27,6 +27,8 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 mod arch;
 #[path = "tests/deconfiguration.rs"]
 mod deconfiguration;
+#[path = "tests/rpm_warning.rs"]
+mod rpm_warning;
 
 fn pre_remove_bundle(package_name: &str, version: &str) -> NativeLifecycleBundle {
     let body = "exit 0\n".to_string();

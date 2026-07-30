@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-26
-revision: 23
+last_updated: 2026-07-30
+revision: 24
 summary: Define exact source-ABI lifecycle authority, selected-root execution, and generation-scoped activation
 ---
 
@@ -30,9 +30,15 @@ This document owns the execution and security boundary around those contracts.
    `exec`.
 6. A missing interpreter, helper, namespace, privilege, syscall filter, exact
    semantic, or persisted-state contract fails the transaction. There is no
-   direct-host, warning-only, skip-script, or permissive sandbox path.
+   direct-host, skip-script, or permissive sandbox path. RPM's source-declared
+   warning-only policy applies only to a script execution failure after this
+   boundary is established; it cannot suppress preflight, contract, or
+   enforcement failures.
 7. Successful lifecycle work and its package/database state commit together.
-   Failure rolls back the isolated selected root and SQLite transaction.
+   A fatal failure rolls back the isolated selected root and SQLite
+   transaction. A source-declared non-critical RPM script execution failure
+   retains its already-applied selected-root effects, emits a warning, and
+   continues exactly as the RPM transaction ABI requires.
 8. Runtime service-manager and security-policy actions are generation work.
    They are captured as exact typed intents and are not sent to the currently
    running host during package installation.
@@ -162,22 +168,30 @@ replayed into later generations.
 
 The typed transaction graph owns failure behavior:
 
-- RPM stage order, instance counts, triggers, embedded Lua, and macro expansion
-  follow RPM's documented ABI.
+- RPM stage order, instance counts, triggers, embedded Lua, macro expansion,
+  and the persisted critical flag follow RPM's documented ABI. A non-critical
+  RPM program exit or timeout is diagnosed and the graph continues; a critical
+  RPM failure aborts.
 - Debian maintainer scripts, trigger state, conffiles, alternatives, dpkg
   compatibility projection, deconfiguration, and error-unwind edges follow
   dpkg's documented ABI.
 - Arch `.INSTALL` functions, ALPM hook ordering, stdin/argv, and implicit
   transaction finalizers follow libalpm's documented ABI.
 
-An upstream ABI may intentionally ignore a particular helper result; for
-example, libalpm ignores its implicit `ldconfig` return value. That behavior is
-encoded in the typed source-format adapter. It is not a generic warning policy
-and cannot be selected by message text or a flag.
+An upstream ABI may intentionally ignore or downgrade a particular result. For
+example, libalpm ignores its implicit `ldconfig` return value, while RPM maps a
+non-critical script result to transaction-element success and still reports
+the script error. That behavior is encoded in the typed source-format adapter.
+It is not a generic operator warning policy and cannot be selected by message
+text, package name, or command-line bypass.
 
-Every other lifecycle failure aborts the transaction. Conary has no
-`post_hooks_failed` changeset state and does not record a failed authoritative
-hook as a successful install with a warning.
+RPM warning-only handling is limited to `ScriptExited` and `ScriptTimedOut`
+after successful typed preflight. A malformed lifecycle contract, unavailable
+program, process or sandbox setup failure, or enforcement failure remains
+fatal regardless of RPM criticality. Every other lifecycle failure aborts the
+transaction. Conary has no generic `post_hooks_failed` bypass state; a
+source-declared non-critical RPM event completes its graph boundary with an
+explicit warning.
 
 ## Signed CCS Hooks
 
