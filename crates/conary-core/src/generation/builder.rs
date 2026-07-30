@@ -26,6 +26,7 @@ pub use create::{
     build_generation_from_captured_root_with_boot_root_and_activation, build_generation_from_db,
     build_generation_from_db_with_activation, build_generation_from_db_with_boot_root,
     build_generation_from_db_with_boot_root_and_activation, materialize_selected_root_from_db,
+    materialize_selected_root_from_db_with_authority,
 };
 pub(crate) use rebuild::rebuild_generation_image;
 
