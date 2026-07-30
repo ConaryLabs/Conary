@@ -53,9 +53,19 @@ impl PendingCcsProvider {
     fn matches(&self, selected: &SatPackage) -> bool {
         self.name == selected.name
             && self.version == selected.version
-            && self.package_release == selected.package_release
+            && selected_ccs_release_matches(
+                self.package_release.as_deref(),
+                selected.package_release.as_deref(),
+            )
             && self.architecture == selected.architecture
             && self.version_scheme == selected.version_scheme
+    }
+}
+
+fn selected_ccs_release_matches(ccs_release: Option<&str>, selected_release: Option<&str>) -> bool {
+    match selected_release {
+        Some(selected_release) => ccs_release == Some(selected_release),
+        None => true,
     }
 }
 
@@ -130,9 +140,10 @@ fn validate_selected_repository_ccs_identity(
     // Remi repository rows carry the exact source-native EVR in `version`,
     // while the signed CCS `release` is the conversion build release. Static
     // CCS rows that explicitly publish a release must still match it.
-    if let Some(selected_release) = selected.package_release.as_deref()
-        && ccs_pkg.package_release() != Some(selected_release)
-    {
+    if !selected_ccs_release_matches(
+        ccs_pkg.package_release(),
+        selected.package_release.as_deref(),
+    ) {
         mismatches.push(format!(
             "package release {:?} != {:?}",
             ccs_pkg.package_release(),

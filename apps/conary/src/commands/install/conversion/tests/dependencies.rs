@@ -174,6 +174,36 @@ fn verified_remi_ccs_matches_exact_selected_source_identity() {
 }
 
 #[test]
+fn pending_remi_root_matches_selected_source_identity_without_ccs_release() {
+    let package = verified_rpm_ccs("dbus-broker", "37-8.fc44", "x86_64");
+    let selected = selected_rpm_dependency();
+
+    assert!(
+        PendingCcsProvider::from_package(&package).matches(&selected),
+        "the pending root must provide its own source identity when the Remi row omits the CCS build release"
+    );
+}
+
+#[test]
+fn pending_static_root_release_stays_exact() {
+    let package = verified_rpm_ccs("dbus-broker", "37-8.fc44", "x86_64");
+    let pending = PendingCcsProvider::from_package(&package);
+    let mut selected = selected_rpm_dependency();
+
+    selected.package_release = package.package_release().map(str::to_string);
+    assert!(
+        pending.matches(&selected),
+        "an explicitly selected matching CCS release must identify the pending root"
+    );
+
+    selected.package_release = Some("2".to_string());
+    assert!(
+        !pending.matches(&selected),
+        "an explicitly selected mismatched CCS release must not identify the pending root"
+    );
+}
+
+#[test]
 fn verified_remi_ccs_rejects_any_selected_identity_drift() {
     let package = verified_rpm_ccs("dbus-broker", "37-8.fc44", "x86_64");
     let provenance = selected_remi_provenance();
