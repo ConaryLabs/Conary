@@ -212,13 +212,49 @@ pub(crate) fn decode_rpm_requirement(
         rpm_relation_text(name, canonical_version, flags)?
     };
     let group = crate::repository::requirement::parse_native_requirement(
-        RepositoryRequirementKind::Depends,
+        rpm_requirement_kind(flags),
         VersionScheme::Rpm,
         &native_text,
     )
     .map_err(Error::ParseError)?;
     crate::repository::rpm_runtime::simplify_runtime_requirement_group(group, VersionScheme::Rpm)
         .map_err(|error| Error::ParseError(error.to_string()))
+}
+
+/// Project RPM's install-order relation into the shared typed requirement
+/// model.
+///
+/// This mirrors the pinned RPM transaction sorter: `%pre` and `%post`
+/// dependencies are strong install edges, while legacy `Prereq` records are
+/// mapped to `%pre`. Transaction script, erase, verification, runtime-feature,
+/// and meta dependencies do not create strong install edges.
+fn rpm_requirement_kind(flags: DependencyFlags) -> RepositoryRequirementKind {
+    let non_legacy_context = DependencyFlags::POSTTRANS
+        | DependencyFlags::PRETRANS
+        | DependencyFlags::INTERP
+        | DependencyFlags::SCRIPT_PRE
+        | DependencyFlags::SCRIPT_POST
+        | DependencyFlags::SCRIPT_PREUN
+        | DependencyFlags::SCRIPT_POSTUN
+        | DependencyFlags::SCRIPT_VERIFY
+        | DependencyFlags::FIND_REQUIRES
+        | DependencyFlags::RPMLIB
+        | DependencyFlags::KEYRING
+        | DependencyFlags::PREUNTRANS
+        | DependencyFlags::POSTUNTRANS
+        | DependencyFlags::META
+        | DependencyFlags::MISSINGOK;
+    let legacy_prerequisite =
+        flags.intersects(DependencyFlags::PREREQ) && !flags.intersects(non_legacy_context);
+    let ordered_install_script = flags
+        .intersects(DependencyFlags::SCRIPT_PRE | DependencyFlags::SCRIPT_POST)
+        && !flags.intersects(DependencyFlags::MISSINGOK);
+
+    if legacy_prerequisite || ordered_install_script {
+        RepositoryRequirementKind::PreDepends
+    } else {
+        RepositoryRequirementKind::Depends
+    }
 }
 
 /// Canonicalize RPM's source-defined empty serialized epoch to omitted epoch
