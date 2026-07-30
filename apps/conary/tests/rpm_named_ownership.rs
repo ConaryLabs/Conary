@@ -15,6 +15,8 @@ use std::process::{Command, Output};
 
 const PACKAGE_NAME: &str = "named-owner-fixture";
 const PACKAGE_PATH: &str = "/usr/lib/named-owner-fixture/payload";
+const ROOT_PACKAGE_NAME: &str = "root-owner-fixture";
+const ROOT_PACKAGE_PATH: &str = "/usr/lib/root-owner-fixture/payload";
 const USER_NAME: &str = "conary-fixture-user";
 const GROUP_NAME: &str = "conary-fixture-group";
 
@@ -26,9 +28,15 @@ fn output_text(output: &Output) -> String {
     )
 }
 
-fn write_named_owner_rpm(directory: &Path) -> std::path::PathBuf {
+fn write_owned_rpm(
+    directory: &Path,
+    package_name: &str,
+    package_path: &str,
+    user: &str,
+    group: &str,
+) -> std::path::PathBuf {
     let mut builder = rpm::PackageBuilder::new(
-        PACKAGE_NAME,
+        package_name,
         "1.0.0",
         "MIT",
         std::env::consts::ARCH,
@@ -37,14 +45,14 @@ fn write_named_owner_rpm(directory: &Path) -> std::path::PathBuf {
     builder
         .with_file_contents(
             b"named owner payload\n".to_vec(),
-            rpm::FileOptions::new(PACKAGE_PATH)
+            rpm::FileOptions::new(package_path)
                 .permissions(0o640)
-                .user(USER_NAME)
-                .group(GROUP_NAME),
+                .user(user)
+                .group(group),
         )
         .unwrap();
     let package = builder.build().unwrap();
-    let path = directory.join("named-owner-fixture.rpm");
+    let path = directory.join(format!("{package_name}.rpm"));
     package.write_file(&path).unwrap();
     path
 }
@@ -88,7 +96,7 @@ fn regular_entry(
     )
 }
 
-fn seed_selected_root(db_path: &Path, uid: u32, gid: u32) {
+fn seed_selected_root(db_path: &Path, named_account: Option<(u32, u32)>) {
     let runtime_root = ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
     stage_test_boot_assets(runtime_root.root());
     let conn = conary_core::db::open(db_path).unwrap();
@@ -109,27 +117,29 @@ fn seed_selected_root(db_path: &Path, uid: u32, gid: u32) {
     ] {
         directory_entry(path, base_id).insert(&conn).unwrap();
     }
-    regular_entry(
-        &runtime_root,
-        "/etc/passwd",
-        format!(
-            "root:x:0:0:root:/root:/bin/sh\n{USER_NAME}:x:{uid}:{gid}:fixture:/:/sbin/nologin\n"
+    if let Some((uid, gid)) = named_account {
+        regular_entry(
+            &runtime_root,
+            "/etc/passwd",
+            format!(
+                "root:x:0:0:root:/root:/bin/sh\n{USER_NAME}:x:{uid}:{gid}:fixture:/:/sbin/nologin\n"
+            )
+            .as_bytes(),
+            0o644,
+            base_id,
         )
-        .as_bytes(),
-        0o644,
-        base_id,
-    )
-    .insert(&conn)
-    .unwrap();
-    regular_entry(
-        &runtime_root,
-        "/etc/group",
-        format!("root:x:0:\n{GROUP_NAME}:x:{gid}:\n").as_bytes(),
-        0o644,
-        base_id,
-    )
-    .insert(&conn)
-    .unwrap();
+        .insert(&conn)
+        .unwrap();
+        regular_entry(
+            &runtime_root,
+            "/etc/group",
+            format!("root:x:0:\n{GROUP_NAME}:x:{gid}:\n").as_bytes(),
+            0o644,
+            base_id,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
     regular_entry(
         &runtime_root,
         "/sbin/init",
@@ -190,9 +200,15 @@ fn rpm_install_resolves_named_ownership_from_selected_target_root() {
     let uid = unsafe { libc::geteuid() };
     let gid = unsafe { libc::getegid() };
     conary_core::db::init(&db_path).unwrap();
-    seed_selected_root(&db_path, uid, gid);
+    seed_selected_root(&db_path, Some((uid, gid)));
 
-    let rpm_path = write_named_owner_rpm(temp.path());
+    let rpm_path = write_owned_rpm(
+        temp.path(),
+        PACKAGE_NAME,
+        PACKAGE_PATH,
+        USER_NAME,
+        GROUP_NAME,
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .args([
@@ -258,5 +274,46 @@ fn rpm_install_resolves_named_ownership_from_selected_target_root() {
             .retrieve(&content.sha256)
             .unwrap(),
         b"named owner payload\n"
+    );
+}
+
+#[test]
+fn rpm_root_ownership_dry_run_does_not_require_account_databases() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    seed_selected_root(&db_path, None);
+
+    let rpm_path = write_owned_rpm(
+        temp.path(),
+        ROOT_PACKAGE_NAME,
+        ROOT_PACKAGE_PATH,
+        "root",
+        "root",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
+        .args([
+            "install",
+            rpm_path.to_str().unwrap(),
+            "--db-path",
+            db_path.to_str().unwrap(),
+            "--root",
+            root.to_str().unwrap(),
+            "--no-deps",
+            "--sandbox",
+            "always",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Dry run complete. No changes made."),
+        "{}",
+        output_text(&output)
     );
 }

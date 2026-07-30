@@ -90,7 +90,8 @@ pub fn install_inner(
         stored_files.len(),
         pkg.name()
     );
-    let resolved_files = resolve_stored_install_files(Path::new(ctx.root), &stored_files)?;
+    let resolved_files =
+        resolve_stored_install_files(Path::new(ctx.root), &stored_files, ctx.semantics)?;
     let directory_plan = preflight_resolved_file_ownership(
         tx,
         Path::new(ctx.root),
@@ -178,6 +179,7 @@ pub(super) fn store_extracted_files_in_cas(
 pub(super) fn resolve_stored_install_files(
     root: &Path,
     stored_files: &[StoredInstallFile],
+    semantics: InstallSemantics,
 ) -> Result<Vec<ResolvedInstallFile>> {
     let mut paths = HashSet::with_capacity(stored_files.len());
     for file in stored_files {
@@ -188,6 +190,7 @@ pub(super) fn resolve_stored_install_files(
     let resolved_nodes = super::payload_identity::resolve_payload_nodes(
         root,
         stored_files.iter().map(|file| file.node.clone()),
+        semantics,
     )?;
     Ok(stored_files
         .iter()
