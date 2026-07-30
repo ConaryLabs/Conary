@@ -917,7 +917,10 @@ fork/exec/wait APIs retain their upstream removal errors; the safe `debug`
 projection exposes introspection but cannot replace Conary's instruction
 deadline hook. `posix.stat` returns RPM's selected value or table on success
 and `(nil, path-qualified strerror, errno)` when target `lstat` fails, while a
-root-confinement violation remains fatal. All target paths use one
+root-confinement violation remains fatal. `posix.dir` and `posix.files`
+likewise return RPM's three-value error result when target `opendir` fails;
+successful calls return the bundled table or iterator contract, including `.`
+and `..`, and confinement failures remain fatal. All target paths use one
 symlink-aware root-confinement resolver. APIs backed by leaf-sensitive
 filesystem calls (`lstat`, `readlink`, removal, rename, and link creation)
 resolve selected-root aliases only in the parent path and retain the exact

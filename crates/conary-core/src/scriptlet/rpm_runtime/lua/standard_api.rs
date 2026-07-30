@@ -351,16 +351,28 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
     table.set(
         "dir",
         lua.create_function(move |lua, path: Option<String>| {
-            directory_table(lua, &dir_context, path.as_deref().unwrap_or("."))
+            let guest = path.as_deref().unwrap_or(".");
+            let entries = match directory_entries(&dir_context, guest)? {
+                Ok(entries) => entries,
+                Err(error) => return posix_path_error(lua, guest, error),
+            };
+            Ok(MultiValue::from_vec(vec![Value::Table(directory_table(
+                lua, entries,
+            )?)]))
         })?,
     )?;
     let files_context = context.clone();
     table.set(
         "files",
         lua.create_function(move |lua, path: Option<String>| {
-            let entries = directory_entries(&files_context, path.as_deref().unwrap_or("."))?;
+            let guest = path.as_deref().unwrap_or(".");
+            let entries = match directory_entries(&files_context, guest)? {
+                Ok(entries) => entries,
+                Err(error) => return posix_path_error(lua, guest, error),
+            };
             let entries = std::rc::Rc::new(std::cell::RefCell::new(entries.into_iter()));
-            lua.create_function(move |_, ()| Ok(entries.borrow_mut().next()))
+            let iterator = lua.create_function(move |_, ()| Ok(entries.borrow_mut().next()))?;
+            Ok(MultiValue::from_vec(vec![Value::Function(iterator)]))
         })?,
     )?;
     table.set("ctermid", lua.create_function(|_, ()| Ok("/dev/tty"))?)?;
@@ -690,27 +702,33 @@ fn install_posix_process(
     )
 }
 
-fn directory_table(lua: &Lua, context: &LuaRuntimeContext, guest: &str) -> mlua::Result<Table> {
+fn directory_table(lua: &Lua, entries: Vec<String>) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    for (index, entry) in directory_entries(context, guest)?.into_iter().enumerate() {
+    for (index, entry) in entries.into_iter().enumerate() {
         table.raw_set(index + 1, entry)?;
     }
     Ok(table)
 }
 
-fn directory_entries(context: &LuaRuntimeContext, guest: &str) -> mlua::Result<Vec<String>> {
+fn directory_entries(
+    context: &LuaRuntimeContext,
+    guest: &str,
+) -> mlua::Result<std::io::Result<Vec<String>>> {
     let path = context.resolve(guest).map_err(mlua::Error::external)?;
     let mut values = vec![".".to_string(), "..".to_string()];
-    for entry in std::fs::read_dir(path).map_err(mlua::Error::external)? {
-        values.push(
-            entry
-                .map_err(mlua::Error::external)?
-                .file_name()
-                .to_string_lossy()
-                .to_string(),
-        );
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) => return Ok(Err(error)),
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            // RPM's bundled lposix treats a failed readdir(3) exactly like
+            // end-of-directory; only opendir(3) exposes an error tuple.
+            break;
+        };
+        values.push(entry.file_name().to_string_lossy().to_string());
     }
-    Ok(values)
+    Ok(Ok(values))
 }
 
 fn posix_path_error(lua: &Lua, path: &str, error: std::io::Error) -> mlua::Result<MultiValue> {

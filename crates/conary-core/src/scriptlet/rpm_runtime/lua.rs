@@ -323,6 +323,66 @@ mod tests {
     }
 
     #[test]
+    fn embedded_lua_posix_directories_preserve_the_pinned_open_contract() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("present")).expect("present directory");
+        std::fs::write(root.path().join("present/entry"), b"value").expect("directory entry");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
+        let executor =
+            ScriptletExecutor::new(root.path(), "glibc", "2.43-2.fc44", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "pre-install",
+            r#"
+                local entries = assert(posix.dir("/present"))
+                local names = {}
+                for _, entry in ipairs(entries) do names[entry] = true end
+                assert(names["."] and names[".."] and names.entry)
+
+                local iter = assert(posix.files("/present"))
+                names = {}
+                for entry in iter do names[entry] = true end
+                assert(names["."] and names[".."] and names.entry)
+
+                local missing, message, errno =
+                    posix.files("/usr/lib64/glibc-hwcaps")
+                assert(missing == nil)
+                assert(message ==
+                    "/usr/lib64/glibc-hwcaps: No such file or directory")
+                assert(errno == 2)
+
+                local missing_dir, dir_message, dir_errno =
+                    posix.dir("/usr/lib64/glibc-hwcaps")
+                assert(missing_dir == nil)
+                assert(dir_message ==
+                    "/usr/lib64/glibc-hwcaps: No such file or directory")
+                assert(dir_errno == 2)
+
+                -- This is the exact optional-directory control-flow shape in
+                -- Fedora glibc's embedded-Lua pre-install body.
+                repeat
+                    local optional = posix.files("/usr/lib64/glibc-hwcaps")
+                    if optional ~= nil then
+                        for _ in optional do error("missing path was iterated") end
+                    end
+                until true
+
+                local confined, confinement_error =
+                    pcall(posix.files, "/loop/child")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
+            "#,
+            &["1".to_string()],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("pinned posix directory contract");
+    }
+
+    #[test]
     fn embedded_lua_file_read_uses_the_pinned_selector_grammar() {
         let root = tempfile::tempdir().expect("target root");
         std::fs::write(root.path().join("values"), b"42\nsecond\n").expect("fixture values");
