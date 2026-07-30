@@ -40,19 +40,31 @@ pub fn materialize_selected_root_from_db(
     objects_dir: &Path,
     selected_root: &Path,
 ) -> crate::Result<()> {
+    materialize_selected_root_from_db_with_authority(conn, objects_dir, selected_root).map(drop)
+}
+
+/// Bootstrap a writable selected root and return the exact typed authority
+/// used for materialization.
+///
+/// The returned manifests let staging callers retain metadata that the
+/// selected-root filesystem cannot represent without making package rows a
+/// second publication authority.
+pub fn materialize_selected_root_from_db_with_authority(
+    conn: &rusqlite::Connection,
+    objects_dir: &Path,
+    selected_root: &Path,
+) -> crate::Result<CapturedSelectedRoot> {
     let troves = Trove::list_all(conn)?;
     let all_files = FileEntry::find_all_ordered(conn)?;
     let runtime_inputs =
         runtime_inputs::collect_runtime_generation_inputs(conn, &troves, all_files, selected_root)?;
     let cas = CasStore::new(objects_dir)?;
-    materialize_captured_selected_root(
-        &CapturedSelectedRoot {
-            generation: runtime_inputs.generation,
-            state: runtime_inputs.state,
-        },
-        &cas,
-        selected_root,
-    )
+    let captured = CapturedSelectedRoot {
+        generation: runtime_inputs.generation,
+        state: runtime_inputs.state,
+    };
+    materialize_captured_selected_root(&captured, &cas, selected_root)?;
+    Ok(captured)
 }
 
 /// Build a complete generation from the current database state.
