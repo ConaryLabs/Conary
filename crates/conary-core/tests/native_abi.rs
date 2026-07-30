@@ -411,6 +411,34 @@ fn pinned_fedora_filesystem_root_anchor_parses_and_converts() {
     assert_conversion_preserves_native_entries(&package, &path, "rpm", "fedora-44");
 }
 
+/// Live source artifact for issue #203:
+/// https://kojipkgs.fedoraproject.org/packages/setup/2.15.0/28.fc44/noarch/setup-2.15.0-28.fc44.noarch.rpm
+///
+/// This package carries a valid many-to-many file dependency mapping. Keep the
+/// proof opt-in so ordinary tests remain hermetic while retaining the exact
+/// public artifact and digest that exposed the parser defect.
+#[test]
+#[ignore = "requires CONARY_RPM_SETUP_FIXTURE pointing to the pinned Fedora 44 setup RPM"]
+fn pinned_fedora_setup_many_file_provides_parse_and_convert() {
+    let path = PathBuf::from(
+        std::env::var("CONARY_RPM_SETUP_FIXTURE")
+            .expect("set CONARY_RPM_SETUP_FIXTURE to the pinned Fedora setup RPM"),
+    );
+    let bytes = fs::read(&path).expect("read pinned Fedora setup RPM");
+    assert_eq!(bytes.len(), 154_691);
+    assert_eq!(
+        conary_core::hash::sha256(&bytes),
+        "7a850ffbba5b3e8ca93fbfef25f7597bbfa87c8dfc8bc699f869cda85ee7440d"
+    );
+
+    let package = RpmPackage::parse(path.to_str().expect("UTF-8 fixture path"))
+        .expect("parse pinned Fedora setup RPM");
+
+    assert_eq!(package.name(), "setup");
+    assert_eq!(package.version(), "2.15.0-28.fc44");
+    assert_conversion_preserves_native_entries(&package, &path, "rpm", "fedora-44");
+}
+
 fn native_slots(package: &impl PackageFormat) -> BTreeSet<&str> {
     package
         .native_scriptlet_abi()

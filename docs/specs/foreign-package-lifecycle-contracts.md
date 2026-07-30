@@ -431,6 +431,21 @@ plan and report lifecycle without executing it because it performs no mutation;
 an applied transaction must execute the complete typed graph or fail before its
 first mutation.
 
+### Source Payload Identity
+
+RPM `FILEUSERNAME` and `FILEGROUPNAME` are source-format ownership authority.
+Before consulting the selected root's account databases, Conary applies pinned
+RPM's
+[`rpmugUid()` and `rpmugGid()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmug.cc#L164-L220)
+contract: the distinguished RPM `root` user and group resolve directly to
+numeric zero. Every other named RPM identity must resolve exactly once from
+that root's exact passwd or group records before mutation. Converted CCS
+retains this rule through its signed native RPM source semantics; author-native
+CCS and other source formats cannot acquire it from a matching name. Installed
+payload state records both the source identity and resolved numeric identity,
+so later generation, rollback, query, and verification paths never repeat or
+guess the resolution.
+
 ### Source Root Ownership Anchors
 
 The selected root is the transaction container and cannot also be a package

@@ -136,7 +136,7 @@ impl ConaryProvider<'_> {
     fn version_set_id(&self, atom: &SolverAtom) -> Option<VersionSetId> {
         let name = self.name_to_id.get(&atom.name)?;
         self.version_set_cache
-            .get(&(name.0, atom.constraint.clone()))
+            .get(&(name.into_raw(), atom.constraint.clone()))
             .copied()
     }
 

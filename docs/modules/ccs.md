@@ -157,12 +157,17 @@ consumers must not recover node kind from mode bits, path spelling, content
 length, or the presence of an unrelated field.
 
 RPM header arrays own installed metadata while the paired CPIO member owns
-bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain named source identities
-and are resolved from the selected target root's exact passwd and group
-records immediately before apply. Debian and Arch payloads retain the numeric
-uid and gid declared by their accepted tar grammars. Installed rows preserve
-both source identity and resolved numeric identity so later generation,
-rollback, query, and verification paths do not repeat or guess resolution.
+bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain source identities.
+Matching pinned RPM
+[`rpmugUid()` and `rpmugGid()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmug.cc#L164-L220),
+the distinguished RPM `root` user and group resolve directly to numeric zero
+before any account database exists. Every other named RPM identity is resolved
+exactly once from the selected target root's passwd or group records
+immediately before apply; author-native CCS does not inherit RPM's root rule.
+Debian and Arch payloads retain the numeric uid and gid declared by their
+accepted tar grammars. Installed rows preserve both source identity and
+resolved numeric identity so later generation, rollback, query, and
+verification paths do not repeat or guess resolution.
 Unknown names, conflicting header/payload facts, unsupported archive records,
 and missing content authority reject the package before filesystem mutation.
 For an RPM symlink, `FILELINKTOS` owns the target and the CPIO member must carry

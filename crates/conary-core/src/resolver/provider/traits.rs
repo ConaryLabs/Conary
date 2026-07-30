@@ -9,7 +9,7 @@
 use std::fmt;
 
 use resolvo::{
-    Candidates, Condition, ConditionId, Dependencies, DependencyProvider,
+    Candidates, Condition, ConditionId, DenseIndex, Dependencies, DependencyProvider,
     HintDependenciesAvailable, Interner, KnownDependencies, NameId, SolvableId, SolverCache,
     StringId, VersionSetId, VersionSetUnionId,
 };
@@ -57,8 +57,11 @@ impl fmt::Display for DisplayString<'_> {
 // --- Interner implementation ---
 
 impl Interner for ConaryProvider<'_> {
+    type NameId = NameId;
+    type SolvableId = SolvableId;
+
     fn display_solvable(&self, solvable: SolvableId) -> impl fmt::Display + '_ {
-        let pkg = &self.solvables[solvable.0 as usize];
+        let pkg = &self.solvables[solvable.to_index()];
         DisplaySolvable {
             name: &pkg.name,
             version: &pkg.version,
@@ -66,23 +69,23 @@ impl Interner for ConaryProvider<'_> {
     }
 
     fn display_name(&self, name: NameId) -> impl fmt::Display + '_ {
-        DisplayName(&self.names[name.0 as usize])
+        DisplayName(&self.names[name.to_index()])
     }
 
     fn display_version_set(&self, version_set: VersionSetId) -> impl fmt::Display + '_ {
-        DisplayVersionSet(&self.version_sets[version_set.0 as usize].1)
+        DisplayVersionSet(&self.version_sets[version_set.to_index()].1)
     }
 
     fn display_string(&self, string_id: StringId) -> impl fmt::Display + '_ {
-        DisplayString(&self.strings[string_id.0 as usize])
+        DisplayString(&self.strings[string_id.to_index()])
     }
 
     fn version_set_name(&self, version_set: VersionSetId) -> NameId {
-        self.version_sets[version_set.0 as usize].0
+        self.version_sets[version_set.to_index()].0
     }
 
     fn solvable_name(&self, solvable: SolvableId) -> NameId {
-        let pkg = &self.solvables[solvable.0 as usize];
+        let pkg = &self.solvables[solvable.to_index()];
         self.name_to_id[&pkg.name]
     }
 
@@ -91,7 +94,7 @@ impl Interner for ConaryProvider<'_> {
         version_set_union: VersionSetUnionId,
     ) -> impl Iterator<Item = VersionSetId> {
         self.version_set_unions
-            .get(version_set_union.0 as usize)
+            .get(version_set_union.to_index())
             .expect("resolvo requested a version-set union minted by this provider")
             .clone()
             .into_iter()
@@ -111,8 +114,8 @@ impl DependencyProvider for ConaryProvider<'_> {
         version_set: VersionSetId,
         inverse: bool,
     ) -> Vec<SolvableId> {
-        let (name_id, ref constraint) = self.version_sets[version_set.0 as usize];
-        let requested_name = &self.names[name_id.0 as usize];
+        let (name_id, ref constraint) = self.version_sets[version_set.to_index()];
+        let requested_name = &self.names[name_id.to_index()];
         let requested_kind = match constraint {
             ConaryConstraint::Repository {
                 capability_kind, ..
@@ -125,7 +128,7 @@ impl DependencyProvider for ConaryProvider<'_> {
             .iter()
             .copied()
             .filter(|&sid| {
-                let pkg = &self.solvables[sid.0 as usize];
+                let pkg = &self.solvables[sid.to_index()];
                 let matches = match constraint {
                     ConaryConstraint::RpmRuntime(_) => false,
                     ConaryConstraint::ProviderExpression { expression } => {
@@ -190,11 +193,11 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn get_candidates(&self, name: NameId) -> Option<Candidates> {
-        let name_str = &self.names[name.0 as usize];
+        let name_str = &self.names[name.to_index()];
         if name_str == "\0conary:false" {
             return None;
         }
-        if self.provider_expression_name_ids.contains(&name.0) {
+        if self.provider_expression_name_ids.contains(&name.into_raw()) {
             let candidates = self.solvable_ids.clone();
             return (!candidates.is_empty()).then_some(Candidates {
                 candidates,
@@ -202,6 +205,7 @@ impl DependencyProvider for ConaryProvider<'_> {
                 locked: None,
                 hint_dependencies_available: HintDependenciesAvailable::All,
                 excluded: Vec::new(),
+                allow_multiple: false,
             });
         }
         let mut candidates = self.solvables_for_name(name);
@@ -241,7 +245,7 @@ impl DependencyProvider for ConaryProvider<'_> {
         let locked = candidates
             .iter()
             .find(|&&sid| {
-                let pkg = &self.solvables[sid.0 as usize];
+                let pkg = &self.solvables[sid.to_index()];
                 pkg.name == *name_str && pkg.installed_pinned
             })
             .copied();
@@ -252,6 +256,7 @@ impl DependencyProvider for ConaryProvider<'_> {
             locked,
             hint_dependencies_available: HintDependenciesAvailable::All,
             excluded: Vec::new(),
+            allow_multiple: false,
         })
     }
 
@@ -261,11 +266,11 @@ impl DependencyProvider for ConaryProvider<'_> {
         // should sort after exact-name candidates.
         let primary_name = solvables
             .first()
-            .map(|s| self.solvables[s.0 as usize].name.as_str());
+            .map(|s| self.solvables[s.to_index()].name.as_str());
 
         solvables.sort_by(|a, b| {
-            let pkg_a = &self.solvables[a.0 as usize];
-            let pkg_b = &self.solvables[b.0 as usize];
+            let pkg_a = &self.solvables[a.to_index()];
+            let pkg_b = &self.solvables[b.to_index()];
 
             // Exact-name candidates sort before canonical fallbacks
             if let Some(primary) = primary_name {
@@ -308,7 +313,7 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn get_dependencies(&self, solvable: SolvableId) -> Dependencies {
-        match self.compiled_dependencies.get(&solvable.0) {
+        match self.compiled_dependencies.get(&solvable.into_raw()) {
             Some(requirements) => Dependencies::Known(KnownDependencies {
                 requirements: requirements.clone(),
                 constrains: Vec::new(),
