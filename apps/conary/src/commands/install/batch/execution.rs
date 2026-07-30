@@ -279,9 +279,9 @@ where
                 .stored_files_by_pkg
                 .get(change_index)
                 .context("batch payload has no stored-file input")?;
-            let resolved_files =
-                inner::resolve_stored_install_files(self.selected_root, stored_files)?;
             let semantics = InstallSemantics::native_package(package.format);
+            let resolved_files =
+                inner::resolve_stored_install_files(self.selected_root, stored_files, semantics)?;
             let directory_plan = inner::preflight_resolved_file_ownership(
                 self.tx,
                 self.selected_root,

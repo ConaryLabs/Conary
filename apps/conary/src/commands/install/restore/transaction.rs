@@ -732,8 +732,11 @@ impl NativeGraphPayloadMutation for RestoreInstallPayload<'_, '_> {
             .stored_files
             .get(change_index)
             .context("state-restore install payload has no stored files")?;
-        let resolved_files =
-            inner::resolve_stored_install_files(self.selected_root.selected_root(), stored_files)?;
+        let resolved_files = inner::resolve_stored_install_files(
+            self.selected_root.selected_root(),
+            stored_files,
+            prepared.semantics,
+        )?;
         let directory_plan = inner::preflight_resolved_file_ownership(
             self.tx,
             self.selected_root.selected_root(),

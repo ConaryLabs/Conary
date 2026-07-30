@@ -8,6 +8,7 @@
 //! only that root's account databases and rejects missing or ambiguous
 //! authority.
 
+use super::{InstallSemantics, PackageFormatType, PreparedSourceKind};
 use anyhow::{Context, Result, bail};
 use conary_core::payload::{PayloadIdentity, PayloadNode, ResolvedPayloadNode};
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,10 +20,11 @@ const MAX_IDENTITY_DATABASE_SIZE: u64 = 16 * 1024 * 1024;
 pub(super) fn resolve_payload_nodes(
     root: &Path,
     nodes: impl IntoIterator<Item = PayloadNode>,
+    semantics: InstallSemantics,
 ) -> Result<Vec<ResolvedPayloadNode>> {
     let nodes = nodes.into_iter().collect::<Vec<_>>();
-    let named_users = named_identities(nodes.iter().map(|node| &node.user));
-    let named_groups = named_identities(nodes.iter().map(|node| &node.group));
+    let named_users = named_identities(nodes.iter().map(|node| &node.user), semantics);
+    let named_groups = named_identities(nodes.iter().map(|node| &node.group), semantics);
 
     let users = if named_users.is_empty() {
         BTreeMap::new()
@@ -42,8 +44,8 @@ pub(super) fn resolve_payload_nodes(
         .into_iter()
         .map(|source| {
             source.validate()?;
-            let uid = resolve_identity(&source.user, &users, "user")?;
-            let gid = resolve_identity(&source.group, &groups, "group")?;
+            let uid = resolve_identity(&source.user, &users, "user", semantics)?;
+            let gid = resolve_identity(&source.group, &groups, "group", semantics)?;
             let resolved = ResolvedPayloadNode { source, uid, gid };
             resolved.validate()?;
             Ok(resolved)
@@ -53,14 +55,39 @@ pub(super) fn resolve_payload_nodes(
 
 fn named_identities<'a>(
     identities: impl IntoIterator<Item = &'a PayloadIdentity>,
+    semantics: InstallSemantics,
 ) -> BTreeSet<&'a str> {
     identities
         .into_iter()
         .filter_map(|identity| match identity {
-            PayloadIdentity::Named { name } => Some(name.as_str()),
+            PayloadIdentity::Named { name }
+                if source_defined_numeric_identity(identity, semantics).is_none() =>
+            {
+                Some(name.as_str())
+            }
             PayloadIdentity::Numeric { .. } => None,
+            PayloadIdentity::Named { .. } => None,
         })
         .collect()
+}
+
+/// RPM's pinned source ABI resolves its distinguished UID-0 user and GID-0
+/// group without consulting account databases. Converted RPM CCS packages
+/// retain `NativePackage { Rpm }` semantics, so this rule survives transport.
+fn source_defined_numeric_identity(
+    identity: &PayloadIdentity,
+    semantics: InstallSemantics,
+) -> Option<u64> {
+    let is_rpm = matches!(
+        semantics.source,
+        PreparedSourceKind::NativePackage {
+            format: PackageFormatType::Rpm
+        }
+    );
+    match identity {
+        PayloadIdentity::Named { name } if is_rpm && name == "root" => Some(0),
+        _ => None,
+    }
 }
 
 fn require_all_names(
@@ -88,7 +115,11 @@ fn resolve_identity(
     identity: &PayloadIdentity,
     names: &BTreeMap<String, u64>,
     kind: &str,
+    semantics: InstallSemantics,
 ) -> Result<u64> {
+    if let Some(id) = source_defined_numeric_identity(identity, semantics) {
+        return Ok(id);
+    }
     match identity {
         PayloadIdentity::Numeric { id } => Ok(*id),
         PayloadIdentity::Named { name } => names
@@ -246,6 +277,7 @@ fn parse_identity_records(text: &str, kind: IdentityDatabaseKind) -> Result<BTre
 mod tests {
     use super::*;
     use conary_core::payload::{PayloadIdentity, PayloadNode};
+    use conary_core::repository::versioning::VersionScheme;
 
     fn named_node(user: &str, group: &str) -> PayloadNode {
         let mut node = PayloadNode::regular(0o755);
@@ -256,6 +288,14 @@ mod tests {
             name: group.to_string(),
         };
         node
+    }
+
+    fn rpm_semantics() -> InstallSemantics {
+        InstallSemantics::native_package(PackageFormatType::Rpm)
+    }
+
+    fn conary_semantics() -> InstallSemantics {
+        InstallSemantics::ccs(VersionScheme::Conary)
     }
 
     #[test]
@@ -273,8 +313,12 @@ mod tests {
         )
         .unwrap();
 
-        let resolved =
-            resolve_payload_nodes(root.path(), [named_node("svc", "svc-group")]).unwrap();
+        let resolved = resolve_payload_nodes(
+            root.path(),
+            [named_node("svc", "svc-group")],
+            rpm_semantics(),
+        )
+        .unwrap();
 
         assert_eq!(resolved[0].uid, 417);
         assert_eq!(resolved[0].gid, 819);
@@ -293,7 +337,7 @@ mod tests {
         node.user = PayloadIdentity::Numeric { id: 123 };
         node.group = PayloadIdentity::Numeric { id: 456 };
 
-        let resolved = resolve_payload_nodes(root.path(), [node]).unwrap();
+        let resolved = resolve_payload_nodes(root.path(), [node], conary_semantics()).unwrap();
 
         assert_eq!(resolved[0].uid, 123);
         assert_eq!(resolved[0].gid, 456);
@@ -314,8 +358,12 @@ mod tests {
         )
         .unwrap();
 
-        let error =
-            resolve_payload_nodes(root.path(), [named_node("missing", "svc-group")]).unwrap_err();
+        let error = resolve_payload_nodes(
+            root.path(),
+            [named_node("missing", "svc-group")],
+            rpm_semantics(),
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("does not define payload user"));
     }
@@ -331,8 +379,12 @@ mod tests {
         .unwrap();
         fs::write(root.path().join("etc/group"), "svc-group:x:819:\n").unwrap();
 
-        let error =
-            resolve_payload_nodes(root.path(), [named_node("svc", "svc-group")]).unwrap_err();
+        let error = resolve_payload_nodes(
+            root.path(),
+            [named_node("svc", "svc-group")],
+            rpm_semantics(),
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("defined more than once"));
     }
@@ -344,9 +396,67 @@ mod tests {
         std::os::unix::fs::symlink("/etc/passwd", root.path().join("etc/passwd")).unwrap();
         fs::write(root.path().join("etc/group"), "svc-group:x:819:\n").unwrap();
 
-        let error =
-            resolve_payload_nodes(root.path(), [named_node("svc", "svc-group")]).unwrap_err();
+        let error = resolve_payload_nodes(
+            root.path(),
+            [named_node("svc", "svc-group")],
+            rpm_semantics(),
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[test]
+    fn rpm_distinguished_root_resolves_without_account_databases() {
+        let root = tempfile::tempdir().unwrap();
+
+        let resolved =
+            resolve_payload_nodes(root.path(), [named_node("root", "root")], rpm_semantics())
+                .unwrap();
+
+        assert_eq!(resolved[0].uid, 0);
+        assert_eq!(resolved[0].gid, 0);
+        assert_eq!(
+            resolved[0].source.user,
+            PayloadIdentity::Named {
+                name: "root".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn rpm_non_root_name_still_requires_target_account_database() {
+        let root = tempfile::tempdir().unwrap();
+
+        let error = resolve_payload_nodes(
+            root.path(),
+            [named_node("service", "root")],
+            rpm_semantics(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("target root has no /etc directory")
+        );
+    }
+
+    #[test]
+    fn non_rpm_named_root_does_not_inherit_rpm_uid_zero_semantics() {
+        let root = tempfile::tempdir().unwrap();
+
+        let error = resolve_payload_nodes(
+            root.path(),
+            [named_node("root", "root")],
+            conary_semantics(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("target root has no /etc directory")
+        );
     }
 }

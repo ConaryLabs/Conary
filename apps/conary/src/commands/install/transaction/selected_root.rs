@@ -316,6 +316,7 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
         let resolved_files = inner::resolve_stored_install_files(
             self.selected_root.selected_root(),
             self.stored_files,
+            self.ctx.semantics,
         )?;
         let directory_plan = inner::preflight_resolved_file_ownership(
             self.tx,
