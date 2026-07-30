@@ -450,6 +450,14 @@ event, payload mutation, or database mutation. Preflight includes availability
 of the selected-root interpreter/helper runtime; it does not wait until a later
 stage to discover that an unwind path cannot execute. A failed preflight leaves
 the previous payload, package database, and selected generation unchanged.
+The event-time projection advances source-declared absolute path capabilities
+at the same exact `ApplyPayload` and `FinalizeOldPayload` boundaries as literal
+archive paths. Thus a dependency's typed `/bin/sh` provider can authorize a
+later lifecycle interpreter even when its payload is represented through the
+source filesystem layout as `/usr/bin/sh`; it cannot authorize an event before
+that provider payload is applied or after its final provider is removed.
+Package names, distro identities, script text, and hard-coded redirect tables
+never establish this availability.
 
 Lifecycle execution is inseparable from a mutating install, update, remove,
 restore, batch, or autoremove transaction. The CLI, daemon request schema, and
