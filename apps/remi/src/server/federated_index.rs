@@ -480,6 +480,7 @@ mod tests {
             42,
             format!("sha256:{package}-{version}-content"),
             format!("/tmp/{package}-{version}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = CONVERSION_VERSION - 1;
         converted.insert(conn).unwrap();

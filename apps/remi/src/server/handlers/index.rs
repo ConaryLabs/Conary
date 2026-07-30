@@ -132,8 +132,8 @@ fn build_metadata(
     }
     repo_packages.retain(|pkg| pkg.size > 0);
 
-    // Query converted packages once so we can both mark repo-backed entries as
-    // converted and surface packages that exist only in Remi's CCS store.
+    // Query current conversions once to mark their exact repository-backed
+    // entries as converted.
     let converted_packages = load_converted_metadata_rows(&conn, profile.id())?;
     let converted_set: HashSet<PackageKey> = converted_packages
         .iter()
@@ -191,38 +191,6 @@ fn build_metadata(
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    let existing_keys: HashSet<PackageKey> = packages
-        .iter()
-        .map(|pkg| {
-            package_key(
-                &pkg.name,
-                &pkg.version,
-                pkg.release.as_deref(),
-                pkg.architecture.as_deref(),
-            )
-        })
-        .collect();
-    for converted in converted_packages {
-        let key = package_key(
-            &converted.name,
-            &converted.version,
-            None,
-            converted.architecture.as_deref(),
-        );
-        if !existing_keys.contains(&key) {
-            packages.push(PackageEntry {
-                name: converted.name,
-                version: converted.version,
-                release: None,
-                architecture: converted.architecture,
-                converted: true,
-                provides: Vec::new(),
-                requirement_groups: Vec::new(),
-                metadata: metadata_with_scriptlets(None, Some(&converted.scriptlets))?,
-            });
-        }
-    }
-
     // Sort by name, then version
     packages.sort_by(|a, b| {
         a.name
@@ -274,29 +242,6 @@ struct ConvertedMetadataRow {
     scriptlets: ScriptletPackageMetadata,
 }
 
-/// Build converted package entries for this distro.
-#[cfg(test)]
-fn build_converted_packages(
-    conn: &Connection,
-    source_profile: &str,
-) -> Result<Vec<PackageEntry>, anyhow::Error> {
-    load_converted_metadata_rows(conn, source_profile)?
-        .into_iter()
-        .map(|row| {
-            Ok(PackageEntry {
-                name: row.name,
-                version: row.version,
-                release: None,
-                architecture: row.architecture,
-                converted: true,
-                provides: Vec::new(),
-                requirement_groups: Vec::new(),
-                metadata: metadata_with_scriptlets(None, Some(&row.scriptlets))?,
-            })
-        })
-        .collect()
-}
-
 fn load_converted_metadata_rows(
     conn: &Connection,
     source_profile: &str,
@@ -307,14 +252,6 @@ fn load_converted_metadata_rows(
         let name = artifact.package_name.to_string();
         let version = artifact.package_version.to_string();
         let architecture = Some(artifact.package_architecture.to_string());
-
-        // Pre-architecture Remi conversion records cannot be addressed safely
-        // once native metadata has multilib packages and epoch-aware versions.
-        // Keep uploaded CCS fixtures visible, but do not advertise ambiguous
-        // repo-derived conversions as installable repository metadata.
-        if architecture.is_none() && converted.original_format != "ccs" {
-            continue;
-        }
 
         let scriptlet_summary = converted.scriptlet_summary()?;
 

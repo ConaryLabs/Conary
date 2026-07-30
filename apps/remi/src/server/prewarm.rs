@@ -459,6 +459,7 @@ mod tests {
 
     #[test]
     fn prewarm_rebuilds_stale_rows_and_skips_current_rows() {
+        use crate::server::conversion::test_support::seed_repository_conversion_source;
         use conary_core::db::schema;
         use tempfile::NamedTempFile;
 
@@ -478,6 +479,7 @@ mod tests {
             3,
             "sha256:pkg-1.0-content".to_string(),
             "/tmp/pkg-1.0.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         stale.conversion_version = CONVERSION_VERSION - 1;
         stale.insert(&conn).unwrap();
@@ -493,7 +495,9 @@ mod tests {
             3,
             "sha256:pkg-2.0-content".to_string(),
             "/tmp/pkg-2.0.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
+        seed_repository_conversion_source(&conn, &mut current);
         current.insert(&conn).unwrap();
 
         assert_eq!(

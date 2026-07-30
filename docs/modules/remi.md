@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 13
+last_updated: 2026-07-30
+revision: 14
 summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -257,11 +257,15 @@ The current schema separates installed conversions from repository-serving
 artifacts with a required discriminator. Installed rows require an exact trove
 identity and cannot carry serving fields. Repository rows require their exact
 distro/name/version/architecture identity, chunk list, total size, content
-hash, and CCS path; public and OCI handlers validate that typed artifact
-instead of filling missing fields with guesses or empty values. Architecture is
-a required constructor and API-view field, and the current schema rejects
-missing or empty values. Local conversion tracking is written only after the
-CCS install transaction commits.
+hash, CCS path, and SHA-256 digest of the normalized repository-provide
+projection merged into signed CCS authority; public, OCI, index, search, chunk,
+and garbage-collection paths validate that typed artifact instead of filling
+missing fields with guesses or empty values. Architecture and the repository
+provide digest are required constructor and API-view fields, and the current
+schema rejects missing, empty, or malformed values. Schema revision 22 is a
+pre-alpha hard cut: prior databases are rebuilt and re-ingested from configured
+repository authority rather than migrated. Local conversion tracking is
+written only after the CCS install transaction commits.
 
 Ready conversion means the artifact carries a source-independent Conary
 lifecycle contract. A client may install it on any target whose typed
@@ -287,9 +291,16 @@ local filesystem paths are not part of any public response.
 
 Server conversion has two terminal outcomes: ready or failed. A ready
 conversion is advertised and served when its conversion version and lifecycle
-summary are current and its CCS/CAS objects exist. Lifecycle program content,
-diagnostic classes, package names, provides, and command-name matches do not
-create a second serving decision.
+summary are current, its stored repository-provide digest exactly matches the
+current normalized source package, and its CCS/CAS objects exist. A native
+metadata refresh removes mismatched conversion rows in the same SQLite
+transaction. Cold conversion carries one immutable provider snapshot through
+cache lookup, CCS signing, and persistence, then revalidates it under the
+database write transaction so a concurrent refresh cannot publish mixed
+authority. CCS cache files use their emitted content hash as the local filename
+instead of a mutable package-name/version slot. Lifecycle program content,
+diagnostic classes, package names, and command-name matches do not create a
+second serving decision.
 
 Every route resolves the public route slug to one exact persisted source
 profile and uses the same current-row validation. A stale row is reconverted;

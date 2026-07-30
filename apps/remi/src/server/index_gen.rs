@@ -136,7 +136,7 @@ fn generate_index_for_profile(
     // Get all converted packages
     let mut converted = Vec::new();
     for candidate in ConvertedPackage::list_repository_conversions(&conn)? {
-        if !candidate.needs_reconversion() {
+        if candidate.repository_metadata_is_current(&conn)? {
             candidate.repository_artifact()?;
             candidate.scriptlet_summary()?;
             converted.push(candidate);
@@ -450,6 +450,7 @@ mod tests {
             3,
             "sha256:content".to_string(),
             "/cache/pkg.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted
             .set_scriptlet_metadata(&ScriptletBundleSummary {
@@ -496,6 +497,7 @@ mod tests {
             42,
             "sha256:stale-only-content".to_string(),
             "/tmp/stale-only.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = conary_core::db::models::CONVERSION_VERSION - 1;
 

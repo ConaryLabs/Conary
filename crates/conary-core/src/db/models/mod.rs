@@ -82,7 +82,7 @@ pub use component_dependency::{ComponentDepType, ComponentDependency, ComponentP
 pub use config::{ConfigBackup, ConfigFile, ConfigSource, ConfigStatus};
 pub use converted::{
     CONVERSION_VERSION, ChunkConversionState, ConvertedArtifactKind, ConvertedPackage,
-    RepositoryConvertedArtifact,
+    EMPTY_REPOSITORY_PROVIDES_DIGEST, RepositoryConvertedArtifact,
 };
 pub use debian_debconf_state::DebianDebconfState;
 pub use delta::{DeltaStats, PackageDelta};

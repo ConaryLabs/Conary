@@ -1,5 +1,6 @@
 // apps/remi/src/server/handlers/oci/tests.rs
 use super::*;
+use crate::server::conversion::test_support::seed_repository_conversion_source;
 use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
 use conary_core::db::schema;
 use tempfile::NamedTempFile;
@@ -32,7 +33,9 @@ fn insert_converted_package(
         4096,
         format!("sha256:content-{}-{}", name, version),
         format!("/data/{}-{}.ccs", name, version),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
+    seed_repository_conversion_source(conn, &mut pkg);
     pkg.insert(conn).unwrap();
 }
 
@@ -56,6 +59,7 @@ fn insert_stale_converted_package(
         4096,
         format!("sha256:content-{}-{}", name, version),
         format!("/data/{}-{}.ccs", name, version),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     pkg.conversion_version = CONVERSION_VERSION - 1;
     pkg.insert(conn).unwrap();
@@ -90,9 +94,12 @@ async fn oci_blob_state_with_db(
             10,
             format!("sha256:content-{index}"),
             format!("/tmp/pkg-{index}.ccs"),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         if stale {
             converted.conversion_version = CONVERSION_VERSION - 1;
+        } else {
+            seed_repository_conversion_source(&conn, &mut converted);
         }
         converted.insert(&conn).unwrap();
     }

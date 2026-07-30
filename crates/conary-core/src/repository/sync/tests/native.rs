@@ -171,6 +171,97 @@ fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassifi
 }
 
 #[test]
+fn native_sync_invalidates_conversion_when_exact_provides_change() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+
+    let mut repo = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.com/fedora".to_string(),
+    );
+    repo.source_profile = Some("fedora-44".to_string());
+    repo.insert(&conn).unwrap();
+    let repo_id = repo.id.unwrap();
+
+    let synced_row = |include_kernel_install: bool| {
+        let mut metadata = PackageMetadata::new(
+            "systemd-udev".to_string(),
+            "259.5-1.fc44".to_string(),
+            "sha256:systemd-udev".to_string(),
+            1024,
+            "https://example.com/fedora/systemd-udev.rpm".to_string(),
+            RepositoryDependencyFlavor::Rpm,
+            VersionScheme::Rpm,
+        );
+        metadata.architecture = Some("x86_64".to_string());
+        metadata.provides = vec![dep_model::RepositoryProvide::package_name(
+            "systemd-udev".to_string(),
+            Some("259.5-1.fc44".to_string()),
+        )];
+        if include_kernel_install {
+            metadata.provides.push(dep_model::RepositoryProvide::file(
+                "/usr/bin/kernel-install".to_string(),
+            ));
+        }
+        let provides = normalized_repository_capabilities(&metadata);
+        let mut package = RepositoryPackage::new(
+            repo_id,
+            metadata.name,
+            metadata.version,
+            VersionScheme::Rpm,
+            metadata.checksum,
+            metadata.size as i64,
+            metadata.download_url,
+        );
+        package.architecture = metadata.architecture;
+        package.source_profile = Some("fedora-44".to_string());
+        SyncedPackageRow {
+            package,
+            provides,
+            requirement_groups: Vec::new(),
+            requirement_group_clauses: Vec::new(),
+        }
+    };
+
+    persist_native_sync_rows(&conn, &mut repo, vec![synced_row(false)]).unwrap();
+    let repository_package_id = RepositoryPackage::find_by_repository(&conn, repo_id)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .id
+        .unwrap();
+    let digest =
+        RepositoryProvide::conversion_capabilities_digest(&conn, repository_package_id).unwrap();
+    let mut converted = ConvertedPackage::new_repository(
+        "fedora-44".to_string(),
+        "systemd-udev".to_string(),
+        "259.5-1.fc44".to_string(),
+        "x86_64".to_string(),
+        "rpm".to_string(),
+        "sha256:systemd-udev".to_string(),
+        &[],
+        1,
+        "sha256:converted".to_string(),
+        "/tmp/systemd-udev.ccs".to_string(),
+        digest,
+    );
+    converted.insert(&conn).unwrap();
+
+    persist_native_sync_rows(&conn, &mut repo, vec![synced_row(true)]).unwrap();
+
+    assert!(
+        ConvertedPackage::find_repository_by_checksum(
+            &conn,
+            "fedora-44",
+            "sha256:systemd-udev"
+        )
+        .unwrap()
+        .is_none(),
+        "a conversion signed before the new exact file provider must not remain current"
+    );
+}
+
+#[test]
 fn test_remi_sparse_entry_builds_normalized_capabilities() {
     let entry = RemiSparseResolutionVersionEntry {
         version: "6.19.6-200.fc44".to_string(),

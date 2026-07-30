@@ -3,11 +3,14 @@
 //! Normalized repository-native capability tables.
 
 use crate::error::Result;
-use crate::repository::dependency_model::{ProvideArchitectureQualifier, ProvideVersionRelation};
+use crate::packages::traits::ProvidedCapability;
+use crate::repository::dependency_model::{
+    ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+};
 use crate::repository::distro::version_scheme_from_db;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, Row, params};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +140,155 @@ impl RepositoryProvide {
             .query_map([repository_package_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Project the exact normalized rows for one repository package into the
+    /// capability type signed into converted CCS authority.
+    pub fn conversion_capabilities(
+        conn: &Connection,
+        repository_package_id: i64,
+    ) -> Result<Vec<ProvidedCapability>> {
+        Self::conversion_capabilities_with_digest(conn, repository_package_id)
+            .map(|(capabilities, _)| capabilities)
+    }
+
+    /// Return one atomic projection and digest for conversion-cache identity.
+    pub fn conversion_capabilities_with_digest(
+        conn: &Connection,
+        repository_package_id: i64,
+    ) -> Result<(Vec<ProvidedCapability>, String)> {
+        Self::project_conversion_capabilities(Self::find_by_repository_package(
+            conn,
+            repository_package_id,
+        )?)
+    }
+
+    /// Load every exact source-package checksum and provider digest for one
+    /// repository conversion identity from a single SQLite read snapshot.
+    pub(crate) fn conversion_inputs_for_source_identity(
+        conn: &Connection,
+        source_profile: &str,
+        package_name: &str,
+        package_version: &str,
+        package_architecture: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.repository_package_id, p.capability, p.version,
+                    p.version_relation, p.kind, p.raw, p.version_scheme,
+                    p.architecture_qualifier_kind, p.architecture,
+                    rp.id, rp.checksum
+             FROM repository_packages rp
+             JOIN repositories r ON r.id = rp.repository_id
+             LEFT JOIN repository_provides p ON p.repository_package_id = rp.id
+             WHERE r.enabled = 1
+               AND r.source_profile = ?1
+               AND rp.name = ?2
+               AND rp.version = ?3
+               AND rp.architecture = ?4
+               AND rp.size > 0
+             ORDER BY rp.id, p.id",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![
+                    source_profile,
+                    package_name,
+                    package_version,
+                    package_architecture,
+                ],
+                |row| {
+                    let provide = row
+                        .get::<_, Option<i64>>(0)?
+                        .map(|_| Self::from_row(row))
+                        .transpose()?;
+                    Ok((row.get::<_, i64>(10)?, row.get::<_, String>(11)?, provide))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        let mut package_inputs = BTreeMap::<i64, (String, Vec<Self>)>::new();
+        for (repository_package_id, checksum, provide) in rows {
+            let (persisted_checksum, provides) = package_inputs
+                .entry(repository_package_id)
+                .or_insert_with(|| (checksum.clone(), Vec::new()));
+            if persisted_checksum != &checksum {
+                return Err(crate::Error::InternalError(format!(
+                    "repository package {repository_package_id} yielded conflicting checksums"
+                )));
+            }
+            if let Some(provide) = provide {
+                provides.push(provide);
+            }
+        }
+
+        package_inputs
+            .into_values()
+            .map(|(checksum, provides)| {
+                let (_, digest) = Self::project_conversion_capabilities(provides)?;
+                Ok((checksum, digest))
+            })
+            .collect()
+    }
+
+    fn project_conversion_capabilities(
+        provides: impl IntoIterator<Item = Self>,
+    ) -> Result<(Vec<ProvidedCapability>, String)> {
+        let mut capabilities = BTreeMap::<Vec<u8>, ProvidedCapability>::new();
+        for provide in provides {
+            let capability = provide.as_provided_capability()?;
+            capability.validate()?;
+            let canonical = crate::json::canonical_json(&capability).map_err(|error| {
+                crate::Error::InternalError(format!(
+                    "failed to canonicalize repository provide projection: {error}"
+                ))
+            })?;
+            capabilities.entry(canonical).or_insert(capability);
+        }
+        let capabilities = capabilities.into_values().collect::<Vec<_>>();
+        let canonical = crate::json::canonical_json(&capabilities).map_err(|error| {
+            crate::Error::InternalError(format!(
+                "failed to canonicalize repository conversion metadata: {error}"
+            ))
+        })?;
+        let digest = crate::hash::sha256_prefixed(&canonical);
+        Ok((capabilities, digest))
+    }
+
+    /// Digest the exact repository-provide projection that influences native
+    /// conversion output.
+    pub fn conversion_capabilities_digest(
+        conn: &Connection,
+        repository_package_id: i64,
+    ) -> Result<String> {
+        Self::conversion_capabilities_with_digest(conn, repository_package_id)
+            .map(|(_, digest)| digest)
+    }
+
+    fn as_provided_capability(&self) -> Result<ProvidedCapability> {
+        let kind = match self.kind.as_str() {
+            "package" => RepositoryCapabilityKind::PackageName,
+            "virtual" => RepositoryCapabilityKind::Virtual,
+            "soname" => RepositoryCapabilityKind::Soname,
+            "file" => RepositoryCapabilityKind::File,
+            "path" => RepositoryCapabilityKind::Path,
+            "binary" => RepositoryCapabilityKind::Binary,
+            "pkgconfig" => RepositoryCapabilityKind::PkgConfig,
+            "generic" => RepositoryCapabilityKind::Generic,
+            other => {
+                return Err(crate::Error::InternalError(format!(
+                    "unsupported normalized repository provide kind '{other}'"
+                )));
+            }
+        };
+        Ok(ProvidedCapability {
+            kind,
+            name: self.capability.clone(),
+            version: self.version.clone(),
+            version_relation: self.version_relation,
+            version_scheme: self.version_scheme,
+            architecture_qualifier: self.architecture_qualifier.clone(),
+        })
     }
 
     /// Load exact provides for a bounded set of repository packages in one
@@ -478,6 +630,54 @@ mod tests {
         let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].version_scheme, VersionScheme::Rpm);
+    }
+
+    #[test]
+    fn conversion_capability_digest_tracks_only_exact_signed_projection() {
+        let conn = test_db();
+        seed_repo_and_package(&conn);
+
+        let empty = RepositoryProvide::conversion_capabilities_digest(&conn, 1).unwrap();
+        let mut shell = RepositoryProvide::new(
+            1,
+            "/usr/bin/sh".to_string(),
+            None,
+            "file".to_string(),
+            Some("first diagnostic spelling".to_string()),
+            VersionScheme::Rpm,
+        );
+        shell.insert(&conn).unwrap();
+        let with_shell = RepositoryProvide::conversion_capabilities_digest(&conn, 1).unwrap();
+        assert_ne!(empty, with_shell);
+
+        let mut duplicate = RepositoryProvide::new(
+            1,
+            "/usr/bin/sh".to_string(),
+            None,
+            "file".to_string(),
+            Some("different diagnostic spelling".to_string()),
+            VersionScheme::Rpm,
+        );
+        duplicate.insert(&conn).unwrap();
+        assert_eq!(
+            RepositoryProvide::conversion_capabilities_digest(&conn, 1).unwrap(),
+            with_shell,
+            "raw diagnostic text and duplicate rows do not change signed capability authority"
+        );
+
+        let mut kernel_install = RepositoryProvide::new(
+            1,
+            "/usr/bin/kernel-install".to_string(),
+            None,
+            "file".to_string(),
+            None,
+            VersionScheme::Rpm,
+        );
+        kernel_install.insert(&conn).unwrap();
+        assert_ne!(
+            RepositoryProvide::conversion_capabilities_digest(&conn, 1).unwrap(),
+            with_shell
+        );
     }
 
     #[test]

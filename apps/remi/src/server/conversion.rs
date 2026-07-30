@@ -11,7 +11,7 @@ mod persistence;
 mod recipe;
 mod storage;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 mod types;
 mod workflow;
 

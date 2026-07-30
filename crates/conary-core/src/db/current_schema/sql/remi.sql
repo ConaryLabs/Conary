@@ -12,6 +12,10 @@ CREATE TABLE converted_packages (
             -- Checksum of the original package file. Repository conversion
             -- identity is scoped by exact source_profile.
             original_checksum TEXT NOT NULL,
+            -- Exact normalized repository-provide projection merged into a
+            -- repository conversion. Installed conversions have no repository
+            -- metadata projection.
+            repository_provides_digest TEXT,
             -- Conversion algorithm version (re-convert if upgraded)
             conversion_version INTEGER NOT NULL DEFAULT 1,
             -- When the conversion occurred
@@ -24,6 +28,7 @@ CREATE TABLE converted_packages (
                     AND package_version IS NULL
                     AND source_profile IS NULL
                     AND package_architecture IS NULL
+                    AND repository_provides_digest IS NULL
                     AND chunk_hashes_json IS NULL
                     AND total_size IS NULL
                     AND content_hash IS NULL
@@ -40,6 +45,11 @@ CREATE TABLE converted_packages (
                     AND length(source_profile) > 0
                     AND package_architecture IS NOT NULL
                     AND length(package_architecture) > 0
+                    AND repository_provides_digest IS NOT NULL
+                    AND length(repository_provides_digest) = 71
+                    AND substr(repository_provides_digest, 1, 7) = 'sha256:'
+                    AND substr(repository_provides_digest, 8)
+                        NOT GLOB '*[^0-9a-f]*'
                     AND chunk_hashes_json IS NOT NULL
                     AND json_valid(chunk_hashes_json)
                     AND json_type(chunk_hashes_json) = 'array'

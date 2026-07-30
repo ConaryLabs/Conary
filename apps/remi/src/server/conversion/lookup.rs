@@ -92,6 +92,7 @@ impl ConversionService {
                      FROM repository_packages rp
                      JOIN repositories r ON rp.repository_id = r.id
                      WHERE rp.name = ?1
+                     AND r.enabled = 1
                      AND r.source_profile = ?2
                      AND rp.version = ?3
                      AND rp.architecture = ?4
@@ -123,6 +124,7 @@ impl ConversionService {
                  FROM repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.name = ?1
+                 AND r.enabled = 1
                  AND r.source_profile = ?2
                  AND rp.version = ?3
                  AND rp.size > 0
@@ -154,6 +156,7 @@ impl ConversionService {
              FROM repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.name = ?1
+             AND r.enabled = 1
              AND r.source_profile = ?2
              AND (?3 IS NULL OR rp.architecture = ?3)
              AND rp.size > 0",
@@ -368,6 +371,37 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found"));
         assert!(err_msg.contains("repository sync"));
+    }
+
+    #[test]
+    fn conversion_lookup_never_selects_a_disabled_repository() {
+        let (temp_file, conn) = create_test_db();
+        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
+        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
+        conn.execute(
+            "UPDATE repositories SET enabled = 0 WHERE id = ?1",
+            [repo_id],
+        )
+        .unwrap();
+
+        let service = ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            temp_file.path().to_path_buf(),
+            None,
+        );
+
+        for (version, architecture) in [
+            (None, None),
+            (Some("1.24.0"), None),
+            (Some("1.24.0"), Some("x86_64")),
+        ] {
+            assert!(
+                service
+                    .find_package(&conn, "fedora-44", "nginx", version, architecture)
+                    .is_err()
+            );
+        }
     }
 
     #[test]

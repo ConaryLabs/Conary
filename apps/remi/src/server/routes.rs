@@ -525,6 +525,8 @@ mod tests {
 
     #[tokio::test]
     async fn package_downloads_are_not_content_encoded() {
+        use crate::server::conversion::test_support::seed_repository_conversion_source;
+
         let temp = tempfile::TempDir::new().unwrap();
         let storage_root = temp.path().join("storage");
         let db_path = storage_root.join("metadata/conary.db");
@@ -554,7 +556,9 @@ mod tests {
             ccs_bytes.len() as i64,
             "sha256:ccs".to_string(),
             ccs_path.to_string_lossy().to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
+        seed_repository_conversion_source(&conn, &mut converted);
         converted.insert(&conn).unwrap();
         drop(conn);
 
