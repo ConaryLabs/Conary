@@ -396,6 +396,13 @@ filesystem that cannot apply the signature does not erase it: capture restores
 the deferred value only while the regular-file SHA-256 and size are unchanged,
 so a lifecycle content mutation invalidates the signature before generation
 serialization.
+Payload metadata application also distinguishes package-declared xattrs from
+the target LSM label assigned when a staging node is created. An undeclared
+`security.selinux` value is preserved as ambient target authority and becomes
+part of selected-root capture; when the payload declares `security.selinux`,
+that exact opaque value is applied instead. This is not a general
+`security.*` exception: every other undeclared xattr is removed, and a removal
+failure remains fatal.
 Generation-local config projection removes exactly one `/etc` prefix when it
 materializes the overlay upper; `/var` and `/srv` entries cannot enter that
 upper. Boot-carrier export copies both manifests, reconstructs `/var` and
