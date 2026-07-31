@@ -48,6 +48,14 @@ fn live_symlink(path: &str, target: &str, mode: u32) -> LiveRootFile {
     }
 }
 
+fn live_directory(path: &str, mode: u32) -> LiveRootFile {
+    LiveRootFile {
+        path: path.to_string(),
+        content: LiveRootContent::absent(),
+        node: resolved_node(PayloadNodeKind::Directory, libc::S_IFDIR | (mode & 0o7777)),
+    }
+}
+
 fn live_hardlink(path: &str, target: &str, identity: &str, mode: u32) -> LiveRootFile {
     LiveRootFile {
         path: path.to_string(),
@@ -123,7 +131,7 @@ fn install_rejects_symlink_parent_without_writing_outside_root() {
     fs::create_dir_all(&runtime).unwrap();
     fs::create_dir_all(&root).unwrap();
     fs::create_dir_all(&outside).unwrap();
-    symlink(&outside, root.join("usr")).unwrap();
+    symlink("../outside", root.join("usr")).unwrap();
 
     let mut tx = LiveRootTransaction::begin(
         &runtime,
@@ -137,8 +145,33 @@ fn install_rejects_symlink_parent_without_writing_outside_root() {
         .unwrap_err()
         .to_string();
 
-    assert!(err.contains("unsafe parent"));
+    assert!(err.contains("escapes the selected root"));
     assert!(!outside.join("bin/fixture").exists());
+}
+
+#[test]
+fn install_rejects_looping_symlink_parent() {
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("root");
+    fs::create_dir_all(&runtime).unwrap();
+    fs::create_dir_all(&root).unwrap();
+    symlink("usr", root.join("usr")).unwrap();
+
+    let mut tx = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "install fixture",
+    )
+    .unwrap();
+    let err = tx
+        .apply_install_files(&[live_regular("/usr/bin/fixture", b"fixture", 0o755)])
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("exceeds 40 selected-root symlinks"));
+    assert!(fs::symlink_metadata(root.join("usr")).unwrap().is_symlink());
 }
 
 #[test]
@@ -187,6 +220,99 @@ fn preserved_regular_reference_extends_hardlink_graph_without_replacing_target()
 }
 
 #[test]
+fn in_root_alias_is_consistent_across_install_remove_rollback_and_hardlinks() {
+    const TEST_NAME: &str = "commands::live_root::tests::in_root_alias_is_consistent_across_install_remove_rollback_and_hardlinks";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("root");
+    let physical = root.join("usr/lib64");
+    fs::create_dir_all(&runtime).unwrap();
+    fs::create_dir_all(&physical).unwrap();
+    symlink("usr/lib64", root.join("lib64")).unwrap();
+
+    let mut install = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "install through alias",
+    )
+    .unwrap();
+    install
+        .apply_install_files(&[
+            live_directory("/lib64/vendor", 0o755),
+            live_regular("/lib64/vendor/installed", b"installed", 0o644),
+        ])
+        .unwrap();
+    install.commit().unwrap();
+    assert_eq!(
+        fs::read(physical.join("vendor/installed")).unwrap(),
+        b"installed"
+    );
+
+    let mut remove = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "remove through alias",
+    )
+    .unwrap();
+    remove
+        .apply_remove_paths(&[
+            "/lib64/vendor/installed".to_string(),
+            "/lib64/vendor".to_string(),
+        ])
+        .unwrap();
+    remove.commit().unwrap();
+    assert!(!physical.join("vendor").exists());
+
+    fs::write(physical.join("rollback"), b"original").unwrap();
+    let mut rollback = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "rollback through alias",
+    )
+    .unwrap();
+    rollback
+        .apply_install_files(&[live_regular("/lib64/rollback", b"replacement", 0o644)])
+        .unwrap();
+    rollback.rollback().unwrap();
+    assert_eq!(fs::read(physical.join("rollback")).unwrap(), b"original");
+
+    fs::write(physical.join("reference"), b"shared").unwrap();
+    let identity = "path:/lib64/reference";
+    let mut reference = live_regular("/lib64/reference", b"shared", 0o644);
+    reference.node.source.kind = PayloadNodeKind::Regular {
+        hardlink_identity: Some(identity.to_string()),
+    };
+    let peer = live_hardlink("/lib64/peer", "/lib64/reference", identity, 0o644);
+    let mut hardlink = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "hardlink through alias",
+    )
+    .unwrap();
+    hardlink
+        .apply_install_files_with_references(&[peer], &[reference])
+        .unwrap();
+    hardlink.commit().unwrap();
+    assert_eq!(
+        fs::metadata(physical.join("reference")).unwrap().ino(),
+        fs::metadata(physical.join("peer")).unwrap().ino()
+    );
+    assert!(
+        fs::symlink_metadata(root.join("lib64"))
+            .unwrap()
+            .is_symlink()
+    );
+}
+
+#[test]
 fn remove_rejects_symlink_parent_without_removing_outside_root() {
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");
@@ -196,7 +322,7 @@ fn remove_rejects_symlink_parent_without_removing_outside_root() {
     fs::create_dir_all(&root).unwrap();
     fs::create_dir_all(outside.join("bin")).unwrap();
     fs::write(outside.join("bin/fixture"), "outside").unwrap();
-    symlink(&outside, root.join("usr")).unwrap();
+    symlink("../outside", root.join("usr")).unwrap();
 
     let mut tx = LiveRootTransaction::begin(
         &runtime,
@@ -210,7 +336,7 @@ fn remove_rejects_symlink_parent_without_removing_outside_root() {
         .unwrap_err()
         .to_string();
 
-    assert!(err.contains("unsafe parent"));
+    assert!(err.contains("escapes the selected root"));
     assert_eq!(
         fs::read_to_string(outside.join("bin/fixture")).unwrap(),
         "outside"

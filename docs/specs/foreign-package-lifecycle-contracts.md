@@ -570,6 +570,14 @@ capture, file-capability projection, rollback, and removal all resolve package
 ownership through claims. Generation export and CAS reachability consume the
 single materialized anchor, which remains present until the final claim.
 
+Live-root install, removal, rollback, and hardlink operations preserve that
+package-path spelling as ownership authority while resolving existing ancestor
+symlinks to one effective path inside the selected root. Transaction journals
+record the resolved physical mutation path, so recovery uses the same target
+that the forward operation changed. In-root layout aliases such as
+`/lib64 -> usr/lib64` are therefore valid; an alias that escapes the selected
+root or loops fails before mutation.
+
 Rollback captures payload claims and the independently materialized node
 before any package in a single or batch transaction mutates the selected root.
 It resolves only the package path's existing selected-root ancestor symlinks
