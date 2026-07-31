@@ -349,6 +349,9 @@ fn rootfs_projection_creates_runtime_tree() {
         std::fs::read(staging.join("conary/etc-state/7/fstab")).unwrap(),
         SOURCE_FSTAB
     );
+    let machine_id = staging.join("conary/etc-state/7/machine-id");
+    assert!(machine_id.is_file());
+    assert!(std::fs::read(machine_id).unwrap().is_empty());
     assert_projected_metadata(&staging, &artifact.generation_root.root);
     assert_projected_metadata(
         &staging.join("usr"),
@@ -365,6 +368,30 @@ fn rootfs_projection_creates_runtime_tree() {
     assert_projected_metadata(
         &staging.join("conary/etc-state/7"),
         carrier_mountpoint_node(&artifact, "/etc").unwrap(),
+    );
+}
+
+#[test]
+fn rootfs_projection_preserves_state_owned_machine_id() {
+    let fixture = Fixture::new();
+    let machine_id = write_cas_object(&fixture.objects_dir, b"0123456789abcdef0123456789abcdef\n");
+    let mut artifact = fixture.artifact();
+    artifact
+        .mutable_state
+        .entries
+        .push(state_regular("/etc/machine-id", &machine_id));
+    artifact
+        .mutable_state
+        .entries
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    artifact.cas_objects.push(machine_id);
+    let staging = fixture._tmp.path().join("rootfs-machine-id");
+
+    project_generation_rootfs(&artifact, &staging).unwrap();
+
+    assert_eq!(
+        std::fs::read(staging.join("conary/etc-state/7/machine-id")).unwrap(),
+        b"0123456789abcdef0123456789abcdef\n"
     );
 }
 
@@ -530,6 +557,7 @@ fn esp_projection_writes_systemd_boot_contract() {
     assert!(bls.contains("rootfstype=ext4"));
     assert!(bls.contains(" rw "));
     assert!(bls.contains(" fstab=no "));
+    assert!(bls.contains(" systemd.gpt_auto=0 "));
     assert!(bls.contains("systemd.mount-extra=PARTLABEL=CONARY_ESP:/boot:vfat:defaults,noatime"));
     assert!(bls.contains("conary.generation=7"));
     assert!(bls.contains("console=tty0"));
@@ -554,6 +582,7 @@ fn iso_esp_projection_writes_readonly_carrier_boot_contract() {
     assert!(bls.contains("rootfstype=iso9660"));
     assert!(bls.contains(" ro "));
     assert!(bls.contains(" fstab=no "));
+    assert!(!bls.contains("systemd.gpt_auto=0"));
     assert!(!bls.contains("systemd.mount-extra="));
     assert!(bls.contains("conary.generation=7"));
     assert!(bls.contains("conary.carrier=readonly"));

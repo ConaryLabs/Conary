@@ -194,7 +194,7 @@ fn build_generation_from_runtime_inputs(
     boot_root: &Path,
     activation: GenerationActivation,
     troves: Vec<Trove>,
-    runtime_inputs: runtime_inputs::RuntimeGenerationInputs,
+    mut runtime_inputs: runtime_inputs::RuntimeGenerationInputs,
 ) -> crate::Result<(i64, BuildResult)> {
     struct PendingGenerationGuard {
         gen_dir: PathBuf,
@@ -291,10 +291,17 @@ fn build_generation_from_runtime_inputs(
     })?;
     let mut pending_guard = PendingGenerationGuard::new(gen_dir.clone());
 
-    // Step 3: Validate the exact runtime input selected by the caller.
+    // Step 3: Validate the exact runtime input selected by the caller, then
+    // prepare boot assets before freezing the immutable image. Boot
+    // preparation may derive exact kernel-module metadata that must become
+    // generation authority rather than remain in an ephemeral sysroot.
+    validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
+    let architecture = runtime_generation_architecture()?;
+    let boot_asset_sources =
+        resolve_generation_boot_asset_sources(&mut runtime_inputs, generations_root, boot_root)?;
     let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
 
-    // Step 4: Build EROFS image with symlinks from DB.
+    // Step 4: Build the EROFS image from the finalized immutable manifest.
     // This must succeed before we commit state to the database.
     validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
     let cas_objects = deduplicate_sort_cas_objects(cas_objects_from_manifests(
@@ -305,11 +312,9 @@ fn build_generation_from_runtime_inputs(
     let result = build_erofs_image_from_root_manifest(&runtime_inputs.generation, &gen_dir)?;
     runtime_inputs.state.write_to(&gen_dir)?;
 
-    // Step 5: Stage boot assets and write the export artifact contract before
-    // committing metadata. Export must not scrape live /boot later.
-    let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources =
-        resolve_generation_boot_asset_sources(&runtime_inputs, generations_root, boot_root)?;
+    // Step 5: Stage the already-prepared boot assets and write the export
+    // artifact contract before committing metadata. Export must not scrape
+    // live /boot later.
     let kernel_version = boot_asset_sources.kernel_version.clone();
     let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,

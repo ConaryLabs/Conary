@@ -96,6 +96,28 @@ fn generation_builder_stages_boot_assets_from_cas_sysroot_for_default_runtime_bu
 }
 
 #[test]
+fn generation_builder_retains_boot_preparation_mutations_before_freezing_erofs() {
+    for path in [
+        "generation/builder/create.rs",
+        "generation/builder/rebuild.rs",
+    ] {
+        let source =
+            fs::read_to_string(core_source(path)).expect("failed to read generation builder");
+        let prepare = source
+            .find("resolve_generation_boot_asset_sources(&mut runtime_inputs")
+            .expect("generation builder must finalize boot-derived manifest authority");
+        let freeze = source
+            .find("build_erofs_image_from_root_manifest(&runtime_inputs.generation")
+            .expect("generation builder must freeze the finalized immutable manifest");
+
+        assert!(
+            prepare < freeze,
+            "{path} must retain exact depmod output before writing the immutable EROFS image"
+        );
+    }
+}
+
+#[test]
 fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
     let create_rs = fs::read_to_string(core_source("generation/builder/create.rs"))
         .expect("failed to read generation/builder/create.rs");
