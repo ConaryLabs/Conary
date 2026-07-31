@@ -218,3 +218,124 @@ fn write_dracut_module_file(path: &Path, contents: &str) -> crate::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use tree_sitter::{Node, Parser};
+
+    use super::*;
+    use crate::ccs::convert::command_evidence::extract_invocations_from_shell_text;
+
+    #[test]
+    fn conary_runtime_scripts_only_invoke_declared_module_tools() {
+        let declared = declared_module_tools();
+
+        for (name, script) in [
+            ("conary-init", CONARY_DRACUT_INIT),
+            ("conary-generator", CONARY_DRACUT_GENERATOR),
+        ] {
+            let functions = shell_function_names(script);
+            let invocations =
+                extract_invocations_from_shell_text(name, script, Some("initramfs")).unwrap();
+            let missing = invocations
+                .iter()
+                .map(|invocation| invocation.command.as_str())
+                .filter(|command| {
+                    !shell_builtin(command)
+                        && !functions.contains(*command)
+                        && !declared.contains(*command)
+                })
+                .collect::<BTreeSet<_>>();
+
+            assert!(
+                missing.is_empty(),
+                "{name} directly invokes initramfs tools that the Conary dracut module does not declare: {missing:?}"
+            );
+        }
+    }
+
+    fn declared_module_tools() -> BTreeSet<String> {
+        let invocations = extract_invocations_from_shell_text(
+            "conary-module-setup",
+            CONARY_DRACUT_MODULE_SETUP,
+            Some("initramfs-build"),
+        )
+        .unwrap();
+        let mut declared = invocations
+            .iter()
+            .filter(|invocation| invocation.command == "inst_multiple")
+            .flat_map(|invocation| invocation.argv.iter())
+            .filter(|argument| !argument.starts_with('-'))
+            .map(|argument| argument.rsplit('/').next().unwrap_or_default().to_string())
+            .collect::<BTreeSet<_>>();
+        declared.extend(
+            invocations
+                .iter()
+                .filter(|invocation| invocation.command == "install_conary_script")
+                .filter_map(|invocation| invocation.argv.get(1))
+                .map(|destination| {
+                    destination
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                }),
+        );
+        declared
+    }
+
+    fn shell_function_names(script: &str) -> BTreeSet<String> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_bash::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(script, None).unwrap();
+        assert!(!tree.root_node().has_error(), "invalid shell fixture");
+        let mut names = BTreeSet::new();
+        collect_function_names(tree.root_node(), script, &mut names);
+        names
+    }
+
+    fn collect_function_names(node: Node<'_>, script: &str, names: &mut BTreeSet<String>) {
+        if node.kind() == "function_definition"
+            && let Some(name) = node.child_by_field_name("name")
+        {
+            names.insert(
+                name.utf8_text(script.as_bytes())
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            collect_function_names(child, script, names);
+        }
+    }
+
+    fn shell_builtin(command: &str) -> bool {
+        matches!(
+            command,
+            "!" | ":"
+                | "["
+                | "break"
+                | "command"
+                | "continue"
+                | "echo"
+                | "exec"
+                | "exit"
+                | "export"
+                | "local"
+                | "printf"
+                | "read"
+                | "return"
+                | "set"
+                | "shift"
+                | "test"
+                | "true"
+                | "unset"
+        )
+    }
+}
