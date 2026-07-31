@@ -27,7 +27,8 @@ use tracing::warn;
 mod captured_root;
 mod live_root;
 use captured_root::{
-    capture_live_selected_root, ensure_complete_native_partition, synchronize_captured_root,
+    bind_package_payloads_to_selected_root, capture_live_selected_root,
+    ensure_complete_native_partition, synchronize_captured_root,
 };
 use live_root::adopt_live_root_as_full_package;
 
@@ -467,6 +468,14 @@ pub async fn cmd_adopt_system(
     } else {
         None
     };
+    if let Some(captured) = captured_selected_root.as_ref() {
+        bind_package_payloads_to_selected_root(
+            captured,
+            pre_collected
+                .iter_mut()
+                .flat_map(|package| package.files.iter_mut()),
+        )?;
+    }
 
     // DB-only transaction: all PM queries and CAS writes are already done.
     write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;

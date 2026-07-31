@@ -19,7 +19,7 @@ use conary_core::repository::versioning::VersionScheme;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use rusqlite::Transaction;
 
-use super::LIVE_ROOT_PACKAGE_NAME;
+use super::{CapturedAdoptionFile, LIVE_ROOT_PACKAGE_NAME};
 
 const CAPTURED_ROOT_VERSION: &str = "snapshot";
 
@@ -61,6 +61,45 @@ pub(super) fn capture_live_selected_root(
     scan_selected_root_with_exclusions(Path::new("/"), cas, &exclusions)
         .map_err(anyhow::Error::from)
         .context("failed to capture exact selected-root continuity state")
+}
+
+/// Replace independently captured package nodes with the authority from the
+/// complete selected-root scan.
+///
+/// A one-path capture cannot identify hardlink peers. Complete full adoption
+/// therefore uses it only as preflight and CAS staging; the durable package
+/// claims are rebound here to the same global topology that owns unclaimed
+/// selected-root paths.
+pub(super) fn bind_package_payloads_to_selected_root<'a>(
+    captured: &CapturedSelectedRoot,
+    files: impl IntoIterator<Item = &'a mut CapturedAdoptionFile>,
+) -> conary_core::Result<()> {
+    let mut entries = HashMap::new();
+    for entry in captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+    {
+        if entries.insert(entry.path.as_str(), entry).is_some() {
+            return Err(conary_core::Error::ConfigError(format!(
+                "complete selected-root capture contains duplicate path {}",
+                entry.path
+            )));
+        }
+    }
+
+    for file in files {
+        let Some(entry) = entries.get(file.source.0.as_str()) else {
+            // Ephemeral and capture-runtime domains are intentionally absent
+            // from the complete selected-root snapshot. Their package claim
+            // retains the exact independently captured node.
+            continue;
+        };
+        file.node = entry.node.clone();
+        file.content = entry.content.clone();
+    }
+    Ok(())
 }
 
 pub(super) fn synchronize_captured_root(
@@ -347,6 +386,7 @@ mod tests {
     use conary_core::generation::root_manifest::{
         SelectedRootCaptureExclusions, scan_selected_root_with_exclusions,
     };
+    use conary_core::packages::InstalledFileAbsencePolicy;
     use conary_core::payload::PayloadNodeKind;
     use std::os::unix::fs::PermissionsExt;
 
@@ -377,6 +417,11 @@ mod tests {
         std::fs::write(root.join("run/private"), b"ephemeral").unwrap();
         std::fs::write(root.join("var/lib/conary/conary.db"), b"runtime").unwrap();
         std::fs::write(root.join("etc/owned-primary"), b"hardlinked").unwrap();
+        std::fs::hard_link(
+            root.join("etc/owned-primary"),
+            root.join("etc/owned-secondary"),
+        )
+        .unwrap();
         std::fs::hard_link(
             root.join("etc/owned-primary"),
             root.join("etc/unowned-link"),
@@ -434,22 +479,42 @@ mod tests {
         );
         package.installed_by_changeset_id = Some(changeset_id);
         let package_id = package.insert(&tx).unwrap();
-        for path in [
-            "/etc",
-            "/etc/owned-primary",
-            "/usr",
-            "/usr/bin",
-            "/usr/bin/owned",
-        ] {
+        for path in ["/etc", "/usr", "/usr/bin", "/usr/bin/owned"] {
+            let entry = entries[path];
+            let mut file = FileEntry::new(
+                path.to_string(),
+                entry.node.clone(),
+                entry.content.clone(),
+                package_id,
+            );
+            file.insert_or_replace(&tx, ExistingDirectoryMaterialization::ApplyIncoming)
+                .unwrap();
+        }
+
+        let mut package_hardlinks = ["/etc/owned-primary", "/etc/owned-secondary"].map(|path| {
             let entry = entries[path];
             let mut node = entry.node.clone();
-            if path == "/etc/owned-primary" {
-                node.source.kind = PayloadNodeKind::Regular {
-                    hardlink_identity: None,
-                };
+            node.source.kind = PayloadNodeKind::Regular {
+                hardlink_identity: None,
+            };
+            CapturedAdoptionFile {
+                source: (
+                    path.to_string(),
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    InstalledFileAbsencePolicy::Required,
+                ),
+                node,
+                content: entries["/etc/owned-primary"].content.clone(),
             }
-            let mut file =
-                FileEntry::new(path.to_string(), node, entry.content.clone(), package_id);
+        });
+        bind_package_payloads_to_selected_root(&captured, package_hardlinks.iter_mut()).unwrap();
+        for captured in package_hardlinks {
+            let mut file = captured.file_entry(package_id);
             file.insert_or_replace(&tx, ExistingDirectoryMaterialization::ApplyIncoming)
                 .unwrap();
         }
@@ -458,7 +523,7 @@ mod tests {
         let first = synchronize_captured_root(&tx, first_changeset, &captured).unwrap();
         assert!(first.changed);
         assert!(first.captured_entries > 0);
-        assert!(first.package_entries >= 5);
+        assert!(first.package_entries >= 6);
 
         let captured_trove = Trove::list_all(&tx)
             .unwrap()
@@ -486,6 +551,9 @@ mod tests {
         let linked = FileEntry::find_by_path(&tx, "/etc/unowned-link")
             .unwrap()
             .unwrap();
+        let package_linked = FileEntry::find_by_path(&tx, "/etc/owned-secondary")
+            .unwrap()
+            .unwrap();
         let PayloadNodeKind::Regular {
             hardlink_identity: Some(primary_identity),
         } = primary.node.source.kind
@@ -494,6 +562,11 @@ mod tests {
         };
         let PayloadNodeKind::Hardlink { identity, target } = linked.node.source.kind else {
             panic!("captured-root hardlink lost its typed link authority");
+        };
+        assert_eq!(identity, primary_identity);
+        assert_eq!(target, "/etc/owned-primary");
+        let PayloadNodeKind::Hardlink { identity, target } = package_linked.node.source.kind else {
+            panic!("package-owned hardlink lost its typed link authority");
         };
         assert_eq!(identity, primary_identity);
         assert_eq!(target, "/etc/owned-primary");
