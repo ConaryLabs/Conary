@@ -62,8 +62,11 @@ commands.
   `apps/conary/src/commands/generation/selected_root.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
   execution starts in
-  `apps/conary/src/commands/install/transaction/selected_root.rs`; removal starts
-  in `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
+  `apps/conary/src/commands/install/transaction/selected_root.rs`; declarative
+  multi-root selection and authenticated batch preparation start in
+  `apps/conary/src/commands/install/package_set.rs` and
+  `apps/conary/src/commands/install/repository_batch.rs`; removal starts in
+  `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
   session acquires and owns the canonical runtime mutation lock before
   materialization; the lock implementation starts in
   `crates/conary-core/src/transaction/mod.rs`. Exact rollback execution and

@@ -7,22 +7,21 @@
 
 use super::super::open_db;
 use super::PackageFormatType;
-use super::batch::{BatchInstaller, prepare_ccs_package_for_batch, prepare_package_for_batch};
+use super::batch::{BatchInstaller, prepare_ccs_package_for_batch};
 use super::dep_resolution;
 use super::dependencies::resolved_repository_deps_from_sat_result;
+use super::repository_batch::{RepositoryBatchSelection, prepare_repository_batch};
 use super::{
     CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, RepositoryInstallProvenance,
-    repository_install_provenance_from_package, verify_ccs_package_authority,
+    verify_ccs_package_authority,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::{
     ConversionOptions, NativePackageConverter, ScriptletBundleSummary,
 };
-use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::packages::common::PackageMetadata;
-use conary_core::repository;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{SatPackage, SatSource};
 use conary_core::scriptlet::SandboxMode;
@@ -69,7 +68,7 @@ fn selected_ccs_release_matches(ccs_release: Option<&str>, selected_release: Opt
     }
 }
 
-fn validate_selected_repository_ccs_identity(
+pub(super) fn validate_selected_repository_ccs_identity(
     ccs_pkg: &CcsPackage,
     selected: &SatPackage,
     repository_provenance: Option<&RepositoryInstallProvenance>,
@@ -162,7 +161,7 @@ fn validate_selected_repository_ccs_identity(
     Ok(())
 }
 
-fn validate_selected_repository_native_identity(
+pub(super) fn validate_selected_repository_native_identity(
     artifact_name: &str,
     artifact_version: &str,
     artifact_package_release: Option<&str>,
@@ -567,108 +566,18 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
         }
     }
 
-    let conn = open_db(db_path)?;
-    let to_download = dep_resolution::exact_repository_downloads(&conn, &selected_dependencies)?;
-    let temp_dir = TempDir::new()?;
-    let keyring_dir = keyring_dir(db_path);
-    let downloaded =
-        repository::download_dependencies(&to_download, temp_dir.path(), &keyring_dir).await?;
-    if downloaded.len() != to_download.len() {
-        anyhow::bail!(
-            "repository dependency downloader returned {} artifacts for {} exact selections",
-            downloaded.len(),
-            to_download.len()
-        );
-    }
-    let mut prepared_packages = Vec::with_capacity(downloaded.len() + 1);
-    // `download_dependencies` preserves request order. Pair each artifact with
-    // the exact row already checked by `exact_repository_downloads` so
-    // co-installable identities with the same package name cannot alias.
-    for ((dep_name, package_with_repo), (downloaded_name, dep_path)) in
-        to_download.iter().zip(&downloaded)
-    {
-        if dep_name != downloaded_name {
-            anyhow::bail!(
-                "repository dependency download order drifted: expected {dep_name}, received {downloaded_name}"
-            );
-        }
-        let provenance = repository_install_provenance_from_package(
-            &package_with_repo.package,
-            &package_with_repo.repository,
-        )?;
-        let expected = selected_dependencies
-            .iter()
-            .find(|dependency| {
-                dependency.package.repo_package_id == package_with_repo.package.id
-                    && dependency.package.repository_id == package_with_repo.repository.id
-            })
-            .with_context(|| {
-                format!(
-                    "downloaded dependency {dep_name} has no exact SAT-selected repository identity"
-                )
-            })?;
-        let reason = format!("Required by {}", ccs_pkg.name());
-        if dep_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("ccs"))
-        {
-            let dep_ccs_path = dep_path
-                .to_str()
-                .context("Invalid CCS dependency path (non-UTF8)")?;
-            let verified_dependency = verify_ccs_package_authority(
-                db_path,
-                dep_path,
-                &CcsEnvelopeAuthority::Repository,
-                Some(&provenance),
-            )?;
-            let dependency = CcsPackage::from_verified_archive(dep_ccs_path, &verified_dependency)
-                .with_context(|| {
-                    format!("Failed to construct verified CCS dependency {dep_name}")
-                })?;
-            validate_selected_repository_ccs_identity(
-                &dependency,
-                &expected.package,
-                Some(&provenance),
-            )?;
-            crate::commands::ccs::validate_ccs_capability_declaration(&dependency)?;
-            prepared_packages.push(prepare_ccs_package_for_batch(
-                &dependency,
-                db_path,
-                conary_core::db::models::InstallReason::Dependency,
-                &reason,
-                allow_downgrade,
-                intent,
-                Some(provenance),
-            )?);
-        } else {
-            let Some(mut prepared) = prepare_package_for_batch(
-                dep_path,
-                db_path,
-                conary_core::db::models::InstallReason::Dependency,
-                &reason,
-                allow_downgrade,
-                provenance.source_profile.as_deref(),
-            )?
-            else {
-                anyhow::bail!(
-                    "SAT selected dependency {dep_name}, but its exact artifact is already installed"
-                );
-            };
-            validate_selected_repository_native_identity(
-                &prepared.name,
-                &prepared.version,
-                prepared.package_release.as_deref(),
-                prepared.architecture.as_deref(),
-                prepared.semantics.version_scheme,
-                &expected.package,
-                &provenance,
-            )?;
-            prepared.repository_provenance = Some(provenance);
-            prepared_packages.push(prepared);
-        }
-    }
-    prepared_packages.push(prepare_ccs_package_for_batch(
+    let selections = selected_dependencies
+        .into_iter()
+        .map(|selected| RepositoryBatchSelection {
+            selected,
+            install_reason: conary_core::db::models::InstallReason::Dependency,
+            selection_reason: format!("Required by {}", ccs_pkg.name()),
+            allow_downgrade,
+            intent,
+        })
+        .collect();
+    let mut prepared = prepare_repository_batch(db_path, selections).await?;
+    prepared.push(prepare_ccs_package_for_batch(
         &ccs_pkg,
         db_path,
         conary_core::db::models::InstallReason::Explicit,
@@ -679,8 +588,7 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
     )?);
 
     println!("Installing CCS package...");
-    let result =
-        BatchInstaller::new(db_path, sandbox_mode).install_batch_with_result(prepared_packages)?;
+    let result = prepared.install_with_result(BatchInstaller::new(db_path, sandbox_mode))?;
     Ok(Some(result.exact_trove_id(&ccs_pkg)?))
 }
 
