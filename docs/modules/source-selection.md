@@ -403,6 +403,12 @@ target matrices, or command-text exceptions. If the selected root cannot
 satisfy a typed interpreter or source-manager semantic, preflight reports that
 semantic before mutation so the missing model can be engineered.
 
+Model apply resolves every install and update root together, authenticates the
+exact SAT-selected repository closure, and executes that closure as one batch.
+Typed package relations therefore order provider payloads and dependent
+lifecycle programs inside one package-set transition; model diff iteration
+order is never transaction authority.
+
 ## Flow Behavior
 
 ### Native Package Adoption
@@ -605,8 +611,13 @@ state requires an explicit scoped install, update, or replatform operation.
   replatform summaries
 - `apps/conary/src/commands/model/apply.rs` for model apply execution and
   replatform install dispatch
+- `apps/conary/src/commands/model/apply/packages.rs` for model package-set
+  aggregation and atomic install/update dispatch
 - `apps/conary/src/commands/model/apply/derived.rs` for persisted
   derived-package definition and build ownership
+- `apps/conary/src/commands/install/package_set.rs` for multi-root SAT
+  selection and `apps/conary/src/commands/install/repository_batch.rs` for
+  authenticated preparation of the exact selected closure
 - `apps/conary/src/commands/model/remote_diff.rs` and
   `apps/conary/src/commands/model/lock.rs` for remote include drift and
   lockfile behavior

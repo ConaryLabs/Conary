@@ -3,7 +3,8 @@
 use super::super::context::compute_model_diff;
 use super::super::test_support::{
     ReplatformMetadataFailpointReset, build_test_ccs_package,
-    insert_test_repository_package_resolution, insert_test_static_ccs_repository, serve_test_file,
+    build_test_ccs_package_with_payloads_and_relations, insert_test_repository_package_resolution,
+    insert_test_static_ccs_repository, serve_test_file, typed_rpm_model_post_helper_bundle,
     typed_rpm_replatform_upgrade_bundle,
 };
 use super::*;
@@ -14,6 +15,42 @@ use conary_core::model::parser::SystemModel;
 use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
 use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use tempfile::tempdir;
+
+fn published_or_pending_generation_has_path(db_path: &std::path::Path, path: &str) -> bool {
+    let runtime_root =
+        conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
+    if let Some(generation) =
+        conary_core::generation::mount::current_generation(runtime_root.root()).unwrap()
+    {
+        let artifact = conary_core::generation::artifact::load_generation_artifact(
+            &runtime_root.generation_path(generation),
+        )
+        .unwrap();
+        return artifact
+            .generation_root
+            .entries
+            .iter()
+            .chain(&artifact.mutable_state.entries)
+            .any(|entry| entry.path == path);
+    }
+
+    let conn = conary_core::db::open(db_path).unwrap();
+    let debt = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)
+        .unwrap()
+        .pop()
+        .expect("model package-set install should retain exact publication debt");
+    let captured = crate::commands::generation::selected_root::load_publication_candidate(
+        &runtime_root,
+        &debt,
+    )
+    .unwrap();
+    captured
+        .generation
+        .entries
+        .iter()
+        .chain(&captured.state.entries)
+        .any(|entry| entry.path == path)
+}
 
 fn replatform_variant(architecture: Option<&str>, marker: &str) -> Trove {
     let mut trove = Trove::new(
@@ -169,6 +206,188 @@ allowed_distros = ["arch"]
         Some("[\"arch\"]".to_string())
     );
     assert!(DistroPin::get_current(&conn).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction() {
+    const TEST_NAME: &str = "commands::model::apply::tests::test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction";
+    if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
+        return;
+    }
+
+    use conary_core::db::models::{
+        InstallReason, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+        RepositoryRequirementGroup as DbRepositoryRequirementGroup, Trove,
+    };
+    use conary_core::repository::dependency_model::{
+        RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
+        RepositoryRequirementKind,
+    };
+
+    let (_temp_file, db_path) = create_test_db();
+    crate::commands::test_helpers::seed_test_bootable_runtime(std::path::Path::new(&db_path));
+    let temp_dir = tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    std::fs::create_dir_all(&install_root).unwrap();
+
+    let consumer_name = "a-model-consumer";
+    let provider_name = "z-model-provider";
+    let version = "1-1";
+    let libsystemd = "libmodel-systemd.so.0()(64bit)";
+    let requirement = RepositoryRequirementGroup::simple(
+        RepositoryRequirementKind::Depends,
+        RepositoryRequirementClause {
+            name: libsystemd.to_string(),
+            capability_kind: Some(RepositoryCapabilityKind::Soname),
+            version_constraint: None,
+            architecture_qualifier: Default::default(),
+            native_text: Some(libsystemd.to_string()),
+        },
+    );
+    let consumer_path = build_test_ccs_package_with_payloads_and_relations(
+        temp_dir.path(),
+        consumer_name,
+        version,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+        Some(typed_rpm_model_post_helper_bundle(consumer_name, version)),
+        vec![(
+            format!("/usr/bin/{consumer_name}"),
+            b"#!/bin/sh\nexit 0\n".to_vec(),
+            0o755,
+        )],
+        vec![requirement.clone()],
+        Vec::new(),
+    );
+    let provider_path = build_test_ccs_package_with_payloads_and_relations(
+        temp_dir.path(),
+        provider_name,
+        version,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+        None,
+        vec![(
+            "/usr/lib/systemd/systemd-update-helper".to_string(),
+            b"#!/bin/sh\nprintf observed > /model-post-observed\n".to_vec(),
+            0o755,
+        )],
+        Vec::new(),
+        vec![libsystemd.to_string()],
+    );
+    let (consumer_url, _consumer_server) = serve_test_file(consumer_path.clone());
+    let (provider_url, _provider_server) = serve_test_file(provider_path.clone());
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Strict).unwrap();
+    let repository_id = insert_test_static_ccs_repository(
+        &conn,
+        "fedora",
+        "https://example.test/fedora",
+        "fedora-44",
+    );
+    let mut package_ids = std::collections::HashMap::new();
+    for (name, package_path, package_url) in [
+        (consumer_name, &consumer_path, consumer_url),
+        (provider_name, &provider_path, provider_url),
+    ] {
+        let checksum = conary_core::hash::sha256(&std::fs::read(package_path).unwrap());
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            name.to_string(),
+            version.to_string(),
+            conary_core::repository::versioning::VersionScheme::Rpm,
+            checksum,
+            std::fs::metadata(package_path)
+                .unwrap()
+                .len()
+                .try_into()
+                .unwrap(),
+            package_url,
+        );
+        package.architecture = Some("x86_64".to_string());
+        package.source_profile = Some("fedora-44".to_string());
+        let package_id = package.insert(&conn).unwrap();
+        package_ids.insert(name, package_id);
+        insert_test_repository_package_resolution(&conn, repository_id, package_id, name, version);
+    }
+    let consumer_id = package_ids[consumer_name];
+    let provider_id = package_ids[provider_name];
+    let mut requirement_group = DbRepositoryRequirementGroup::new(
+        consumer_id,
+        requirement.kind.as_str().to_string(),
+        "hard".to_string(),
+        serde_json::to_string(&requirement.expression).unwrap(),
+    );
+    requirement_group.native_text = requirement.native_text.clone();
+    let group_id = requirement_group.insert(&conn).unwrap();
+    let clause = &requirement.alternatives[0];
+    RepositoryRequirement::new(
+        consumer_id,
+        group_id,
+        clause.name.clone(),
+        clause.version_constraint.clone(),
+        "soname".to_string(),
+        "runtime".to_string(),
+        clause.native_text.clone(),
+    )
+    .insert(&conn)
+    .unwrap();
+    RepositoryProvide::new(
+        provider_id,
+        libsystemd.to_string(),
+        None,
+        "soname".to_string(),
+        Some(libsystemd.to_string()),
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
+
+    let model_path = temp_dir.path().join("system.toml");
+    std::fs::write(
+        &model_path,
+        r#"
+[model]
+version = 1
+install = ["a-model-consumer", "z-model-provider"]
+
+[system.pin]
+distro = "fedora-44"
+strength = "strict"
+"#,
+    )
+    .unwrap();
+
+    let result = cmd_model_apply(ApplyOptions {
+        model_path: model_path.to_str().unwrap(),
+        db_path: &db_path,
+        root: install_root.to_str().unwrap(),
+        dry_run: false,
+        skip_optional: false,
+        strict: true,
+        autoremove: false,
+        offline: true,
+    });
+    let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+    result.await.unwrap();
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let mut changeset_ids = Vec::new();
+    for name in [consumer_name, provider_name] {
+        let installed = Trove::find_by_name(&conn, name).unwrap();
+        assert_eq!(installed.len(), 1, "{name} must be installed exactly once");
+        assert_eq!(installed[0].install_reason, InstallReason::Explicit);
+        assert_eq!(
+            installed[0].selection_reason.as_deref(),
+            Some("Installed by model apply")
+        );
+        changeset_ids.push(installed[0].installed_by_changeset_id);
+    }
+    assert_eq!(changeset_ids[0], changeset_ids[1]);
+    assert!(changeset_ids[0].is_some());
+    assert!(published_or_pending_generation_has_path(
+        std::path::Path::new(&db_path),
+        "/model-post-observed"
+    ));
 }
 
 #[tokio::test]
