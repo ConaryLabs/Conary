@@ -55,15 +55,7 @@ impl LuaRuntimeContext {
         self.cwd.borrow().clone()
     }
 
-    pub(super) fn chdir(&self, guest: &str) -> Result<()> {
-        let cwd = self.cwd();
-        let path = super::super::target::resolve_guest_path(self.root(), &cwd, guest)?;
-        if !path.is_dir() {
-            bail!(
-                "RpmEmbeddedLuaPathError: '{}' is not a directory in the install target",
-                guest
-            );
-        }
+    pub(super) fn set_cwd(&self, guest: &str) -> Result<()> {
         *self.cwd.borrow_mut() = self.guest_path(guest)?;
         Ok(())
     }

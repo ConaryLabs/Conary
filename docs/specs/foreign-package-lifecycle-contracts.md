@@ -920,12 +920,25 @@ and `(nil, path-qualified strerror, errno)` when target `lstat` fails, while a
 root-confinement violation remains fatal. `posix.dir` and `posix.files`
 likewise return RPM's three-value error result when target `opendir` fails;
 successful calls return the bundled table or iterator contract, including `.`
-and `..`, and confinement failures remain fatal. All target paths use one
-symlink-aware root-confinement resolver. APIs backed by leaf-sensitive
-filesystem calls (`lstat`, `readlink`, removal, rename, and link creation)
-resolve selected-root aliases only in the parent path and retain the exact
-final directory entry; APIs whose source syscall follows the leaf retain full
+and `..`, and confinement failures remain fatal. The remaining bundled
+`lposix` filesystem calls preserve the pinned
+[`pushresult`/`pusherror`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/rpmio/lposix.cc#L104-L127)
+contract: a numeric or string result on success and
+`(nil, path-qualified strerror, errno)` on syscall failure, except for upstream
+operations such as hard-link and symlink creation whose error string is
+intentionally not path-qualified. All target paths use one symlink-aware
+root-confinement resolver, and confinement failures remain fatal rather than
+becoming an ordinary syscall result. APIs backed by leaf-sensitive filesystem
+calls (`lstat`, `readlink`, removal, rename, and link creation) resolve
+selected-root aliases only in the parent path and retain the exact final
+directory entry; APIs whose source syscall follows the leaf retain full
 dereferencing.
+
+Standard `io.open` accepts Lua 5.4's pinned `[rwa]%+?b*` mode grammar and
+returns `(nil, path-qualified strerror, errno)` when the target `fopen` fails.
+RPM's separate `rpm.open` API retains its pinned exception-on-open-failure
+contract. Path validation and selected-root confinement occur before either
+open and remain fatal.
 
 Target-confined `io` file reads preserve the pinned Lua
 [`g_read()`](https://github.com/lua/lua/blob/v5.4.8/liolib.c#L534-L581)

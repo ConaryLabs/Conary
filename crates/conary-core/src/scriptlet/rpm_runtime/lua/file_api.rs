@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -32,11 +33,21 @@ impl LuaFile {
         rpm_default_read_all: bool,
     ) -> anyhow::Result<Self> {
         let path = context.resolve(guest)?;
+        Self::open_resolved(&path, guest, mode, rpm_default_read_all, context.umask())
+    }
+
+    fn open_resolved(
+        path: &Path,
+        guest: &str,
+        mode: &str,
+        rpm_default_read_all: bool,
+        umask: u32,
+    ) -> anyhow::Result<Self> {
         let backend = if let Some(compression) = mode.split_once('.').map(|(_, value)| value) {
             if !mode.starts_with('r') {
                 anyhow::bail!("compressed RPM file modes are read-only");
             }
-            let bytes = std::fs::read(&path)?;
+            let bytes = std::fs::read(path)?;
             let bytes = match compression {
                 "gzip" | "gz" => {
                     let mut decoded = Vec::new();
@@ -62,7 +73,7 @@ impl LuaFile {
                 .create(mode.starts_with('w') || mode.starts_with('a'))
                 .truncate(mode.starts_with('w'))
                 .append(mode.starts_with('a'))
-                .mode(0o666 & !context.umask());
+                .mode(0o666 & !umask);
             FileBackend::File(options.open(path)?)
         };
         Ok(Self {
@@ -316,9 +327,23 @@ pub(super) fn install_io(lua: &Lua, context: LuaRuntimeContext, stdin: &[u8]) ->
     let open_context = context.clone();
     table.set(
         "open",
-        lua.create_function(move |_, (path, mode): (String, Option<String>)| {
-            LuaFile::open(&open_context, &path, mode.as_deref().unwrap_or("r"), false)
-                .map_err(mlua::Error::external)
+        lua.create_function(move |lua, (path, mode): (String, Option<String>)| {
+            let mode = mode.unwrap_or_else(|| "r".to_string());
+            if !valid_standard_io_mode(&mode) {
+                return Err(mlua::Error::runtime(
+                    "bad argument #2 to 'open' (invalid mode)",
+                ));
+            }
+            let resolved = open_context.resolve(&path).map_err(mlua::Error::external)?;
+            match LuaFile::open_resolved(&resolved, &path, &mode, false, open_context.umask()) {
+                Ok(file) => Ok(MultiValue::from_vec(vec![Value::UserData(
+                    lua.create_userdata(file)?,
+                )])),
+                Err(error) => match error.downcast_ref::<std::io::Error>() {
+                    Some(io_error) => io_open_error(lua, &path, io_error),
+                    None => Err(mlua::Error::external(error)),
+                },
+            }
         })?,
     )?;
     let lines_context = context.clone();
@@ -460,6 +485,31 @@ fn read_formats(lua: &Lua, file: &LuaFile, formats: Variadic<Value>) -> mlua::Re
         }
     }
     Ok(MultiValue::from_vec(values))
+}
+
+fn valid_standard_io_mode(mode: &str) -> bool {
+    let mut bytes = mode.bytes().peekable();
+    if !matches!(bytes.next(), Some(b'r' | b'w' | b'a')) {
+        return false;
+    }
+    if bytes.peek() == Some(&b'+') {
+        bytes.next();
+    }
+    bytes.all(|byte| byte == b'b')
+}
+
+fn io_open_error(lua: &Lua, path: &str, error: &std::io::Error) -> mlua::Result<MultiValue> {
+    let errno = error.raw_os_error().unwrap_or(0);
+    let description = if errno == 0 {
+        error.to_string()
+    } else {
+        nix::errno::Errno::from_raw(errno).desc().to_string()
+    };
+    Ok(MultiValue::from_vec(vec![
+        Value::Nil,
+        Value::String(lua.create_string(format!("{path}: {description}"))?),
+        Value::Integer(i64::from(errno)),
+    ]))
 }
 
 pub(super) fn install_rpm_open(

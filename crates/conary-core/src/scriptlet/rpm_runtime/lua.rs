@@ -191,6 +191,7 @@ mod tests {
     };
     use crate::scriptlet::test_support::materialized_root;
     use crate::scriptlet::{PackageFormat, SandboxMode, ScriptletExecutor};
+    use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
     fn runtime() -> RpmRuntimeMetadata {
@@ -416,6 +417,218 @@ mod tests {
             Duration::from_secs(5),
         )
         .expect("pinned file:read selector grammar");
+    }
+
+    #[test]
+    fn embedded_lua_io_open_preserves_standard_and_rpm_failure_contracts() {
+        let root = tempfile::tempdir().expect("target root");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
+        let executor = ScriptletExecutor::new(
+            root.path(),
+            "crypto-policies",
+            "20251128",
+            PackageFormat::Rpm,
+        );
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"
+                local missing, message, errno =
+                    io.open("/proc/sys/crypto/fips_enabled", "r")
+                assert(missing == nil)
+                assert(message ==
+                    "/proc/sys/crypto/fips_enabled: No such file or directory")
+                assert(errno == 2)
+
+                local valid_mode, mode_error = pcall(io.open, "/missing", "rx")
+                assert(valid_mode == false)
+                assert(string.find(tostring(mode_error), "invalid mode", 1, true))
+
+                local rpm_ok, rpm_error = pcall(rpm.open, "/missing", "r")
+                assert(rpm_ok == false)
+                assert(string.find(tostring(rpm_error),
+                    "No such file or directory", 1, true))
+
+                local confined, confinement_error =
+                    pcall(io.open, "/loop/child", "r")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
+            "#,
+            &["1".to_string()],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("standard and RPM open contracts");
+    }
+
+    #[test]
+    fn embedded_lua_posix_filesystem_calls_preserve_pinned_result_tuples() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("present")).expect("present directory");
+        std::fs::create_dir_all(root.path().join("empty")).expect("empty directory");
+        std::fs::write(root.path().join("present/entry"), b"value").expect("present entry");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"
+                local function path_error(call, path, description, errno)
+                    local result, message, code = call()
+                    assert(result == nil)
+                    assert(message == path .. ": " .. description)
+                    assert(code == errno)
+                end
+
+                local function plain_error(call, description, errno)
+                    local result, message, code = call()
+                    assert(result == nil)
+                    assert(message == description)
+                    assert(code == errno)
+                end
+
+                assert(posix.access("/present", "r x") == 0)
+                path_error(function() return posix.access("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.chdir("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.chdir("/present/entry") end,
+                    "/present/entry", "Not a directory", 20)
+                assert(posix.getcwd() == "/")
+                path_error(function() return posix.chmod("/missing", "u+x") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.chown("/missing", nil, nil) end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.mkdir("/present") end,
+                    "/present", "File exists", 17)
+                assert(posix.umask(0) == 18)
+                assert(posix.mkdir("/unmasked") == 0)
+                path_error(function() return posix.rmdir("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.mkfifo("/present/entry") end,
+                    "/present/entry", "File exists", 17)
+                path_error(function() return posix.unlink("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                plain_error(function() return posix.link("/missing", "/hard-link") end,
+                    "No such file or directory", 2)
+                plain_error(function()
+                    return posix.symlink("target", "/present/entry")
+                end, "File exists", 17)
+                path_error(function() return posix.readlink("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.utime("/missing") end,
+                    "/missing", "No such file or directory", 2)
+
+                local confined, confinement_error =
+                    pcall(posix.unlink, "/loop/child")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
+            "#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("pinned lposix filesystem result contracts");
+
+        assert_eq!(
+            std::fs::metadata(root.path().join("unmasked"))
+                .expect("unmasked directory")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o777
+        );
+    }
+
+    #[test]
+    fn embedded_lua_runs_the_fedora_crypto_policies_post_install_body() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("etc/crypto-policies/back-ends"))
+            .expect("backend directory");
+        std::fs::create_dir_all(root.path().join("etc/crypto-policies/state"))
+            .expect("state directory");
+        std::fs::create_dir_all(root.path().join("usr/share/crypto-policies/DEFAULT"))
+            .expect("default policy directory");
+        std::fs::write(
+            root.path()
+                .join("usr/share/crypto-policies/DEFAULT/openssl.txt"),
+            b"backend",
+        )
+        .expect("policy backend");
+        let executor = ScriptletExecutor::new(
+            root.path(),
+            "crypto-policies",
+            "20251128-3.git19878fe.fc44",
+            PackageFormat::Rpm,
+        );
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"if not posix.access("/etc/crypto-policies/config") then
+    local policy = "DEFAULT"
+    local cf = io.open("/proc/sys/crypto/fips_enabled", "r")
+    if cf then
+        if cf:read() == "1" then
+            policy = "FIPS"
+        end
+        cf:close()
+    end
+    cf = io.open("/etc/crypto-policies/config", "w")
+    if cf then
+        cf:write(policy.."\n")
+        cf:close()
+    end
+    cf = io.open("/etc/crypto-policies/state/current", "w")
+    if cf then
+        cf:write(policy.."\n")
+        cf:close()
+    end
+    local policypath = "/usr/share/crypto-policies/"..policy
+    for fn in posix.files(policypath) do
+        if fn ~= "." and fn ~= ".." then
+            local backend = fn:gsub(".*/", ""):gsub("%..*", "")
+            local cfgfn = "/etc/crypto-policies/back-ends/"..backend..".config"
+            posix.unlink(cfgfn)
+            posix.symlink(policypath.."/"..fn, cfgfn)
+        end
+    end
+else
+    if posix.access("/var/lib/rpm-state/crypto-policies/autopolicy-reapplication-needed") then
+        os.execute("/usr/libexec/fips-crypto-policy-overlay >/dev/null 2>/dev/null || :")
+        posix.unlink("/var/lib/rpm-state/crypto-policies/autopolicy-reapplication-needed")
+    end
+end"#,
+            &["1".to_string()],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("Fedora crypto-policies post-install body");
+
+        assert_eq!(
+            std::fs::read(root.path().join("etc/crypto-policies/config")).expect("selected policy"),
+            b"DEFAULT\n"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("etc/crypto-policies/state/current"))
+                .expect("current policy"),
+            b"DEFAULT\n"
+        );
+        assert_eq!(
+            std::fs::read_link(
+                root.path()
+                    .join("etc/crypto-policies/back-ends/openssl.config")
+            )
+            .expect("backend link"),
+            std::path::PathBuf::from("/usr/share/crypto-policies/DEFAULT/openssl.txt")
+        );
     }
 
     #[test]
