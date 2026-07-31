@@ -172,7 +172,42 @@ fn stage_links_script_enables_the_units_the_boot_proof_needs() {
 }
 
 #[test]
+fn publication_convergence_is_idempotent_and_requires_exact_selected_state() {
+    let script = fixture_dir().join("publish-selected-generation.sh");
+    let contents = std::fs::read_to_string(&script)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", script.display()));
+
+    for required in [
+        "conary system generation publish",
+        "last_error FROM generation_publications",
+        "conary system generation pending",
+        "No pending generation publication debt.",
+        "readlink -f \"$runtime_root/current\"",
+        "\"$runtime_root/generations/$generation\"",
+    ] {
+        assert!(
+            contents.contains(required),
+            "{} must prove publication convergence with {required:?}",
+            script.display()
+        );
+    }
+
+    let status = Command::new("sh")
+        .arg("-n")
+        .arg(&script)
+        .status()
+        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", script.display()));
+    assert!(
+        status.success(),
+        "{} failed shell parsing",
+        script.display()
+    );
+}
+
+#[test]
 fn export_suites_consume_this_fixture_and_no_bootstrap_fixture() {
+    let convergence_script =
+        "/opt/remi-tests/fixtures/supported-host-generation-export/publish-selected-generation.sh";
     for rel in MANIFEST_RELS {
         let path = workspace_root().join(rel);
         let contents = std::fs::read_to_string(&path)
@@ -191,9 +226,8 @@ fn export_suites_consume_this_fixture_and_no_bootstrap_fixture() {
              publication correctly refuses to claim truthful composefs protection"
         );
         assert!(
-            contents.contains("PUBLISH_CODE=$?")
-                && contents.contains("last_error FROM generation_publications"),
-            "{rel} must preserve the explicit publish result and its typed debt cause"
+            contents.contains(convergence_script),
+            "{rel} must use the shared idempotent publication-convergence contract"
         );
     }
 }
