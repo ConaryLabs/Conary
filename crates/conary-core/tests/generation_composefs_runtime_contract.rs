@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,6 +24,42 @@ fn app_source(path: &str) -> PathBuf {
 
 fn workspace_file(path: &str) -> PathBuf {
     workspace_root().join(path)
+}
+
+fn dracut_inst_multiple_calls(module: &Path) -> Vec<Vec<String>> {
+    let output = Command::new("bash")
+        .args([
+            "-c",
+            r#"
+set -eu
+source "$1"
+moddir=/contract/conary-dracut-module
+install_conary_script() { :; }
+inst_multiple() {
+    printf 'call'
+    for argument in "$@"; do
+        printf '\t%s' "$argument"
+    done
+    printf '\n'
+}
+install
+"#,
+            "dracut-module-contract",
+        ])
+        .arg(module)
+        .output()
+        .expect("failed to evaluate conary dracut module setup");
+    assert!(
+        output.status.success(),
+        "conary dracut module setup failed under the contract harness: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8(output.stdout)
+        .expect("conary dracut module setup emitted non-UTF-8 arguments")
+        .lines()
+        .map(|line| line.split('\t').skip(1).map(str::to_string).collect())
+        .collect()
 }
 
 #[test]
@@ -474,6 +511,12 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
     let dracut_module =
         fs::read_to_string(workspace_file("packaging/dracut/90conary/module-setup.sh"))
             .expect("failed to read conary dracut module setup");
+    let dracut_module_path = workspace_file("packaging/dracut/90conary/module-setup.sh");
+    let mandatory_dracut_tools = dracut_inst_multiple_calls(&dracut_module_path)
+        .into_iter()
+        .filter(|call| !call.iter().any(|argument| argument == "-o"))
+        .flatten()
+        .collect::<Vec<_>>();
 
     assert!(
         dracut_module.contains("install_conary_script \"$moddir/conary-init.sh\" \"/init\""),
@@ -527,7 +570,7 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
         "boot must fail closed instead of creating an empty /etc upper when typed state is absent"
     );
     assert!(
-        dracut_module.contains("inst_multiple -o blkid cp grep"),
+        mandatory_dracut_tools.iter().any(|tool| tool == "cp"),
         "the initramfs must carry the copy tool required for readonly config-state seeding"
     );
 
