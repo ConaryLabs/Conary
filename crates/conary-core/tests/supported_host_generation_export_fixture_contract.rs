@@ -185,5 +185,15 @@ fn export_suites_consume_this_fixture_and_no_bootstrap_fixture() {
             !contents.contains("bootstrap-generation-export"),
             "{rel} still references the deleted bootstrap generation-export fixture"
         );
+        assert!(
+            contents.contains("mkfs.ext4 -F -O verity /dev/disk/by-id/virtio-conary-scratch"),
+            "{rel} must enable ext4 fs-verity on the selected generation root; otherwise \
+             publication correctly refuses to claim truthful composefs protection"
+        );
+        assert!(
+            contents.contains("PUBLISH_CODE=$?")
+                && contents.contains("last_error FROM generation_publications"),
+            "{rel} must preserve the explicit publish result and its typed debt cause"
+        );
     }
 }
