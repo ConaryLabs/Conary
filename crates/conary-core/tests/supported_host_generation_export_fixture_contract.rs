@@ -204,6 +204,101 @@ fn publication_convergence_is_idempotent_and_requires_exact_selected_state() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn publication_convergence_accepts_current_and_rejects_debt_or_escape() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let temp = tempfile::tempdir().expect("temporary publication fixture");
+    let runtime_root = temp.path().join("runtime");
+    let generation = runtime_root.join("generations/7");
+    std::fs::create_dir_all(generation.join("boot-assets")).expect("generation directories");
+    for marker in [
+        ".conary-artifact.json",
+        "cas-manifest.json",
+        "boot-assets/manifest.json",
+    ] {
+        std::fs::write(generation.join(marker), b"{}\n").expect("generation marker");
+    }
+    std::fs::write(runtime_root.join("conary.db"), b"").expect("fixture database");
+    symlink("generations/7", runtime_root.join("current")).expect("selected generation link");
+
+    let fake_bin = temp.path().join("bin");
+    std::fs::create_dir(&fake_bin).expect("fake command directory");
+    let fake_conary = fake_bin.join("conary");
+    std::fs::write(
+        &fake_conary,
+        r#"#!/bin/sh
+if [ "$1" = "system" ] && [ "$2" = "generation" ]; then
+    case "$3" in
+        publish)
+            echo "Generation publication is already current."
+            exit 0
+            ;;
+        pending)
+            printf '%s\n' "${FAKE_PENDING_OUTPUT:-No pending generation publication debt.}"
+            exit 0
+            ;;
+    esac
+fi
+exit 64
+"#,
+    )
+    .expect("fake conary command");
+    let mut permissions = std::fs::metadata(&fake_conary)
+        .expect("fake command metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_conary, permissions).expect("fake command permissions");
+
+    let script = fixture_dir().join("publish-selected-generation.sh");
+    let db_path = runtime_root.join("conary.db");
+    let selected_output = runtime_root.join("selected-generation.txt");
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let run = |pending_output: &str| {
+        Command::new("sh")
+            .arg(&script)
+            .arg(&db_path)
+            .arg(&selected_output)
+            .env("PATH", &path)
+            .env("FAKE_PENDING_OUTPUT", pending_output)
+            .output()
+            .unwrap_or_else(|err| panic!("failed to run {}: {err}", script.display()))
+    };
+
+    let current = run("No pending generation publication debt.");
+    assert!(
+        current.status.success(),
+        "already-current publication with no debt failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&current.stdout),
+        String::from_utf8_lossy(&current.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&selected_output).expect("selected generation output"),
+        "7\n"
+    );
+
+    let pending = run("Pending generation publication debt:");
+    assert!(
+        !pending.status.success(),
+        "publication convergence accepted outstanding debt"
+    );
+
+    std::fs::remove_file(runtime_root.join("current")).expect("remove selected link");
+    let outside = temp.path().join("outside/7");
+    std::fs::create_dir_all(&outside).expect("outside generation");
+    symlink(&outside, runtime_root.join("current")).expect("escaped selected link");
+    let escaped = run("No pending generation publication debt.");
+    assert!(
+        !escaped.status.success(),
+        "publication convergence accepted a selected generation outside the runtime root"
+    );
+}
+
 #[test]
 fn export_suites_consume_this_fixture_and_no_bootstrap_fixture() {
     let convergence_script =
