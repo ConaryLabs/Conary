@@ -166,9 +166,32 @@ fn stage_links_script_enables_the_units_the_boot_proof_needs() {
         assert_eq!(
             resolved,
             Path::new(target),
-            "{link} must be enabled by an explicit package-owned symlink, not by a preset"
+            "{link} must have explicit package-owned initial enablement"
         );
     }
+}
+
+#[test]
+fn access_package_preset_preserves_networkd_across_native_install_lifecycle() {
+    let preset = fixture_dir().join(
+        "conary-qemu-test-access/stage/etc/systemd/system-preset/00-conary-qemu-test-access.preset",
+    );
+    let contents = std::fs::read_to_string(&preset)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", preset.display()));
+    let rules = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        rules,
+        BTreeSet::from([
+            "enable systemd-networkd.service",
+            "enable systemd-networkd.socket",
+        ]),
+        "the Fedora networkd post-install helper applies preset policy after the access package's initial symlinks"
+    );
 }
 
 #[test]

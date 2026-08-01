@@ -117,7 +117,7 @@ pub(super) async fn apply_package_changes(
             applied += count;
         }
         Err(error) => {
-            let message = format!("Model package set: {error}");
+            let message = model_package_set_error(&error);
             eprintln!(
                 "{}",
                 crate::ui::row_line(crate::ui::Status::Fail, &[&message])
@@ -130,6 +130,10 @@ pub(super) async fn apply_package_changes(
     }
 
     Ok((applied, errors))
+}
+
+fn model_package_set_error(error: &anyhow::Error) -> String {
+    format!("Model package set: {error:#}")
 }
 
 fn package_set_requests(actions: &[&DiffAction]) -> Vec<PackageSetRequest> {
@@ -160,6 +164,17 @@ fn package_set_requests(actions: &[&DiffAction]) -> Vec<PackageSetRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_package_set_error_preserves_the_solver_cause() {
+        let error = anyhow::anyhow!("dependency graph exceeded the loading limit")
+            .context("failed to solve the complete model package set");
+
+        assert_eq!(
+            model_package_set_error(&error),
+            "Model package set: failed to solve the complete model package set: dependency graph exceeded the loading limit"
+        );
+    }
 
     #[test]
     fn install_and_update_actions_form_one_typed_package_set() {

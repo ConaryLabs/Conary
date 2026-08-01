@@ -1,0 +1,7 @@
+# apps/conary/tests/fixtures/supported-host-generation-export/conary-qemu-test-access/stage/etc/systemd/system-preset/00-conary-qemu-test-access.preset
+#
+# Fedora's systemd-networkd post-install lifecycle applies preset policy on an
+# initial install. Keep the QEMU guest's declared DHCP service enabled across
+# the complete model package-set transaction.
+enable systemd-networkd.service
+enable systemd-networkd.socket

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 23
-summary: Document exact profile-owned source policy, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
+last_updated: 2026-07-31
+revision: 24
+summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -364,8 +364,13 @@ rejects strict dependency solving when that profile has not been established;
 it never treats an empty profile as an empty candidate set and never derives
 one from a package name, repository label, URL, or package format. Local files
 with repository dependencies therefore require an explicit scope or system
-pin. Guarded mixing prefers an established profile and may fall back;
-permissive mixing does not add a profile preference. An exact installed
+pin. A declarative multi-root package set has no privileged root: when no
+profile is already pinned, its only implicit authority is the one exact source
+profile common to every root's version-compatible repository candidates.
+Disjoint or ambiguous profile sets fail closed and require an explicit pin;
+model order never selects source authority. Guarded mixing prefers an
+established profile and may fall back; permissive mixing does not add a profile
+preference. An exact installed
 package-name or declared capability provider that satisfies a transitive
 requirement is favored before repository ranking, so dependency planning does
 not reinstall its repository copy. An explicit root with an exact package-name
