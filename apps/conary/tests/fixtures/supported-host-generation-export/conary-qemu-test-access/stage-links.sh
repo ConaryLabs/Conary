@@ -8,7 +8,9 @@
 # They live in this script rather than in the checked-in stage tree because the
 # QEMU harness copies fixtures with `scp -r`, which materializes symlinks as
 # copies of their targets; a checked-in link would silently arrive in the guest
-# as a regular file. `conary ccs build` records them as payload symlinks.
+# as a regular file. `conary ccs build` records them as payload symlinks. The
+# package also carries an exact preset so Fedora's networkd post-install helper
+# preserves this enablement when the complete model transaction installs it.
 #
 # /etc/systemd/system is the enablement location systemctl writes to, so these
 # never collide with the /usr paths systemd and openssh-server own. A dangling

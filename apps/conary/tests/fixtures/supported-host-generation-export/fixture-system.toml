@@ -7,12 +7,9 @@
 # root that Groups O and P export and boot is assembled by the same install
 # path a user gets on a supported host.
 #
-# `model apply` turns each entry into a separate dependency-resolved install,
-# so no ordering may be relied on. Every intermediate generation publication
-# fails (a publication demands a complete kernel set and an ESP boot binary),
-# publication failure is non-fatal to the install, and each session
-# materializes from the latest candidate, so the selected root accumulates
-# until `conary system generation publish` succeeds once and clears the debt.
+# `model apply` resolves every changed entry as one complete package set and
+# executes one transaction. Model order is not installation order and must not
+# carry authority; the exact source profile and SAT solution own selection.
 #
 # Why each non-obvious entry is here:
 #   filesystem              owns the /sbin -> usr/sbin -> bin chain that
@@ -35,7 +32,9 @@
 #                           `conary-qemu-test-access/`. It is listed by name so
 #                           model apply treats it as explicitly wanted; the
 #                           suite installs it by path before apply so apply
-#                           never tries to resolve it from the repository.
+#                           never tries to resolve it from the repository. Its
+#                           preset keeps networkd enabled when Fedora's native
+#                           post-install lifecycle applies unit preset policy.
 
 [model]
 version = 1

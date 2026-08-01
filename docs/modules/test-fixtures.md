@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 28
+last_updated: 2026-07-31
+revision: 29
 summary: Map fixture ownership, including bounded CCS install-prefix authoring, cross-source lifecycle proof, the public v4 QEMU image contract, Fedora guest regeneration, and RPM root-anchor conversion
 ---
 
@@ -445,7 +445,9 @@ Each fixture family should record:
   suites apply; `conary-qemu-test-access/`, a CCS package built at test time
   that ships harness SSH access, a DHCP `.network` file, a tmpfiles fragment
   recreating openssh's privilege-separation directory on carrier `/var`, and
-  explicit unit-enablement symlinks. The symlinks are produced by
+  explicit unit-enablement symlinks plus a package-owned networkd preset. The
+  preset preserves DHCP enablement when Fedora's native networkd post-install
+  lifecycle applies unit preset policy. The symlinks are produced by
   `stage-links.sh` rather than checked in, because the harness copies fixtures
   with `scp -r`, which would materialize a checked-in link as a copy of its
   target.
@@ -464,11 +466,12 @@ Each fixture family should record:
 - **Regeneration:** hand-maintained. The model entries are pinned to real
   Fedora 44 package facts; changing the set means re-deriving them from Fedora
   44 headers, not from documentation.
-- **Current evidence:** none yet. The re-based suites have not had a live run,
-  so the fail-forward accumulation path they depend on
-  (`model apply` publishing per entry, every intermediate publication failing,
-  one `generation publish` clearing the debt) is supported by a code trace and
-  by the first bring-up, not by a recorded green run.
+- **Transaction contract:** `model apply` resolves the changed entries as one
+  exact-source SAT package set and executes one lifecycle transaction. The
+  suite verifies the selected generation contains networkd enablement before
+  export, then requires an independently reachable SSH boot of the qcow2 or ISO
+  artifact. Exact-head live evidence belongs on the owning pull request rather
+  than in this map.
 - **Safety notes:** The staged `authorized_keys` carries the
   `__CONARY_QEMU_TEST_PUBLIC_KEY__` placeholder and is substituted in the guest
   with the disposable harness key; no real credential belongs in this fixture.
