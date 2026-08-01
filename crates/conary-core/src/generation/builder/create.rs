@@ -43,7 +43,7 @@ pub fn materialize_selected_root_from_db(
     materialize_selected_root_from_db_with_authority(conn, objects_dir, selected_root).map(drop)
 }
 
-/// Bootstrap a writable selected root and return the exact typed authority
+/// Initialize a writable selected root and return the exact typed authority
 /// used for materialization.
 ///
 /// The returned manifests let staging callers retain metadata that the
