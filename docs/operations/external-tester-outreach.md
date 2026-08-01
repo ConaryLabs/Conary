@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-07-29
-revision: 6
+last_updated: 2026-07-31
+revision: 7
 status: postponed
-target_release: v0.14.0
+target_release: unassigned
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
 ---
 
@@ -11,16 +11,17 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > **POSTPONED; NO NEW DATE IS ASSIGNED:** the current qualifying milestone is
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
-> differed from the host's native format. Release candidate `v0.14.0` is not
-> yet publication or tester authority. Do not publish the copy below until its
-> release proof and the separate external cached-history and venue-eligibility
-> gates are closed.
+> differed from the host's native format. Release `v0.14.0` is published and
+> artifact-verified, but supported-host bring-up subsequently exposed defects
+> whose fixes remain unreleased. It is not current tester authority. Do not
+> publish the copy below until a later immutable release is named here and the
+> W7, external cached-history, and venue-eligibility gates are closed.
 
-`v0.14.0` is the target release for this packet. It becomes pinned only after
-the release artifact matrix records its published tag, checksums, signature,
-installed-binary proof, live deployment, and released-package cross-distro
-lifecycle. The maintainer assigns fresh dates only after every remaining gate
-closes, then posts manually and remains available to answer comments.
+The venue copy below retains its `v0.14.0` wording as an unpublishable draft
+until a replacement release exists; replacing the version without exact
+release evidence would create false authority. The maintainer re-pins and
+assigns fresh dates only after every remaining gate closes, then posts manually
+and remains available to answer comments.
 
 ## Show HN Submission
 
@@ -185,14 +186,17 @@ failed attempts are useful evidence.
   reports as non-qualifying historical evidence.
 - [x] Rewrite the venue copy around the cross-distro package loop.
 - [x] Retire the passed 2026-07-20 through 2026-07-22 dates.
-- [ ] Publish immutable `v0.14.0` with RPM, DEB, Arch, CCS, checksums, and the
+- [x] Publish immutable `v0.14.0` with RPM, DEB, Arch, CCS, checksums, and the
   required signature and installed-binary evidence.
-- [ ] Record exact cross-distro install/query/update-preview/remove proof for
+- [x] Record exact cross-distro install/query/update-preview/remove proof for
   the released binary on supported hosts.
-- [ ] Deploy the exact release sites and independently verify live status and
+- [x] Deploy the exact release sites and independently verify live status and
   body claims.
-- [ ] Update the release artifact matrix and milestone tracker with exact
+- [x] Update the release artifact matrix and milestone tracker with exact
   release, deployment, and Remi population evidence.
+- [ ] Publish and independently verify a later immutable Conary release that
+  contains the supported-host fixes discovered after `v0.14.0`, then replace
+  every pinned version and URL in this draft.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.
 - [ ] Re-check each venue's current rules and account eligibility immediately

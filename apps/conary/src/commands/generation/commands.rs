@@ -436,11 +436,9 @@ pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<(
 
     let outcome = result?;
     if outcome.needs_publication {
-        return Err(anyhow!(
-            "Generation publication is still pending. Retry with: {}",
-            outcome.retry_command.unwrap_or_else(
-                crate::commands::generation::publication::PublicationOutcome::default_retry_command
-            )
+        return Err(pending_publication_error(
+            "Generation publication",
+            &outcome,
         ));
     }
 
@@ -449,6 +447,20 @@ pub fn cmd_generation_publish(db_path: &str, changeset: Option<i64>) -> Result<(
         outcome.generation_number.unwrap_or_default()
     );
     Ok(())
+}
+
+fn pending_publication_error(
+    context: &str,
+    outcome: &crate::commands::generation::publication::PublicationOutcome,
+) -> anyhow::Error {
+    let cause = outcome
+        .failure_reason
+        .as_deref()
+        .unwrap_or("publication failed without a recorded cause");
+    let retry = outcome.retry_command.clone().unwrap_or_else(
+        crate::commands::generation::publication::PublicationOutcome::default_retry_command,
+    );
+    anyhow!("{context} is still pending.\nCause: {cause}\nRetry with: {retry}")
 }
 
 pub fn cmd_generation_pending(db_path: &str) -> Result<()> {
@@ -670,11 +682,9 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
             "Recover interrupted generation publication",
         )?;
         if outcome.needs_publication {
-            return Err(anyhow!(
-                "Generation publication recovery is still pending. Retry with: {}",
-                outcome.retry_command.unwrap_or_else(
-                    crate::commands::generation::publication::PublicationOutcome::default_retry_command
-                )
+            return Err(pending_publication_error(
+                "Generation publication recovery",
+                &outcome,
             ));
         }
     }

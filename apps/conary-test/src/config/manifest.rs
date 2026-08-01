@@ -783,7 +783,7 @@ local_image_path = "/tmp/generated.qcow2"
 stage_conary = true
 scratch_disk_mb = 8192
 copy_to_guest = [
-  { source = "apps/conary/tests/fixtures/bootstrap-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
+  { source = "apps/conary/tests/fixtures/supported-host-generation-export", dest = "/var/lib/conary/bootstrap-inputs" },
 ]
 copy_from_guest = [
   { source = "/tmp/out.qcow2", dest = "/tmp/conary-generation-export/host-out.qcow2" },
@@ -805,7 +805,7 @@ commands = ["true"]
                 assert_eq!(cfg.copy_to_guest.len(), 1);
                 assert_eq!(
                     cfg.copy_to_guest[0].source,
-                    "apps/conary/tests/fixtures/bootstrap-generation-export"
+                    "apps/conary/tests/fixtures/supported-host-generation-export"
                 );
                 assert_eq!(
                     cfg.copy_to_guest[0].dest,

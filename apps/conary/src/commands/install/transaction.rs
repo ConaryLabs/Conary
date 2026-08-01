@@ -71,22 +71,31 @@ pub(super) fn preflight_generation_file_capabilities_for_install(
     ctx: &TransactionContext<'_>,
     extraction: &ExtractionResult,
 ) -> Result<()> {
-    preflight_generation_file_capabilities(ctx)?;
-    preflight_selected_generation_file_capability_targets(ctx, extraction)
+    preflight_generation_file_capabilities(
+        ctx.ccs_file_capabilities,
+        ctx.defer_generation,
+        &extraction.extracted_files,
+    )
 }
 
-fn preflight_generation_file_capabilities(ctx: &TransactionContext<'_>) -> Result<()> {
+pub(super) fn preflight_generation_file_capabilities(
+    file_capabilities: Option<&[conary_core::ccs::manifest::FileCapability]>,
+    defer_generation: bool,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
+) -> Result<()> {
     preflight_generation_file_capabilities_with_xattr_support(
-        ctx,
+        file_capabilities,
+        defer_generation,
+        extracted_files,
         conary_core::generation::builder::erofs_xattr_image_support_available(),
     )
 }
 
 fn preflight_selected_generation_file_capability_targets(
-    ctx: &TransactionContext<'_>,
-    extraction: &ExtractionResult,
+    file_capabilities: Option<&[conary_core::ccs::manifest::FileCapability]>,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
-    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+    let Some(file_capabilities) = file_capabilities else {
         return Ok(());
     };
     if file_capabilities.is_empty() {
@@ -94,8 +103,7 @@ fn preflight_selected_generation_file_capability_targets(
     }
 
     for capability in file_capabilities {
-        let Some(selected_file) = extraction
-            .extracted_files
+        let Some(selected_file) = extracted_files
             .iter()
             .find(|file| file.path == capability.path)
         else {
@@ -119,10 +127,12 @@ fn preflight_selected_generation_file_capability_targets(
 }
 
 fn preflight_generation_file_capabilities_with_xattr_support(
-    ctx: &TransactionContext<'_>,
+    file_capabilities: Option<&[conary_core::ccs::manifest::FileCapability]>,
+    defer_generation: bool,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
     xattr_image_support_available: bool,
 ) -> Result<()> {
-    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+    let Some(file_capabilities) = file_capabilities else {
         return Ok(());
     };
     if file_capabilities.is_empty() {
@@ -131,7 +141,7 @@ fn preflight_generation_file_capabilities_with_xattr_support(
     for capability in file_capabilities {
         capability.validate()?;
     }
-    if ctx.defer_generation {
+    if defer_generation {
         anyhow::bail!(
             "CCS file_capabilities require immediate generation publication and cannot use --defer-generation"
         );
@@ -141,7 +151,7 @@ fn preflight_generation_file_capabilities_with_xattr_support(
             "CCS file_capabilities require generation image xattr propagation, but generation image xattr propagation is unavailable in this build"
         );
     }
-    Ok(())
+    preflight_selected_generation_file_capability_targets(Some(file_capabilities), extracted_files)
 }
 
 pub(super) fn persist_package_provides(

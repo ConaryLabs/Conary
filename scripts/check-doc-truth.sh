@@ -281,10 +281,10 @@ check_preview_status() {
     require_match "docs/roadmaps/development-roadmap.md" 'remote Forge validation is paused pending (a new |a )KVM-capable runner|Remote Forge validation is paused pending (a new |a )KVM-capable runner' 'remote Forge paused wording'
     require_match "docs/INTEGRATION-TESTING.md" 'Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner|Forge-backed.*paused' 'remote Forge paused wording'
 
-    require_match "docs/roadmaps/development-roadmap.md" '2026-05-21.*Group O' 'dated Group O evidence'
-    require_match "docs/roadmaps/development-roadmap.md" '2026-05-21.*Group P' 'dated Group P evidence'
-    require_match "docs/INTEGRATION-TESTING.md" 'Group O.*2026-05-21' 'dated Group O evidence'
-    require_match "docs/INTEGRATION-TESTING.md" 'Group P.*2026-05-21' 'dated Group P evidence'
+    require_match "docs/roadmaps/development-roadmap.md" '2026-07-31.*Group O' 'dated Group O evidence'
+    require_match "docs/roadmaps/development-roadmap.md" '2026-07-31.*Group P' 'dated Group P evidence'
+    require_match "docs/INTEGRATION-TESTING.md" 'Group O.*2026-07-31' 'dated Group O evidence'
+    require_match "docs/INTEGRATION-TESTING.md" 'Group P.*2026-07-31' 'dated Group P evidence'
 }
 
 check_release_doc_versions() {
@@ -337,18 +337,28 @@ check_release_doc_versions() {
         if [[ "$planned_status" != "postponed" ]]; then
             report_error "$planned_doc: planned launch packet status must be postponed until release proof exists"
         fi
-        if [[ ! "$target_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            report_error "$planned_doc: target_release must be an exact vMAJOR.MINOR.PATCH tag"
+        require_match "$planned_doc" "$current_tag" "historical current-release baseline ${current_tag}"
+
+        local allowed_target_tag candidate_link_tag candidate_link_label
+        if [[ "$target_tag" == "unassigned" ]]; then
+            allowed_target_tag="$current_tag"
+            candidate_link_tag="$current_tag"
+            candidate_link_label="retained current release ${current_tag} while target_release is unassigned"
+            require_match "$planned_doc" 'NO NEW DATE IS ASSIGNED|[Nn]o .*release is assigned|release is unassigned' 'explicit unassigned launch state'
+        elif [[ "$target_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            allowed_target_tag="$target_tag"
+            candidate_link_tag="$target_tag"
+            candidate_link_label="target release ${target_tag}"
+            require_match "$planned_doc" "$target_tag" "planned target release ${target_tag}"
+        else
+            report_error "$planned_doc: target_release must be an exact vMAJOR.MINOR.PATCH tag or unassigned"
             return
         fi
-
-        require_match "$planned_doc" "$current_tag" "historical current-release baseline ${current_tag}"
-        require_match "$planned_doc" "$target_tag" "planned target release ${target_tag}"
 
         local file line_no text found_tag
         while IFS=: read -r file line_no text; do
             while IFS= read -r found_tag; do
-                if [[ "$found_tag" != "$current_tag" && "$found_tag" != "$target_tag" ]]; then
+                if [[ "$found_tag" != "$current_tag" && "$found_tag" != "$allowed_target_tag" ]]; then
                     report_error "$file:$line_no has release reference outside current/target contract: $text"
                 fi
             done < <(rg -o -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' <<< "$text")
@@ -358,8 +368,8 @@ check_release_doc_versions() {
         )
 
         while IFS=: read -r file line_no text; do
-            if [[ "$text" != *"$target_tag"* ]]; then
-                report_error "$file:$line_no has candidate launch link or checklist item outside target release ${target_tag}: $text"
+            if [[ "$text" != *"$candidate_link_tag"* ]]; then
+                report_error "$file:$line_no has candidate launch link or checklist item outside ${candidate_link_label}: $text"
             fi
         done < <(
             rg -nH -- 'github\.com/ConaryLabs/Conary/(blob|releases/tag)/v|Publish immutable `v' "$planned_doc" ||

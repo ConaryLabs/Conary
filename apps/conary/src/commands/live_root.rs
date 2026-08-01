@@ -96,6 +96,14 @@ pub(crate) fn target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
     Ok(root.join(relative_path))
 }
 
+fn selected_root_target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
+    let effective = conary_core::filesystem::selected_root::selected_root_effective_package_path(
+        root,
+        package_path,
+    )?;
+    target_path(root, &effective)
+}
+
 impl LiveRootTransaction {
     pub(crate) fn begin(
         runtime_root: &Path,
@@ -191,7 +199,7 @@ impl LiveRootTransaction {
 
         directories.sort_by_key(|file| std::cmp::Reverse(file.path.matches('/').count()));
         for file in directories {
-            let target = target_path(&self.root, &file.path)?;
+            let target = selected_root_target_path(&self.root, &file.path)?;
             apply_resolved_payload_metadata(&target, &file.node)
                 .with_context(|| format!("Failed to apply metadata for {}", file.path))?;
             sync_directory(&target)?;
@@ -201,7 +209,7 @@ impl LiveRootTransaction {
     }
 
     fn apply_directory(&mut self, file: &LiveRootFile, stats: &mut LiveRootStats) -> Result<()> {
-        let target = target_path(&self.root, &file.path)?;
+        let target = selected_root_target_path(&self.root, &file.path)?;
         self.ensure_parent(&target, stats)?;
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_dir() => {
@@ -239,7 +247,7 @@ impl LiveRootTransaction {
     }
 
     fn apply_leaf(&mut self, file: &LiveRootFile, stats: &mut LiveRootStats) -> Result<()> {
-        let target = target_path(&self.root, &file.path)?;
+        let target = selected_root_target_path(&self.root, &file.path)?;
         self.ensure_parent(&target, stats)?;
         reject_existing_directory_target(&target)?;
         self.backup_existing(&target)?;
@@ -264,7 +272,7 @@ impl LiveRootTransaction {
         let mut stats = LiveRootStats::default();
         let mut dirs = Vec::new();
         for package_path in package_paths {
-            let target = target_path(&self.root, package_path)?;
+            let target = selected_root_target_path(&self.root, package_path)?;
             validate_existing_parent(&self.root, &target)?;
             match fs::symlink_metadata(&target) {
                 Ok(meta) if meta.is_dir() => dirs.push(target),
@@ -638,7 +646,7 @@ fn preflight_install_files(files: &[LiveRootFile], references: &[LiveRootFile]) 
 }
 
 fn verify_preserved_reference(root: &Path, reference: &LiveRootFile) -> Result<()> {
-    let path = target_path(root, &reference.path)?;
+    let path = selected_root_target_path(root, &reference.path)?;
     let metadata = fs::symlink_metadata(&path).with_context(|| {
         format!(
             "preserved hardlink target {} is unavailable",
@@ -705,7 +713,7 @@ fn create_live_root_leaf(root: &Path, path: &Path, file: &LiveRootFile) -> Resul
                 .with_context(|| format!("Failed to create symlink {}", path.display()))?;
         }
         PayloadNodeKind::Hardlink { target, .. } => {
-            let target = target_path(root, target)?;
+            let target = selected_root_target_path(root, target)?;
             let metadata = fs::symlink_metadata(&target).with_context(|| {
                 format!(
                     "payload hardlink {} target is unavailable: {}",

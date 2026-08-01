@@ -17,9 +17,9 @@ const pages = [
 	},
 	{
 		file: 'install/index.html',
-		title: 'Install the Conary limited preview — Conary',
+		title: 'Conary tester release status — Conary',
 		canonical: 'https://conary.io/install/',
-		marker: 'Install Conary without skipping the safety gate.'
+		marker: 'Wait for the next verified tester release.'
 	},
 	{
 		file: 'compare/index.html',

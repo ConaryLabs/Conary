@@ -97,7 +97,6 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         allow_downgrade: false,
         intent: InstallIntent::PackageChange,
         yes: true,
-        dependency_passes_remaining: 0,
         envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
         repository_provenance: Some(provenance),
         resolution_policy: test_resolution_policy(),

@@ -340,6 +340,7 @@ fn query_package_files(
                 file.user,
                 file.group,
                 file.link_target,
+                file.absence_policy,
             )
         })
         .collect())
@@ -381,6 +382,7 @@ mod tests {
             Some("root".to_string()),
             Some("root".to_string()),
             link_target.map(str::to_string),
+            conary_core::packages::InstalledFileAbsencePolicy::Required,
         )
     }
 

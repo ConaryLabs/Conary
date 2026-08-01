@@ -1,7 +1,7 @@
 // conary-core/src/generation/export.rs
 
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
@@ -28,6 +28,7 @@ const ISO_VOLUME_ID: &str = "CONARY_ISO";
 const ISO_EFI_IMAGE_REL: &str = "EFI/efiboot.img";
 const ISO_EFI_IMAGE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 const DISABLE_SOURCE_FSTAB_OPTION: &str = "fstab=no";
+const DISABLE_GPT_AUTO_DISCOVERY_OPTION: &str = "systemd.gpt_auto=0";
 const WRITABLE_ESP_MOUNT_OPTION: &str =
     "systemd.mount-extra=PARTLABEL=CONARY_ESP:/boot:vfat:defaults,noatime";
 
@@ -161,7 +162,7 @@ fn export_raw(
 
     let definitions = staging.path().join("repart.d");
     let plan = crate::image::repart::DiskImagePlan {
-        architecture: crate::bootstrap::TargetArch::X86_64,
+        architecture: crate::image::arch::TargetArch::X86_64,
         esp_staging_dir: esp,
         root_staging_dir: rootfs,
         output_raw: options.output.clone(),
@@ -503,6 +504,8 @@ fn project_generation_rootfs_with_security_apply(
     } else {
         std::fs::create_dir(&etc_state)?;
     }
+    ensure_generic_image_machine_id(&etc_state)?;
+    apply_resolved_payload_metadata(&etc_state, carrier_mountpoint_node(artifact, "/etc")?)?;
     std::fs::create_dir_all(staging_dir.join("conary/etc-lower"))?;
     std::fs::create_dir_all(staging_dir.join("conary/mnt"))?;
 
@@ -520,6 +523,32 @@ fn project_generation_rootfs_with_security_apply(
     restore_carrier_root_metadata(artifact, staging_dir)?;
 
     Ok(staging_dir.to_path_buf())
+}
+
+/// Seed systemd's documented generic-image machine-id state.
+///
+/// A missing file means "first boot" and applies preset policy. An empty file
+/// is explicitly not first boot: systemd creates a transient unique ID and
+/// commits it later when the writable carrier is available. Existing
+/// state-owned authority always wins.
+fn ensure_generic_image_machine_id(etc_state: &Path) -> crate::Result<()> {
+    let machine_id = etc_state.join("machine-id");
+    match std::fs::symlink_metadata(&machine_id) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&machine_id)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o444))?;
+    }
+    Ok(())
 }
 
 fn validate_carrier_root_metadata(artifact: &GenerationArtifact) -> crate::Result<()> {
@@ -659,7 +688,7 @@ fn project_generation_esp_for_carrier(
     )?;
     let boot_options = match carrier {
         BootCarrier::WritableDisk => format!(
-            "root=PARTLABEL=CONARY_ROOT rootfstype={} rw {DISABLE_SOURCE_FSTAB_OPTION} {WRITABLE_ESP_MOUNT_OPTION} conary.generation={} console=tty0 console=ttyS0",
+            "root=PARTLABEL=CONARY_ROOT rootfstype={} rw {DISABLE_SOURCE_FSTAB_OPTION} {DISABLE_GPT_AUTO_DISCOVERY_OPTION} {WRITABLE_ESP_MOUNT_OPTION} conary.generation={} console=tty0 console=ttyS0",
             crate::image::repart::BLS_ROOTFSTYPE,
             artifact.generation
         ),

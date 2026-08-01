@@ -497,7 +497,7 @@ mod tests {
                 stage_conary: true,
                 scratch_disk_mb: Some(4096),
                 copy_to_guest: vec![QemuGuestCopy {
-                    source: "${FIXTURE_ROOT}/bootstrap-generation-export".to_string(),
+                    source: "${FIXTURE_ROOT}/supported-host-generation-export".to_string(),
                     dest: "/var/lib/conary/${IMG}".to_string(),
                 }],
                 copy_from_guest: vec![QemuGuestCopy {
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(expanded.scratch_disk_mb, Some(4096));
         assert_eq!(
             expanded.copy_to_guest[0].source,
-            "/opt/remi-tests/fixtures/bootstrap-generation-export"
+            "/opt/remi-tests/fixtures/supported-host-generation-export"
         );
         assert_eq!(
             expanded.copy_to_guest[0].dest,

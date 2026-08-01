@@ -39,7 +39,7 @@ pub(crate) fn capture_package_files(
     files: &[FileInfoTuple],
     cas: Option<&CasStore>,
 ) -> Result<Vec<CapturedAdoptionFile>> {
-    files
+    let captured = files
         .iter()
         .map(|file| {
             capture_file(file, cas).map_err(|error| {
@@ -49,7 +49,8 @@ pub(crate) fn capture_package_files(
                 )
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(captured.into_iter().flatten().collect())
 }
 
 pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]) -> Result<()> {
@@ -64,8 +65,17 @@ pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]
     Ok(())
 }
 
-fn capture_file(file: &FileInfoTuple, cas: Option<&CasStore>) -> Result<CapturedAdoptionFile> {
+fn capture_file(
+    file: &FileInfoTuple,
+    cas: Option<&CasStore>,
+) -> Result<Option<CapturedAdoptionFile>> {
     let path = Path::new(&file.0);
+    if is_selected_root_anchor(path) {
+        return Ok(None);
+    }
+    if permitted_native_absence(file, path) {
+        return Ok(None);
+    }
     let node = conary_core::generation::root_manifest::capture_existing_payload_node(path)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("failed to capture exact node {}", file.0))?;
@@ -85,15 +95,21 @@ fn capture_file(file: &FileInfoTuple, cas: Option<&CasStore>) -> Result<Captured
         None
     };
     node.source.validate_content(content.as_ref())?;
-    Ok(CapturedAdoptionFile {
+    Ok(Some(CapturedAdoptionFile {
         source: file.clone(),
         node,
         content,
-    })
+    }))
 }
 
 fn validate_file(file: &FileInfoTuple) -> Result<()> {
     let path = Path::new(&file.0);
+    if is_selected_root_anchor(path) {
+        return Ok(());
+    }
+    if permitted_native_absence(file, path) {
+        return Ok(());
+    }
     let node = conary_core::generation::root_manifest::capture_existing_payload_node(path)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("failed to capture exact node {}", file.0))?;
@@ -101,6 +117,26 @@ fn validate_file(file: &FileInfoTuple) -> Result<()> {
         read_regular_without_following(path)?;
     }
     Ok(())
+}
+
+/// The selected root owns its root node independently of package payload.
+///
+/// Native databases may record `/` as package ownership, but Conary's files
+/// and directory-claim graphs intentionally contain paths below root only.
+/// Persisting this record would duplicate the generation manifest's root
+/// authority and make package removal target the root anchor itself.
+fn is_selected_root_anchor(path: &Path) -> bool {
+    path == Path::new("/")
+}
+
+fn permitted_native_absence(file: &FileInfoTuple, path: &Path) -> bool {
+    if !file.7.permits_absence() {
+        return false;
+    }
+    matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 fn read_regular_without_following(path: &Path) -> Result<Vec<u8>> {
@@ -133,6 +169,7 @@ fn read_regular_without_following(path: &Path) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use conary_core::filesystem::CasStore;
+    use conary_core::packages::InstalledFileAbsencePolicy;
 
     fn tempdir_in_target() -> tempfile::TempDir {
         std::fs::create_dir_all("target").unwrap();
@@ -157,7 +194,17 @@ mod tests {
             Some("root".to_string()),
             Some("root".to_string()),
             link_target.map(str::to_string),
+            InstalledFileAbsencePolicy::Required,
         )
+    }
+
+    fn file_tuple_with_policy(
+        path: &str,
+        policy: InstalledFileAbsencePolicy,
+    ) -> super::super::FileInfoTuple {
+        let mut file = file_tuple(path, 0, 0o100644, None, None);
+        file.7 = policy;
+        file
     }
 
     fn assert_error_contains(error: anyhow::Error, snippets: &[&str]) {
@@ -384,5 +431,74 @@ mod tests {
                 "failed to capture exact node",
             ],
         );
+    }
+
+    #[test]
+    fn native_optional_absence_is_omitted_from_the_live_payload_snapshot() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let ghost = file_tuple_with_policy(
+            tmp.path().join("absent-ghost").to_str().unwrap(),
+            InstalledFileAbsencePolicy::RpmGhost,
+        );
+        let missing_ok = file_tuple_with_policy(
+            tmp.path().join("absent-missing-ok").to_str().unwrap(),
+            InstalledFileAbsencePolicy::RpmMissingOk,
+        );
+
+        let captured =
+            capture_package_files("native-optional", &[ghost, missing_ok], Some(&cas)).unwrap();
+
+        assert!(captured.is_empty());
+        validate_package_files(
+            "native-optional",
+            &[file_tuple_with_policy(
+                tmp.path().join("still-absent").to_str().unwrap(),
+                InstalledFileAbsencePolicy::RpmGhostAndMissingOk,
+            )],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn present_rpm_ghost_is_captured_as_live_payload() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("present-ghost");
+        std::fs::write(&path, b"runtime state").unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+
+        let captured = capture_package_files(
+            "present-ghost",
+            &[file_tuple_with_policy(
+                path.to_str().unwrap(),
+                InstalledFileAbsencePolicy::RpmGhost,
+            )],
+            Some(&cas),
+        )
+        .unwrap();
+
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            cas.retrieve(&captured[0].content.as_ref().unwrap().sha256)
+                .unwrap(),
+            b"runtime state"
+        );
+    }
+
+    #[test]
+    fn native_selected_root_ownership_is_not_removable_package_payload() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let below_root = tmp.path().join("owned-directory");
+        std::fs::create_dir(&below_root).unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let root = file_tuple("/", 0, 0o040755, None, None);
+        let child = file_tuple(below_root.to_str().unwrap(), 0, 0o040755, None, None);
+
+        let captured =
+            capture_package_files("filesystem", &[root.clone(), child], Some(&cas)).unwrap();
+
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].source.0, below_root.to_string_lossy());
+        validate_package_files("filesystem", &[root]).unwrap();
     }
 }

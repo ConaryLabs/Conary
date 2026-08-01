@@ -79,12 +79,13 @@ pub(super) fn install_os(lua: &Lua, context: LuaRuntimeContext) -> mlua::Result<
         "remove",
         lua.create_function(move |_, path: String| {
             let path = remove_context
-                .resolve(&path)
+                .resolve_without_following_leaf(&path)
                 .map_err(mlua::Error::external)?;
-            if path.is_dir() {
-                std::fs::remove_dir(path).map_err(mlua::Error::external)?;
+            let metadata = std::fs::symlink_metadata(&path).map_err(mlua::Error::external)?;
+            if metadata.file_type().is_dir() {
+                std::fs::remove_dir(&path).map_err(mlua::Error::external)?;
             } else {
-                std::fs::remove_file(path).map_err(mlua::Error::external)?;
+                std::fs::remove_file(&path).map_err(mlua::Error::external)?;
             }
             Ok(true)
         })?,
@@ -94,9 +95,11 @@ pub(super) fn install_os(lua: &Lua, context: LuaRuntimeContext) -> mlua::Result<
         "rename",
         lua.create_function(move |_, (from, to): (String, String)| {
             let from = rename_context
-                .resolve(&from)
+                .resolve_without_following_leaf(&from)
                 .map_err(mlua::Error::external)?;
-            let to = rename_context.resolve(&to).map_err(mlua::Error::external)?;
+            let to = rename_context
+                .resolve_without_following_leaf(&to)
+                .map_err(mlua::Error::external)?;
             std::fs::rename(from, to).map_err(mlua::Error::external)?;
             Ok(true)
         })?,
@@ -177,14 +180,14 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
     let access_context = context.clone();
     table.set(
         "access",
-        lua.create_function(move |_, (path, mode): (String, Option<String>)| {
+        lua.create_function(move |lua, (guest, mode): (String, Option<String>)| {
             let path = access_context
-                .resolve(&path)
+                .resolve(&guest)
                 .map_err(mlua::Error::external)?;
             let mode = mode.unwrap_or_else(|| "f".to_string());
             if !mode
                 .bytes()
-                .all(|byte| matches!(byte, b'r' | b'w' | b'x' | b'f'))
+                .all(|byte| matches!(byte, b' ' | b'r' | b'w' | b'x' | b'f'))
             {
                 return Err(mlua::Error::runtime(format!(
                     "invalid access mode '{mode}'"
@@ -202,156 +205,190 @@ fn install_posix_paths(lua: &Lua, table: &Table, context: LuaRuntimeContext) -> 
             if mode.contains('x') {
                 flags |= libc::X_OK;
             }
-            Ok(unsafe { libc::access(path.as_ptr(), flags) } == 0)
+            posix_status(lua, Some(&guest), unsafe {
+                libc::access(path.as_ptr(), flags)
+            })
         })?,
     )?;
     let chdir_context = context.clone();
     table.set(
         "chdir",
-        lua.create_function(move |_, path: String| {
-            chdir_context.chdir(&path).map_err(mlua::Error::external)?;
-            Ok(0)
+        lua.create_function(move |lua, guest: String| {
+            let path = chdir_context
+                .resolve(&guest)
+                .map_err(mlua::Error::external)?;
+            match std::fs::metadata(path) {
+                Ok(metadata) if metadata.is_dir() => {
+                    chdir_context
+                        .set_cwd(&guest)
+                        .map_err(mlua::Error::external)?;
+                    posix_result(lua, Some(&guest), Ok(()))
+                }
+                Ok(_) => posix_path_error(
+                    lua,
+                    &guest,
+                    std::io::Error::from_raw_os_error(libc::ENOTDIR),
+                ),
+                Err(error) => posix_path_error(lua, &guest, error),
+            }
         })?,
     )?;
     let chmod_context = context.clone();
     table.set(
         "chmod",
-        lua.create_function(move |_, (path, mode): (String, Value)| {
+        lua.create_function(move |lua, (guest, mode): (String, Value)| {
             let path = chmod_context
-                .resolve(&path)
+                .resolve(&guest)
                 .map_err(mlua::Error::external)?;
-            let current = std::fs::metadata(&path)
-                .map_err(mlua::Error::external)?
-                .permissions()
-                .mode();
+            let current = match std::fs::metadata(&path) {
+                Ok(metadata) => metadata.permissions().mode(),
+                Err(error) => return posix_path_error(lua, &guest, error),
+            };
             let mode = parse_mode(mode, current)?;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-                .map_err(mlua::Error::external)?;
-            Ok(0)
+            posix_result(
+                lua,
+                Some(&guest),
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)),
+            )
         })?,
     )?;
     let chown_context = context.clone();
     table.set(
         "chown",
         lua.create_function(
-            move |_, (path, user, group): (String, Option<Value>, Option<Value>)| {
+            move |lua, (guest, user, group): (String, Option<Value>, Option<Value>)| {
                 let path = chown_context
-                    .resolve(&path)
+                    .resolve(&guest)
                     .map_err(mlua::Error::external)?;
                 let uid = target_identity(&chown_context, user, false)?;
                 let gid = target_identity(&chown_context, group, true)?;
                 let path = CString::new(path.as_os_str().as_bytes())
                     .map_err(|_| mlua::Error::runtime("path contains NUL"))?;
-                let rc = unsafe { libc::chown(path.as_ptr(), uid, gid) };
-                if rc != 0 {
-                    return Err(mlua::Error::external(std::io::Error::last_os_error()));
-                }
-                Ok(0)
+                posix_status(lua, Some(&guest), unsafe {
+                    libc::chown(path.as_ptr(), uid, gid)
+                })
             },
         )?,
     )?;
     let mkdir_context = context.clone();
     table.set(
         "mkdir",
-        lua.create_function(move |_, (path, mode): (String, Option<u32>)| {
+        lua.create_function(move |lua, (guest, mode): (String, Option<u32>)| {
             let path = mkdir_context
-                .resolve(&path)
+                .resolve_without_following_leaf(&guest)
                 .map_err(mlua::Error::external)?;
-            std::fs::create_dir(&path).map_err(mlua::Error::external)?;
             let mode = mode.unwrap_or(0o777) & !mkdir_context.umask();
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-                .map_err(mlua::Error::external)?;
-            Ok(0)
+            let result = std::fs::create_dir(&path).and_then(|()| {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            });
+            posix_result(lua, Some(&guest), result)
         })?,
     )?;
     let rmdir_context = context.clone();
     table.set(
         "rmdir",
-        lua.create_function(move |_, path: String| {
-            std::fs::remove_dir(
+        lua.create_function(move |lua, guest: String| {
+            let result = std::fs::remove_dir(
                 rmdir_context
-                    .resolve(&path)
+                    .resolve_without_following_leaf(&guest)
                     .map_err(mlua::Error::external)?,
-            )
-            .map_err(mlua::Error::external)?;
-            Ok(0)
+            );
+            posix_result(lua, Some(&guest), result)
         })?,
     )?;
     let fifo_context = context.clone();
     table.set(
         "mkfifo",
-        lua.create_function(move |_, path: String| {
-            let path = fifo_context.resolve(&path).map_err(mlua::Error::external)?;
+        lua.create_function(move |lua, guest: String| {
+            let path = fifo_context
+                .resolve_without_following_leaf(&guest)
+                .map_err(mlua::Error::external)?;
             let path = CString::new(path.as_os_str().as_bytes())
                 .map_err(|_| mlua::Error::runtime("path contains NUL"))?;
-            let rc = unsafe { libc::mkfifo(path.as_ptr(), 0o777 & !fifo_context.umask()) };
-            if rc != 0 {
-                return Err(mlua::Error::external(std::io::Error::last_os_error()));
-            }
-            Ok(0)
+            posix_status(lua, Some(&guest), unsafe {
+                libc::mkfifo(path.as_ptr(), 0o777 & !fifo_context.umask())
+            })
         })?,
     )?;
     let unlink_context = context.clone();
     table.set(
         "unlink",
-        lua.create_function(move |_, path: String| {
-            std::fs::remove_file(
+        lua.create_function(move |lua, guest: String| {
+            let result = std::fs::remove_file(
                 unlink_context
-                    .resolve(&path)
+                    .resolve_without_following_leaf(&guest)
                     .map_err(mlua::Error::external)?,
-            )
-            .map_err(mlua::Error::external)?;
-            Ok(0)
+            );
+            posix_result(lua, Some(&guest), result)
         })?,
     )?;
     let link_context = context.clone();
     table.set(
         "link",
-        lua.create_function(move |_, (old, new): (String, String)| {
-            let old = link_context.resolve(&old).map_err(mlua::Error::external)?;
-            let new = link_context.resolve(&new).map_err(mlua::Error::external)?;
-            std::fs::hard_link(old, new).map_err(mlua::Error::external)?;
-            Ok(0)
+        lua.create_function(move |lua, (old_guest, new_guest): (String, String)| {
+            let old = link_context
+                .resolve_without_following_leaf(&old_guest)
+                .map_err(mlua::Error::external)?;
+            let new = link_context
+                .resolve_without_following_leaf(&new_guest)
+                .map_err(mlua::Error::external)?;
+            posix_result(lua, None, std::fs::hard_link(old, new))
         })?,
     )?;
     let symlink_context = context.clone();
     table.set(
         "symlink",
-        lua.create_function(move |_, (old, new): (String, String)| {
+        lua.create_function(move |lua, (old, new_guest): (String, String)| {
             let new = symlink_context
-                .resolve(&new)
+                .resolve_without_following_leaf(&new_guest)
                 .map_err(mlua::Error::external)?;
-            std::os::unix::fs::symlink(old, new).map_err(mlua::Error::external)?;
-            Ok(0)
+            posix_result(lua, None, std::os::unix::fs::symlink(old, new))
         })?,
     )?;
     let readlink_context = context.clone();
     table.set(
         "readlink",
-        lua.create_function(move |_, path: String| {
+        lua.create_function(move |lua, guest: String| {
             let path = readlink_context
-                .resolve(&path)
+                .resolve_without_following_leaf(&guest)
                 .map_err(mlua::Error::external)?;
-            Ok(std::fs::read_link(path)
-                .map_err(mlua::Error::external)?
-                .to_string_lossy()
-                .to_string())
+            match std::fs::read_link(path) {
+                Ok(target) => {
+                    let target = target.to_string_lossy().to_string();
+                    Ok(MultiValue::from_vec(vec![Value::String(
+                        lua.create_string(target)?,
+                    )]))
+                }
+                Err(error) => posix_path_error(lua, &guest, error),
+            }
         })?,
     )?;
     let dir_context = context.clone();
     table.set(
         "dir",
         lua.create_function(move |lua, path: Option<String>| {
-            directory_table(lua, &dir_context, path.as_deref().unwrap_or("."))
+            let guest = path.as_deref().unwrap_or(".");
+            let entries = match directory_entries(&dir_context, guest)? {
+                Ok(entries) => entries,
+                Err(error) => return posix_path_error(lua, guest, error),
+            };
+            Ok(MultiValue::from_vec(vec![Value::Table(directory_table(
+                lua, entries,
+            )?)]))
         })?,
     )?;
     let files_context = context.clone();
     table.set(
         "files",
         lua.create_function(move |lua, path: Option<String>| {
-            let entries = directory_entries(&files_context, path.as_deref().unwrap_or("."))?;
+            let guest = path.as_deref().unwrap_or(".");
+            let entries = match directory_entries(&files_context, guest)? {
+                Ok(entries) => entries,
+                Err(error) => return posix_path_error(lua, guest, error),
+            };
             let entries = std::rc::Rc::new(std::cell::RefCell::new(entries.into_iter()));
-            lua.create_function(move |_, ()| Ok(entries.borrow_mut().next()))
+            let iterator = lua.create_function(move |_, ()| Ok(entries.borrow_mut().next()))?;
+            Ok(MultiValue::from_vec(vec![Value::Function(iterator)]))
         })?,
     )?;
     table.set("ctermid", lua.create_function(|_, ()| Ok("/dev/tty"))?)?;
@@ -468,20 +505,26 @@ fn install_posix_metadata(
     table.set(
         "stat",
         lua.create_function(move |lua, (path, selector): (String, Option<String>)| {
-            let metadata = std::fs::symlink_metadata(
-                stat_context.resolve(&path).map_err(mlua::Error::external)?,
-            )
-            .map_err(mlua::Error::external)?;
-            stat_value(lua, &metadata, selector.as_deref())
+            let target = stat_context
+                .resolve_without_following_leaf(&path)
+                .map_err(mlua::Error::external)?;
+            match std::fs::symlink_metadata(target) {
+                Ok(metadata) => Ok(MultiValue::from_vec(vec![stat_value(
+                    lua,
+                    &metadata,
+                    selector.as_deref(),
+                )?])),
+                Err(error) => posix_path_error(lua, &path, error),
+            }
         })?,
     )?;
     let utime_context = context.clone();
     table.set(
         "utime",
         lua.create_function(
-            move |_, (path, modified, accessed): (String, Option<i64>, Option<i64>)| {
+            move |lua, (guest, modified, accessed): (String, Option<i64>, Option<i64>)| {
                 let path = utime_context
-                    .resolve(&path)
+                    .resolve(&guest)
                     .map_err(mlua::Error::external)?;
                 let now = Utc::now().timestamp();
                 let times = libc::utimbuf {
@@ -490,11 +533,9 @@ fn install_posix_metadata(
                 };
                 let path = CString::new(path.as_os_str().as_bytes())
                     .map_err(|_| mlua::Error::runtime("path contains NUL"))?;
-                let rc = unsafe { libc::utime(path.as_ptr(), &times) };
-                if rc != 0 {
-                    return Err(mlua::Error::external(std::io::Error::last_os_error()));
-                }
-                Ok(0)
+                posix_status(lua, Some(&guest), unsafe {
+                    libc::utime(path.as_ptr(), &times)
+                })
             },
         )?,
     )?;
@@ -675,27 +716,75 @@ fn install_posix_process(
     )
 }
 
-fn directory_table(lua: &Lua, context: &LuaRuntimeContext, guest: &str) -> mlua::Result<Table> {
+fn directory_table(lua: &Lua, entries: Vec<String>) -> mlua::Result<Table> {
     let table = lua.create_table()?;
-    for (index, entry) in directory_entries(context, guest)?.into_iter().enumerate() {
+    for (index, entry) in entries.into_iter().enumerate() {
         table.raw_set(index + 1, entry)?;
     }
     Ok(table)
 }
 
-fn directory_entries(context: &LuaRuntimeContext, guest: &str) -> mlua::Result<Vec<String>> {
+fn directory_entries(
+    context: &LuaRuntimeContext,
+    guest: &str,
+) -> mlua::Result<std::io::Result<Vec<String>>> {
     let path = context.resolve(guest).map_err(mlua::Error::external)?;
     let mut values = vec![".".to_string(), "..".to_string()];
-    for entry in std::fs::read_dir(path).map_err(mlua::Error::external)? {
-        values.push(
-            entry
-                .map_err(mlua::Error::external)?
-                .file_name()
-                .to_string_lossy()
-                .to_string(),
-        );
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) => return Ok(Err(error)),
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            // RPM's bundled lposix treats a failed readdir(3) exactly like
+            // end-of-directory; only opendir(3) exposes an error tuple.
+            break;
+        };
+        values.push(entry.file_name().to_string_lossy().to_string());
     }
-    Ok(values)
+    Ok(Ok(values))
+}
+
+fn posix_status(lua: &Lua, info: Option<&str>, status: libc::c_int) -> mlua::Result<MultiValue> {
+    if status == 0 {
+        posix_result(lua, info, Ok(()))
+    } else {
+        posix_result(lua, info, Err(std::io::Error::last_os_error()))
+    }
+}
+
+fn posix_result(
+    lua: &Lua,
+    info: Option<&str>,
+    result: std::io::Result<()>,
+) -> mlua::Result<MultiValue> {
+    match result {
+        Ok(()) => Ok(MultiValue::from_vec(vec![Value::Integer(0)])),
+        Err(error) => posix_error(lua, info, error),
+    }
+}
+
+fn posix_path_error(lua: &Lua, path: &str, error: std::io::Error) -> mlua::Result<MultiValue> {
+    posix_error(lua, Some(path), error)
+}
+
+fn posix_error(lua: &Lua, info: Option<&str>, error: std::io::Error) -> mlua::Result<MultiValue> {
+    let errno = error.raw_os_error().unwrap_or(0);
+    let description = if errno == 0 {
+        error.to_string()
+    } else {
+        // RPM 6.0.1's lposix `pusherror` returns strerror(errno), not a Lua
+        // exception or Rust's parenthesized OS-error suffix.
+        nix::errno::Errno::from_raw(errno).desc().to_string()
+    };
+    Ok(MultiValue::from_vec(vec![
+        Value::Nil,
+        Value::String(lua.create_string(match info {
+            Some(info) => format!("{info}: {description}"),
+            None => description,
+        })?),
+        Value::Integer(i64::from(errno)),
+    ]))
 }
 
 fn stat_value(

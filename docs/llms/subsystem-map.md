@@ -62,8 +62,11 @@ commands.
   `apps/conary/src/commands/generation/selected_root.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
   execution starts in
-  `apps/conary/src/commands/install/transaction/selected_root.rs`; removal starts
-  in `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
+  `apps/conary/src/commands/install/transaction/selected_root.rs`; declarative
+  multi-root selection and authenticated batch preparation start in
+  `apps/conary/src/commands/install/package_set.rs` and
+  `apps/conary/src/commands/install/repository_batch.rs`; removal starts in
+  `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
   session acquires and owns the canonical runtime mutation lock before
   materialization; the lock implementation starts in
   `crates/conary-core/src/transaction/mod.rs`. Exact rollback execution and
@@ -85,8 +88,12 @@ commands.
   environment, administrative state, trigger/config capture, and
   update-alternatives projection start in
   `apps/conary/src/commands/install/native_events/debian_runtime.rs` and
-  `apps/conary/src/commands/install/native_events/debian_runtime/`. Exact
-  source-independent payload nodes start in `crates/conary-core/src/payload.rs`.
+  `apps/conary/src/commands/install/native_events/debian_runtime/`. Exact RPM
+  pre-payload sysusers target-interface execution starts in
+  `crates/conary-core/src/scriptlet/sysusers.rs`; generic native argv remains
+  selected-root confined in
+  `crates/conary-core/src/scriptlet/native_command.rs`. Exact source-independent
+  payload nodes start in `crates/conary-core/src/payload.rs`.
   `apps/conary/src/commands/live_root/recovery.rs` is confined to the
   selected-root session journal implementation.
 - Declarative models, source selection, and replatforming:

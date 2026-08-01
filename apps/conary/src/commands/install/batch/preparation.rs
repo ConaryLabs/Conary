@@ -99,7 +99,9 @@ pub fn prepare_package_for_batch(
     Ok(Some(PreparedPackage {
         name: pkg.name().to_string(),
         version: pkg.version().to_string(),
-        format,
+        semantics: InstallSemantics::native_package(format),
+        package_release: pkg.package_release().map(str::to_string),
+        debian_multi_arch: pkg.debian_multi_arch(),
         architecture: pkg.architecture().map(|s| s.to_string()),
         description: pkg.description().map(|s| s.to_string()),
         extracted_files,
@@ -115,8 +117,11 @@ pub fn prepare_package_for_batch(
         old_trove,
         installed_components,
         classified_files,
+        installed_component_names: None,
+        component_names_by_path: None,
         repository_provenance: None,
         native_lifecycle_state,
+        ccs: None,
     }))
 }
 
@@ -142,12 +147,7 @@ impl BatchInstaller<'_> {
 
         for pkg in packages {
             for file in &pkg.extracted_files {
-                let incoming_policy = match pkg.format {
-                    PackageFormatType::Rpm => conary_core::payload::PayloadSharingPolicy::Rpm,
-                    PackageFormatType::Deb | PackageFormatType::Arch => {
-                        conary_core::payload::PayloadSharingPolicy::Exclusive
-                    }
-                };
+                let incoming_policy = pkg.semantics.payload_sharing_policy();
                 let incoming_is_directory = matches!(
                     file.node.kind,
                     conary_core::payload::PayloadNodeKind::Directory

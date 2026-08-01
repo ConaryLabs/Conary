@@ -191,6 +191,7 @@ mod tests {
     };
     use crate::scriptlet::test_support::materialized_root;
     use crate::scriptlet::{PackageFormat, SandboxMode, ScriptletExecutor};
+    use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
     fn runtime() -> RpmRuntimeMetadata {
@@ -263,6 +264,7 @@ mod tests {
         )
         .expect("module");
         std::fs::write(root.path().join("macros.test"), "%loaded target\n").expect("macro file");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
         let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
 
         execute_embedded_lua(
@@ -277,6 +279,16 @@ mod tests {
                 assert(input:read() == "payload")
                 input:close()
                 assert(posix.stat("/var/value", "size") == 7)
+                assert(select('#', posix.stat("/var/value", "size")) == 1)
+                local missing, message, errno = posix.stat("/media")
+                assert(missing == nil)
+                assert(message == "/media: No such file or directory")
+                assert(errno == 2)
+                assert(posix.stat("/loop", "type") == "link")
+                local confined, confinement_error = pcall(posix.stat, "/loop/child")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
                 assert(rpm.glob("/var/*")[1] == "/var/value")
                 assert(posix.chdir("/var") == 0)
                 assert(posix.getcwd() == "/var")
@@ -308,6 +320,423 @@ mod tests {
         assert_eq!(
             std::fs::read(root.path().join("var/value")).expect("written value"),
             b"payload"
+        );
+    }
+
+    #[test]
+    fn embedded_lua_posix_directories_preserve_the_pinned_open_contract() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("present")).expect("present directory");
+        std::fs::write(root.path().join("present/entry"), b"value").expect("directory entry");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
+        let executor =
+            ScriptletExecutor::new(root.path(), "glibc", "2.43-2.fc44", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "pre-install",
+            r#"
+                local entries = assert(posix.dir("/present"))
+                local names = {}
+                for _, entry in ipairs(entries) do names[entry] = true end
+                assert(names["."] and names[".."] and names.entry)
+
+                local iter = assert(posix.files("/present"))
+                names = {}
+                for entry in iter do names[entry] = true end
+                assert(names["."] and names[".."] and names.entry)
+
+                local missing, message, errno =
+                    posix.files("/usr/lib64/glibc-hwcaps")
+                assert(missing == nil)
+                assert(message ==
+                    "/usr/lib64/glibc-hwcaps: No such file or directory")
+                assert(errno == 2)
+
+                local missing_dir, dir_message, dir_errno =
+                    posix.dir("/usr/lib64/glibc-hwcaps")
+                assert(missing_dir == nil)
+                assert(dir_message ==
+                    "/usr/lib64/glibc-hwcaps: No such file or directory")
+                assert(dir_errno == 2)
+
+                -- This is the exact optional-directory control-flow shape in
+                -- Fedora glibc's embedded-Lua pre-install body.
+                repeat
+                    local optional = posix.files("/usr/lib64/glibc-hwcaps")
+                    if optional ~= nil then
+                        for _ in optional do error("missing path was iterated") end
+                    end
+                until true
+
+                local confined, confinement_error =
+                    pcall(posix.files, "/loop/child")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
+            "#,
+            &["1".to_string()],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("pinned posix directory contract");
+    }
+
+    #[test]
+    fn embedded_lua_file_read_uses_the_pinned_selector_grammar() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::write(root.path().join("values"), b"42\nsecond\n").expect("fixture values");
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"
+                local function read(format)
+                    local file = assert(io.open("/values", "r"))
+                    local value = file:read(format)
+                    file:close()
+                    return value
+                end
+
+                assert(read("*number") == 42)
+                assert(read("*line") == "42")
+                assert(read("*Line") == "42\n")
+                assert(read("*all") == "42\nsecond\n")
+                assert(read("all-compatible-suffix") == "42\nsecond\n")
+
+                local ok, message = pcall(read, "*unknown")
+                assert(ok == false)
+                assert(string.find(tostring(message),
+                    "invalid file read format '*unknown'", 1, true))
+            "#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("pinned file:read selector grammar");
+    }
+
+    #[test]
+    fn embedded_lua_io_open_preserves_standard_and_rpm_failure_contracts() {
+        let root = tempfile::tempdir().expect("target root");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
+        let executor = ScriptletExecutor::new(
+            root.path(),
+            "crypto-policies",
+            "20251128",
+            PackageFormat::Rpm,
+        );
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"
+                local missing, message, errno =
+                    io.open("/proc/sys/crypto/fips_enabled", "r")
+                assert(missing == nil)
+                assert(message ==
+                    "/proc/sys/crypto/fips_enabled: No such file or directory")
+                assert(errno == 2)
+
+                local valid_mode, mode_error = pcall(io.open, "/missing", "rx")
+                assert(valid_mode == false)
+                assert(string.find(tostring(mode_error), "invalid mode", 1, true))
+
+                local rpm_ok, rpm_error = pcall(rpm.open, "/missing", "r")
+                assert(rpm_ok == false)
+                assert(string.find(tostring(rpm_error),
+                    "No such file or directory", 1, true))
+
+                local confined, confinement_error =
+                    pcall(io.open, "/loop/child", "r")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
+            "#,
+            &["1".to_string()],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("standard and RPM open contracts");
+    }
+
+    #[test]
+    fn embedded_lua_posix_filesystem_calls_preserve_pinned_result_tuples() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("present")).expect("present directory");
+        std::fs::create_dir_all(root.path().join("empty")).expect("empty directory");
+        std::fs::write(root.path().join("present/entry"), b"value").expect("present entry");
+        std::os::unix::fs::symlink("loop", root.path().join("loop")).expect("symlink loop");
+        let executor = ScriptletExecutor::new(root.path(), "demo", "1.0", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"
+                local function path_error(call, path, description, errno)
+                    local result, message, code = call()
+                    assert(result == nil)
+                    assert(message == path .. ": " .. description)
+                    assert(code == errno)
+                end
+
+                local function plain_error(call, description, errno)
+                    local result, message, code = call()
+                    assert(result == nil)
+                    assert(message == description)
+                    assert(code == errno)
+                end
+
+                assert(posix.access("/present", "r x") == 0)
+                path_error(function() return posix.access("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.chdir("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.chdir("/present/entry") end,
+                    "/present/entry", "Not a directory", 20)
+                assert(posix.getcwd() == "/")
+                path_error(function() return posix.chmod("/missing", "u+x") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.chown("/missing", nil, nil) end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.mkdir("/present") end,
+                    "/present", "File exists", 17)
+                assert(posix.umask(0) == 18)
+                assert(posix.mkdir("/unmasked") == 0)
+                path_error(function() return posix.rmdir("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.mkfifo("/present/entry") end,
+                    "/present/entry", "File exists", 17)
+                path_error(function() return posix.unlink("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                plain_error(function() return posix.link("/missing", "/hard-link") end,
+                    "No such file or directory", 2)
+                plain_error(function()
+                    return posix.symlink("target", "/present/entry")
+                end, "File exists", 17)
+                path_error(function() return posix.readlink("/missing") end,
+                    "/missing", "No such file or directory", 2)
+                path_error(function() return posix.utime("/missing") end,
+                    "/missing", "No such file or directory", 2)
+
+                local confined, confinement_error =
+                    pcall(posix.unlink, "/loop/child")
+                assert(confined == false)
+                assert(string.find(tostring(confinement_error),
+                    "RpmTargetPathError: symlink depth exceeds 64", 1, true))
+            "#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("pinned lposix filesystem result contracts");
+
+        assert_eq!(
+            std::fs::metadata(root.path().join("unmasked"))
+                .expect("unmasked directory")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o777
+        );
+    }
+
+    #[test]
+    fn embedded_lua_runs_the_fedora_crypto_policies_post_install_body() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("etc/crypto-policies/back-ends"))
+            .expect("backend directory");
+        std::fs::create_dir_all(root.path().join("etc/crypto-policies/state"))
+            .expect("state directory");
+        std::fs::create_dir_all(root.path().join("usr/share/crypto-policies/DEFAULT"))
+            .expect("default policy directory");
+        std::fs::write(
+            root.path()
+                .join("usr/share/crypto-policies/DEFAULT/openssl.txt"),
+            b"backend",
+        )
+        .expect("policy backend");
+        let executor = ScriptletExecutor::new(
+            root.path(),
+            "crypto-policies",
+            "20251128-3.git19878fe.fc44",
+            PackageFormat::Rpm,
+        );
+
+        execute_embedded_lua(
+            &executor,
+            "post-install",
+            r#"if not posix.access("/etc/crypto-policies/config") then
+    local policy = "DEFAULT"
+    local cf = io.open("/proc/sys/crypto/fips_enabled", "r")
+    if cf then
+        if cf:read() == "1" then
+            policy = "FIPS"
+        end
+        cf:close()
+    end
+    cf = io.open("/etc/crypto-policies/config", "w")
+    if cf then
+        cf:write(policy.."\n")
+        cf:close()
+    end
+    cf = io.open("/etc/crypto-policies/state/current", "w")
+    if cf then
+        cf:write(policy.."\n")
+        cf:close()
+    end
+    local policypath = "/usr/share/crypto-policies/"..policy
+    for fn in posix.files(policypath) do
+        if fn ~= "." and fn ~= ".." then
+            local backend = fn:gsub(".*/", ""):gsub("%..*", "")
+            local cfgfn = "/etc/crypto-policies/back-ends/"..backend..".config"
+            posix.unlink(cfgfn)
+            posix.symlink(policypath.."/"..fn, cfgfn)
+        end
+    end
+else
+    if posix.access("/var/lib/rpm-state/crypto-policies/autopolicy-reapplication-needed") then
+        os.execute("/usr/libexec/fips-crypto-policy-overlay >/dev/null 2>/dev/null || :")
+        posix.unlink("/var/lib/rpm-state/crypto-policies/autopolicy-reapplication-needed")
+    end
+end"#,
+            &["1".to_string()],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("Fedora crypto-policies post-install body");
+
+        assert_eq!(
+            std::fs::read(root.path().join("etc/crypto-policies/config")).expect("selected policy"),
+            b"DEFAULT\n"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("etc/crypto-policies/state/current"))
+                .expect("current policy"),
+            b"DEFAULT\n"
+        );
+        assert_eq!(
+            std::fs::read_link(
+                root.path()
+                    .join("etc/crypto-policies/back-ends/openssl.config")
+            )
+            .expect("backend link"),
+            std::path::PathBuf::from("/usr/share/crypto-policies/DEFAULT/openssl.txt")
+        );
+    }
+
+    #[test]
+    fn embedded_lua_runs_the_fedora_bash_shell_registration_body() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir(root.path().join("etc")).expect("etc directory");
+        std::fs::write(root.path().join("etc/shells"), b"/bin/sh\n").expect("shell registry");
+        let executor =
+            ScriptletExecutor::new(root.path(), "bash", "5.3.9-3.fc44", PackageFormat::Rpm);
+        let body = r#"
+            nl='\n'
+            sh='/bin/sh'..nl
+            bash='/bin/bash'..nl
+            f=io.open('/etc/shells','a+')
+            if f then
+              local shells=nl..f:read('*all')..nl
+              if not shells:find(nl..sh) then f:write(sh) end
+              if not shells:find(nl..bash) then f:write(bash) end
+              f:close()
+            end
+        "#;
+
+        for _ in 0..2 {
+            execute_embedded_lua(
+                &executor,
+                "post-install",
+                body,
+                &["1".to_string()],
+                &[],
+                &runtime(),
+                Duration::from_secs(5),
+            )
+            .expect("Fedora Bash post-install body");
+        }
+
+        assert_eq!(
+            std::fs::read(root.path().join("etc/shells")).expect("updated shell registry"),
+            b"/bin/sh\n/bin/bash\n"
+        );
+    }
+
+    #[test]
+    fn embedded_lua_leaf_sensitive_filesystem_calls_preserve_symlink_entries() {
+        let root = tempfile::tempdir().expect("target root");
+        std::fs::create_dir_all(root.path().join("usr/bin")).expect("usr bin");
+        std::fs::write(root.path().join("usr/bin/kept"), b"kept").expect("target file");
+        std::os::unix::fs::symlink("bin", root.path().join("usr/sbin")).expect("usr sbin symlink");
+        std::os::unix::fs::symlink("usr", root.path().join("alias")).expect("ancestor alias");
+        let executor =
+            ScriptletExecutor::new(root.path(), "filesystem", "3.18", PackageFormat::Rpm);
+
+        execute_embedded_lua(
+            &executor,
+            "post-transaction",
+            r#"
+                assert(posix.stat("/usr/sbin", "type") == "link")
+                assert(posix.readlink("/usr/sbin") == "bin")
+
+                -- This is the decisive branch in Fedora filesystem's
+                -- usrmerge post-transaction script. A leaf-following stat
+                -- incorrectly enters it and deletes /usr/bin.
+                local st = posix.stat("/usr/sbin")
+                if st and st.type ~= "link" then
+                    os.remove("/usr/sbin")
+                    posix.symlink("bin", "/usr/sbin")
+                end
+                assert(posix.stat("/usr/bin", "type") == "directory")
+                assert(posix.readlink("/usr/sbin") == "bin")
+
+                assert(os.remove("/usr/sbin"))
+                assert(posix.stat("/usr/bin", "type") == "directory")
+                assert(posix.stat("/usr/bin/kept", "size") == 4)
+
+                assert(posix.symlink("bin", "/usr/sbin") == 0)
+                assert(posix.unlink("/usr/sbin") == 0)
+                assert(posix.stat("/usr/bin", "type") == "directory")
+
+                assert(posix.symlink("bin", "/usr/sbin") == 0)
+                assert(os.rename("/usr/sbin", "/usr/admin"))
+                assert(posix.readlink("/usr/admin") == "bin")
+                assert(posix.stat("/usr/bin", "type") == "directory")
+
+                assert(posix.link("/usr/admin", "/usr/admin-hard") == 0)
+                assert(posix.stat("/usr/admin-hard", "type") == "link")
+                assert(posix.readlink("/usr/admin-hard") == "bin")
+
+                assert(posix.symlink("bin", "/alias/sbin") == 0)
+                assert(posix.readlink("/usr/sbin") == "bin")
+            "#,
+            &[],
+            &[],
+            &runtime(),
+            Duration::from_secs(5),
+        )
+        .expect("leaf-sensitive target-root APIs");
+
+        assert!(root.path().join("usr/bin").is_dir());
+        assert_eq!(
+            std::fs::read_link(root.path().join("usr/admin")).expect("renamed symlink"),
+            std::path::PathBuf::from("bin")
+        );
+        assert_eq!(
+            std::fs::read_link(root.path().join("usr/admin-hard")).expect("linked symlink"),
+            std::path::PathBuf::from("bin")
+        );
+        assert_eq!(
+            std::fs::read_link(root.path().join("usr/sbin")).expect("ancestor-resolved symlink"),
+            std::path::PathBuf::from("bin")
         );
     }
 

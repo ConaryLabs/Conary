@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-29
-revision: 26
-summary: Map fixture ownership, including source-built and published-package cross-source lifecycle proof and the public v4 QEMU image contract
+last_updated: 2026-07-31
+revision: 30
+summary: Map fixture ownership, including supported-host generation export, Fedora guest regeneration, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -46,6 +46,7 @@ Each fixture family should record:
 | `remi-converted-artifact-serving` | Remi conversion persistence and serving | `cargo test -p remi conversion` |
 | `remi-test-artifact-fixtures` | Remi artifact handlers | `cargo test -p remi test_upload_fixture`; `cargo test -p remi test_public_fixture_get_and_head` |
 | `qemu-source-image-fixtures` | Bootstrap/QEMU fixture maintenance | `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; `cargo run -p conary-test -- list` |
+| `supported-host-generation-export` | Generation export boot proofs | `cargo test -p conary-core --test supported_host_generation_export_fixture_contract` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
 
 ### foreign-package-lifecycle-contracts
@@ -431,21 +432,84 @@ Each fixture family should record:
   required target lanes and the stable all-lane aggregator context; do not
   weaken either in workflow-only edits.
 
+### supported-host-generation-export
+
+- **Owner:** `apps/conary/tests/fixtures/supported-host-generation-export/`;
+  contract test
+  `crates/conary-core/tests/supported_host_generation_export_fixture_contract.rs`.
+- **Purpose:** Prove that Conary's bootable-image export works from a root
+  assembled entirely by ordinary supported-host installs. It replaced the
+  bootstrap-run export fixture, so bootable export is a generation capability
+  with no bootstrap dependency.
+- **Fixture sources:** `fixture-system.toml`, the Fedora 44 system model the
+  suites apply; `conary-qemu-test-access/`, a CCS package built at test time
+  that ships harness SSH access, a DHCP `.network` file, a tmpfiles fragment
+  recreating openssh's privilege-separation directory on carrier `/var`, and
+  explicit unit-enablement symlinks plus a package-owned networkd preset. The
+  preset preserves DHCP enablement when Fedora's native networkd post-install
+  lifecycle applies unit preset policy. The symlinks are produced by
+  `stage-links.sh` rather than checked in, because the harness copies fixtures
+  with `scp -r`, which would materialize a checked-in link as a copy of its
+  target. `publish-selected-generation.sh` is the shared idempotent
+  publication-convergence and selected-generation assertion used by both
+  carriers.
+- **Consumes:** Group O `TGE02`
+  (`supported_host_generation_export_boots`) and Group P `TISO01`
+  (`supported_host_generation_iso_export_boots`).
+- **Fast proof:**
+  `cargo test -p conary-core --test supported_host_generation_export_fixture_contract`;
+  `cargo run -p conary-test -- list`.
+- **Medium proof:** `conary ccs build` of `conary-qemu-test-access/` against a
+  substituted stage, then `conary ccs verify` with the fixture trust policy.
+- **Slow proof:**
+  `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`;
+  `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`.
+  Both need a boot lane: a host with `/dev/kvm` and OVMF.
+- **Regeneration:** hand-maintained. The model entries are pinned to real
+  Fedora 44 package facts; changing the set means re-deriving them from Fedora
+  44 headers, not from documentation.
+- **Transaction contract:** `model apply` resolves the changed entries as one
+  exact-source SAT package set and executes one lifecycle transaction. The
+  suite verifies the selected generation contains networkd enablement before
+  export, then requires an independently reachable SSH boot of the qcow2 or ISO
+  artifact.
+- **Current evidence:** the 2026-07-31 PR #151 implementation proof passed all
+  five Group O qcow2 cases and the Group P ISO case on Fedora 44. The shared
+  final helper is idempotent, requires zero pending publication debt, and
+  validates the exact numeric selected-generation target. Full timings and
+  artifact identities belong on the owning pull request rather than in this
+  map.
+- **Safety notes:** The staged `authorized_keys` carries the
+  `__CONARY_QEMU_TEST_PUBLIC_KEY__` placeholder and is substituted in the guest
+  with the disposable harness key; no real credential belongs in this fixture.
+  The suites assemble into a scratch-disk `--db-path` root and never mutate the
+  guest's live root. That scratch filesystem must be ext4 with the `verity`
+  feature: composefs generation publication enables fs-verity on `root.erofs`
+  and truthfully fails closed when the backing filesystem lacks it. A failed
+  convergence attempt must retain and print the typed
+  `generation_publications.last_error`.
+
 ### qemu-source-image-fixtures
 
-- **Owner:** unprivileged identity/size rotation:
-  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU execution and
-  download cache: `apps/conary-test/src/engine/qemu.rs`.
+- **Owner:** image construction: `scripts/build-qemu-guest-image.sh`;
+  unprivileged identity/size rotation:
+  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU orchestration and
+  download cache: `apps/conary-test/src/engine/qemu.rs`; bounded live console
+  capture: `apps/conary-test/src/engine/qemu/console.rs`; cross-guest static
+  client staging: `scripts/build-static-conary.sh`.
 - **Purpose:** Keep a versioned, generation-builder-ready qcow2 source image
   paired with a disposable SSH identity and enough root-filesystem headroom
   for full live-root adoption into CAS.
-- **Fixture sources:** versioned `minimal-boot-vN.qcow2` artifacts and the
-  matching versioned `conaryos-test-key-vN` test artifact served by Remi;
-  active consumers
-  are the Phase 3 QEMU manifests under
+- **Fixture sources:** the pinned official Fedora Cloud Base 44 qcow2 and
+  provisioning contract in `scripts/build-qemu-guest-image.sh`, producing the
+  active immutable `fedora44-guest-v2` artifact served by Remi with the
+  `conaryos-test-key-v4` disposable identity. The historical
+  `minimal-boot-vN.qcow2` artifacts and matching versioned keys remain evidence
+  only. Active consumers are the Phase 3 QEMU manifests under
   `apps/conary/tests/integration/remi/manifests/`.
 - **Consumes:** Groups N, O, and P plus composefs modernization QEMU steps.
-- **Fast proof:** `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`;
+- **Fast proof:** `bash scripts/test-build-qemu-guest-image.sh`;
+  `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`;
   `scripts/bootstrap-vm/rotate-qemu-test-identity.sh --help`;
   `cargo run -p conary-test -- list`;
   `cargo test -p conary-test suite_inventory`.
@@ -454,18 +518,58 @@ Each fixture family should record:
   `systemd-repart`, `qemu-img`, ext4/FAT mkfs helpers, `composefs-info`, and
   `/usr/lib/dracut`.
 - **Slow proof:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`.
-- **Regeneration:** Start from the prior immutable qcow2 and choose new output
-  paths; for the 2026-07-15 v4 rotation, pass `--disk-size-gib 20` so full
-  adoption has CAS headroom. The helper relocates GPT backup data, grows the
-  final `CONARY_ROOT` partition and ext4 filesystem without mounting it,
-  replaces only `/root/.ssh/authorized_keys`, verifies the inserted public
-  key, compresses the new qcow2, and runs `qemu-img check` before promotion.
+- **Active image:** `fedora44-guest-v2` — an official Fedora Cloud Base 44
+  qcow2 provisioned by `scripts/build-qemu-guest-image.sh`, on the
+  `conaryos-test-key-v4` disposable identity (the key name records the identity,
+  not the image lineage; the Fedora image reuses it rather than rotating). It
+  ships **no** `/var/lib/conary`, which is why it can run the current build at
+  all — see the lineage note below. V2 also carries the packaged
+  `/usr/lib/systemd/boot/efi/systemd-bootx64.efi` that generation export
+  consumes after full adoption. Its immutable public artifact is
+  `https://remi.conary.io/test-artifacts/fedora44-guest-v2.qcow2`, SHA-256
+  `f688ac2a02b0b0558e28de1c97bbcb2e45b6772a4f019b037f72ec584a420174`;
+  an empty-cache KVM host can therefore reproduce the lane.
+- **Regeneration:** `scripts/build-qemu-guest-image.sh --output PATH
+  --private-key PATH` builds a guest image from scratch. It downloads a pinned
+  official Fedora Cloud Base qcow2, verifies it against a pinned SHA-256, grows
+  it to `--disk-size-gib` (default 20, the CAS headroom full adoption needs),
+  opens root SSH for the supplied disposable identity through a NoCloud seed,
+  installs the generation toolchain and the running kernel's driver packages at
+  their exact NEVRA, runs the phase-3 manifests' own preflight inside the guest,
+  disables cloud-init, boots once more without the seed, and finishes with
+  `qemu-img check` plus a compressing convert.
+  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh` remains the in-place
+  identity/size rotation for an existing image: it starts from the prior
+  immutable qcow2, relocates GPT backup data, grows the final `CONARY_ROOT`
+  partition and ext4 filesystem without mounting it, replaces only
+  `/root/.ssh/authorized_keys`, verifies the inserted public key, compresses the
+  new qcow2, and runs `qemu-img check` before promotion.
+- **Image lineage:** the `minimal-boot-v1` through `minimal-boot-v5` images are
+  conaryOS artifacts produced by the bootstrap pipeline; `minimal-boot-v5`
+  additionally carries host libraries injected by hand to keep a
+  glibc-linked staged binary running. Neither the lineage nor that patch has a
+  regeneration path once the bootstrap pipeline is removed, which is why
+  `scripts/build-qemu-guest-image.sh` exists. Fedora 44 is the base because the
+  phase-3 rotation runs `--distro fedora44`, the generation builder shells out
+  to Fedora-native `dracut`, and the supported-host export fixture assembles a
+  Fedora 44 root. The lineage is also unusable with the current build for a
+  second, independent reason: those images ship a bootstrap-built
+  `/var/lib/conary/conary.db` at migration-chain schema version 66, and the
+  schema epoch hard cut in df607ee8 (#61, 2026-07-26) retired it, so
+  `conary system init` refuses inside them. #157 owns that product gap.
 - **Current evidence:** the 2026-07-16 Fedora 44 Group O local KVM run passed
-  all five cases against `minimal-boot-v4`; a focused recompiled-harness TGE01
-  rerun also passed with the `conaryos-test-key-v4` cache/artifact name. Remi
+  all five cases against `minimal-boot-v4`, the version the suites targeted at
+  the time; a focused recompiled-harness TGE01 rerun also passed with the
+  `conaryos-test-key-v4` cache/artifact name. Remi
   serves the v4 image and private/public disposable test-key artifacts from its
   public test-artifact path; an isolated cache downloaded the image and private
-  key with matching hashes and passed TGE01 under KVM in 63,320 ms.
+  key with matching hashes and passed TGE01 under KVM in 63,320 ms. That run
+  predates both the #61 schema epoch cut and the Fedora re-base. The v1
+  bring-up exposed that Fedora Cloud omitted systemd-boot's packaged EFI
+  binary; v2 added that exact source asset and superseded v1. The
+  `minimal-boot-v5` stopgap never produced a green run — its TGE01 attempt on
+  2026-07-28 failed at `conary system init` on the retired schema described
+  above.
 - **Safety notes:** Never overwrite the source image. Keep the generated
   private key mode `0600`; it is a disposable test credential, not a Remi,
   federation, release-signing, or operator identity. Publish small image/key
@@ -508,7 +612,6 @@ roots and proof commands before treating them as committed gates:
   `apps/conary/tests/cli_daily_ux.rs`.
 - `conary-test` bootstrap check and smoke fixtures documented in
   `docs/INTEGRATION-TESTING.md`.
-- Generation export and ISO carrier fixtures.
 - Recipe and source-selection fixtures.
 - conaryd daemon job fixtures.
 - Agent/MCP operation fixtures.

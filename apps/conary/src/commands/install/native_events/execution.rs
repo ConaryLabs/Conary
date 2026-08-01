@@ -62,12 +62,20 @@ impl PreparedNativeTransaction {
             NativeEventProgram::Command { argv } => executor
                 .execute_native_command("native-transaction-hook", argv, &event.stdin)
                 .map_err(anyhow::Error::from),
+            NativeEventProgram::RpmSysusers { source_path } => executor
+                .execute_rpm_sysusers(
+                    self.rpm_sysusers_interface()?,
+                    source_path.as_deref(),
+                    &event.stdin,
+                )
+                .map_err(anyhow::Error::from),
         };
         let captured = executor.take_activation_invocations();
         if result.is_ok() {
             let source_entry = match &event.program {
                 NativeEventProgram::BundleEntry { entry_id } => entry_id.clone(),
                 NativeEventProgram::Command { .. } => event.order_key.clone(),
+                NativeEventProgram::RpmSysusers { .. } => event.order_key.clone(),
             };
             self.activation_invocations
                 .borrow_mut()

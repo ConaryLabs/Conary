@@ -5,7 +5,7 @@
 //! Generates repart.d/*.conf files that systemd-repart uses to create GPT disk
 //! images without requiring root privileges or loop devices.
 
-use crate::bootstrap::TargetArch;
+use super::arch::TargetArch;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;

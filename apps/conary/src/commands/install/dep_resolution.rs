@@ -9,12 +9,10 @@
 use anyhow::{Context, Result};
 use conary_core::db::models::{Repository, RepositoryPackage};
 use conary_core::repository;
-#[cfg(test)]
 use conary_core::repository::versioning::{
     RepoVersionConstraint, VersionScheme, repo_version_satisfies,
 };
 use conary_core::resolver::{MissingDependency, SatPackage, SatSource};
-#[cfg(test)]
 use conary_core::version::VersionConstraint;
 
 /// A dependency selected for installation from a configured repository.
@@ -36,7 +34,6 @@ fn normalized_package_release(release: &str) -> Option<&str> {
     (!release.is_empty()).then_some(release)
 }
 
-#[cfg(test)]
 pub(super) fn version_satisfies_constraint(
     scheme: VersionScheme,
     version: &str,
