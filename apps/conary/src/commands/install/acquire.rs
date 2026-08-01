@@ -1,8 +1,7 @@
 // apps/conary/src/commands/install/acquire.rs
 
 use super::conversion::{
-    CcsArtifactInstallOptions, ConversionResult, DEFAULT_CCS_DEPENDENCY_PASSES,
-    install_ccs_artifact, try_convert_to_ccs,
+    CcsArtifactInstallOptions, ConversionResult, install_ccs_artifact, try_convert_to_ccs,
 };
 use super::prepare::parse_package;
 use super::resolve::{
@@ -122,7 +121,6 @@ pub(super) async fn resolve_and_parse_package(
             allow_downgrade: ccs_opts.allow_downgrade,
             intent: ccs_opts.intent,
             yes: ccs_opts.yes,
-            dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
             envelope_authority: direct_ccs_envelope_authority(
                 resolved.source_type,
                 repository_provenance.as_ref(),
@@ -153,7 +151,6 @@ pub(super) async fn resolve_and_parse_package(
             allow_downgrade: ccs_opts.allow_downgrade,
             intent: ccs_opts.intent,
             yes: ccs_opts.yes,
-            dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
             envelope_authority: direct_ccs_envelope_authority(
                 resolved.source_type,
                 repository_provenance.as_ref(),
@@ -203,7 +200,6 @@ pub(super) async fn resolve_and_parse_package(
                     allow_downgrade: ccs_opts.allow_downgrade,
                     intent: ccs_opts.intent,
                     yes: ccs_opts.yes,
-                    dependency_passes_remaining: DEFAULT_CCS_DEPENDENCY_PASSES,
                     envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
                     repository_provenance,
                     resolution_policy,

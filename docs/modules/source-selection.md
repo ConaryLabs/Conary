@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 23
-summary: Document exact profile-owned source policy, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
+last_updated: 2026-07-31
+revision: 24
+summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -364,12 +364,22 @@ rejects strict dependency solving when that profile has not been established;
 it never treats an empty profile as an empty candidate set and never derives
 one from a package name, repository label, URL, or package format. Local files
 with repository dependencies therefore require an explicit scope or system
-pin. Guarded mixing prefers an established profile and may fall back;
-permissive mixing does not add a profile preference. Once eligibility and any
-guarded preference are fixed, repository priority is authoritative. Candidates at
-the same priority are compared only with their source ecosystem's native
-version scheme. Equal-priority candidates from different schemes, or candidates
-whose exact native identity remains tied, produce a typed ambiguity. Repository
+pin. A declarative multi-root package set has no privileged root: when no
+profile is already pinned, its only implicit authority is the one exact source
+profile common to every root's version-compatible repository candidates.
+Disjoint or ambiguous profile sets fail closed and require an explicit pin;
+model order never selects source authority. Guarded mixing prefers an
+established profile and may fall back; permissive mixing does not add a profile
+preference. An exact installed
+package-name or declared capability provider that satisfies a transitive
+requirement is favored before repository ranking, so dependency planning does
+not reinstall its repository copy. An explicit root with an exact package-name
+candidate retains that root identity instead of being replaced by a differently
+named installed virtual provider. Once eligibility and installed-provider
+preference are fixed, repository priority is authoritative. Candidates at the
+same priority are compared only with their source ecosystem's native version
+scheme. Equal-priority candidates from different schemes, or candidates whose
+exact native identity remains tied, produce a typed ambiguity. Repository
 names, cache iteration order, and external discovery metadata never break that
 tie.
 
@@ -397,6 +407,12 @@ state. There are no operator replay flags, mixing-policy overrides, shallow
 target matrices, or command-text exceptions. If the selected root cannot
 satisfy a typed interpreter or source-manager semantic, preflight reports that
 semantic before mutation so the missing model can be engineered.
+
+Model apply resolves every install and update root together, authenticates the
+exact SAT-selected repository closure, and executes that closure as one batch.
+Typed package relations therefore order provider payloads and dependent
+lifecycle programs inside one package-set transition; model diff iteration
+order is never transaction authority.
 
 ## Flow Behavior
 
@@ -600,8 +616,13 @@ state requires an explicit scoped install, update, or replatform operation.
   replatform summaries
 - `apps/conary/src/commands/model/apply.rs` for model apply execution and
   replatform install dispatch
+- `apps/conary/src/commands/model/apply/packages.rs` for model package-set
+  aggregation and atomic install/update dispatch
 - `apps/conary/src/commands/model/apply/derived.rs` for persisted
   derived-package definition and build ownership
+- `apps/conary/src/commands/install/package_set.rs` for multi-root SAT
+  selection and `apps/conary/src/commands/install/repository_batch.rs` for
+  authenticated preparation of the exact selected closure
 - `apps/conary/src/commands/model/remote_diff.rs` and
   `apps/conary/src/commands/model/lock.rs` for remote include drift and
   lockfile behavior

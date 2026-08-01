@@ -6,7 +6,8 @@ use super::{PreparedNativeTransaction, executor_for_owner, runtime};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::native_transaction::{
     DebRecoveryResult, NativeEventPathProjection, NativeEventProgram, NativePackageIdentity,
-    NativeTransactionChange, NativeTransactionEvent, NativeTransactionPlan,
+    NativeTransactionChange, NativeTransactionEvent, NativeTransactionPathCapabilities,
+    NativeTransactionPlan,
 };
 use conary_core::scriptlet::{
     ExecutionMode, NativeInterpreterAvailability, SandboxMode, ScriptletExecutor,
@@ -29,10 +30,18 @@ impl NativePathProjection {
         plan: &NativeTransactionPlan,
         changes: &[NativeTransactionChange],
         final_owned: &BTreeSet<String>,
+        path_capabilities: &[NativeTransactionPathCapabilities],
+        final_path_capabilities: &BTreeSet<String>,
     ) -> Result<Self> {
         let events = plan
             .graph
-            .path_projections(plan.events.len(), changes, final_owned)?
+            .path_projections(
+                plan.events.len(),
+                changes,
+                final_owned,
+                path_capabilities,
+                final_path_capabilities,
+            )?
             .into_iter()
             .enumerate()
             .map(|(event_index, projection)| {
@@ -60,6 +69,8 @@ impl NativePathProjection {
         let NativeEventPathProjection::Projected {
             introduced_paths,
             explicitly_removed_paths,
+            introduced_path_capabilities,
+            explicitly_removed_path_capabilities,
         } = projection
         else {
             return Ok(NativeInterpreterAvailability::CurrentRoot);
@@ -69,11 +80,16 @@ impl NativePathProjection {
         let normalized = interpreter_path
             .to_str()
             .context("normalized native interpreter path is not UTF-8")?;
-        if explicitly_removed_paths.contains(normalized) {
+        if explicitly_removed_paths.contains(normalized)
+            || explicitly_removed_path_capabilities.contains(normalized)
+        {
             return Ok(NativeInterpreterAvailability::ProjectedMissing);
         }
         Ok(
-            if root.join(&interpreter_path).exists() || introduced_paths.contains(normalized) {
+            if root.join(&interpreter_path).exists()
+                || introduced_paths.contains(normalized)
+                || introduced_path_capabilities.contains(normalized)
+            {
                 NativeInterpreterAvailability::ProjectedPresent
             } else {
                 NativeInterpreterAvailability::ProjectedMissing
@@ -152,6 +168,9 @@ impl PreparedNativeTransaction {
             }
             NativeEventProgram::Command { argv } => executor
                 .preflight_native_command(argv)
+                .map_err(anyhow::Error::from),
+            NativeEventProgram::RpmSysusers { source_path } => executor
+                .preflight_rpm_sysusers(self.rpm_sysusers_interface()?, source_path.as_deref())
                 .map_err(anyhow::Error::from),
         }
     }

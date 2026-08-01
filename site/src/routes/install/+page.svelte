@@ -6,36 +6,58 @@
 </script>
 
 <PageMeta
-	title="Install the Conary limited preview — Conary"
-	description={`Install the Conary ${previewRelease.tag} limited preview on Fedora 44, Ubuntu 26.04 LTS, or Arch and test a package from another distro.`}
+	title="Conary tester release status — Conary"
+	description={`Conary ${previewRelease.tag} is published but not current tester authority; the packaged tester loop is paused until a release contains the supported-host fixes.`}
 	path="/install/"
 />
 
 <PageIntro
-	eyebrow="Preview runbook"
-	title="Install Conary without skipping the safety gate."
-	description={`Use the pinned ${previewRelease.tag} release on a VM or non-critical x86_64 host. Verify Conary, select a non-native package source, and inspect the complete cross-distro transaction before apply.`}
+	eyebrow="Tester loop paused"
+	title="Wait for the next verified tester release."
+	description={previewRelease.testerAuthorityReason}
 />
 
 <section class="install-section">
 	<div class="container install-grid">
 		<aside class="safety-rail" aria-labelledby="safety-title">
 			<p class="eyebrow">Before you start</p>
-			<h2 id="safety-title">Safety gate</h2>
+			<h2 id="safety-title">Current stop gate</h2>
 			<ul>
+				<li>Do not use {previewRelease.tag} as current tester authority.</li>
 				<li>Use a VM, snapshot, or explicitly non-critical host.</li>
 				<li>The packaged tester lane is x86_64.</li>
 				<li>Match Fedora 44, Ubuntu 26.04 LTS, or Arch Linux.</li>
 				<li>Stop if the checksum does not print <code>OK</code>.</li>
 				<li>Ask before every command that can mutate the host.</li>
 			</ul>
-			<a href={previewRelease.releaseUrl} class="btn btn-secondary">
-				Open {previewRelease.tag} release <span aria-hidden="true">↗</span>
+			<a href={previewRelease.matrixUrl} class="btn btn-secondary">
+				Read the release matrix <span aria-hidden="true">↗</span>
 			</a>
 		</aside>
 
 		<div class="install-content">
-			<section class="install-step" id="preflight">
+			<section class="authority-pause" aria-labelledby="authority-pause-title">
+				<p class="eyebrow">No current pinned release</p>
+				<h2 id="authority-pause-title">The package runbook is not open.</h2>
+				<p>
+					{previewRelease.testerAuthorityReason} The exact {previewRelease.tag}
+					artifacts remain available for inspecting that immutable release, but their
+					results do not validate the fixes now under review. This page will reopen
+					only after a later immutable release passes the artifact matrix.
+				</p>
+				<div class="button-row">
+					<a href={previewRelease.matrixUrl} class="btn btn-primary">
+						Read exact release evidence <span aria-hidden="true">↗</span>
+					</a>
+					<a href={previewRelease.releaseUrl} class="btn btn-secondary">
+						Inspect {previewRelease.tag} artifact <span aria-hidden="true">↗</span>
+					</a>
+				</div>
+			</section>
+
+			<details class="retained-runbook">
+				<summary>Retained {previewRelease.tag} commands — historical reference, do not run</summary>
+				<section class="install-step" id="preflight">
 				<div class="step-heading">
 					<span class="step-number">01</span>
 					<div>
@@ -188,7 +210,7 @@
 				</div>
 			</section>
 
-			<section class="install-step report-step" id="report-feedback">
+				<section class="install-step report-step" id="report-feedback">
 				<div class="step-heading">
 					<span class="step-number">06</span>
 					<div>
@@ -232,7 +254,8 @@
 						Read the pinned guide <span aria-hidden="true">↗</span>
 					</a>
 				</div>
-			</section>
+				</section>
+			</details>
 
 			<section class="contributor-panel" id="source-build">
 				<div>
@@ -331,6 +354,37 @@
 
 	.install-content {
 		min-width: 0;
+	}
+
+	.authority-pause {
+		padding: clamp(1.5rem, 4vw, 2.5rem);
+		margin-bottom: clamp(2.5rem, 6vw, 4rem);
+		border: 1px solid var(--color-orange);
+		background: var(--color-layer);
+	}
+
+	.authority-pause h2 {
+		margin-bottom: 0.75rem;
+		font-size: var(--step-section);
+	}
+
+	.authority-pause > p:not(.eyebrow) {
+		max-width: 70ch;
+		color: var(--color-mist);
+	}
+
+	.retained-runbook {
+		margin-bottom: clamp(3rem, 7vw, 5rem);
+		border-top: 1px solid var(--color-border);
+	}
+
+	.retained-runbook summary {
+		padding: 1rem 0;
+		color: var(--color-muted);
+		cursor: pointer;
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		letter-spacing: 0.04em;
 	}
 
 	.install-step {

@@ -50,7 +50,17 @@ pub enum NativeEventPathProjection {
     Projected {
         introduced_paths: BTreeSet<String>,
         explicitly_removed_paths: BTreeSet<String>,
+        introduced_path_capabilities: BTreeSet<String>,
+        explicitly_removed_path_capabilities: BTreeSet<String>,
     },
+}
+
+/// Exact source-declared absolute path capabilities before and after one
+/// transaction element.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeTransactionPathCapabilities {
+    pub old_paths: BTreeSet<String>,
+    pub new_paths: BTreeSet<String>,
 }
 
 /// Exact transaction execution order, including filesystem visibility changes.
@@ -70,12 +80,25 @@ impl NativeTransactionGraph {
         events_len: usize,
         changes: &[NativeTransactionChange],
         final_owned_paths: &BTreeSet<String>,
+        path_capabilities: &[NativeTransactionPathCapabilities],
+        final_path_capabilities: &BTreeSet<String>,
     ) -> Result<Vec<Option<NativeEventPathProjection>>> {
+        if path_capabilities.len() != changes.len() {
+            bail!(
+                "native transaction path-capability changes have length {}, expected {}",
+                path_capabilities.len(),
+                changes.len()
+            );
+        }
         let final_owned_paths = normalize_paths(final_owned_paths)?;
+        let final_path_capabilities = normalize_paths(final_path_capabilities)?;
         let mut projections = vec![None; events_len];
         let mut introduced_paths = BTreeSet::new();
         let mut explicitly_removed_paths = BTreeSet::new();
         let mut applied_new_owners = BTreeMap::<String, BTreeSet<usize>>::new();
+        let mut introduced_path_capabilities = BTreeSet::new();
+        let mut explicitly_removed_path_capabilities = BTreeSet::new();
+        let mut applied_new_capability_owners = BTreeMap::<String, BTreeSet<usize>>::new();
         let mut payload_boundary_crossed = false;
         let mut finalized_changes = 0usize;
         let payload_change_count = changes
@@ -103,6 +126,9 @@ impl NativeTransactionGraph {
                         NativeEventPathProjection::Projected {
                             introduced_paths: introduced_paths.clone(),
                             explicitly_removed_paths: explicitly_removed_paths.clone(),
+                            introduced_path_capabilities: introduced_path_capabilities.clone(),
+                            explicitly_removed_path_capabilities:
+                                explicitly_removed_path_capabilities.clone(),
                         }
                     } else {
                         NativeEventPathProjection::CurrentRoot
@@ -131,14 +157,20 @@ impl NativeTransactionGraph {
                             "native transaction graph refers to missing payload change {change_index}"
                         )
                     })?;
-                    for path in normalize_paths(&change.new_paths)? {
-                        applied_new_owners
-                            .entry(path.clone())
-                            .or_default()
-                            .insert(change_index);
-                        explicitly_removed_paths.remove(&path);
-                        introduced_paths.insert(path);
-                    }
+                    apply_visible_paths(
+                        normalize_paths(&change.new_paths)?,
+                        change_index,
+                        &mut introduced_paths,
+                        &mut explicitly_removed_paths,
+                        &mut applied_new_owners,
+                    );
+                    apply_visible_paths(
+                        normalize_paths(&path_capabilities[change_index].new_paths)?,
+                        change_index,
+                        &mut introduced_path_capabilities,
+                        &mut explicitly_removed_path_capabilities,
+                        &mut applied_new_capability_owners,
+                    );
                     payload_boundary_crossed = true;
                 }
                 NativeTransactionStep::FinalizeOldPayload { change_index } => {
@@ -147,22 +179,28 @@ impl NativeTransactionGraph {
                             "native transaction graph refers to missing old-payload change {change_index}"
                         )
                     })?;
-                    let old_paths = normalize_paths(&change.old_paths)?;
-                    let new_paths = normalize_paths(&change.new_paths)?;
-                    for path in old_paths.difference(&new_paths) {
-                        if applied_new_owners
-                            .get(path)
-                            .is_some_and(|owners| !owners.is_empty())
-                        {
-                            continue;
-                        }
-                        introduced_paths.remove(path);
-                        explicitly_removed_paths.insert(path.clone());
-                    }
+                    finalize_visible_paths(
+                        normalize_paths(&change.old_paths)?,
+                        normalize_paths(&change.new_paths)?,
+                        &mut introduced_paths,
+                        &mut explicitly_removed_paths,
+                        &applied_new_owners,
+                    );
+                    finalize_visible_paths(
+                        normalize_paths(&path_capabilities[change_index].old_paths)?,
+                        normalize_paths(&path_capabilities[change_index].new_paths)?,
+                        &mut introduced_path_capabilities,
+                        &mut explicitly_removed_path_capabilities,
+                        &applied_new_capability_owners,
+                    );
                     finalized_changes += 1;
                     if finalized_changes == payload_change_count {
                         introduced_paths.retain(|path| final_owned_paths.contains(path));
                         explicitly_removed_paths.retain(|path| !final_owned_paths.contains(path));
+                        introduced_path_capabilities
+                            .retain(|path| final_path_capabilities.contains(path));
+                        explicitly_removed_path_capabilities
+                            .retain(|path| !final_path_capabilities.contains(path));
                     }
                     payload_boundary_crossed = true;
                 }
@@ -186,6 +224,42 @@ impl NativeTransactionGraph {
             bail!("native transaction graph does not place every planned event");
         }
         Ok(projections)
+    }
+}
+
+fn apply_visible_paths(
+    paths: BTreeSet<String>,
+    change_index: usize,
+    introduced: &mut BTreeSet<String>,
+    explicitly_removed: &mut BTreeSet<String>,
+    applied_new_owners: &mut BTreeMap<String, BTreeSet<usize>>,
+) {
+    for path in paths {
+        applied_new_owners
+            .entry(path.clone())
+            .or_default()
+            .insert(change_index);
+        explicitly_removed.remove(&path);
+        introduced.insert(path);
+    }
+}
+
+fn finalize_visible_paths(
+    old_paths: BTreeSet<String>,
+    new_paths: BTreeSet<String>,
+    introduced: &mut BTreeSet<String>,
+    explicitly_removed: &mut BTreeSet<String>,
+    applied_new_owners: &BTreeMap<String, BTreeSet<usize>>,
+) {
+    for path in old_paths.difference(&new_paths) {
+        if applied_new_owners
+            .get(path)
+            .is_some_and(|owners| !owners.is_empty())
+        {
+            continue;
+        }
+        introduced.remove(path);
+        explicitly_removed.insert(path.clone());
     }
 }
 
@@ -505,8 +579,15 @@ mod tests {
             ],
         };
 
+        let path_capabilities = vec![NativeTransactionPathCapabilities::default(); changes.len()];
         let projections = graph
-            .path_projections(3, &changes, &BTreeSet::from(["usr/bin/tool".to_string()]))
+            .path_projections(
+                3,
+                &changes,
+                &BTreeSet::from(["usr/bin/tool".to_string()]),
+                &path_capabilities,
+                &BTreeSet::new(),
+            )
             .unwrap();
         let NativeEventPathProjection::Projected {
             explicitly_removed_paths,
@@ -519,6 +600,7 @@ mod tests {
         let NativeEventPathProjection::Projected {
             introduced_paths,
             explicitly_removed_paths,
+            ..
         } = projections[2].as_ref().unwrap()
         else {
             panic!("event after replacement must use a projected root");
@@ -543,18 +625,99 @@ mod tests {
             ],
         };
 
+        let path_capabilities = vec![NativeTransactionPathCapabilities::default(); changes.len()];
         let projections = graph
-            .path_projections(1, &changes, &BTreeSet::from(["usr/bin/tool".to_string()]))
+            .path_projections(
+                1,
+                &changes,
+                &BTreeSet::from(["usr/bin/tool".to_string()]),
+                &path_capabilities,
+                &BTreeSet::new(),
+            )
             .unwrap();
         let NativeEventPathProjection::Projected {
             introduced_paths,
             explicitly_removed_paths,
+            ..
         } = projections[0].as_ref().unwrap()
         else {
             panic!("event after transfer must use a projected root");
         };
         assert!(introduced_paths.contains("usr/bin/tool"));
         assert!(!explicitly_removed_paths.contains("usr/bin/tool"));
+    }
+
+    #[test]
+    fn path_capability_projection_obeys_payload_and_finalization_boundaries() {
+        let install_changes = [change("shell-provider", &[], &["usr/bin/sh"], 0)];
+        let install_capabilities = [NativeTransactionPathCapabilities {
+            old_paths: BTreeSet::new(),
+            new_paths: BTreeSet::from(["/bin/sh".to_string()]),
+        }];
+        let install_graph = NativeTransactionGraph {
+            steps: vec![
+                NativeTransactionStep::RunEvent { event_index: 0 },
+                NativeTransactionStep::ApplyPayload { change_index: 0 },
+                NativeTransactionStep::RunEvent { event_index: 1 },
+                NativeTransactionStep::FinalizeOldPayload { change_index: 0 },
+            ],
+        };
+
+        let projections = install_graph
+            .path_projections(
+                2,
+                &install_changes,
+                &BTreeSet::from(["usr/bin/sh".to_string()]),
+                &install_capabilities,
+                &BTreeSet::from(["bin/sh".to_string()]),
+            )
+            .unwrap();
+        assert_eq!(projections[0], Some(NativeEventPathProjection::CurrentRoot));
+        let NativeEventPathProjection::Projected {
+            introduced_paths,
+            introduced_path_capabilities,
+            explicitly_removed_path_capabilities,
+            ..
+        } = projections[1].as_ref().unwrap()
+        else {
+            panic!("event after provider payload must use a projected root");
+        };
+        assert!(introduced_paths.contains("usr/bin/sh"));
+        assert!(introduced_path_capabilities.contains("bin/sh"));
+        assert!(explicitly_removed_path_capabilities.is_empty());
+
+        let remove_changes = [change("shell-provider", &["usr/bin/sh"], &[], 0)];
+        let remove_capabilities = [NativeTransactionPathCapabilities {
+            old_paths: BTreeSet::from(["/bin/sh".to_string()]),
+            new_paths: BTreeSet::new(),
+        }];
+        let remove_graph = NativeTransactionGraph {
+            steps: vec![
+                NativeTransactionStep::ApplyPayload { change_index: 0 },
+                NativeTransactionStep::FinalizeOldPayload { change_index: 0 },
+                NativeTransactionStep::RunEvent { event_index: 0 },
+            ],
+        };
+
+        let projections = remove_graph
+            .path_projections(
+                1,
+                &remove_changes,
+                &BTreeSet::new(),
+                &remove_capabilities,
+                &BTreeSet::new(),
+            )
+            .unwrap();
+        let NativeEventPathProjection::Projected {
+            introduced_path_capabilities,
+            explicitly_removed_path_capabilities,
+            ..
+        } = projections[0].as_ref().unwrap()
+        else {
+            panic!("event after provider removal must use a projected root");
+        };
+        assert!(introduced_path_capabilities.is_empty());
+        assert!(explicitly_removed_path_capabilities.contains("bin/sh"));
     }
 
     #[test]

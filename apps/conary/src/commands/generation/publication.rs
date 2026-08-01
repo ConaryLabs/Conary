@@ -23,6 +23,7 @@ pub(crate) struct PublicationOutcome {
     pub state_number: Option<i64>,
     pub needs_publication: bool,
     pub retry_command: Option<String>,
+    pub failure_reason: Option<String>,
     pub completed_debts: usize,
 }
 
@@ -154,15 +155,18 @@ fn publish_pending_debt_with_hook(
             state_number: Some(built.state_number),
             needs_publication: false,
             retry_command: None,
+            failure_reason: None,
             completed_debts: completed,
         }),
         Err(error) => {
-            debt.mark_failed(conn, &error.to_string())?;
+            let failure_reason = error.to_string();
+            debt.mark_failed(conn, &failure_reason)?;
             Ok(PublicationOutcome {
                 generation_number: None,
                 state_number: None,
                 needs_publication: true,
                 retry_command: Some(PublicationOutcome::default_retry_command()),
+                failure_reason: Some(failure_reason),
                 completed_debts: 0,
             })
         }
@@ -475,6 +479,14 @@ mod tests {
         assert!(outcome.needs_publication);
         let interrupted_debt = fixture.reload_debt();
         assert_eq!(
+            outcome.failure_reason.as_deref(),
+            interrupted_debt.last_error.as_deref()
+        );
+        assert_eq!(
+            outcome.failure_reason.as_deref(),
+            Some("simulated death after current link swap")
+        );
+        assert_eq!(
             interrupted_debt.phase,
             GenerationPublicationPhase::ArtifactReady
         );
@@ -497,6 +509,7 @@ mod tests {
             "recovery debt remained pending: {:?}",
             fixture.reload_debt()
         );
+        assert_eq!(recovered.failure_reason, None);
         fixture.assert_terminal_publication();
     }
 

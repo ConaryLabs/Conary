@@ -411,11 +411,13 @@ fn create_fifo(path: &Path) -> crate::Result<()> {
     }
 }
 
-/// Restore the complete metadata authority of one already-created payload node.
+/// Restore the complete payload-owned metadata of one already-created node.
 ///
 /// This is shared by immutable generation reconstruction and journaled
 /// mutable-root application so the two paths cannot drift on ownership,
-/// permissions, timestamps, or xattrs.
+/// permissions, timestamps, or xattrs. An undeclared `security.selinux`
+/// attribute is target LSM authority assigned at node creation and is
+/// preserved; a declared value remains exact payload authority.
 pub fn apply_resolved_payload_metadata(
     path: &Path,
     node: &ResolvedPayloadNode,
@@ -477,7 +479,7 @@ fn replace_xattrs(
     let expected_names = expected.keys().map(String::as_str).collect::<BTreeSet<_>>();
     for name in existing
         .iter()
-        .filter(|name| !expected_names.contains(name.as_str()))
+        .filter(|name| existing_xattr_requires_removal(name, &expected_names))
     {
         let c_name = CString::new(name.as_bytes()).expect("validated xattr name");
         let result = unsafe { libc::lremovexattr(c_path.as_ptr(), c_name.as_ptr()) };
@@ -519,6 +521,11 @@ fn replace_xattrs(
 }
 
 const SECURITY_IMA_XATTR: &str = "security.ima";
+const SECURITY_SELINUX_XATTR: &str = "security.selinux";
+
+fn existing_xattr_requires_removal(name: &str, expected_names: &BTreeSet<&str>) -> bool {
+    !expected_names.contains(name) && name != SECURITY_SELINUX_XATTR
+}
 
 fn ima_staging_error_is_non_fatal(
     name: &str,
@@ -576,7 +583,13 @@ fn list_xattr_names(c_path: &CString, path: &Path) -> crate::Result<Vec<String>>
 
 fn set_mtime(path: &Path, seconds: i64, nanoseconds: u32) -> crate::Result<()> {
     let c_path = c_path(path)?;
-    let seconds = libc::time_t::try_from(seconds).map_err(|_| {
+    // Convert into whatever `timespec::tv_sec` is on this target rather than
+    // naming a libc alias for it: `libc::time_t` is deprecated on musl, and the
+    // field is the structural owner of the width either way. The conversion is
+    // i64->i64 and therefore redundant on x86_64, but not on targets with a
+    // narrower `tv_sec`, where dropping it would silently truncate an mtime.
+    #[allow(clippy::useless_conversion)]
+    let seconds = seconds.try_into().map_err(|_| {
         crate::Error::InvalidPath(format!(
             "mtime seconds are not representable at {}",
             path.display()
@@ -641,7 +654,11 @@ fn xattr_error(operation: &str, path: &Path, error: io::Error) -> crate::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{SECURITY_IMA_XATTR, ima_staging_error_is_non_fatal};
+    use super::{
+        SECURITY_IMA_XATTR, SECURITY_SELINUX_XATTR, existing_xattr_requires_removal,
+        ima_staging_error_is_non_fatal, replace_xattrs,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn ima_staging_error_policy_matches_pinned_rpm_contract() {
@@ -663,5 +680,48 @@ mod tests {
             );
         }
         assert!(!ima_staging_error_is_non_fatal(SECURITY_IMA_XATTR, None, 0));
+    }
+
+    #[test]
+    fn undeclared_selinux_label_is_ambient_target_authority() {
+        let no_declared_xattrs = BTreeSet::new();
+        assert!(!existing_xattr_requires_removal(
+            SECURITY_SELINUX_XATTR,
+            &no_declared_xattrs
+        ));
+
+        let declared_xattrs = BTreeSet::from([SECURITY_SELINUX_XATTR]);
+        assert!(!existing_xattr_requires_removal(
+            SECURITY_SELINUX_XATTR,
+            &declared_xattrs
+        ));
+
+        for name in ["security.capability", SECURITY_IMA_XATTR, "user.demo"] {
+            assert!(
+                existing_xattr_requires_removal(name, &no_declared_xattrs),
+                "{name} must not gain the SELinux ambient-authority exception"
+            );
+        }
+    }
+
+    #[test]
+    fn replacement_removes_other_undeclared_xattrs_and_sets_declared_values() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let path = temp.path().join("payload");
+        std::fs::write(&path, b"payload").expect("create payload");
+        xattr::set(&path, "user.remove-me", b"stale").expect("set stale xattr");
+        xattr::set(&path, "user.keep-me", b"old").expect("set declared xattr");
+
+        let expected = BTreeMap::from([("user.keep-me".to_string(), b"exact".to_vec())]);
+        replace_xattrs(&path, &expected).expect("replace xattrs");
+
+        assert_eq!(
+            xattr::get(&path, "user.remove-me").expect("read stale xattr"),
+            None
+        );
+        assert_eq!(
+            xattr::get(&path, "user.keep-me").expect("read declared xattr"),
+            Some(b"exact".to_vec())
+        );
     }
 }

@@ -6,8 +6,10 @@ use super::super::gc::{
     runtime_root_for_generation_db_path,
 };
 use super::{
-    classify_side_effect_reasons, removed_members_for_side_effect_warning, render_generation_info,
+    classify_side_effect_reasons, pending_publication_error,
+    removed_members_for_side_effect_warning, render_generation_info,
 };
+use crate::commands::generation::publication::PublicationOutcome;
 use conary_core::db::models::settings;
 use conary_core::db::models::{StateDiff, StateMember};
 use conary_core::db::schema;
@@ -214,4 +216,23 @@ fn generation_info_omits_capability_xattr_count_when_zero() {
     let rendered = render_generation_info(7, &metadata, false, 4096);
 
     assert!(!rendered.contains("Cap xattrs"));
+}
+
+#[test]
+fn explicit_publication_failure_reports_recorded_cause_and_retry() {
+    let outcome = PublicationOutcome {
+        generation_number: None,
+        state_number: None,
+        needs_publication: true,
+        retry_command: Some("conary system generation publish --yes".to_string()),
+        failure_reason: Some("exact generation builder failure".to_string()),
+        completed_debts: 0,
+    };
+
+    assert_eq!(
+        pending_publication_error("Generation publication", &outcome).to_string(),
+        "Generation publication is still pending.\n\
+         Cause: exact generation builder failure\n\
+         Retry with: conary system generation publish --yes"
+    );
 }

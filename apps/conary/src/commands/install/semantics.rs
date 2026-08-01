@@ -74,4 +74,24 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn source_semantics_own_payload_sharing_policy() {
+        use conary_core::payload::PayloadSharingPolicy;
+
+        assert_eq!(
+            InstallSemantics::native_package(PackageFormatType::Rpm).payload_sharing_policy(),
+            PayloadSharingPolicy::Rpm
+        );
+        for format in [PackageFormatType::Deb, PackageFormatType::Arch] {
+            assert_eq!(
+                InstallSemantics::native_package(format).payload_sharing_policy(),
+                PayloadSharingPolicy::Exclusive
+            );
+        }
+        assert_eq!(
+            InstallSemantics::ccs(VersionScheme::Conary).payload_sharing_policy(),
+            PayloadSharingPolicy::Exclusive
+        );
+    }
 }

@@ -1,7 +1,8 @@
 ---
-last_updated: 2026-07-29
-revision: 13
-summary: Pin the agent-supervised cross-distro package tester loop to v0.14.0
+last_updated: 2026-07-31
+revision: 14
+status: paused
+summary: Preserve the v0.14.0 tester-loop shape while execution waits for a release containing the supported-host fixes
 ---
 
 # Agent-Assisted Tester Loop
@@ -14,17 +15,23 @@ stays responsible for approving every command that mutates system state.
 Use a disposable VM, a snapshot, or a non-critical host. Do not run this loop
 first on an irreplaceable daily driver.
 
-This guide is pinned to `v0.14.0`. Do not begin the loop until the
+**Do not run this guide while its frontmatter status is `paused`.** Its
+`v0.14.0` commands are retained so the next release can be re-pinned without
+losing the reviewed flow, but that immutable release predates fixes discovered
+during supported-host generation bring-up and is not current tester authority.
+Resume only after this guide names a later release and the
 [current release artifact matrix](https://github.com/ConaryLabs/Conary/blob/main/docs/operations/release-artifact-matrix.md)
-records that tag as published and independently verified, and the release page
-publishes the package for this host plus `SHA256SUMS`. Do not continue when the
-downloaded package fails checksum verification.
+records that exact tag as published and independently verified.
 
 ## Copy-Paste Agent Prompt
 
 Paste this into the agent running inside the VM or snapshot:
 
 ```text
+First read the guide frontmatter. If its status is paused, stop without
+downloading or installing anything and explain that no current pinned tester
+release exists.
+
 I want you to help me run the Conary first external tester loop on this host.
 
 Read this guide first:

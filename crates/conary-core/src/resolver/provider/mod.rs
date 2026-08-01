@@ -799,6 +799,33 @@ impl<'db> ConaryProvider<'db> {
         })
     }
 
+    /// Select one stable installed witness from an already-bounded candidate
+    /// set. The caller retains root-name and version filtering authority.
+    pub(super) fn installed_solvable_for_candidates(
+        &self,
+        candidates: &[SolvableId],
+    ) -> Option<SolvableId> {
+        candidates
+            .iter()
+            .copied()
+            .filter(|id| self.solvables[id.to_index()].installed_trove_id.is_some())
+            .min_by(|left, right| {
+                let left = &self.solvables[left.to_index()];
+                let right = &self.solvables[right.to_index()];
+                left.name
+                    .cmp(&right.name)
+                    .then_with(|| {
+                        left.version_scheme
+                            .as_str()
+                            .cmp(right.version_scheme.as_str())
+                    })
+                    .then_with(|| left.version.cmp(&right.version))
+                    .then_with(|| left.package_release.cmp(&right.package_release))
+                    .then_with(|| left.architecture.cmp(&right.architecture))
+                    .then_with(|| left.installed_trove_id.cmp(&right.installed_trove_id))
+            })
+    }
+
     /// Build the provides index, trove-id-to-name map, and dependency list used
     /// by `solve_removal()`.
     ///

@@ -202,7 +202,7 @@ fn rpm_regular_events_do_not_delegate_transaction_failure_policy() {
 }
 
 #[test]
-fn rpm_sysusers_is_an_exact_pre_payload_compatibility_command() {
+fn rpm_sysusers_is_an_exact_pre_payload_target_interface_event() {
     let mut sysusers = entry(
         "rpm:%sysusers:0",
         LifecyclePath::RpmSysusers,
@@ -234,15 +234,11 @@ fn rpm_sysusers_is_an_exact_pre_payload_compatibility_command() {
     assert_eq!(event.stage, NativeEventStage::RpmSysusers);
     assert_eq!(
         event.program,
-        NativeEventProgram::Command {
-            argv: vec![
-                "/usr/bin/systemd-sysusers".to_string(),
-                "--replace".to_string(),
-                "/usr/lib/sysusers.d/owner.conf".to_string(),
-                "-".to_string(),
-            ]
+        NativeEventProgram::RpmSysusers {
+            source_path: Some("/usr/lib/sysusers.d/owner.conf".to_string()),
         }
     );
+    assert!(plan.requires_sysusers_interface());
     assert_eq!(
         event.stdin,
         b"u! owner - \"Owner service\" /var/lib/owner\n"

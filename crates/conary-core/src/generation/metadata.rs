@@ -350,9 +350,9 @@ pub fn gc_roots_dir() -> PathBuf {
 
 /// Resolve one exact kernel release from `gen_dir/usr/lib/modules/`.
 ///
-/// Used by the bootstrap image builder to discover the kernel in a deployed
-/// sysroot. Multiple releases require an explicit selection instead of
-/// filesystem iteration order deciding which kernel boots.
+/// Used by generation boot-asset staging and image export to discover the
+/// kernel in a deployed sysroot. Multiple releases require an explicit
+/// selection instead of filesystem iteration order deciding which kernel boots.
 pub fn detect_kernel_version(gen_dir: &Path) -> crate::Result<Option<String>> {
     let modules_dir = gen_dir.join("usr/lib/modules");
     let entries = match std::fs::read_dir(&modules_dir) {

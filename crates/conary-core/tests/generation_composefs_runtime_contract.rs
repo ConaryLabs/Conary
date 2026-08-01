@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,6 +24,42 @@ fn app_source(path: &str) -> PathBuf {
 
 fn workspace_file(path: &str) -> PathBuf {
     workspace_root().join(path)
+}
+
+fn dracut_inst_multiple_calls(module: &Path) -> Vec<Vec<String>> {
+    let output = Command::new("bash")
+        .args([
+            "-c",
+            r#"
+set -eu
+source "$1"
+moddir=/contract/conary-dracut-module
+install_conary_script() { :; }
+inst_multiple() {
+    printf 'call'
+    for argument in "$@"; do
+        printf '\t%s' "$argument"
+    done
+    printf '\n'
+}
+install
+"#,
+            "dracut-module-contract",
+        ])
+        .arg(module)
+        .output()
+        .expect("failed to evaluate conary dracut module setup");
+    assert!(
+        output.status.success(),
+        "conary dracut module setup failed under the contract harness: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8(output.stdout)
+        .expect("conary dracut module setup emitted non-UTF-8 arguments")
+        .lines()
+        .map(|line| line.split('\t').skip(1).map(str::to_string).collect())
+        .collect()
 }
 
 #[test]
@@ -93,6 +130,28 @@ fn generation_builder_stages_boot_assets_from_cas_sysroot_for_default_runtime_bu
             && initramfs_rs.contains(".arg(\"--kmoddir\")"),
         "dracut must build initramfs content from the materialized generation sysroot, not the live root"
     );
+}
+
+#[test]
+fn generation_builder_retains_boot_preparation_mutations_before_freezing_erofs() {
+    for path in [
+        "generation/builder/create.rs",
+        "generation/builder/rebuild.rs",
+    ] {
+        let source =
+            fs::read_to_string(core_source(path)).expect("failed to read generation builder");
+        let prepare = source
+            .find("resolve_generation_boot_asset_sources(&mut runtime_inputs")
+            .expect("generation builder must finalize boot-derived manifest authority");
+        let freeze = source
+            .find("build_erofs_image_from_root_manifest(&runtime_inputs.generation")
+            .expect("generation builder must freeze the finalized immutable manifest");
+
+        assert!(
+            prepare < freeze,
+            "{path} must retain exact depmod output before writing the immutable EROFS image"
+        );
+    }
 }
 
 #[test]
@@ -441,7 +500,7 @@ fn generation_recovery_fails_hard_on_etc_overlay_failures() {
 }
 
 #[test]
-fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() {
+fn dracut_generator_is_the_single_generation_activation_authority() {
     let dracut_generator = fs::read_to_string(workspace_file(
         "packaging/dracut/90conary/conary-generator.sh",
     ))
@@ -452,8 +511,12 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
     let dracut_module =
         fs::read_to_string(workspace_file("packaging/dracut/90conary/module-setup.sh"))
             .expect("failed to read conary dracut module setup");
-    let bootstrap_config = fs::read_to_string(core_source("bootstrap/system_config.rs"))
-        .expect("failed to read bootstrap system config");
+    let dracut_module_path = workspace_file("packaging/dracut/90conary/module-setup.sh");
+    let mandatory_dracut_tools = dracut_inst_multiple_calls(&dracut_module_path)
+        .into_iter()
+        .filter(|call| !call.iter().any(|argument| argument == "-o"))
+        .flatten()
+        .collect::<Vec<_>>();
 
     assert!(
         dracut_module.contains("install_conary_script \"$moddir/conary-init.sh\" \"/init\""),
@@ -507,23 +570,42 @@ fn initramfs_generation_mounts_expose_usr_without_partial_generation_fallback() 
         "boot must fail closed instead of creating an empty /etc upper when typed state is absent"
     );
     assert!(
-        dracut_module.contains("inst_multiple -o blkid cp grep"),
+        mandatory_dracut_tools.iter().any(|tool| tool == "cp"),
         "the initramfs must carry the copy tool required for readonly config-state seeding"
     );
 
-    for (label, source) in [
-        ("dracut generator", dracut_generator.as_str()),
-        ("bootstrap initramfs", bootstrap_config.as_str()),
-    ] {
-        assert!(
-            source.contains("expose_generation_usr"),
-            "{label} must route generation /usr exposure through the shared post-composefs helper"
-        );
-        assert!(
-            source.contains("ensure_root_symlink sbin usr/sbin"),
-            "{label} must ensure /sbin resolves through usr-merge before switch_root"
-        );
-    }
+    assert!(
+        dracut_generator.contains("expose_generation_usr"),
+        "the dracut generator must route generation /usr exposure through the post-composefs helper"
+    );
+    assert!(
+        dracut_generator.contains("ensure_root_symlink sbin usr/sbin"),
+        "the dracut generator must ensure /sbin resolves through usr-merge before switch_root"
+    );
+    assert!(
+        !dracut_init.contains("expose_generation_usr()"),
+        "conary-init must delegate generation activation to /sbin/conary-generator instead of reimplementing /usr exposure"
+    );
+    assert!(
+        dracut_generator.contains("read_kernel_value conary.carrier"),
+        "the dracut generator must read the carrier mode from the kernel command line"
+    );
+    assert!(
+        dracut_generator.contains("ETC_STATE_BASE=\"${SYSROOT}/run/conary/etc-state\""),
+        "a readonly carrier must place the /etc overlay upper under the runtime tmpfs"
+    );
+    assert!(
+        dracut_generator.contains("ETC_STATE_BASE=\"${SYSROOT}/conary/etc-state\""),
+        "a writable carrier must keep the /etc overlay upper on persistent generation state"
+    );
+    assert!(
+        dracut_init.contains("mount_once tmpfs tmpfs \"$SYSROOT/run\""),
+        "conary-init must provide the readonly carrier runtime tmpfs the generator's etc-state depends on"
+    );
+    assert!(
+        dracut_init.contains("mount_once tmpfs tmpfs \"$SYSROOT/var\""),
+        "conary-init must provide a writable /var for readonly carrier roots"
+    );
 }
 
 #[test]

@@ -1,16 +1,20 @@
 // conary-core/src/generation/builder/boot_assets.rs
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::cas::artifact_root_for_generations_root;
 use super::initramfs::generate_runtime_initramfs;
 use super::kernel::{
-    collect_boot_kernel_releases, collect_module_kernel_releases, module_kernel_path,
-    regular_file_exists, system_root_for_boot_root,
+    collect_boot_kernel_releases, collect_module_kernel_releases, kernel_module_dir,
+    module_kernel_path, regular_file_exists, system_root_for_boot_root,
 };
 use super::runtime_inputs;
 use super::sysroot::materialize_runtime_generation_sysroot;
+use crate::filesystem::CasStore;
 use crate::generation::artifact::{BootAssetSources, BootAssetsManifest, stage_boot_assets};
+use crate::generation::root_manifest::{GenerationRootEntry, capture_existing_payload_node};
+use crate::payload::{PayloadContentAuthority, PayloadNodeKind};
 
 #[derive(Debug)]
 pub(super) struct RuntimeBootAssetSources {
@@ -62,7 +66,7 @@ fn resolve_runtime_boot_asset_sources(boot_root: &Path) -> crate::Result<Runtime
 }
 
 pub(super) fn resolve_generation_boot_asset_sources(
-    runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
+    runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
     boot_root: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
@@ -77,7 +81,7 @@ pub(super) fn resolve_generation_boot_asset_sources(
 }
 
 fn resolve_generation_boot_asset_sources_with_tools(
-    runtime_inputs: &runtime_inputs::RuntimeGenerationInputs,
+    runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
     boot_root: &Path,
     dracut: &Path,
@@ -100,8 +104,112 @@ fn resolve_generation_boot_asset_sources_with_tools(
         cpio,
         InitramfsPolicy::GenerateConary,
     )?;
+    retain_generated_kernel_module_metadata(
+        runtime_inputs,
+        &objects_dir,
+        sysroot_workspace.path(),
+        &sources.kernel_version,
+    )?;
     sources._sysroot_workspace = Some(sysroot_workspace);
     Ok(sources)
+}
+
+/// Retain exact depmod output in the immutable generation authority.
+///
+/// The boot-asset sysroot starts as an exact materialization of
+/// `runtime_inputs`. Any additional node under the selected kernel's module
+/// directory was therefore produced by the typed depmod preparation that ran
+/// before dracut. Capture every such node and its bytes instead of keeping the
+/// mutation only in the temporary initramfs workspace.
+fn retain_generated_kernel_module_metadata(
+    runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
+    objects_dir: &Path,
+    sysroot: &Path,
+    release: &str,
+) -> crate::Result<()> {
+    let (module_dir, _) = kernel_module_dir(sysroot, release).ok_or_else(|| {
+        crate::Error::NotFound(format!(
+            "missing kernel module directory for {release}; expected lib/modules/{release} or usr/lib/modules/{release}"
+        ))
+    })?;
+    // A usr-merged root exposes the same tree through `/lib -> usr/lib`.
+    // Resolve that manifest-owned alias before deriving virtual paths so the
+    // generated entries retain the canonical `/usr/lib/modules` authority.
+    let module_dir = std::fs::canonicalize(&module_dir)?;
+    let existing_paths = runtime_inputs
+        .generation
+        .entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut workspace_paths = Vec::new();
+    collect_workspace_nodes(&module_dir, &mut workspace_paths)?;
+    workspace_paths.sort();
+
+    let cas = CasStore::new(objects_dir)?;
+    let mut generated_entries = Vec::new();
+    for path in workspace_paths {
+        let relative = path.strip_prefix(sysroot).map_err(|error| {
+            crate::Error::InvalidPath(format!(
+                "generated kernel-module path {} is outside sysroot {}: {error}",
+                path.display(),
+                sysroot.display()
+            ))
+        })?;
+        let virtual_path = Path::new("/").join(relative);
+        let virtual_path = virtual_path.to_str().ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "generated kernel-module path is not UTF-8: {}",
+                virtual_path.display()
+            ))
+        })?;
+        if existing_paths.contains(virtual_path) {
+            continue;
+        }
+
+        let node = capture_existing_payload_node(&path)?;
+        let content = if matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
+            let bytes = std::fs::read(&path)?;
+            let size = u64::try_from(bytes.len()).map_err(|_| {
+                crate::Error::IoError(format!(
+                    "generated kernel-module metadata is too large to capture: {}",
+                    path.display()
+                ))
+            })?;
+            Some(PayloadContentAuthority {
+                sha256: cas.store_private_copy(&bytes)?,
+                size,
+            })
+        } else {
+            None
+        };
+        generated_entries.push(GenerationRootEntry {
+            path: virtual_path.to_string(),
+            node,
+            content,
+        });
+    }
+
+    runtime_inputs.generation.entries.extend(generated_entries);
+    runtime_inputs
+        .generation
+        .entries
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    runtime_inputs.generation.validate()
+}
+
+fn collect_workspace_nodes(root: &Path, paths: &mut Vec<PathBuf>) -> crate::Result<()> {
+    let mut entries = std::fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        paths.push(path.clone());
+        if metadata.is_dir() {
+            collect_workspace_nodes(&path, paths)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_runtime_boot_asset_sources_with_tools(
@@ -126,7 +234,7 @@ fn resolve_runtime_boot_asset_sources_with_tools_and_policy(
     cpio: &Path,
     initramfs_policy: InitramfsPolicy,
 ) -> crate::Result<RuntimeBootAssetSources> {
-    let system_root = system_root_for_boot_root(boot_root);
+    let system_root = system_root_for_boot_root(boot_root)?;
     let mut candidate_releases = Vec::new();
     collect_boot_kernel_releases(boot_root, &mut candidate_releases)?;
     collect_module_kernel_releases(&system_root, &mut candidate_releases)?;
@@ -210,13 +318,7 @@ fn runtime_boot_asset_sources_for_release(
         )));
     }
 
-    let efi_bootloader = boot_root.join("EFI/BOOT/BOOTX64.EFI");
-    if !regular_file_exists(&efi_bootloader) {
-        return Err(crate::error::Error::NotFound(format!(
-            "missing required boot asset efi_bootloader at {}",
-            efi_bootloader.display()
-        )));
-    }
+    let efi_bootloader = resolve_efi_bootloader_source(boot_root, system_root)?;
 
     Ok(RuntimeBootAssetSources {
         kernel_version: release.to_string(),
@@ -225,6 +327,37 @@ fn runtime_boot_asset_sources_for_release(
         efi_bootloader,
         _sysroot_workspace: None,
     })
+}
+
+/// ESP location the generation stages its EFI bootloader from.
+const ESP_BOOTLOADER_REL: &str = "EFI/BOOT/BOOTX64.EFI";
+
+/// systemd-boot's own installed EFI binary, the file `bootctl install` copies
+/// to the ESP. Conary captures that mutation instead of executing it, so the
+/// generation builder owns the copy.
+const SYSTEMD_BOOT_EFI_REL: &str = "usr/lib/systemd/boot/efi/systemd-bootx64.efi";
+
+/// Resolve the exact file staged as the generation's `BOOTX64.EFI`.
+///
+/// A sysroot that already carries an ESP layout wins. Otherwise the
+/// systemd-boot package's shipped binary is staged directly, which is what
+/// `bootctl install` would have done had Conary executed it.
+fn resolve_efi_bootloader_source(boot_root: &Path, system_root: &Path) -> crate::Result<PathBuf> {
+    let staged_esp = boot_root.join(ESP_BOOTLOADER_REL);
+    if regular_file_exists(&staged_esp) {
+        return Ok(staged_esp);
+    }
+
+    let systemd_boot_efi = system_root.join(SYSTEMD_BOOT_EFI_REL);
+    if regular_file_exists(&systemd_boot_efi) {
+        return Ok(systemd_boot_efi);
+    }
+
+    Err(crate::error::Error::NotFound(format!(
+        "missing required boot asset efi_bootloader; expected a staged ESP binary at {} or systemd-boot's installed binary at {}",
+        staged_esp.display(),
+        systemd_boot_efi.display()
+    )))
 }
 
 #[cfg(test)]
@@ -418,7 +551,7 @@ mod tests {
         let initramfs_hash = cas.store(b"cas-initramfs").unwrap();
         let efi_hash = cas.store(b"cas-efi").unwrap();
         let modules_dep_hash = cas.store(b"modules-dep").unwrap();
-        let runtime_inputs = exact_runtime_inputs(vec![
+        let mut runtime_inputs = exact_runtime_inputs(vec![
             (
                 format!("/boot/vmlinuz-{release}"),
                 kernel_hash,
@@ -447,7 +580,7 @@ mod tests {
         write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
         write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
         let sources = resolve_generation_boot_asset_sources_with_tools(
-            &runtime_inputs,
+            &mut runtime_inputs,
             &generations_root,
             Path::new("/boot"),
             &fake_dracut,
@@ -473,6 +606,95 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn generation_boot_asset_resolution_retains_exact_depmod_output_in_manifest_and_cas() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
+        std::fs::create_dir_all(&generations_root).unwrap();
+        let cas = CasStore::new(&objects_dir).unwrap();
+
+        let release = "6.20.0-conary";
+        let kernel_hash = cas.store(b"cas-kernel").unwrap();
+        let efi_hash = cas.store(b"cas-efi").unwrap();
+        let vfat_hash = cas.store(b"vfat-module").unwrap();
+        let mut runtime_inputs = exact_runtime_inputs(vec![
+            (
+                format!("/boot/vmlinuz-{release}"),
+                kernel_hash,
+                b"cas-kernel".len() as u64,
+            ),
+            (
+                "/boot/EFI/BOOT/BOOTX64.EFI".to_string(),
+                efi_hash,
+                b"cas-efi".len() as u64,
+            ),
+            (
+                format!("/usr/lib/modules/{release}/kernel/fs/fat/vfat.ko"),
+                vfat_hash,
+                b"vfat-module".len() as u64,
+            ),
+        ]);
+        let mut lib_symlink = owned_regular_source(0o777);
+        lib_symlink.kind = PayloadNodeKind::Symlink {
+            target: "usr/lib".to_string(),
+        };
+        lib_symlink.mode = libc::S_IFLNK | 0o777;
+        runtime_inputs.generation.entries.push(GenerationRootEntry {
+            path: "/lib".to_string(),
+            node: ResolvedPayloadNode::from_numeric_source(lib_symlink).unwrap(),
+            content: None,
+        });
+        runtime_inputs
+            .generation
+            .entries
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        runtime_inputs.generation.validate().unwrap();
+        write_executable(
+            &fake_depmod,
+            "#!/bin/sh\nbasedir=/\nmoduledir=/lib/modules\nrelease=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -b|--basedir) basedir=\"$2\"; shift 2 ;;\n    -m|--moduledir) moduledir=\"$2\"; shift 2 ;;\n    *) release=\"$1\"; shift ;;\n  esac\ndone\nprintf 'kernel/fs/fat/vfat.ko:\\n' > \"${basedir}${moduledir}/${release}/modules.dep\"\nprintf 'alias fs-vfat vfat\\n' > \"${basedir}${moduledir}/${release}/modules.alias\"\n",
+        );
+        write_executable(
+            &fake_dracut,
+            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
+        );
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+
+        let _sources = resolve_generation_boot_asset_sources_with_tools(
+            &mut runtime_inputs,
+            &generations_root,
+            Path::new("/boot"),
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
+        )
+        .unwrap();
+
+        for (path, expected) in [
+            (
+                format!("/usr/lib/modules/{release}/modules.dep"),
+                b"kernel/fs/fat/vfat.ko:\n".as_slice(),
+            ),
+            (
+                format!("/usr/lib/modules/{release}/modules.alias"),
+                b"alias fs-vfat vfat\n".as_slice(),
+            ),
+        ] {
+            let entry = runtime_inputs
+                .generation
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .unwrap_or_else(|| panic!("missing retained depmod output {path}"));
+            let content = entry.content.as_ref().expect("depmod output is regular");
+            assert_eq!(cas.retrieve(&content.sha256).unwrap(), expected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn generation_boot_asset_resolution_regenerates_conary_initramfs_from_materialized_sysroot() {
         let tmp = tempfile::TempDir::new().unwrap();
         let generations_root = tmp.path().join("generations");
@@ -489,7 +711,7 @@ mod tests {
         let adopted_initramfs_hash = cas.store(b"adopted-host-initramfs").unwrap();
         let efi_hash = cas.store(b"cas-efi").unwrap();
         let modules_dep_hash = cas.store(b"modules-dep").unwrap();
-        let runtime_inputs = exact_runtime_inputs(vec![
+        let mut runtime_inputs = exact_runtime_inputs(vec![
             (
                 format!("/boot/vmlinuz-{release}"),
                 kernel_hash,
@@ -521,7 +743,7 @@ mod tests {
         write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
         write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
         let sources = resolve_generation_boot_asset_sources_with_tools(
-            &runtime_inputs,
+            &mut runtime_inputs,
             &generations_root,
             Path::new("/boot"),
             &fake_dracut,
@@ -540,6 +762,111 @@ mod tests {
         assert!(args.lines().any(|line| line == RUNTIME_DRACUT_ADD_MODULES));
         assert!(args.lines().any(|line| line == "--omit"));
         assert!(args.lines().any(|line| line == RUNTIME_DRACUT_OMIT_MODULES));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generation_boot_assets_stage_systemd_boot_binary_when_the_sysroot_has_no_esp() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let generations_root = tmp.path().join("generations");
+        let objects_dir = tmp.path().join("objects");
+        let gen_dir = generations_root.join("7");
+        let fake_dracut = tmp.path().join("dracut");
+        let fake_depmod = tmp.path().join("depmod");
+        let fake_cpio = tmp.path().join("cpio");
+        std::fs::create_dir_all(&gen_dir).unwrap();
+        let cas = CasStore::new(&objects_dir).unwrap();
+
+        let release = "6.20.0-conary";
+        let kernel_hash = cas.store(b"cas-kernel").unwrap();
+        let modules_dep_hash = cas.store(b"modules-dep").unwrap();
+        let systemd_boot_hash = cas.store(b"systemd-boot-efi").unwrap();
+        let mut runtime_inputs = exact_runtime_inputs(vec![
+            (
+                format!("/boot/vmlinuz-{release}"),
+                kernel_hash,
+                b"cas-kernel".len() as u64,
+            ),
+            (
+                format!("/usr/lib/modules/{release}/modules.dep"),
+                modules_dep_hash,
+                b"modules-dep".len() as u64,
+            ),
+            (
+                "/usr/lib/systemd/boot/efi/systemd-bootx64.efi".to_string(),
+                systemd_boot_hash,
+                b"systemd-boot-efi".len() as u64,
+            ),
+        ]);
+        write_executable(
+            &fake_dracut,
+            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
+        );
+        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+
+        let sources = resolve_generation_boot_asset_sources_with_tools(
+            &mut runtime_inputs,
+            &generations_root,
+            Path::new("/boot"),
+            &fake_dracut,
+            &fake_depmod,
+            &fake_cpio,
+        )
+        .unwrap();
+
+        assert!(
+            sources
+                .efi_bootloader
+                .ends_with("usr/lib/systemd/boot/efi/systemd-bootx64.efi"),
+            "the generation must stage systemd-boot's own binary when no ESP layout exists; got {}",
+            sources.efi_bootloader.display()
+        );
+
+        let manifest =
+            stage_runtime_boot_assets_from_sources(&gen_dir, 7, "x86_64", &sources).unwrap();
+
+        assert_eq!(manifest.efi_bootloader, "EFI/BOOT/BOOTX64.EFI");
+        let staged = gen_dir.join("boot-assets/EFI/BOOT/BOOTX64.EFI");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"systemd-boot-efi");
+    }
+
+    #[test]
+    fn runtime_boot_asset_resolution_names_both_efi_sources_when_neither_exists() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let boot_root = tmp.path().join("boot");
+        let release = "6.17.1-300.fc44.x86_64";
+        let module_dir = tmp.path().join("lib/modules").join(release);
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(&boot_root).unwrap();
+        std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
+        std::fs::write(
+            boot_root.join(format!("initramfs-{release}.img")),
+            b"initramfs",
+        )
+        .unwrap();
+
+        let error = resolve_runtime_boot_asset_sources(&boot_root)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("missing required boot asset efi_bootloader"));
+        assert!(
+            error.contains(
+                boot_root
+                    .join("EFI/BOOT/BOOTX64.EFI")
+                    .to_str()
+                    .expect("temp path is utf-8")
+            )
+        );
+        assert!(
+            error.contains(
+                tmp.path()
+                    .join("usr/lib/systemd/boot/efi/systemd-bootx64.efi")
+                    .to_str()
+                    .expect("temp path is utf-8")
+            )
+        );
     }
 
     #[cfg(unix)]

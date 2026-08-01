@@ -336,6 +336,24 @@ impl HostCapabilityInventory {
             .map(|interface| interface.command.executable.as_path())
     }
 
+    /// Return the exact persisted sysusers target interface after repeating
+    /// its implementation handshake and executable identity check.
+    pub fn sysusers_interface(&self) -> Result<&ExecutableInterface, HostCapabilityPreflightError> {
+        let Some(interface) = self.sysusers.as_ref() else {
+            return Err(HostCapabilityPreflightError::MissingCapability {
+                requirement: HostCapabilityRequirement::Sysusers,
+                hook: "RPM sysusers native event",
+            });
+        };
+        if !interface.is_available() {
+            return Err(HostCapabilityPreflightError::InterfaceDrift {
+                requirement: HostCapabilityRequirement::Sysusers,
+                executable: interface.executable.clone(),
+            });
+        }
+        Ok(interface)
+    }
+
     /// Return the exact ldconfig program path inside `root` only when libalpm's
     /// two structural guards hold: `/etc/ld.so.conf` exists and the configured
     /// target-root program is executable.
@@ -527,6 +545,7 @@ pub enum HostCapabilityRequirement {
     SystemdManager,
     Systemd,
     SystemdOperation(SystemdOperation),
+    Sysusers,
     Tmpfiles,
     Sysctl,
     Ldconfig,
@@ -540,6 +559,7 @@ impl std::fmt::Display for HostCapabilityRequirement {
             Self::SystemdOperation(operation) => {
                 write!(formatter, "systemctl {operation:?} operation")
             }
+            Self::Sysusers => formatter.write_str("systemd-sysusers target interface"),
             Self::Tmpfiles => formatter.write_str("systemd-tmpfiles command interface"),
             Self::Sysctl => formatter.write_str("sysctl command interface"),
             Self::Ldconfig => formatter.write_str("target-root ldconfig command interface"),
@@ -644,6 +664,43 @@ mod tests {
         assert!(!encoded.contains("distro"));
         assert!(!encoded.contains("profile"));
         assert!(encoded.contains("\"tmpfiles\":{\"command\":{\"executable\":"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sysusers_path_requires_the_exact_persisted_interface() {
+        let missing = HostCapabilityInventory::default()
+            .sysusers_interface()
+            .unwrap_err();
+        assert!(matches!(
+            missing,
+            HostCapabilityPreflightError::MissingCapability {
+                requirement: HostCapabilityRequirement::Sysusers,
+                ..
+            }
+        ));
+
+        let root = tempfile::tempdir().unwrap();
+        let executable = fake_interface(root.path(), "systemd-sysusers");
+        let inventory = HostCapabilityInventory {
+            sysusers: Some(ExecutableInterface::probe_sysusers(executable.clone()).unwrap()),
+            ..HostCapabilityInventory::default()
+        };
+        assert_eq!(
+            inventory.sysusers_interface().unwrap().executable,
+            executable
+        );
+
+        fs::remove_file(&executable).unwrap();
+        link_host_tool(&executable, HostToolFixture::ExitSuccess);
+        let drift = inventory.sysusers_interface().unwrap_err();
+        assert!(matches!(
+            drift,
+            HostCapabilityPreflightError::InterfaceDrift {
+                requirement: HostCapabilityRequirement::Sysusers,
+                ..
+            }
+        ));
     }
 
     #[test]

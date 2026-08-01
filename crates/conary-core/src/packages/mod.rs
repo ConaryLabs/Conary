@@ -36,7 +36,7 @@ use std::process::Command;
 use tracing::info;
 
 pub use payload::{PackagePayload, PackagePayloadFile, ReopenablePayload};
-pub use query_common::{InstalledFileInfo, InstalledPackageRecord};
+pub use query_common::{InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord};
 pub use rpm_query::InstalledRpmInfo;
 pub use traits::{ExtractedFile, PackageFormat};
 

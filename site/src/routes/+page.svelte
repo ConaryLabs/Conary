@@ -14,7 +14,7 @@
 <section class="hero">
 	<div class="container grid-12 hero-grid">
 		<div class="hero-copy">
-			<p class="eyebrow">A package system for Linux · {previewRelease.tag}</p>
+			<p class="eyebrow">A package system for Linux · tester loop paused</p>
 			<h1>An RPM that installs on Ubuntu. A DEB that installs on Fedora.</h1>
 			<p class="hero-lede">
 				Conary keeps each package's exact RPM, Debian, or ALPM semantics, executes
@@ -22,7 +22,7 @@
 				transaction and rollback — without invoking dnf, apt, or pacman.
 			</p>
 			<div class="button-row hero-actions">
-				<a href="/install/" class="btn btn-primary">Try what works today</a>
+				<a href="/install/" class="btn btn-primary">Read the current release status</a>
 				<a href="/features/" class="btn btn-secondary">See what is proven</a>
 			</div>
 			<ul class="hero-meta" aria-label="Supported formats and hosts">
@@ -133,12 +133,14 @@
 <section class="section evaluate">
 	<div class="container grid-12">
 		<div class="evaluate-heading">
-			<p class="eyebrow">Available now · limited preview</p>
+			<p class="eyebrow">Source proof active · packaged tester loop paused</p>
 			<h2 class="section-heading">Cross the package boundary deliberately.</h2>
 			<p class="section-copy">
-				The public loop is deliberately focused: inspect a foreign-format package,
-				confirm its exact target capabilities, install it through Conary, and prove
-				that query, update planning, removal, and rollback still agree.
+				The next public loop remains deliberately focused: inspect a foreign-format
+				package, confirm its exact target capabilities, install it through Conary,
+				and prove that query, update planning, removal, and rollback still agree.
+				The published {previewRelease.tag} artifact predates current fixes, so this
+				loop resumes only after a later release is independently verified.
 			</p>
 		</div>
 

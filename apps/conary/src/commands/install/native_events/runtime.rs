@@ -7,8 +7,9 @@ use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::NativeLifecycleEntry;
 use conary_core::scriptlet::{
     ExecutionMode, NativeInterpreterAvailability, NativeInvocationRuntime,
-    NativeLifecycleExecution, ScriptletExecutor,
+    NativeLifecycleExecution, ScriptletExecutor, ScriptletFailureKind, ScriptletOutcome,
 };
+use tracing::warn;
 
 struct EntryRuntimeContext {
     environment: Vec<String>,
@@ -60,7 +61,31 @@ pub(super) fn execute_entry(
     } else {
         executor.execute_native_lifecycle_entry_with_outcome(&execution, &runtime)
     };
-    outcome.into_result().map_err(anyhow::Error::from)
+    match outcome {
+        ScriptletOutcome::Failure(failure)
+            if entry.rpm_runtime.as_ref().is_some_and(|rpm| {
+                !rpm.critical
+                    && matches!(
+                        failure.failure_kind,
+                        ScriptletFailureKind::ScriptExited | ScriptletFailureKind::ScriptTimedOut
+                    )
+            }) =>
+        {
+            warn!(
+                package = %owner.package_name,
+                version = %owner.package_version,
+                entry = %entry.id,
+                phase = %failure.phase,
+                failure_kind = failure.failure_kind.as_str(),
+                requested_sandbox = failure.requested_sandbox_mode.as_str(),
+                effective_sandbox = failure.effective_sandbox.as_str(),
+                error = %failure.message,
+                "RPM warning-only native lifecycle event failed; continuing transaction"
+            );
+            Ok(())
+        }
+        outcome => outcome.into_result().map_err(anyhow::Error::from),
+    }
 }
 
 pub(super) fn preflight_entry(

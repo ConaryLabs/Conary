@@ -28,7 +28,24 @@ install() {
     install_conary_script "$moddir/conary-generator.sh" "/sbin/conary-generator"
     install_conary_script "$moddir/conary-generator.sh" \
         "/var/lib/dracut/hooks/pre-pivot/90-conary-generator.sh"
-    inst_multiple -o blkid cp grep head modprobe switch_root
+    # Own the complete executable contract of the runtime scripts instead of
+    # relying on incidental tools pulled in by neighboring dracut modules.
+    inst_multiple \
+        basename \
+        cat \
+        chmod \
+        cp \
+        grep \
+        head \
+        ln \
+        mkdir \
+        modprobe \
+        mount \
+        readlink \
+        rmdir \
+        sleep \
+        switch_root
+    inst_multiple -o blkid
     # Include mount.composefs if available
     inst_multiple -o mount.composefs
 }

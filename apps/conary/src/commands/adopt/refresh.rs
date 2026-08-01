@@ -653,6 +653,7 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<
                 f.user,
                 f.group,
                 f.link_target,
+                f.absence_policy,
             )
         })
         .collect())

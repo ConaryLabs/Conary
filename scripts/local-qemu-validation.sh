@@ -71,11 +71,11 @@ run_suite \
 run_suite \
     phase3-group-o-generation-export \
     "${LOG_DIR}/group-o-generation-export.log" \
-    'installed-runtime-generation-export-booted|bootstrap-run-generation-export-booted'
+    'installed-runtime-generation-export-booted|supported-host-generation-export-booted'
 
 run_suite \
     phase3-group-p-iso-export \
     "${LOG_DIR}/group-p-iso-export.log" \
-    'bootstrap-run-generation-iso-export-booted'
+    'supported-host-generation-iso-export-booted'
 
 echo "[local-qemu-validation] ok"

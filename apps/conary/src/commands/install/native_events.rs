@@ -7,7 +7,8 @@ use conary_core::ccs::native_lifecycle::NativeLifecycleBundle;
 use conary_core::ccs::native_transaction::{
     DebPackageState, NativeBundleRole, NativeBundleView, NativeInstalledCapability,
     NativePackageIdentity, NativeTransactionChange, NativeTransactionOperation,
-    NativeTransactionPlan, NativeTransactionState, plan_native_transaction,
+    NativeTransactionPathCapabilities, NativeTransactionPlan, NativeTransactionState,
+    plan_native_transaction,
 };
 use conary_core::db::models::{
     ConfigFile, InstalledNativeLifecycleBundle, PackagePayloadOwnership, Trove,
@@ -41,7 +42,8 @@ mod transaction_state;
 
 use preflight::NativePathProjection;
 use transaction_state::{
-    declared_capabilities_excluding, installed_instance_count, installed_packages_before,
+    declared_capabilities_excluding, declared_path_capabilities_for_trove,
+    installed_instance_count, installed_packages_before, path_capabilities,
     sort_and_deduplicate_capabilities,
 };
 
@@ -172,10 +174,6 @@ impl PreparedNativeTransaction {
             .iter()
             .any(|input| input.version_scheme == VersionScheme::Arch)
             || relation_removal_has_arch;
-        let host_capabilities = arch_transaction
-            .then(|| conary_core::ccs::HostCapabilityInventory::load_required(conn))
-            .transpose()
-            .context("Arch transaction host capability preflight failed")?;
         let input_old_trove_ids = inputs
             .iter()
             .map(|input| {
@@ -222,6 +220,9 @@ impl PreparedNativeTransaction {
         let mut counts_after = HashMap::<String, u32>::new();
         let mut input_instance_counts = Vec::with_capacity(inputs.len());
         let mut changes = Vec::with_capacity(
+            inputs.len() + relation_removal_troves.len() + relation_deconfiguration_troves.len(),
+        );
+        let mut path_capability_changes = Vec::with_capacity(
             inputs.len() + relation_removal_troves.len() + relation_deconfiguration_troves.len(),
         );
         let mut deb_change_indices = BTreeSet::new();
@@ -274,6 +275,12 @@ impl PreparedNativeTransaction {
                 .new_bundle
                 .and_then(|bundle| bundle.source_arch.clone())
                 .or_else(|| input.package_arch.map(str::to_string));
+            let old_path_capabilities = old_trove_id
+                .map(|trove_id| declared_path_capabilities_for_trove(conn, trove_id))
+                .transpose()?
+                .unwrap_or_default();
+            let new_path_capabilities =
+                path_capabilities(input.provides.iter().map(|provide| provide.name.as_str()));
             changes.push(NativeTransactionChange {
                 package_name: input.package_name.to_string(),
                 old_arch,
@@ -290,6 +297,10 @@ impl PreparedNativeTransaction {
                 instances_before,
                 instances_after,
                 transaction_index,
+            });
+            path_capability_changes.push(NativeTransactionPathCapabilities {
+                old_paths: old_path_capabilities,
+                new_paths: new_path_capabilities,
             });
         }
         for (offset, (removal, trove)) in relation_removal_troves.iter().enumerate() {
@@ -319,6 +330,7 @@ impl PreparedNativeTransaction {
             } else {
                 NativeTransactionOperation::Remove
             };
+            let old_path_capabilities = declared_path_capabilities_for_trove(conn, trove_id)?;
             changes.push(NativeTransactionChange {
                 package_name: trove.name.clone(),
                 old_arch: installed_bundles
@@ -335,6 +347,10 @@ impl PreparedNativeTransaction {
                 instances_before,
                 instances_after,
                 transaction_index,
+            });
+            path_capability_changes.push(NativeTransactionPathCapabilities {
+                old_paths: old_path_capabilities,
+                new_paths: BTreeSet::new(),
             });
         }
         let deconfigured_trove_ids = relation_deconfiguration_troves
@@ -424,6 +440,7 @@ impl PreparedNativeTransaction {
                 .source_arch
                 .clone()
                 .or_else(|| trove.architecture.clone());
+            let retained_path_capabilities = declared_path_capabilities_for_trove(conn, trove_id)?;
             deb_change_indices.insert(transaction_index);
             changes.push(NativeTransactionChange {
                 package_name: trove.name.clone(),
@@ -440,6 +457,10 @@ impl PreparedNativeTransaction {
                 instances_before: instances,
                 instances_after: instances,
                 transaction_index,
+            });
+            path_capability_changes.push(NativeTransactionPathCapabilities {
+                old_paths: retained_path_capabilities.clone(),
+                new_paths: retained_path_capabilities,
             });
         }
 
@@ -517,6 +538,11 @@ impl PreparedNativeTransaction {
             }));
         }
         sort_and_deduplicate_capabilities(&mut installed_capabilities_after);
+        let installed_path_capabilities_after = path_capabilities(
+            installed_capabilities_after
+                .iter()
+                .map(|capability| capability.name.as_str()),
+        );
         let mut installed_paths_after =
             PackagePayloadOwnership::installed_paths_excluding(conn, &replaced_trove_ids)?;
         for input in inputs {
@@ -532,8 +558,14 @@ impl PreparedNativeTransaction {
             deb_change_indices,
         };
         let plan = plan_native_transaction(&views, &changes, &transaction_state)?;
-        let path_projection =
-            NativePathProjection::from_transaction(&plan, &changes, &installed_paths_after)?;
+        let host_capabilities = host_capabilities_for_plan(conn, arch_transaction, &plan)?;
+        let path_projection = NativePathProjection::from_transaction(
+            &plan,
+            &changes,
+            &installed_paths_after,
+            &path_capability_changes,
+            &installed_path_capabilities_after,
+        )?;
         Ok(Self {
             owners,
             plan,
@@ -594,6 +626,7 @@ impl PreparedNativeTransaction {
         let mut removed_trove_ids = HashSet::new();
         let mut counts_after = HashMap::<String, u32>::new();
         let mut changes = Vec::with_capacity(inputs.len());
+        let mut path_capability_changes = Vec::with_capacity(inputs.len());
         let mut deb_change_indices = BTreeSet::new();
         let mut arch_transaction = false;
         for (transaction_index, input) in inputs.iter().enumerate() {
@@ -644,6 +677,7 @@ impl PreparedNativeTransaction {
                 )
             })?;
             counts_after.insert(input.trove.name.clone(), instances_after);
+            let old_path_capabilities = declared_path_capabilities_for_trove(conn, trove_id)?;
             changes.push(NativeTransactionChange {
                 package_name: input.trove.name.clone(),
                 old_arch: InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)?
@@ -659,12 +693,11 @@ impl PreparedNativeTransaction {
                 instances_after,
                 transaction_index,
             });
+            path_capability_changes.push(NativeTransactionPathCapabilities {
+                old_paths: old_path_capabilities,
+                new_paths: BTreeSet::new(),
+            });
         }
-
-        let host_capabilities = arch_transaction
-            .then(|| conary_core::ccs::HostCapabilityInventory::load_required(conn))
-            .transpose()
-            .context("Arch removal host capability preflight failed")?;
 
         let mut owners = Vec::new();
         let installed_bundles = InstalledNativeLifecycleBundle::find_all(conn)?;
@@ -707,6 +740,11 @@ impl PreparedNativeTransaction {
             .collect::<Vec<_>>();
         let installed_capabilities_after =
             declared_capabilities_excluding(conn, &removed_trove_ids)?;
+        let installed_path_capabilities_after = path_capabilities(
+            installed_capabilities_after
+                .iter()
+                .map(|capability| capability.name.as_str()),
+        );
         let installed_paths_after =
             PackagePayloadOwnership::installed_paths_excluding(conn, &removed_trove_ids)?;
         let arch_ldconfig_required_after =
@@ -719,8 +757,14 @@ impl PreparedNativeTransaction {
             deb_change_indices,
         };
         let plan = plan_native_transaction(&views, &changes, &transaction_state)?;
-        let path_projection =
-            NativePathProjection::from_transaction(&plan, &changes, &installed_paths_after)?;
+        let host_capabilities = host_capabilities_for_plan(conn, arch_transaction, &plan)?;
+        let path_projection = NativePathProjection::from_transaction(
+            &plan,
+            &changes,
+            &installed_paths_after,
+            &path_capability_changes,
+            &installed_path_capabilities_after,
+        )?;
         Ok(Self {
             owners,
             plan,
@@ -740,6 +784,25 @@ impl PreparedNativeTransaction {
     pub(crate) fn requires_upgrade_payload_boundary(&self) -> bool {
         self.requires_upgrade_payload_boundary
     }
+
+    pub(super) fn rpm_sysusers_interface(&self) -> Result<&conary_core::ccs::ExecutableInterface> {
+        self.host_capabilities
+            .as_ref()
+            .context("RPM sysusers event lost its required typed host capability inventory")?
+            .sysusers_interface()
+            .map_err(anyhow::Error::from)
+    }
+}
+
+fn host_capabilities_for_plan(
+    conn: &rusqlite::Connection,
+    arch_transaction: bool,
+    plan: &NativeTransactionPlan,
+) -> Result<Option<conary_core::ccs::HostCapabilityInventory>> {
+    (arch_transaction || plan.requires_sysusers_interface())
+        .then(|| conary_core::ccs::HostCapabilityInventory::load_required(conn))
+        .transpose()
+        .context("native transaction typed host capability preflight failed")
 }
 
 fn debian_relation_removal_operation(

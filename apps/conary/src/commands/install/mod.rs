@@ -19,8 +19,10 @@ pub(super) mod native_graph;
 mod native_lifecycle;
 mod options;
 mod ownership_mode;
+mod package_set;
 mod payload_identity;
 mod prepare;
+mod repository_batch;
 mod resolve;
 mod restore;
 mod rollback_snapshot;
@@ -34,6 +36,7 @@ pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use command::cmd_install;
 pub(crate) use command::cmd_install_replatform;
 pub use ownership_mode::OwnershipMode;
+pub(crate) use package_set::{PackageSetRequest, install_package_set};
 
 #[allow(unused_imports)]
 pub(crate) use ccs_transaction::{

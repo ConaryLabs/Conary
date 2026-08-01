@@ -87,7 +87,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_bootstrap_size_syntax() {
+    fn parses_image_size_syntax() {
         assert_eq!(ImageSize::from_str("4G").unwrap().gigabytes(), 4);
         assert_eq!(ImageSize::from_str("512M").unwrap().megabytes(), 512);
         assert_eq!(ImageSize::from_str("1024K").unwrap().bytes(), 1024 * 1024);

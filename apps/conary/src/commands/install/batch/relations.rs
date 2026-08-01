@@ -25,9 +25,7 @@ impl BatchInstaller<'_> {
                     name: &package.name,
                     version: &package.version,
                     architecture: package.architecture.as_deref(),
-                    version_scheme: super::super::prepare::version_scheme_for_format(
-                        package.format,
-                    ),
+                    version_scheme: package.semantics.version_scheme,
                     provides: &package.provides,
                     relations: &package.relations,
                 },
