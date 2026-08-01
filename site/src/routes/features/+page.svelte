@@ -106,25 +106,28 @@
 
 		<div class="category category-preview" id="preview-supported">
 			<div class="category-heading">
-				<span class="category-status preview">preview-supported</span>
+				<span class="category-status preview">source validation active · release pending</span>
 				<h2 class="category-title">The bounded tester loop</h2>
-				<p>Cross-distro packages with a documented, inspectable transaction workflow.</p>
+				<p>
+					Cross-distro packages have a documented, inspectable transaction workflow.
+					The packaged tester loop is paused until a release contains the current fixes.
+				</p>
 			</div>
 
 			<div class="feature-list">
 				<article class="feature-card feature-lead">
-					<span class="feature-status preview">supported path</span>
+					<span class="feature-status preview">unreleased fixes</span>
 					<h3>Cross-distro package install</h3>
 					<p>
-							Fedora 44, Ubuntu 26.04 LTS, and Arch can consume RPM, DEB, Arch, and
-							CCS inputs through the same Conary transaction path. Dry-run shows the
-							source ABI and typed target capabilities before automatic target preflight.
+						Fedora 44, Ubuntu 26.04 LTS, and Arch can consume RPM, DEB, Arch, and
+						CCS inputs through the same Conary transaction path. Dry-run shows the
+						source ABI and typed target capabilities before automatic target preflight.
 					</p>
 					<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal command list needs keyboard scrolling) -->
 					<div class="feature-code scroll-region" role="region" tabindex="0" aria-label="Cross-distro package install commands">
-							<code>sudo conary install ./package.rpm --dry-run</code>
-							<code>sudo conary install ./package.deb --yes</code>
-							<code>sudo conary install ./package.pkg.tar.zst --yes</code>
+						<code>sudo conary install ./package.rpm --dry-run</code>
+						<code>sudo conary install ./package.deb --yes</code>
+						<code>sudo conary install ./package.pkg.tar.zst --yes</code>
 					</div>
 				</article>
 
@@ -153,7 +156,7 @@
 						The tester lane pins a release, verifies its checksum, records exact commands
 						and exit statuses, and asks for concise public evidence without broad host dumps.
 					</p>
-					<a href="/install/" class="feature-action">Run the supported preview <span aria-hidden="true">→</span></a>
+					<a href="/install/" class="feature-action">Read the current release status <span aria-hidden="true">→</span></a>
 				</article>
 			</div>
 		</div>

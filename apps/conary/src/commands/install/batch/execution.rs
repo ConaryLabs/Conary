@@ -3,16 +3,13 @@
 //! Graph-driven batch payload execution.
 
 use super::super::native_events::PreparedNativeTransaction;
-use super::{
-    BatchDbRows, BatchInstaller, InstallSemantics, PackageFormatType, PreparedPackage, inner,
-};
+use super::{BatchDbRows, BatchInstaller, PreparedPackage, inner};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::NativePackageIdentity;
 use conary_core::config_transaction::GenerationConfigTransaction;
 use conary_core::db::models::{
-    ActivationRequest, Changeset, ChangesetStatus, ConfigSource, InstalledNativeLifecycleBundle,
-    Trove,
+    ActivationRequest, Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, Trove,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::scriptlet::ExecutionMode;
@@ -40,6 +37,7 @@ impl BatchInstaller<'_> {
         native_execution_mode: &ExecutionMode,
         selected: &mut crate::commands::generation::selected_root::SelectedRootSession,
         rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+        ccs_hook_executors: &mut [Option<conary_core::ccs::HookExecutor>],
     ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
         let graph_inputs = self.prepare_graph_execution(conn, packages)?;
         let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(
@@ -78,12 +76,32 @@ impl BatchInstaller<'_> {
                 &graph_inputs,
                 &retained_upgrade_trove_ids,
             )?;
+            let mut activation_requests = native_transaction.take_activation_requests();
+            for (package, executor) in packages.iter().zip(ccs_hook_executors.iter()) {
+                let (Some(ccs), Some(executor)) = (package.ccs.as_ref(), executor.as_ref()) else {
+                    continue;
+                };
+                if super::super::ccs_transaction::ccs_has_post_hooks(&ccs.hooks) {
+                    super::super::ccs_transaction::execute_ccs_post_hooks(
+                        &package.name,
+                        &package.version,
+                        &ccs.hooks,
+                        executor,
+                    )?;
+                    activation_requests.extend(
+                        super::super::ccs_transaction::ccs_activation_requests(
+                            &package.name,
+                            &package.version,
+                            executor,
+                        ),
+                    );
+                }
+            }
             let all_file_paths = packages
                 .iter()
                 .flat_map(|pkg| pkg.extracted_files.iter().map(|file| file.path.clone()))
                 .collect::<Vec<_>>();
             super::super::run_triggers(&tx, &selected_root, changeset_id, &all_file_paths)?;
-            let activation_requests = native_transaction.take_activation_requests();
             ActivationRequest::append_batch(&tx, changeset_id, &activation_requests)
                 .context("failed to persist exact batch generation activation requests")?;
             config_transaction.validate()?;
@@ -279,7 +297,7 @@ where
                 .stored_files_by_pkg
                 .get(change_index)
                 .context("batch payload has no stored-file input")?;
-            let semantics = InstallSemantics::native_package(package.format);
+            let semantics = package.semantics;
             let resolved_files =
                 inner::resolve_stored_install_files(self.selected_root, stored_files, semantics)?;
             let directory_plan = inner::preflight_resolved_file_ownership(
@@ -313,7 +331,7 @@ where
                 self.selected_root,
                 self.cas,
                 crate::commands::generation::config_transaction::ConfigInstallCapture {
-                    source: source_for_format(package.format),
+                    source: super::super::config_files::source_for_semantics(package.semantics),
                     declared: &package.config_files,
                     incoming: &package_files,
                     replacing_trove_id: old_trove_id,
@@ -326,7 +344,7 @@ where
             let mut plan = super::super::config_files::prepare_config_install(
                 self.tx,
                 self.selected_root,
-                source_for_format(package.format),
+                super::super::config_files::source_for_semantics(package.semantics),
                 &package.config_files,
                 old_trove_id,
                 package_files,
@@ -342,6 +360,13 @@ where
             self.root_mutation
                 .apply_install_files(&through_symlink_files)?;
             self.root_mutation.apply_remove_paths(&plan.remove_paths)?;
+            if let Some(ccs) = package.ccs.as_ref() {
+                super::super::file_capabilities::apply_selected_file_capabilities(
+                    self.selected_root,
+                    &ccs.file_capabilities,
+                    plan.files.iter(),
+                )?;
+            }
             let retain_for_lifecycle = self
                 .retain_for_lifecycle_by_pkg
                 .get(change_index)
@@ -409,14 +434,6 @@ where
         anyhow::bail!(
             "batch install transaction graph unexpectedly purges config for change {change_index}"
         )
-    }
-}
-
-fn source_for_format(format: PackageFormatType) -> ConfigSource {
-    match format {
-        PackageFormatType::Rpm => ConfigSource::Rpm,
-        PackageFormatType::Deb => ConfigSource::Deb,
-        PackageFormatType::Arch => ConfigSource::Arch,
     }
 }
 

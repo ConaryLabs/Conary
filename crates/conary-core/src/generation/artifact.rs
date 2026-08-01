@@ -57,11 +57,11 @@ impl Default for GenerationCarrierCapabilities {
 }
 
 impl GenerationCarrierCapabilities {
-    /// Derive bootstrap carrier authority from an exact captured target root.
+    /// Derive carrier authority from an exact captured offline target root.
     ///
-    /// Runtime generations use the initialized host inventory instead. A
-    /// bootstrap target is not running yet, so its signed `/usr` node is the
-    /// equivalent target-supplied fact.
+    /// Runtime generations use the initialized host inventory instead. An
+    /// offline-assembled target is not running yet, so its signed `/usr` node
+    /// is the equivalent target-supplied fact.
     pub fn from_generation_root(generation_root: &GenerationRootManifest) -> crate::Result<Self> {
         let target_usr = generation_root
             .entries

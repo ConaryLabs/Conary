@@ -1,0 +1,11 @@
+# DHCP on the QEMU user-mode NIC so the harness can reach port 22 through the
+# host forward.
+#
+# networkd applies the first matching .network file in sorted order and
+# /etc/systemd/network takes priority over /usr/lib/systemd/network, so this
+# file decides the link regardless of what systemd-networkd-defaults ships.
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes

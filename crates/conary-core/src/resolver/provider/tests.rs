@@ -987,3 +987,5 @@ fn installed_debian_package_uses_native_version_scheme() {
 
 #[path = "tests/installed_and_canonical.rs"]
 mod installed_and_canonical;
+#[path = "tests/installed_preference.rs"]
+mod installed_preference;

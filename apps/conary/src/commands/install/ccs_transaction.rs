@@ -152,7 +152,7 @@ fn show_ccs_dry_run_summary(pkg: &conary_core::ccs::CcsPackage, extraction: &Ext
     println!("\nDry run complete. No changes made.");
 }
 
-fn check_ccs_upgrade_status(
+pub(super) fn check_ccs_upgrade_status(
     conn: &rusqlite::Connection,
     pkg: &conary_core::ccs::CcsPackage,
     semantics: &InstallSemantics,

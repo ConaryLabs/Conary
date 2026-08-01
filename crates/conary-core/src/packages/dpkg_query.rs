@@ -9,7 +9,9 @@ use crate::error::{Error, Result};
 use crate::packages::InstalledPackageIdentity;
 use crate::packages::archive_utils::get_file_metadata;
 use crate::packages::install_reason::{InstallReasonAuthorityError, query_package_names};
-use crate::packages::query_common::{InstalledFileInfo, InstalledPackageRecord, run_query_command};
+use crate::packages::query_common::{
+    InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord, run_query_command,
+};
 use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
 use crate::repository::requirement::parse_native_requirement;
 use crate::repository::versioning::VersionScheme;
@@ -239,6 +241,7 @@ pub fn query_package_files(name: &str) -> Result<Vec<InstalledFileInfo>> {
             group: None,
             link_target,
             mtime: None,
+            absence_policy: InstalledFileAbsencePolicy::Required,
         });
     }
 

@@ -17,7 +17,8 @@ use conary_core::db::models::{
     InstallSource, PayloadClaim, ProvideEntry, Trove, TroveType,
 };
 use conary_core::packages::{
-    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledFileAbsencePolicy, InstalledPackageIdentity, SystemPackageManager, dpkg_query,
+    pacman_query, rpm_query,
 };
 use conary_core::repository::dependency_model::RepositoryRequirementGroup;
 use std::collections::HashMap;
@@ -26,7 +27,8 @@ use tracing::warn;
 mod captured_root;
 mod live_root;
 use captured_root::{
-    capture_live_selected_root, ensure_complete_native_partition, synchronize_captured_root,
+    bind_package_payloads_to_selected_root, capture_live_selected_root,
+    ensure_complete_native_partition, synchronize_captured_root,
 };
 use live_root::adopt_live_root_as_full_package;
 
@@ -40,7 +42,7 @@ fn parse_package_pattern(field: &str, pattern: Option<&str>) -> Result<Option<gl
         .transpose()
 }
 
-/// File info tuple: (path, size, mode, digest, user, group, link_target)
+/// File info tuple: (path, size, mode, digest, user, group, link_target, absence policy)
 pub type FileInfoTuple = (
     String,
     i64,
@@ -49,6 +51,7 @@ pub type FileInfoTuple = (
     Option<String>,
     Option<String>,
     Option<String>,
+    InstalledFileAbsencePolicy,
 );
 
 #[derive(Debug)]
@@ -465,6 +468,14 @@ pub async fn cmd_adopt_system(
     } else {
         None
     };
+    if let Some(captured) = captured_selected_root.as_ref() {
+        bind_package_payloads_to_selected_root(
+            captured,
+            pre_collected
+                .iter_mut()
+                .flat_map(|package| package.files.iter_mut()),
+        )?;
+    }
 
     // DB-only transaction: all PM queries and CAS writes are already done.
     write_db_checkpoint(db_path, CheckpointReason::PreMutation)?;
@@ -725,6 +736,7 @@ fn query_pm_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileI
                 f.user,
                 f.group,
                 f.link_target,
+                f.absence_policy,
             )
         })
         .collect())
@@ -874,6 +886,7 @@ mod tests {
                 None,
                 None,
                 None,
+                InstalledFileAbsencePolicy::Required,
             ),
             node: new_node.clone(),
             content: Some(new_content.clone()),

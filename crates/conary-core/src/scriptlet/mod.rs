@@ -38,6 +38,7 @@ mod process;
 mod rpm_runtime;
 mod runtime;
 mod sandbox;
+mod sysusers;
 #[cfg(test)]
 mod test_support;
 mod types;

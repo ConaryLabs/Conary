@@ -223,7 +223,6 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
             allow_downgrade: false,
             intent: InstallIntent::PackageChange,
             yes: true,
-            dependency_passes_remaining: 0,
             envelope_authority: super::super::CcsEnvelopeAuthority::LocalDev,
             repository_provenance: None,
             resolution_policy: conary_core::repository::resolution_policy::ResolutionPolicy::new()

@@ -237,7 +237,15 @@ impl DependencyProvider for ConaryProvider<'_> {
             return None;
         }
 
-        let favored = self.installed_solvable_for_name(name);
+        let exact_root_candidate = self.root_request_names.contains(name_str)
+            && candidates
+                .iter()
+                .any(|candidate| self.solvables[candidate.to_index()].name == *name_str);
+        let favored = self.installed_solvable_for_name(name).or_else(|| {
+            (!exact_root_candidate)
+                .then(|| self.installed_solvable_for_candidates(&candidates))
+                .flatten()
+        });
 
         // If the package is pinned (troves.pinned = 1), lock the solver to
         // the installed version so the SAT solver cannot choose a different

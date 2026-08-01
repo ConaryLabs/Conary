@@ -83,7 +83,7 @@ impl ExecutableInterface {
         )
     }
 
-    pub(super) fn is_available(&self) -> bool {
+    pub(crate) fn is_available(&self) -> bool {
         self.verify_at(&self.executable)
     }
 
@@ -235,11 +235,7 @@ fn functional_handshake(executable: &Path, contract: HostExecutableContract) -> 
             &["--root=/", "--no-pager", "--no-legend", "list-unit-files"],
             None,
         ),
-        HostExecutableContract::SystemdSysusers => command_succeeds(
-            executable,
-            &["--dry-run", "-"],
-            Some(b"u conary-interface-probe -\n"),
-        ),
+        HostExecutableContract::SystemdSysusers => sysusers_functional_handshake(executable),
         HostExecutableContract::SystemdTmpfiles => command_succeeds(
             executable,
             &["--dry-run", "--create", "-"],
@@ -250,6 +246,27 @@ fn functional_handshake(executable: &Path, contract: HostExecutableContract) -> 
         }
         HostExecutableContract::GlibcLdconfig => command_succeeds(executable, &["-p"], None),
     }
+}
+
+fn sysusers_functional_handshake(executable: &Path) -> bool {
+    let Ok(root) = tempfile::tempdir() else {
+        return false;
+    };
+    let Some(root) = root.path().to_str() else {
+        return false;
+    };
+    let root_argument = format!("--root={root}");
+    command_succeeds(
+        executable,
+        &[
+            "--dry-run",
+            &root_argument,
+            "--replace",
+            "/usr/lib/sysusers.d/conary-interface-probe.conf",
+            "-",
+        ],
+        Some(b"u conary-interface-probe -\n"),
+    ) && std::fs::read_dir(root).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 fn command_succeeds(executable: &Path, args: &[&str], stdin: Option<&[u8]>) -> bool {

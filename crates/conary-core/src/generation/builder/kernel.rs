@@ -130,15 +130,34 @@ pub(super) fn regular_file_exists(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
-pub(super) fn system_root_for_boot_root(boot_root: &Path) -> PathBuf {
-    if boot_root.file_name().is_some_and(|name| name == "boot") {
-        return boot_root
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("/"));
+pub(super) fn system_root_for_boot_root(boot_root: &Path) -> crate::Result<PathBuf> {
+    if !boot_root.is_absolute() || !boot_root.file_name().is_some_and(|name| name == "boot") {
+        return Err(crate::Error::InvalidPath(format!(
+            "generation boot root {} must be an absolute path naming the target root's boot directory",
+            boot_root.display()
+        )));
     }
 
-    PathBuf::from("/")
+    let canonical_boot = std::fs::canonicalize(boot_root).map_err(|error| {
+        crate::Error::InvalidPath(format!(
+            "generation boot root {} cannot be resolved: {error}",
+            boot_root.display()
+        ))
+    })?;
+    let system_root = canonical_boot.parent().ok_or_else(|| {
+        crate::Error::InvalidPath(format!(
+            "generation boot root {} has no target system root",
+            boot_root.display()
+        ))
+    })?;
+    if boot_root != Path::new("/boot") && system_root == Path::new("/") {
+        return Err(crate::Error::InvalidPath(format!(
+            "custom generation boot root {} resolves to the live system /boot",
+            boot_root.display()
+        )));
+    }
+
+    Ok(system_root.to_path_buf())
 }
 
 #[cfg(test)]
@@ -157,5 +176,30 @@ mod tests {
         collect_boot_kernel_releases(&boot, &mut releases).unwrap();
 
         assert_eq!(releases, ["6.19.10", "6.20.0"]);
+    }
+
+    #[test]
+    fn boot_root_never_defaults_an_ambiguous_path_to_the_live_system() {
+        let root = tempfile::tempdir().unwrap();
+
+        let error = system_root_for_boot_root(&root.path().join("boot-assets"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("naming the target root's boot directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_boot_root_cannot_resolve_through_a_symlink_to_live_boot() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/", root.path().join("target")).unwrap();
+        let disguised_live_boot = root.path().join("target/boot");
+
+        let error = system_root_for_boot_root(&disguised_live_boot)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("resolves to the live system /boot"));
     }
 }

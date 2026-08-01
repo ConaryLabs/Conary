@@ -1,6 +1,7 @@
 // src/commands/model/apply.rs
 
 mod derived;
+mod packages;
 
 use std::path::Path;
 
@@ -13,7 +14,7 @@ use crate::commands::install::cmd_install_replatform;
 use crate::commands::replatform_rendering::{
     render_replatform_blocked_reason, render_replatform_execution_plan,
 };
-use crate::commands::{InstallOptions, SandboxMode, cmd_install, cmd_remove};
+use crate::commands::{InstallOptions, SandboxMode};
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{
     DistroPin, Repository, RepositoryPackage, Trove, TroveType, settings,
@@ -23,6 +24,7 @@ use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, replatform_execution_plan};
 use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
 use derived::{build_derived_package, create_derived_from_model};
+use packages::apply_package_changes;
 use rusqlite::Connection;
 #[cfg(test)]
 use std::cell::Cell;
@@ -587,179 +589,6 @@ fn maybe_fail_replatform_metadata_for_test() -> Result<()> {
 #[cfg(not(test))]
 fn maybe_fail_replatform_metadata_for_test() -> Result<()> {
     Ok(())
-}
-
-/// Apply package install/remove actions from the model diff.
-///
-/// Returns `(applied_count, error_list)`.
-pub(super) async fn apply_package_changes(
-    db_path: &str,
-    root: &str,
-    actions: &[&DiffAction],
-    strict: bool,
-) -> Result<(usize, Vec<String>)> {
-    let mut applied = 0usize;
-    let mut errors = Vec::new();
-
-    for action in actions {
-        if let DiffAction::Remove {
-            package,
-            current_version,
-            architectures,
-        } = action
-        {
-            let iterations = architectures.len().max(1);
-            for arch in architectures
-                .iter()
-                .map(Some)
-                .chain(std::iter::once(None))
-                .take(iterations)
-            {
-                match arch {
-                    Some(arch) => {
-                        println!("Removing {} {} [{}]...", package, current_version, arch)
-                    }
-                    None => println!("Removing {} {}...", package, current_version),
-                }
-
-                match cmd_remove(
-                    package,
-                    db_path,
-                    Some(current_version.clone()),
-                    arch.cloned(),
-                    SandboxMode::Always,
-                    false,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        println!("  Removed {}", package);
-                        applied += 1;
-                    }
-                    Err(e) => {
-                        let msg = match arch {
-                            Some(arch) => {
-                                format!(
-                                    "Remove '{}' {} [{}]: {}",
-                                    package, current_version, arch, e
-                                )
-                            }
-                            None => format!("Remove '{}' {}: {}", package, current_version, e),
-                        };
-                        eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&msg]));
-                        if strict {
-                            anyhow::bail!(msg);
-                        }
-                        errors.push(msg);
-                    }
-                }
-            }
-        }
-    }
-
-    for action in actions {
-        match action {
-            DiffAction::Install { package, pin, .. } => {
-                println!(
-                    "Installing {}{}...",
-                    package,
-                    display_pin_suffix(pin.as_deref())
-                );
-                match cmd_install(
-                    package,
-                    InstallOptions {
-                        db_path,
-                        root,
-                        version: pin.clone(),
-                        package_release: None,
-                        repo: None,
-                        architecture: None,
-                        dry_run: false,
-                        no_deps: false,
-                        selection_reason: Some("Installed by model apply"),
-                        sandbox_mode: SandboxMode::Always,
-                        allow_downgrade: false,
-                        convert_to_ccs: false,
-                        ownership: None,
-                        yes: true,
-                        from_profile: None,
-                        repository_provenance: None,
-                    },
-                )
-                .await
-                {
-                    Ok(()) => {
-                        println!("  Installed {}", package);
-                        applied += 1;
-                    }
-                    Err(e) => {
-                        let msg = format!("Install '{}': {}", package, e);
-                        eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&msg]));
-                        if strict {
-                            anyhow::bail!(msg);
-                        }
-                        errors.push(msg);
-                    }
-                }
-            }
-            DiffAction::Update {
-                package,
-                current_version,
-                target_version,
-            } => {
-                println!(
-                    "Updating {} from {} to {}...",
-                    package, current_version, target_version
-                );
-                match cmd_install(
-                    package,
-                    InstallOptions {
-                        db_path,
-                        root,
-                        version: Some(target_version.clone()),
-                        package_release: None,
-                        repo: None,
-                        architecture: None,
-                        dry_run: false,
-                        no_deps: false,
-                        selection_reason: Some("Updated by model apply"),
-                        sandbox_mode: SandboxMode::Always,
-                        allow_downgrade: true,
-                        convert_to_ccs: false,
-                        ownership: None,
-                        yes: true,
-                        from_profile: None,
-                        repository_provenance: None,
-                    },
-                )
-                .await
-                {
-                    Ok(()) => {
-                        println!("  Updated {} to {}", package, target_version);
-                        applied += 1;
-                    }
-                    Err(e) => {
-                        let msg = format!(
-                            "Update '{}' {} -> {}: {}",
-                            package, current_version, target_version, e
-                        );
-                        eprintln!("{}", crate::ui::row_line(crate::ui::Status::Fail, &[&msg]));
-                        if strict {
-                            anyhow::bail!(msg);
-                        }
-                        errors.push(msg);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok((applied, errors))
-}
-
-fn display_pin_suffix(pin: Option<&str>) -> String {
-    pin.map(|pin| format!(" ({})", pin)).unwrap_or_default()
 }
 
 /// Apply derived-package build/rebuild actions.

@@ -11,8 +11,13 @@ case "${1-}" in
         exit 0
         ;;
     --dry-run)
-        cat >/dev/null
-        exit 0
+        case "${2-}" in
+            --root=*|--create)
+                cat >/dev/null
+                exit 0
+                ;;
+        esac
+        exit 2
         ;;
     --root=*)
         root=${1#--root=}
@@ -24,6 +29,9 @@ case "${1-}" in
         mkdir -p "$capture_dir"
         if [ "${2-}" = "--create" ]; then
             cp "$root$3" "$capture_dir/systemd-tmpfiles-captured.conf"
+        elif [ "${2-}" = "--replace" ] || [ "${2-}" = "-" ]; then
+            printf '%s\n' "$*" > "$capture_dir/systemd-sysusers-argv"
+            cat > "$capture_dir/systemd-sysusers-stdin"
         else
             printf '%s\n' "$*" >> "$capture_dir/systemctl-calls"
         fi

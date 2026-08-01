@@ -62,14 +62,18 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
 
     let troves = Trove::list_all(conn)?;
     let all_files = FileEntry::find_all_ordered(conn)?;
-    let runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(
+    let mut runtime_inputs = runtime_inputs::collect_runtime_generation_inputs(
         conn,
         &troves,
         all_files,
         Path::new("/"),
     )?;
-    let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
 
+    validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
+    let architecture = runtime_generation_architecture()?;
+    let boot_asset_sources =
+        resolve_generation_boot_asset_sources(&mut runtime_inputs, generations_root, boot_root)?;
+    let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
     validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
     let cas_objects = deduplicate_sort_cas_objects(cas_objects_from_manifests(
         &runtime_inputs.generation,
@@ -78,9 +82,6 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
     let result = build_erofs_image_from_root_manifest(&runtime_inputs.generation, &gen_dir)?;
     runtime_inputs.state.write_to(&gen_dir)?;
-    let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources =
-        resolve_generation_boot_asset_sources(&runtime_inputs, generations_root, boot_root)?;
     let kernel_version = boot_asset_sources.kernel_version.clone();
     let boot_assets = stage_runtime_boot_assets_from_sources(
         &gen_dir,

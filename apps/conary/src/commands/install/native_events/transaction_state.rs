@@ -7,6 +7,7 @@ use conary_core::ccs::native_transaction::{NativeInstalledCapability, NativeInst
 use conary_core::db::models::{PackagePayloadOwnership, ProvideEntry, Trove};
 use rusqlite::Connection;
 use std::collections::{BTreeSet, HashSet};
+use std::path::Path;
 
 pub(super) fn installed_packages_before(conn: &Connection) -> Result<Vec<NativeInstalledPackage>> {
     Trove::list_packages(conn)?
@@ -72,6 +73,25 @@ pub(super) fn sort_and_deduplicate_capabilities(capabilities: &mut Vec<NativeIns
             })
     });
     capabilities.dedup();
+}
+
+pub(super) fn declared_path_capabilities_for_trove(
+    conn: &Connection,
+    trove_id: i64,
+) -> Result<BTreeSet<String>> {
+    Ok(path_capabilities(
+        ProvideEntry::find_by_trove(conn, trove_id)?
+            .iter()
+            .map(|provide| provide.capability.as_str()),
+    ))
+}
+
+pub(super) fn path_capabilities<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<String> {
+    names
+        .into_iter()
+        .filter(|name| Path::new(name).is_absolute())
+        .map(str::to_string)
+        .collect()
 }
 
 pub(super) fn installed_instance_count(conn: &Connection, package_name: &str) -> Result<u32> {

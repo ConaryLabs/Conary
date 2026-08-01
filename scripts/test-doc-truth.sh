@@ -117,8 +117,8 @@ EOF
 
 The cross-distro package-installation preview is active.
 Remote Forge validation is paused pending a KVM-capable runner.
-The 2026-05-21 Group O QEMU run is dated local evidence.
-The 2026-05-21 Group P QEMU run is dated local evidence.
+The 2026-07-31 Group O QEMU run is dated local evidence.
+The 2026-07-31 Group P QEMU run is dated local evidence.
 The current milestone is the first external tester loop.
 See the [detailed development roadmap](docs/roadmaps/development-roadmap.md).
 EOF
@@ -128,8 +128,8 @@ EOF
 
 The first external tester milestone is the current product milestone.
 Remote Forge validation is paused pending a KVM-capable runner.
-The 2026-05-21 Group O QEMU run is dated local evidence.
-The 2026-05-21 Group P QEMU run is dated local evidence.
+The 2026-07-31 Group O QEMU run is dated local evidence.
+The 2026-07-31 Group P QEMU run is dated local evidence.
 EOF
 
     cat > "$root/docs/roadmaps/external-tester-milestone.md" <<'EOF'
@@ -160,8 +160,8 @@ EOF
 # Integration Testing
 
 Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner.
-Current Group O QEMU export evidence from 2026-05-21 is local evidence.
-Current Group P ISO export evidence from 2026-05-21 is local evidence.
+Current Group O QEMU export evidence from 2026-07-31 is local evidence.
+Current Group P ISO export evidence from 2026-07-31 is local evidence.
 EOF
 
     cat > "$root/docs/operations/release-artifact-matrix.md" <<'EOF'
@@ -411,6 +411,24 @@ expect_pass() {
     rm -rf "$tmp"
 }
 
+expect_unassigned_outreach_pass() {
+    local tmp
+    tmp="$(mktemp -d)"
+    make_good_repo "$tmp"
+    sed -i \
+        -e 's/target_release: v0.11.0/target_release: unassigned/' \
+        -e 's/v0.11.0/v0.10.1/g' \
+        "$tmp/docs/operations/external-tester-outreach.md"
+    printf '\nNo new release is assigned.\n' >> "$tmp/docs/operations/external-tester-outreach.md"
+    stage_fixture "$tmp"
+    run_truth "$tmp" > "$tmp/out" 2>&1 || {
+        cat "$tmp/out" >&2
+        rm -rf "$tmp"
+        fail "expected unassigned outreach fixture to pass"
+    }
+    rm -rf "$tmp"
+}
+
 expect_failure() {
     local name="$1"
     local mutator="$2"
@@ -491,6 +509,15 @@ break_tracker_release_version() {
 
 break_outreach_release_version() {
     sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/operations/external-tester-outreach.md"
+}
+
+break_outreach_target_state() {
+    sed -i 's/target_release: v0.11.0/target_release: later/' "$1/docs/operations/external-tester-outreach.md"
+}
+
+break_unassigned_outreach_candidate_version() {
+    sed -i 's/target_release: v0.11.0/target_release: unassigned/' "$1/docs/operations/external-tester-outreach.md"
+    printf '\nNo new release is assigned.\n' >> "$1/docs/operations/external-tester-outreach.md"
 }
 
 break_detailed_remote_forge_evidence() {
@@ -610,6 +637,7 @@ break_frontmatter_revision() {
 }
 
 expect_pass
+expect_unassigned_outreach_pass
 expect_failure "schema drift" break_schema_version 'schema.*68.*SCHEMA_VERSION.*69'
 expect_failure "unknown CLI command reference" break_cli_command_reference 'unknown conary root command'
 expect_failure "retired command doc" break_retired_command_doc 'retired command'
@@ -624,6 +652,8 @@ expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed
 expect_failure "missing external tester milestone" break_detailed_roadmap_milestone 'first external tester milestone'
 expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference'
 expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
+expect_failure "outreach target state" break_outreach_target_state 'exact vMAJOR.MINOR.PATCH tag or unassigned'
+expect_failure "unassigned outreach candidate version" break_unassigned_outreach_candidate_version 'outside current/target contract|outside retained current release'
 expect_failure "missing detailed remote Forge evidence" break_detailed_remote_forge_evidence 'remote Forge paused wording'
 expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
 expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'

@@ -165,6 +165,7 @@ impl NativePackageSource for DetectedNativePackageSource {
                     file.user,
                     file.group,
                     file.link_target,
+                    file.absence_policy,
                 )
             })
             .collect())

@@ -10,13 +10,20 @@ const version = '0.14.0';
 const tag = 'v0.14.0';
 const releaseUrl = `https://github.com/ConaryLabs/Conary/releases/tag/${tag}`;
 const downloadBaseUrl = `https://github.com/ConaryLabs/Conary/releases/download/${tag}`;
+const matrixUrl =
+	'https://github.com/ConaryLabs/Conary/blob/main/docs/operations/release-artifact-matrix.md';
 
 export const previewRelease = {
 	version,
 	tag,
 	releaseUrl,
 	downloadBaseUrl,
-	testerGuideUrl: `https://github.com/ConaryLabs/Conary/blob/${tag}/docs/guides/agent-assisted-tester-loop.md`,
+	matrixUrl,
+	testerAuthority: 'paused',
+	testerAuthorityReason:
+		'v0.14.0 is published and artifact-verified, but it predates supported-host fixes that remain unreleased.',
+	testerGuideUrl:
+		'https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md',
 	feedbackUrl: 'https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md',
 	workDirectory: `$HOME/conary-preview-${tag}`,
 	targets: [

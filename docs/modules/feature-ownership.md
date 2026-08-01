@@ -186,6 +186,7 @@ mutation flows for local package operations.
 `crates/conary-core/src/scriptlet/sandbox.rs`;
 `crates/conary-core/src/scriptlet/process.rs`;
 `crates/conary-core/src/scriptlet/boundary.rs`;
+`crates/conary-core/src/scriptlet/sysusers.rs`;
 `crates/conary-core/src/scriptlet/native_lifecycle.rs`;
 `crates/conary-core/src/scriptlet/native_lifecycle/contracts.rs`;
 `crates/conary-core/src/db/models/installed_ccs_remove_hook.rs`;
@@ -540,7 +541,14 @@ state, image building, bootstrap validation, conaryd route history.
 
 **Interaction gate:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`;
 `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`
-when export or boot-carrier behavior changes.
+when export or boot-carrier behavior changes. Both suites now stand on the
+supported-host fixture in
+`apps/conary/tests/fixtures/supported-host-generation-export/`: they assemble a
+Fedora 44 root from ordinary repository installs on a scratch disk, publish it
+with `conary system generation publish`, export it, and boot the artifact under
+UEFI. Bootable-image export is therefore a generation capability with no
+bootstrap dependency. The gate needs a boot lane: any host with `/dev/kvm` and
+OVMF firmware, currently remi-dev.
 
 **Docs to update:** `docs/ARCHITECTURE.md`;
 `docs/roadmaps/development-roadmap.md`;

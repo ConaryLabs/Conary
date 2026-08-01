@@ -89,6 +89,17 @@ value or derive one from a distro, path, policy name, source package manager, or
 pairwise compatibility selector. A version-3 inventory must be replaced by
 rerunning `conary system init`.
 
+RPM sysusers planning emits a dedicated typed native event rather than a
+generic command. Because RPM schedules it before the incoming payload is
+visible, install preflight revalidates the persisted `SystemdSysusers`
+descriptor and execution invokes that exact host-side interface with
+`--root=<selected-root>`, optional `--replace <guest-path>`, and the decoded
+declarations on stdin. The fixed grammar gives the target implementation
+semantic authority without reading or mutating host account state. Missing,
+wrong-contract, or drifted descriptors fail before package mutation. Generic
+native commands remain confined to the selected-root execution boundary and
+cannot acquire this target-interface path from argv text or lifecycle stage.
+
 The typed tmpfiles contract preserves type, path, mode, user, group, age, and
 argument as seven required strings. Conary parses only the documented type
 envelope—one ASCII letter plus tmpfiles modifiers—and the field boundaries
@@ -396,6 +407,13 @@ filesystem that cannot apply the signature does not erase it: capture restores
 the deferred value only while the regular-file SHA-256 and size are unchanged,
 so a lifecycle content mutation invalidates the signature before generation
 serialization.
+Payload metadata application also distinguishes package-declared xattrs from
+the target LSM label assigned when a staging node is created. An undeclared
+`security.selinux` value is preserved as ambient target authority and becomes
+part of selected-root capture; when the payload declares `security.selinux`,
+that exact opaque value is applied instead. This is not a general
+`security.*` exception: every other undeclared xattr is removed, and a removal
+failure remains fatal.
 Generation-local config projection removes exactly one `/etc` prefix when it
 materializes the overlay upper; `/var` and `/srv` entries cannot enter that
 upper. Boot-carrier export copies both manifests, reconstructs `/var` and
@@ -432,6 +450,14 @@ event, payload mutation, or database mutation. Preflight includes availability
 of the selected-root interpreter/helper runtime; it does not wait until a later
 stage to discover that an unwind path cannot execute. A failed preflight leaves
 the previous payload, package database, and selected generation unchanged.
+The event-time projection advances source-declared absolute path capabilities
+at the same exact `ApplyPayload` and `FinalizeOldPayload` boundaries as literal
+archive paths. Thus a dependency's typed `/bin/sh` provider can authorize a
+later lifecycle interpreter even when its payload is represented through the
+source filesystem layout as `/usr/bin/sh`; it cannot authorize an event before
+that provider payload is applied or after its final provider is removed.
+Package names, distro identities, script text, and hard-coded redirect tables
+never establish this availability.
 
 Lifecycle execution is inseparable from a mutating install, update, remove,
 restore, batch, or autoremove transaction. The CLI, daemon request schema, and
@@ -543,6 +569,14 @@ component, SBOM, runtime, derived-package, native-lifecycle, configuration
 capture, file-capability projection, rollback, and removal all resolve package
 ownership through claims. Generation export and CAS reachability consume the
 single materialized anchor, which remains present until the final claim.
+
+Live-root install, removal, rollback, and hardlink operations preserve that
+package-path spelling as ownership authority while resolving existing ancestor
+symlinks to one effective path inside the selected root. Transaction journals
+record the resolved physical mutation path, so recovery uses the same target
+that the forward operation changed. In-root layout aliases such as
+`/lib64 -> usr/lib64` are therefore valid; an alias that escapes the selected
+root or loops fails before mutation.
 
 Rollback captures payload claims and the independently materialized node
 before any package in a single or batch transaction mutates the selected root.
@@ -819,6 +853,16 @@ interpreters such as `<lua>`. Those are executable ABI semantics. A plain
 process executor cannot run such an entry; the corresponding RPM expansion or
 embedded-interpreter contract is required Conary implementation.
 
+The persisted effective critical flag owns RPM script-result handling. Matching
+the pinned RPM
+[`runScript()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/transaction.cc#L1709-L1762),
+a failed non-critical script is reported but does not fail its transaction
+element, while a critical script failure remains fatal. Conary applies that
+source policy only to a program exit or timeout after exact preflight and the
+selected-root enforcement boundary have succeeded. Missing interpreters,
+malformed contracts, process or sandbox setup failures, and enforcement
+failures remain fatal; RPM criticality is not a security-boundary bypass.
+
 ### RPM Runtime Compatibility
 
 Conary persists the typed package-header facts, transaction-derived installed
@@ -879,8 +923,37 @@ the install target, never on the conversion host. Native commands use the
 target `PATH`, sanitized environment, timeout, and sandbox mode. Removed RPM
 fork/exec/wait APIs retain their upstream removal errors; the safe `debug`
 projection exposes introspection but cannot replace Conary's instruction
-deadline hook. All target paths use one symlink-aware root-confinement
-resolver.
+deadline hook. `posix.stat` returns RPM's selected value or table on success
+and `(nil, path-qualified strerror, errno)` when target `lstat` fails, while a
+root-confinement violation remains fatal. `posix.dir` and `posix.files`
+likewise return RPM's three-value error result when target `opendir` fails;
+successful calls return the bundled table or iterator contract, including `.`
+and `..`, and confinement failures remain fatal. The remaining bundled
+`lposix` filesystem calls preserve the pinned
+[`pushresult`/`pusherror`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/rpmio/lposix.cc#L104-L127)
+contract: a numeric or string result on success and
+`(nil, path-qualified strerror, errno)` on syscall failure, except for upstream
+operations such as hard-link and symlink creation whose error string is
+intentionally not path-qualified. All target paths use one symlink-aware
+root-confinement resolver, and confinement failures remain fatal rather than
+becoming an ordinary syscall result. APIs backed by leaf-sensitive filesystem
+calls (`lstat`, `readlink`, removal, rename, and link creation) resolve
+selected-root aliases only in the parent path and retain the exact final
+directory entry; APIs whose source syscall follows the leaf retain full
+dereferencing.
+
+Standard `io.open` accepts Lua 5.4's pinned `[rwa]%+?b*` mode grammar and
+returns `(nil, path-qualified strerror, errno)` when the target `fopen` fails.
+RPM's separate `rpm.open` API retains its pinned exception-on-open-failure
+contract. Path validation and selected-root confinement occur before either
+open and remain fatal.
+
+Target-confined `io` file reads preserve the pinned Lua
+[`g_read()`](https://github.com/lua/lua/blob/v5.4.8/liolib.c#L534-L581)
+format grammar: an optional leading `*` is skipped and the first remaining
+format character selects number, line, line-with-newline, or read-all
+behavior. This includes compatible spellings such as `*all`; Conary does not
+replace the upstream grammar with a curated spelling list.
 
 ### RPM Upgrade Order
 
@@ -891,7 +964,8 @@ transaction packages. Conary's typed stages preserve this order:
 1. `%pretrans` of `new`.
 2. `%preuntrans` of `old`.
 3. `%transfiletriggerun` of `any`, selected by paths removed with `old`.
-4. RPM's implicit sysusers operation for `new`.
+4. RPM's implicit sysusers operation for `new`, through the exact persisted
+   target sysusers interface with the selected root supplied explicitly.
 5. `%triggerprein` passes between `rpmdb`, `new`, and the installing change.
 6. `%pre` of `new`.
 7. Unpack `new` and make its payload visible.

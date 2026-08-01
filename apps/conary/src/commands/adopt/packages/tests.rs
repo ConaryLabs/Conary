@@ -111,6 +111,7 @@ fn file_tuple(path: &Path, mode: i32) -> FileInfoTuple {
         Some("root".to_string()),
         Some("root".to_string()),
         None,
+        conary_core::packages::InstalledFileAbsencePolicy::Required,
     )
 }
 

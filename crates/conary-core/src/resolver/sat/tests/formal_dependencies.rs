@@ -534,6 +534,134 @@ fn installed_debian_satisfies_debian_dep_in_sat() {
 }
 
 #[test]
+fn installed_file_provider_wins_over_its_repository_copy() {
+    let (_dir, conn) = setup_test_db();
+    let installed =
+        insert_native_trove(&conn, "filesystem", "3.18-52.fc44", VersionScheme::Rpm, &[]);
+    let mut installed_provide = crate::db::models::ProvideEntry::new_typed(
+        installed,
+        crate::repository::dependency_model::RepositoryCapabilityKind::File,
+        "/usr/bin".to_string(),
+        None,
+        VersionScheme::Rpm,
+        crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+    );
+    installed_provide.insert(&conn).unwrap();
+
+    let mut repo = Repository::new(
+        "fedora-main".to_string(),
+        "https://mirror.fedora.invalid".to_string(),
+    );
+    repo.priority = 100;
+    let repo_id = repo.insert(&conn).unwrap();
+    let filesystem = insert_repo_pkg_with_reqs(
+        &conn,
+        repo_id,
+        "filesystem",
+        "3.18-52.fc44",
+        "https://mirror.fedora.invalid/filesystem.rpm",
+        "rpm",
+        &[],
+    );
+    let mut repository_provide = RepositoryProvide::new(
+        filesystem,
+        "/usr/bin".to_string(),
+        None,
+        "file".to_string(),
+        Some("/usr/bin".to_string()),
+        VersionScheme::Rpm,
+    );
+    repository_provide.insert(&conn).unwrap();
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repo_id,
+        "consumer",
+        "1",
+        "https://mirror.fedora.invalid/consumer.rpm",
+        "rpm",
+        &[("/usr/bin", None)],
+    );
+
+    let result = solve_install(&conn, &[("consumer".to_string(), VersionConstraint::Any)]).unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    let selected = result
+        .install_order
+        .iter()
+        .filter(|package| package.name == "filesystem")
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 1, "{result:?}");
+    assert_eq!(selected[0].source, SatSource::Installed, "{result:?}");
+}
+
+#[test]
+fn incompatible_installed_virtual_provider_does_not_block_repository_provider() {
+    let (_dir, conn) = setup_test_db();
+    let installed = insert_native_trove(&conn, "provider-old", "1", VersionScheme::Rpm, &[]);
+    let mut installed_provide = crate::db::models::ProvideEntry::new_typed(
+        installed,
+        crate::repository::dependency_model::RepositoryCapabilityKind::Virtual,
+        "virtual-api".to_string(),
+        Some("1".to_string()),
+        VersionScheme::Rpm,
+        crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+    );
+    installed_provide.insert(&conn).unwrap();
+
+    let mut repo = Repository::new(
+        "fedora-main".to_string(),
+        "https://mirror.fedora.invalid".to_string(),
+    );
+    let repo_id = repo.insert(&conn).unwrap();
+    let provider = insert_repo_pkg_with_reqs(
+        &conn,
+        repo_id,
+        "provider-new",
+        "2",
+        "https://mirror.fedora.invalid/provider-new.rpm",
+        "rpm",
+        &[],
+    );
+    let mut repository_provide = RepositoryProvide::new(
+        provider,
+        "virtual-api".to_string(),
+        Some("2".to_string()),
+        "virtual".to_string(),
+        Some("virtual-api = 2".to_string()),
+        VersionScheme::Rpm,
+    );
+    repository_provide.insert(&conn).unwrap();
+    let consumer = insert_repo_pkg_with_reqs(
+        &conn,
+        repo_id,
+        "consumer",
+        "1",
+        "https://mirror.fedora.invalid/consumer.rpm",
+        "rpm",
+        &[],
+    );
+    insert_repo_requirement_group(
+        &conn,
+        consumer,
+        "virtual-api",
+        Some(">= 2"),
+        Some("virtual-api >= 2"),
+    );
+
+    let result = solve_install(&conn, &[("consumer".to_string(), VersionConstraint::Any)]).unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert!(result.install_order.iter().any(|package| {
+        package.name == "provider-new" && package.source == SatSource::Repository
+    }));
+    assert!(
+        !result
+            .install_order
+            .iter()
+            .any(|package| package.name == "provider-old"),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn provide_version_used_instead_of_package_version() {
     // Package kernel-modules-core version 6.19.6-200.fc44
     // Provides kernel-modules-core-uname-r = 6.19.6-200.fc44.x86_64
