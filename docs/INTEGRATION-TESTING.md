@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-28
-revision: 41
-summary: Document selected-generation cross-source package lifecycle proof from source and published native packages
+last_updated: 2026-07-31
+revision: 43
+summary: Document selected-generation lifecycle proof and the current Fedora supported-host generation export gates
 ---
 
 # Integration Testing
@@ -112,10 +112,11 @@ two independent reasons found on 2026-07-28:
 The Fedora image ships no `/var/lib/conary` at all, so `system init` creates a
 fresh database at the current schema.
 
-Historical evidence below predates both the re-base and the #61 schema cut, and
-was recorded against `minimal-boot-v4`.
+The 2026-07-31 supported-host evidence below is current. Earlier evidence
+predates both the re-base and the #61 schema cut and was recorded against
+`minimal-boot-v4`.
 
-Current 2026-07-16 W1 Group O local KVM evidence is green. The source fixture
+Historical 2026-07-16 W1 Group O local KVM evidence was green. The source fixture
 was `minimal-boot-v4`, expanded to 20 GiB for full CAS adoption and paired with
 the versioned disposable `conaryos-test-key-v4` identity. The runner discovers
 Fedora's `/usr/share/edk2/x64/OVMF_CODE.4m.fd`, attaches OVMF as read-only
@@ -142,15 +143,27 @@ TGE01 booted the downloaded image under KVM and passed in 63,320 ms.
 `conary system init --db-path` against a scratch-disk root, adds the Fedora 44
 Remi profile, installs a test-time-built `conary-qemu-test-access` CCS package
 for harness SSH and unit enablement, applies `fixture-system.toml` with
-`conary model apply --yes --no-autoremove`, then publishes with
-`conary system generation publish --yes`. `model apply` issues one install per
-model entry, so every intermediate publication fails and prints a pending
-warning; the accumulated candidate is completed by the single `publish` step,
-which is the asserted one. No bootstrap surface is involved and the manifest
-system has no cross-suite artifact passing, so each suite assembles its own
-root.
+`conary model apply --yes --no-autoremove`, then converges publication with
+`conary system generation publish --yes`. `model apply` resolves the changed
+entries as one exact-source SAT package set and executes one lifecycle
+transaction; successful apply may therefore publish the complete closure
+automatically. The shared convergence helper treats the final `publish` as
+idempotent: it must either clear residual debt or confirm publication is
+already current, after which `generation pending` must report no debt and the
+exact numeric target of the selected-generation link is validated. No
+bootstrap surface is involved and the manifest system has no cross-suite
+artifact passing, so each suite assembles its own root.
 
-The source QEMU image for Groups N and O must already include the runtime
+Both supported-host manifests format the scratch root as ext4 with the
+`verity` feature before initializing it. Composefs publication enables
+fs-verity on `root.erofs` and fails closed when the selected root's backing
+filesystem cannot provide it; plain ext4 is therefore not a valid fixture
+substitute. The convergence helper preserves the publish exit status, prints
+its full log, and queries the latest typed
+`generation_publications.last_error` so a failed gate records the exact
+publication cause.
+
+The source QEMU image for Groups N, O, and P must already include the runtime
 generation toolchain (`cpio`, `dracut`, `depmod`, `systemd-repart`, `qemu-img`,
 FAT/ext4 mkfs tools, and composefs inspection tools as needed). Group P uses the
 same source fixture and provisions ISO helper packages through Conary when
@@ -166,14 +179,13 @@ profile and the binary is a test-staging artifact, not a release artifact.
 
 `scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
 Fedora Cloud Base qcow2 plus provisioning, and `bash
-scripts/test-build-qemu-guest-image.sh` is its fast proof. It exists because the
-active `minimal-boot-*` fixtures are conaryOS artifacts of the bootstrap
-pipeline and have no regeneration path once that pipeline is removed. The
-manifests still name the `minimal-boot-*` images; pointing them at a
-Fedora-based image is a separate change, so treat the builder as the
-regeneration path rather than as the fixture the suites currently boot. See
-`docs/modules/test-fixtures.md` under `qemu-source-image-fixtures` for the
-image contract and the identity/size rotation helper. The focused
+scripts/test-build-qemu-guest-image.sh` is its fast proof. The current
+manifests name `fedora44-guest-v2`; the builder is the regeneration authority
+for that Fedora-based fixture. The retired `minimal-boot-*` conaryOS artifacts
+have no regeneration path once the bootstrap pipeline is removed and remain
+historical evidence only. See `docs/modules/test-fixtures.md` under
+`qemu-source-image-fixtures` for the image contract and the identity/size
+rotation helper. The focused
 2026-05-21 KVM run passed the superseded bootstrap-run form of `TISO01`: it
 exported that generation to ISO, copied the ISO and provenance sidecar back to
 `target/local-validation/group-p-iso-export/`, booted the ISO with
@@ -346,7 +358,25 @@ Current Group N QEMU evidence from 2026-05-21:
   Current installs materialize DB/CAS state when no generation exists and
   publish `/conary/current` through the same atomic package transaction.
 
-Current Group O QEMU export evidence from 2026-07-16:
+Current Group O QEMU export evidence from 2026-07-31:
+
+- `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
+  passed 5 / failed 0 / skipped 0 / cancelled 0 against
+  `fedora44-guest-v2`
+- Passed cases:
+  - `TGE01` `installed_generation_export_fails_closed_without_self_contained_root`: 116022ms
+  - `TGE03` `installed_generation_build_rejects_missing_runtime_cas_object`: 552439ms
+  - `TGE04` `installed_runtime_generation_export_boots`: 994129ms
+  - `TGE05` `installed_runtime_generation_export_preserves_file_capability_xattrs`: 2973162ms
+  - `TGE02` `supported_host_generation_export_boots`: 2383246ms
+- TGE02 assembled the Fedora root through ordinary signed Remi CCS installs,
+  published with zero debt, exported the selected generation, and booted the
+  qcow2 under UEFI. TGE04 and TGE05 retained their installed-runtime and
+  file-capability carrier proof.
+- Full artifact hashes and the exact implementation head are recorded on PR
+  #151; this is local x86_64 KVM evidence, not hosted CI.
+
+Historical Group O QEMU export evidence from 2026-07-16:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
   passed 5 / failed 0 / skipped 0 / cancelled 0 against `minimal-boot-v4`
@@ -365,9 +395,9 @@ Current Group O QEMU export evidence from 2026-07-16:
   available from `https://remi.conary.io/test-artifacts/`. An isolated-cache
   download matched the source hashes and passed a 63,320 ms TGE01 KVM boot.
 - The `TGE02` in this and the older dated block is the superseded
-  `bootstrap_run_generation_export_boots` case. It was replaced by
-  `supported_host_generation_export_boots`, which has no run of its own yet.
-  The `TGE01`, `TGE03`, `TGE04`, and `TGE05` results are unaffected.
+  `bootstrap_run_generation_export_boots` case. Current supported-host proof is
+  recorded above. The `TGE01`, `TGE03`, `TGE04`, and `TGE05` results remain
+  useful historical evidence.
 
 Historical Group O QEMU export evidence from 2026-05-21:
 
@@ -387,7 +417,21 @@ Keep Group O in the release-candidate rotation because it is still the full
 boot/export proof for installed-runtime and supported-host generation
 artifacts.
 
-Group P ISO export evidence from 2026-05-21, against the superseded
+Current Group P ISO export evidence from 2026-07-31:
+
+- `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`:
+  passed `TISO01`, 1 passed / 0 failed / 0 skipped / 0 cancelled against
+  `fedora44-guest-v2` in 2326789ms
+- `TISO01` assembled the supported-host generation through ordinary signed
+  Remi CCS installs, emitted the ISO and provenance sidecar, copied both back,
+  booted the read-only ISO under UEFI, selected the exact generation, and
+  retained a writable `/etc` overlay.
+- The ISO was 667713536 bytes with SHA-256
+  `ff6bd95bcd3ac9ceb27712f4acda0328ef4edc97139a8047d310cb415998338b`;
+  the provenance sidecar records the same size and hash. Full provenance and
+  exact-head identity are recorded on PR #151.
+
+Historical Group P ISO export evidence from 2026-05-21, against the superseded
 bootstrap-run form of `TISO01`:
 
 - `cargo run -p conary-test -- list`: passed; includes
@@ -406,9 +450,9 @@ bootstrap-run form of `TISO01`:
   `rootfstype=iso9660`, generation artifact files, and a writable `/etc`
   overlay on the read-only carrier.
 - `TISO01` is now `supported_host_generation_iso_export_boots` on the
-  supported-host fixture and has no run of its own yet. The carrier and
-  provenance assertions above are unchanged by the re-base; the basis that
-  produces the generation is what changed.
+  supported-host fixture. Its current proof is recorded above; the carrier and
+  provenance assertions survived the re-base while the generation basis
+  changed.
 
 Fast workspace verification from 2026-05-14:
 

@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-07-28
-revision: 8
+last_updated: 2026-07-31
+revision: 10
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
-proof_baseline: "v0.13.0 and remi-v0.8.5 at 6f1429c362ac161f1ef817233e72ee9c9a031c11; post-hard-cut release, deployment, and three-distro artifact proof complete"
+proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
 active_workstream: W4 Source Fidelity Hard Cut
 next_workstream: W5 Source Authority Model
@@ -39,13 +39,17 @@ installed-runtime, file-capability, and bootstrap-run raw/qcow2 cases against
 `minimal-boot-v4`. That run predates the #61 schema epoch cut, and the
 `minimal-boot-*` lineage cannot run the current build at all: those images ship
 a bootstrap-built Conary database at a retired schema. The suites now target
-`fedora44-guest-v1`, an official Fedora Cloud Base 44 image built by
-`scripts/build-qemu-guest-image.sh` per #153's re-base decision. It has no
-published artifact yet, and no suite run against it is recorded.
-The dated 2026-05-21 Group P QEMU run passed ISO generation-carrier,
-provenance-sidecar, copy-back, read-only carrier boot, and writable `/etc`
-overlay proof. These are local x86_64 evidence, not a broad or current
-remote-validation claim.
+`fedora44-guest-v2`, an official Fedora Cloud Base 44 image built by
+`scripts/build-qemu-guest-image.sh` per #153's re-base decision. Its immutable
+public artifact is pinned at
+`f688ac2a02b0b0558e28de1c97bbcb2e45b6772a4f019b037f72ec584a420174`
+and includes Fedora's packaged systemd-boot EFI binary.
+The dated 2026-07-31 Group O implementation proof passed all five qcow2 cases
+against that fixture, including ordinary signed Remi CCS assembly and
+selected-generation publication. The dated 2026-07-31 Group P implementation
+proof passed its ISO case, including provenance, copy-back, read-only carrier
+boot, and writable `/etc` overlay proof. This is local x86_64 evidence, not a
+broad remote-validation claim.
 
 Bootable-image export is a retained generation capability, not a bootstrap
 capability. Generation keeps raw/qcow2/ISO export with a UEFI QEMU boot proof,
@@ -53,8 +57,8 @@ and that proof now stands on a supported-host fixture: Groups O and P assemble
 a Fedora 44 root from ordinary repository installs on a scratch disk, publish
 it as a generation, export it, and boot the artifact. The bootstrap-run export
 cases and their fixture are gone. The boot lane needs a host with `/dev/kvm`
-and OVMF firmware; remi-dev is the current such host. The re-based suites have
-not yet had a green live run.
+and OVMF firmware; remi-dev is the current such host. The re-based suites are
+green locally on the 2026-07-31 PR #151 implementation.
 
 ## Milestone 1 Exit Condition
 
@@ -117,16 +121,16 @@ the stated scope, not whether a workstream happens to be active.
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | `v0.13.0` has exact tag, hashes, detached signature, current signed self-update, deployment, and native RPM/DEB/Arch installed-binary proof. The intentional 0.12 schema boundary requires a fresh native-package install. No SBOM/provenance sidecars are published or planned. |
+| Packaging, static repositories, trust, and self-update | solid | Immutable `v0.14.0` has exact tag, hashes, detached signature, self-update endpoint, deployment, native RPM/DEB/Arch installed-binary proof, and a released Fedora sparse sync. It predates the current supported-host fixes and is not current tester authority. No SBOM/provenance sidecars are published. |
 | CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. These share one root cause: the shared package model normalizes source facts at parse time instead of at each consumer's boundary. W5 owns the structural correction. |
-| Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap; the re-based Group O/P suites await their first green live run. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
+| Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap; the re-based Group O/P suites passed locally on 2026-07-31. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
-| Remi core and publication | solid | `remi-v0.8.5` is deployed on the current schema with five populated sources, exact signing profiles, fair prewarm, real conversions, and full public health; distribution and a wider stranger-operated path remain limited. `/health/ready` became evidence bearing in #107 and now fails closed on an absent database or an unrunnable probe; the deployed build predates that change until the next release. |
+| Remi core and publication | solid | `remi-v0.9.5` is deployed at schema revision 23 with three populated distributions, exact signing profiles, 1,783 converted packages, and full public health 11/11. Distribution and a wider stranger-operated path remain limited. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
 | Federation | experimental | Only `/v1/federation/directory` is routed and no federation call exists in chunk serving, so the router is a library nothing invokes on a local miss. TLS fingerprint pinning is enforced in code; the documented disagreement is a docs defect. See the federation horizon for measured state and slice ordering. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | The `v0.13.0` released-package matrix is complete, but the revised cross-distro milestone remains 0/10. Outreach is now gated on the W7 corpus proof rather than on venue scheduling alone; cached-history and venue-eligibility clearance remain separate prerequisites. |
+| External product readiness | unfinished | The `v0.14.0` released-package matrix is complete, but the release predates current supported-host fixes and the revised cross-distro milestone remains 0/10. Outreach is gated on a later verified release, W7 corpus proof, cached-history clearance, and venue eligibility. |
 
 ## Workstreams
 
@@ -171,39 +175,31 @@ the stated scope, not whether a workstream happens to be active.
   behind the W4 through W7 engineering gate, because the release proof covers
   a curated lifecycle rather than ordinary repository packages. Outreach state,
   venue eligibility, and the 0/10 tracker are now W8's.
-- **Current truth:** the post-hard-cut release gate is complete at immutable
-  `v0.13.0` with compatible production `remi-v0.8.5`. The released RPM, DEB,
-  and Arch packages passed the Cartesian source-format lifecycle on Fedora 44,
-  Ubuntu 26.04 LTS, and Arch. That lifecycle is a curated proof, not a
-  repository-wide one; W7 owns the ordinary-package corpus.
+- **Current truth:** the latest immutable release is `v0.14.0` with production
+  `remi-v0.9.5`. The released RPM, DEB, and Arch packages passed the Cartesian
+  source-format lifecycle on Fedora 44, Ubuntu 26.04 LTS, and Arch. The
+  release predates fixes found during supported-host generation bring-up, so
+  it remains exact evidence for its own tree but is not current tester
+  authority. W7 owns the ordinary-package corpus.
 - **Execution status:** complete for the release, deployment, and
   published-package proof it owns.
 - **Dependencies:** none remaining.
-- **Proof:** immutable `v0.13.0` published at `2026-07-27T11:57:44Z`;
-  annotated tag object `f8298522fd7fe95a4994184ae20c34cf64096818`
-  peels to `6f1429c362ac161f1ef817233e72ee9c9a031c11`. Exact-tag
-  release-build `30261256730` passed the workspace and four package builders.
-  Independent downloads found exactly seven assets, matched all five
-  `SHA256SUMS` entries and every GitHub digest, and verified the detached CCS
-  signature with the official preceding release key. A copied released 0.13
-  binary forced a signed update through the production channel and remained
-  `conary 0.13.0`; the incompatible 0.12 CCS parser is an intentional hard-cut
-  reinstall boundary, not a compatibility path. Deploy-and-proof run
-  `30263948968` passed: the server's exact seven files match the release,
-  conary.io serves the exact tag and a branded HTTP 404, and native RPM, DEB,
-  and Arch packages each installed and passed the owned Cartesian lifecycle on
-  their matching supported host. Current `remi-v0.8.5` tag object
-  `1d9b8588fe01453bab20f1a7956e4aa9d6263702` peels to the same commit;
-  release-build `30259180128` and protected deploy `30260847616` passed. Live
-  inspection reports schema revision 21, five populated sources, 98,266
-  repository packages, exact Arch/Fedora/Ubuntu signing profiles, 2,368
-  conversions, full health 10/10, and public converted CCS proof. conaryd
-  0.7.0 and conary-test 0.9.0 remain immutable build-only products from
-  `a231276a900bbe8a8ccb6a0942f104cba2ab86b4`. Exact hashes and complete
-  per-product evidence live in the release matrix. No SBOM or provenance
-  sidecars are published. The known conversion failures are owned by #98,
-  #99, and #102 through #105; the false-success unknown API fallback is owned
-  by #67 rather than hidden as release success.
+- **Proof:** immutable `v0.14.0` published on 2026-07-29; annotated tag
+  `c36c767c7169ff519a96dfdc7bedfa757211f334` peels to
+  `fe23a604b64ea6f7cc87fce8298911e2245e027f`. Exact-tag release-build
+  `30409720307` and protected deploy-and-verify `30412130145` passed.
+  Independent downloads matched the seven-asset checksum/digest inventory and
+  detached CCS signature. The released Fedora RPM reports `conary 0.14.0` and
+  synchronized 76,354 live Fedora packages in a 2,048 MiB guest in 194,288 ms.
+  Current `remi-v0.9.5` tag object
+  `f2bf17f0086a7f8ea4be3e032336551c4e6089c1` peels to
+  `101dba655257f1ff3d1bee689d9c5ac8b2b68cbd`; release-build `30583793501`
+  and protected deployment `30585462182` passed. Independent production proof
+  reports installed `remi 0.9.5`, schema revision 23, 83,885 packages, 1,783
+  conversions, three distributions, and full health 11/11. conaryd 0.7.0 and
+  conary-test 0.9.0 remain immutable build-only products. Exact hashes and
+  complete per-product evidence live in the release matrix. No current product
+  publishes an SBOM or provenance sidecar.
 - **Limitations:** the release proof does not establish that ordinary
   repository packages convert. W4 through W7 own that claim.
 
@@ -384,7 +380,7 @@ acceptance criteria, and proof.
 | Native packaging horizon | #70, #51, #72 | P2 |
 | Service and operator horizon | #69, #65, #66, #73 | P2 |
 | System artifacts horizon | #63, #64, #71 | P2 |
-| Closed | #41 closed 2026-07-27 as fixed in v0.13.0; Artix route tracked as W8 evidence | not engineering work |
+| Closed | #41 closed 2026-07-31 after the selected-root alias regression repair and current Fedora export/boot proof; original Artix route tracked as W8 evidence | not engineering work |
 
 ### Known overlaps
 
@@ -416,10 +412,13 @@ authority owners.
 - **#65 and #66 both target fleet-scale control.** #65 is the replatforming
   operation, #66 the typed gateway that would expose it. #66's local typed APIs
   stabilize first.
-- **#41 overlaps #99's path authority but is not open work.** The reported
-  defect shipped fixed in v0.12.0; only reporter confirmation is outstanding.
-  It belongs in a support state, not the engineering queue. Its Artix host
-  remains outside supported scope and is tracked as W8 evidence.
+- **#41 overlaps #99's path authority but is closed engineering work.** The
+  original archive-path repair shipped in v0.12.0, but current Fedora
+  supported-host proof exposed the same property in the live-root
+  materializer. The 2026-07-31 repair reuses the bounded selected-root resolver
+  for install, remove, rollback, and hardlink paths while retaining escape and
+  loop rejection. The original Artix host remains outside supported scope and
+  is tracked as W8 evidence.
 
 ## Post-Milestone Horizons
 
@@ -656,8 +655,10 @@ checksum and CCS-signature verification, production deployment, official
 installed-binary self-update, compatible prewarmed Remi, rollback, and
 clean-host proof. W3's release proof gate was reopened for the supported `htop`
 SONAME repair and again for issue #41's path-safety and support-bundle defects,
-then superseded by the post-hard-cut package authority suite; it closed with
-verified immutable `v0.13.0` and production `remi-v0.8.5`.
+then superseded by the post-hard-cut package authority suite. The latest exact
+release evidence is immutable `v0.14.0` and production `remi-v0.9.5`; the
+Conary artifact predates current supported-host fixes and is not tester
+authority for them.
 
 W3 was subsequently split. Its release gate is complete, and its external
 tester outreach moved to W8 behind an engineering gate, because a bounded

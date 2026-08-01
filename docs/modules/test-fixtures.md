@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-07-31
-revision: 29
-summary: Map fixture ownership, including bounded CCS install-prefix authoring, cross-source lifecycle proof, the public v4 QEMU image contract, Fedora guest regeneration, and RPM root-anchor conversion
+revision: 30
+summary: Map fixture ownership, including supported-host generation export, Fedora guest regeneration, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -450,7 +450,9 @@ Each fixture family should record:
   lifecycle applies unit preset policy. The symlinks are produced by
   `stage-links.sh` rather than checked in, because the harness copies fixtures
   with `scp -r`, which would materialize a checked-in link as a copy of its
-  target.
+  target. `publish-selected-generation.sh` is the shared idempotent
+  publication-convergence and selected-generation assertion used by both
+  carriers.
 - **Consumes:** Group O `TGE02`
   (`supported_host_generation_export_boots`) and Group P `TISO01`
   (`supported_host_generation_iso_export_boots`).
@@ -470,27 +472,40 @@ Each fixture family should record:
   exact-source SAT package set and executes one lifecycle transaction. The
   suite verifies the selected generation contains networkd enablement before
   export, then requires an independently reachable SSH boot of the qcow2 or ISO
-  artifact. Exact-head live evidence belongs on the owning pull request rather
-  than in this map.
+  artifact.
+- **Current evidence:** the 2026-07-31 PR #151 implementation proof passed all
+  five Group O qcow2 cases and the Group P ISO case on Fedora 44. The shared
+  final helper is idempotent, requires zero pending publication debt, and
+  validates the exact numeric selected-generation target. Full timings and
+  artifact identities belong on the owning pull request rather than in this
+  map.
 - **Safety notes:** The staged `authorized_keys` carries the
   `__CONARY_QEMU_TEST_PUBLIC_KEY__` placeholder and is substituted in the guest
   with the disposable harness key; no real credential belongs in this fixture.
   The suites assemble into a scratch-disk `--db-path` root and never mutate the
-  guest's live root.
+  guest's live root. That scratch filesystem must be ext4 with the `verity`
+  feature: composefs generation publication enables fs-verity on `root.erofs`
+  and truthfully fails closed when the backing filesystem lacks it. A failed
+  convergence attempt must retain and print the typed
+  `generation_publications.last_error`.
 
 ### qemu-source-image-fixtures
 
 - **Owner:** image construction: `scripts/build-qemu-guest-image.sh`;
   unprivileged identity/size rotation:
-  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU execution and
-  download cache: `apps/conary-test/src/engine/qemu.rs`.
+  `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU orchestration and
+  download cache: `apps/conary-test/src/engine/qemu.rs`; bounded live console
+  capture: `apps/conary-test/src/engine/qemu/console.rs`; cross-guest static
+  client staging: `scripts/build-static-conary.sh`.
 - **Purpose:** Keep a versioned, generation-builder-ready qcow2 source image
   paired with a disposable SSH identity and enough root-filesystem headroom
   for full live-root adoption into CAS.
-- **Fixture sources:** versioned `minimal-boot-vN.qcow2` artifacts and the
-  matching versioned `conaryos-test-key-vN` test artifact served by Remi;
-  active consumers
-  are the Phase 3 QEMU manifests under
+- **Fixture sources:** the pinned official Fedora Cloud Base 44 qcow2 and
+  provisioning contract in `scripts/build-qemu-guest-image.sh`, producing the
+  active immutable `fedora44-guest-v2` artifact served by Remi with the
+  `conaryos-test-key-v4` disposable identity. The historical
+  `minimal-boot-vN.qcow2` artifacts and matching versioned keys remain evidence
+  only. Active consumers are the Phase 3 QEMU manifests under
   `apps/conary/tests/integration/remi/manifests/`.
 - **Consumes:** Groups N, O, and P plus composefs modernization QEMU steps.
 - **Fast proof:** `bash scripts/test-build-qemu-guest-image.sh`;

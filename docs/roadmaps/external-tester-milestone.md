@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 6
+last_updated: 2026-07-31
+revision: 7
 status: active
 current_result: 0/10
 summary: Outcome tracker for Conary's first cross-distro external tester milestone
@@ -35,23 +35,22 @@ but does not count as a completion.
 
 ## Release Gate
 
-Release candidate `v0.14.0` is the intended pinned tester release. Its release
-gate remains open until `docs/operations/release-artifact-matrix.md` records:
+The publication gate for `v0.14.0` is complete: the
+`docs/operations/release-artifact-matrix.md` records its annotated tag,
+immutable seven-asset release, checksums and GitHub digests, detached CCS
+signature, deployment, self-update endpoint, and three-distro
+released-package proof. Remi `0.9.5` is the current independently verified
+production authority.
 
-- the annotated tag object and reviewed commit;
-- a terminal exact-tag release-build and the complete seven-asset inventory;
-- matching independent checksums and GitHub digests;
-- detached CCS signature, installed-binary, and self-update proof;
-- exact-tag deployment plus independent endpoint and site verification;
-- native RPM, DEB, and Arch installation and the Cartesian lifecycle proof on
-  Fedora 44, Ubuntu 26.04 LTS, and Arch;
-- compatible `remi-v0.9.0` production identity, schema/source/signing state,
-  full health, and a real public converted CCS artifact;
-- explicit signature, SBOM, and provenance status.
+`v0.14.0` is not the pinned tester release, however. Supported-host generation
+bring-up after that immutable tag exposed product defects whose fixes remain
+unreleased on issue #137 and PR #151. A subsequent immutable release must
+contain and independently prove those fixes before this tracker names a pinned
+tester version. No version is assigned in advance.
 
 Release proof is not an external-user completion. The result therefore remains
-0/10, and broad outreach remains postponed by the separate cached-history and
-venue-eligibility gates.
+0/10, and broad outreach remains postponed by the unreleased-fix gate, the W7
+corpus gate, and the separate cached-history and venue-eligibility gates.
 
 Supported tester hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
 Use a disposable VM, snapshot, spare system, or other non-critical host.
