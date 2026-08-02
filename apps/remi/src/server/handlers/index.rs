@@ -6,7 +6,7 @@ use crate::server::conversion::ScriptletPackageMetadata;
 use anyhow::Context;
 use axum::{
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
@@ -292,49 +292,6 @@ fn metadata_with_scriptlets(
             Some(serde_json::Value::Object(object))
         }
     })
-}
-
-/// GET /v1/:distro/metadata.sig
-///
-/// Returns GPG signature for repository metadata.
-pub async fn get_metadata_sig(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Path(distro): Path<String>,
-) -> Response {
-    if let Err(e) = super::validate_supported_distro_route(&distro) {
-        return e;
-    }
-
-    let state = state.read().await;
-    let sig_path = state
-        .config
-        .chunk_dir
-        .parent()
-        .unwrap_or(&state.config.chunk_dir)
-        .join("repo")
-        .join(&distro)
-        .join("metadata.json.sig");
-
-    if !sig_path.exists() {
-        return (StatusCode::NOT_FOUND, "Signature not found").into_response();
-    }
-
-    match tokio::fs::read(&sig_path).await {
-        Ok(sig) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/pgp-signature")
-            .header(header::CACHE_CONTROL, "public, max-age=300")
-            .body(axum::body::Body::from(sig))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
-        Err(e) => {
-            tracing::error!("Failed to read signature: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to read signature",
-            )
-                .into_response()
-        }
-    }
 }
 
 #[cfg(test)]
