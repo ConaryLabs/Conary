@@ -11,6 +11,11 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 
+// Stable Linux UAPI values from <linux/mount.h>. The libc crate does not
+// expose these names on every static target that Conary supports.
+const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
+const MOVE_MOUNT_T_EMPTY_PATH: libc::c_uint = 0x0000_0040;
+
 #[derive(Debug)]
 pub(super) struct TargetDeviceProjection {
     _mountpoint: TargetDeviceMountpoint,
@@ -253,7 +258,7 @@ pub(super) fn attach_device_projection(
             empty.as_ptr(),
             target.as_raw_fd(),
             empty.as_ptr(),
-            libc::MOVE_MOUNT_F_EMPTY_PATH | libc::MOVE_MOUNT_T_EMPTY_PATH,
+            MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
         )
     };
     if result < 0 {
