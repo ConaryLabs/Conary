@@ -476,6 +476,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metadata_signature_route_is_absent_while_owned_routes_remain() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_path = temp.path().join("remi.db");
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        std::fs::create_dir_all(&chunk_dir).unwrap();
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+
+        let state = Arc::new(RwLock::new(
+            ServerState::new(ServerConfig {
+                db_path,
+                chunk_dir,
+                cache_dir,
+                enable_rate_limit: false,
+                enable_audit_log: false,
+                ..ServerConfig::default()
+            })
+            .expect("test server state"),
+        ));
+        let app = create_router(state).await;
+
+        async fn request(app: Router, uri: &str) -> Response {
+            let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 49152))));
+            app.oneshot(request).await.unwrap()
+        }
+
+        let response = request(app.clone(), "/v1/not-supported/metadata.sig").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = request(app.clone(), "/v1/fedora/metadata.sig").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.is_empty(), "removed route must not run a handler");
+
+        let response = request(app.clone(), "/v1/not-supported/metadata").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = request(app, "/v1/not-supported/tuf/root.json").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn test_mcp_route_rejects_unauthenticated_requests() {
         let (app, _db_path) = crate::server::handlers::admin::test_helpers::test_app().await;
 

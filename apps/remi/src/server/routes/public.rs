@@ -55,7 +55,6 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/health/ready", get(readiness_check))
         .route("/v1/federation/directory", get(federation::directory))
         .route("/v1/{distro}/metadata", get(index::get_metadata))
-        .route("/v1/{distro}/metadata.sig", get(index::get_metadata_sig))
         .route("/v1/{distro}/packages/{name}", get(packages::get_package))
         .route(
             "/v1/{distro}/packages/{name}/download",
