@@ -21,6 +21,9 @@ use uuid::Uuid;
 
 const TARGET_SCRIPT_NAME: &str = "scriptlet";
 
+mod device_projection;
+use device_projection::{TargetDeviceProjection, attach_device_projection};
+
 #[derive(Clone, Copy)]
 pub(super) struct ScriptletProcess<'a> {
     pub(super) phase: &'a str,
@@ -42,9 +45,11 @@ pub(super) struct TargetRootScript {
     extra_directories: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
+#[must_use = "the selected-root boundary guard must live until its child process exits"]
 pub(crate) struct TargetExecutionBoundary {
     pub(crate) contract: &'static str,
+    _device_projection: TargetDeviceProjection,
 }
 
 #[derive(Debug, Clone)]
@@ -360,6 +365,9 @@ impl ScriptletExecutor {
 
 /// Attach Conary's closed lifecycle boundary to a child that executes exact
 /// argv inside a materialized selected root.
+///
+/// The returned guard owns transient selected-root mountpoints and must remain
+/// alive until the child exits.
 pub(crate) fn configure_target_command_boundary(
     command: &mut Command,
     root: &Path,
@@ -400,8 +408,11 @@ pub(super) fn configure_target_command_boundary_with_mounts(
     let root = root.to_path_buf();
     let bind_mounts = bind_mounts.to_vec();
     let prepared_boundary = ScriptletBoundary::prepare()?;
+    let device_projection = TargetDeviceProjection::stage(&root)?;
+    let device_projection_plan = device_projection.plan();
     let boundary = TargetExecutionBoundary {
         contract: SCRIPTLET_BOUNDARY_ABI_V2,
+        _device_projection: device_projection,
     };
 
     // Safety: pre_exec runs between fork and exec in the child process.
@@ -419,6 +430,11 @@ pub(super) fn configure_target_command_boundary_with_mounts(
             )
             .map_err(|error| {
                 std::io::Error::other(format!("mount --make-rprivate failed: {error}"))
+            })?;
+            attach_device_projection(&root, device_projection_plan).map_err(|error| {
+                std::io::Error::other(format!(
+                    "failed to project controlled /dev/null into lifecycle root: {error}"
+                ))
             })?;
             for bind in &bind_mounts {
                 nix::mount::mount(
@@ -461,8 +477,11 @@ fn prepared_stdin(content: &[u8]) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::super::{PackageFormat, ScriptletExecutor};
-    use super::ScriptletProcess;
+    use super::{ScriptletProcess, configure_target_command_boundary};
+    use crate::scriptlet::test_support::materialized_root;
+    use std::fs;
     use std::path::Path;
+    use std::process::{Command, Stdio};
 
     #[test]
     fn test_execute_with_chroot_requires_root() {
@@ -540,5 +559,64 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("host root '/'"));
+    }
+
+    #[test]
+    fn rpm_shell_lifecycle_projects_dev_null_without_persisting_a_device_tree() {
+        const TEST_NAME: &str = "scriptlet::process::tests::rpm_shell_lifecycle_projects_dev_null_without_persisting_a_device_tree";
+        const CRYPTO_POLICIES_PRE: &[u8] =
+            br#"# Drop removed javasystem backend; can be dropped in F43
+rm -f "/etc/crypto-policies/back-ends/javasystem.config" 2>/dev/null || :
+# Drop removed openssl backend; can be dropped in F44
+rm -f "/etc/crypto-policies/back-ends/openssl.config" 2>/dev/null || :
+exit 0"#;
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh", "/bin/rm"]) else {
+            return;
+        };
+        assert_eq!(
+            crate::hash::sha256(CRYPTO_POLICIES_PRE),
+            "aabf5a4deffd8880422c0fcf0abc16b0831e78841d104dcdd6e29b0aeaa30d69"
+        );
+        let backends = root.host_path("/etc/crypto-policies/back-ends");
+        fs::create_dir_all(&backends).unwrap();
+        let javasystem = backends.join("javasystem.config");
+        let openssl = backends.join("openssl.config");
+        fs::write(&javasystem, b"stale java policy\n").unwrap();
+        fs::write(&openssl, b"stale openssl policy\n").unwrap();
+
+        let script = root.host_path("/tmp/crypto-policies-pre");
+        fs::write(&script, CRYPTO_POLICIES_PRE).unwrap();
+
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("/tmp/crypto-policies-pre")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_clear()
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        let boundary = configure_target_command_boundary(&mut command, root.path())
+            .expect("prepare selected-root lifecycle boundary");
+        let output = command.output().expect("execute exact Fedora RPM pre body");
+        drop(boundary);
+
+        assert!(
+            output.status.success(),
+            "unexpected status: {:?}",
+            output.status
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "exact Fedora body wrote warnings: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!javasystem.exists(), "stale javasystem backend survived");
+        assert!(!openssl.exists(), "stale openssl backend survived");
+        assert!(
+            !root.host_path("/dev").exists(),
+            "ephemeral device projection leaked into the selected root"
+        );
     }
 }

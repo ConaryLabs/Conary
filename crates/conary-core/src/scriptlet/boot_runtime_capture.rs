@@ -288,11 +288,12 @@ impl BootRuntimeHandler {
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect::<Vec<_>>();
         apply_sanitized_command_env(&mut command, &environment);
-        configure_target_command_boundary(&mut command, &self.root).map_err(|error| {
-            LifecycleBridgeHandlerError::new(format!(
-                "cannot establish selected-root boot provider boundary: {error}"
-            ))
-        })?;
+        let _boundary =
+            configure_target_command_boundary(&mut command, &self.root).map_err(|error| {
+                LifecycleBridgeHandlerError::new(format!(
+                    "cannot establish selected-root boot provider boundary: {error}"
+                ))
+            })?;
         let mut child = command.spawn().map_err(|error| {
             LifecycleBridgeHandlerError::new(format!(
                 "cannot spawn selected-root boot provider {provider}: {error}"

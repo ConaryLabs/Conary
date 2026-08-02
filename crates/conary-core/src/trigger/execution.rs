@@ -46,12 +46,13 @@ impl TriggerExecutor<'_> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        configure_target_command_boundary(&mut command, self.root).map_err(|error| {
-            Error::TriggerError(format!(
-                "Failed to establish selected-root boundary for '{}': {error}",
-                trigger.name
-            ))
-        })?;
+        let _boundary =
+            configure_target_command_boundary(&mut command, self.root).map_err(|error| {
+                Error::TriggerError(format!(
+                    "Failed to establish selected-root boundary for '{}': {error}",
+                    trigger.name
+                ))
+            })?;
         let child = command.spawn().map_err(|e| {
             Error::TriggerError(format!(
                 "Failed to spawn '{}' in selected root {}: {}",
