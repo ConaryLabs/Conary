@@ -22,7 +22,7 @@ use uuid::Uuid;
 const TARGET_SCRIPT_NAME: &str = "scriptlet";
 
 mod device_projection;
-use device_projection::TargetDeviceProjection;
+use device_projection::{TargetDeviceProjection, attach_device_projection};
 
 #[derive(Clone, Copy)]
 pub(super) struct ScriptletProcess<'a> {
@@ -409,8 +409,7 @@ pub(super) fn configure_target_command_boundary_with_mounts(
     let bind_mounts = bind_mounts.to_vec();
     let prepared_boundary = ScriptletBoundary::prepare()?;
     let device_projection = TargetDeviceProjection::stage(&root)?;
-    let device_source = PathBuf::from("/dev/null");
-    let device_target = root.join("dev/null");
+    let device_projection_plan = device_projection.plan();
     let boundary = TargetExecutionBoundary {
         contract: SCRIPTLET_BOUNDARY_ABI_V2,
         _device_projection: device_projection,
@@ -432,14 +431,7 @@ pub(super) fn configure_target_command_boundary_with_mounts(
             .map_err(|error| {
                 std::io::Error::other(format!("mount --make-rprivate failed: {error}"))
             })?;
-            nix::mount::mount(
-                Some(device_source.as_path()),
-                device_target.as_path(),
-                None::<&str>,
-                nix::mount::MsFlags::MS_BIND,
-                None::<&str>,
-            )
-            .map_err(|error| {
+            attach_device_projection(&root, device_projection_plan).map_err(|error| {
                 std::io::Error::other(format!(
                     "failed to project controlled /dev/null into lifecycle root: {error}"
                 ))
