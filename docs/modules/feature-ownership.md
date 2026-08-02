@@ -497,6 +497,9 @@ and export raw/qcow2/ISO carriers.
 `apps/conary/src/commands/state.rs`;
 `apps/conary/src/commands/provenance.rs`;
 `apps/conary/src/commands/provenance/`;
+`packaging/dracut/90conary/module-setup.sh`;
+`packaging/dracut/90conary/conary-init.sh`;
+`packaging/dracut/90conary/conary-generator.sh`;
 `docs/roadmaps/development-roadmap.md`.
 
 **Neighbor systems:** selected-root lifecycle execution, systemd and
@@ -518,6 +521,7 @@ state, image building, bootstrap validation, conaryd route history.
 `crates/conary-core/src/transaction/recovery.rs`;
 `apps/conary/src/commands/generation/*`;
 `packaging/systemd/conary-generation-activation.service`;
+`packaging/dracut/90conary/*`;
 `apps/conary/src/commands/provenance.rs`;
 `apps/conary/src/commands/provenance/*`.
 
@@ -537,6 +541,7 @@ state, image building, bootstrap validation, conaryd route history.
 `cargo test -p conary --lib commands::generation::activation_intents`;
 `cargo test -p conary --lib commands::generation::gc`;
 `cargo test -p conary-core --test db_backup`;
+`cargo test -p conary-core --test generation_composefs_runtime_contract`;
 `cargo test -p conary --test packaged_onboarding`.
 
 **Interaction gate:** `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`;

@@ -22,10 +22,9 @@
 #                           ESP BOOTX64.EFI.
 #   kernel-modules-core     erofs, overlay, iso9660, vfat, and e1000 are
 #                           modules on Fedora 44, not built into kernel-core.
-#   composefs               provides mount.composefs; the dracut module picks
-#                           the helper up with `inst_multiple -o`, so a root
-#                           without it builds an initramfs that fails at
-#                           generation mount with no build-time signal.
+#   composefs               provides mount.composefs; the dracut module requires
+#                           the helper at initramfs build time, so a root
+#                           without it fails before producing a boot carrier.
 #   util-linux-core         also satisfies systemd's
 #                           (util-linux-core or util-linux) rich dependency.
 #   conary-qemu-test-access built and installed by the suite from

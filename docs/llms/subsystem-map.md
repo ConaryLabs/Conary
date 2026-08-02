@@ -120,6 +120,7 @@ commands.
   `crates/conary-core/src/generation/builder/carrier_capabilities.rs`,
   `crates/conary-core/src/generation/artifact.rs`,
   `crates/conary-core/src/generation/export.rs`,
+  `packaging/dracut/90conary/` for the initramfs activation runtime,
   `crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`,
   `crates/conary-core/src/activation/systemd.rs`,
   `crates/conary-core/src/activation/systemd/grammar.rs`,
