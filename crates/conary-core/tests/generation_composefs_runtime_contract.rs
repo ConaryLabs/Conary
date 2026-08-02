@@ -62,6 +62,39 @@ install
         .collect()
 }
 
+fn dracut_install_succeeds_with_missing_tool(module: &Path, missing_tool: &str) -> bool {
+    Command::new("bash")
+        .args([
+            "-c",
+            r#"
+source "$1"
+missing_tool="$2"
+moddir=/contract/conary-dracut-module
+install_conary_script() { :; }
+inst_multiple() {
+    optional=0
+    if [ "${1-}" = "-o" ]; then
+        optional=1
+        shift
+    fi
+    for argument in "$@"; do
+        if [ "$argument" = "$missing_tool" ] && [ "$optional" -eq 0 ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+install
+"#,
+            "dracut-missing-tool-contract",
+        ])
+        .arg(module)
+        .arg(missing_tool)
+        .status()
+        .expect("failed to evaluate a missing-tool dracut contract")
+        .success()
+}
+
 #[test]
 fn composefs_preflight_requires_the_mount_helper_and_overlay_stack() {
     let composefs_rs = fs::read_to_string(core_source("generation/composefs.rs"))
@@ -512,10 +545,19 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
         fs::read_to_string(workspace_file("packaging/dracut/90conary/module-setup.sh"))
             .expect("failed to read conary dracut module setup");
     let dracut_module_path = workspace_file("packaging/dracut/90conary/module-setup.sh");
-    let mandatory_dracut_tools = dracut_inst_multiple_calls(&dracut_module_path)
-        .into_iter()
+    let dracut_tool_calls = dracut_inst_multiple_calls(&dracut_module_path);
+    let mandatory_dracut_tools = dracut_tool_calls
+        .iter()
         .filter(|call| !call.iter().any(|argument| argument == "-o"))
         .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let optional_dracut_tools = dracut_tool_calls
+        .iter()
+        .filter(|call| call.iter().any(|argument| argument == "-o"))
+        .flatten()
+        .filter(|argument| argument.as_str() != "-o")
+        .cloned()
         .collect::<Vec<_>>();
 
     assert!(
@@ -572,6 +614,31 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
     assert!(
         mandatory_dracut_tools.iter().any(|tool| tool == "cp"),
         "the initramfs must carry the copy tool required for readonly config-state seeding"
+    );
+    assert!(
+        mandatory_dracut_tools
+            .iter()
+            .any(|tool| tool == "mount.composefs"),
+        "the initramfs build must fail when the composefs mount helper is unavailable"
+    );
+    assert_eq!(
+        optional_dracut_tools,
+        vec!["blkid"],
+        "only the guarded blkid fallback may remain optional in the Conary initramfs"
+    );
+    assert!(
+        dracut_init.contains("if command -v blkid >/dev/null 2>&1; then"),
+        "an optional blkid include must remain guarded at every runtime use"
+    );
+    for tool in &mandatory_dracut_tools {
+        assert!(
+            !dracut_install_succeeds_with_missing_tool(&dracut_module_path, tool),
+            "the initramfs install must propagate a missing mandatory tool: {tool}"
+        );
+    }
+    assert!(
+        dracut_install_succeeds_with_missing_tool(&dracut_module_path, "blkid"),
+        "the guarded blkid fallback may be absent without rejecting the initramfs"
     );
 
     assert!(

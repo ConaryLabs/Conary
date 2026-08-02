@@ -41,11 +41,12 @@ install() {
         mkdir \
         modprobe \
         mount \
+        mount.composefs \
         readlink \
         rmdir \
         sleep \
-        switch_root
+        switch_root || return 1
+    # conary-init resolves stable /dev/disk links first and guards blkid as a
+    # fallback, so it is the only runtime executable that remains optional.
     inst_multiple -o blkid
-    # Include mount.composefs if available
-    inst_multiple -o mount.composefs
 }
