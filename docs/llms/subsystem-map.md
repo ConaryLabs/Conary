@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 58
-summary: Route exact Remi signing, serialized selected-root mutation, full-adoption captured-root continuity, typed rollback lineage, canonical-map authority, carrier security, typed generation GC, exact release authority, and subsystem proof through current feature owners.
+last_updated: 2026-08-03
+revision: 59
+summary: Route lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -136,7 +136,11 @@ commands.
 - CCS authoring, conversion, native package contracts, and repository feed
   profiles:
   `docs/modules/feature-ownership.md` slugs `ccs`, `packaging`, and `profiles`,
-  plus `docs/modules/ccs.md` and `docs/modules/recipe.md`. Native authoring
+  plus `docs/modules/ccs.md`,
+  `docs/specs/source-package-authority.md`, and `docs/modules/recipe.md`.
+  The source-authority specification owns the W5 lossless RPM, Debian, ALPM,
+  and CCS models plus their resolution, conversion, and transaction
+  projections. Native authoring
   content flow starts in `crates/conary-core/src/ccs/builder.rs`,
   `builder/source.rs`, `policy/content.rs`, and `builder/package_writer.rs`.
   Debian lifecycle
@@ -213,6 +217,7 @@ commands.
 
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
+- [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md) for lossless RPM, Debian, ALPM, and CCS authority plus explicit consumer projections
 - [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md) for authoritative RPM, Debian, and Arch lifecycle ABIs, transaction order, arguments, triggers, and payload visibility
 - [`docs/modules/feature-ownership.md`](../modules/feature-ownership.md) for feature ownership cards, neighboring systems, and interaction verification gates
 - [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands

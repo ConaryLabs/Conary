@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 38
-summary: Describe workspace architecture, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+last_updated: 2026-08-03
+revision: 39
+summary: Describe workspace architecture, source-authority projections, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -172,7 +172,7 @@ crates/conary-core/      Core library crate
     |   +-- rpm.rs       RPM parser
     |   +-- deb.rs       DEB parser
     |   +-- arch.rs      Arch parser
-    |   +-- common.rs    Unified PackageMetadata
+    |   +-- common.rs    Current unified PackageMetadata bridge; W5 removal target
     +-- ccs/             Native package format
     |   +-- builder.rs   CCS package builder
     |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation hub
@@ -313,7 +313,9 @@ This is the primary operation. The flow from
    +-- Download package(s) - parallel via rayon if multiple
    |   +-- For Remi: fetch CCS chunks, assemble package
    |   +-- For foreign formats: download RPM/DEB/Arch package file
-   +-- Parse package metadata into unified PackageMetadata
+   +-- Parse source metadata into the current unified PackageMetadata bridge
+   |   +-- W5 replaces this with lossless RPM, Debian, or ALPM authority
+   |   +-- Explicit fallible projections serve resolution, CCS, and transactions
    +-- Detect package format (magic bytes or extension)
    +-- Convert RPM/DEB/Arch input to source-independent CCS on-the-fly
    +-- Resolve source requirements against the typed host capability inventory
@@ -666,9 +668,16 @@ reverified against the model's explicit `[include].trusted_keys`; unsigned
 collections, missing trust roots, signer-ID mismatches, and stale cache
 metadata fail closed.
 
-**Unified format pipeline**: All package formats (RPM, DEB, Arch) are parsed
-into a common `PackageMetadata` struct. Conversion to the native CCS format
-happens transparently, either on the client or via the Remi server.
+**Source package authority pipeline**: The current parser implementation still
+routes RPM, Debian, and Arch facts through a common `PackageMetadata` bridge.
+That bridge is an active pre-alpha removal target because it conflates exact
+identity, declared capabilities, and format-specific configuration
+declarations before a consumer is known. The W5 contract in
+[`docs/specs/source-package-authority.md`](specs/source-package-authority.md)
+replaces it with lossless format-specific authority and explicit fallible
+projections for dependency resolution, CCS authoring, and native transaction
+planning. Conversion remains transparent to the caller, but normalization is
+owned by the named consumer rather than initial parsing.
 
 **Namespace isolation**: Scriptlets run in Linux containers (mount, PID, IPC,
 UTS namespaces) with resource limits. Capability enforcement uses mandatory

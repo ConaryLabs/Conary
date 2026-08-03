@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 38
-summary: Define source-independent lifecycle, generation activation, and configuration transactions for RPM, Debian, and Arch packages
+last_updated: 2026-08-03
+revision: 39
+summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
 # Foreign Package Lifecycle Contracts
@@ -11,6 +11,12 @@ from RPM, Debian, and Arch packages. The package managers expose finite,
 documented lifecycle ABIs around arbitrary program bodies. Conary models those
 ABIs directly; it does not infer lifecycle meaning from program text or
 delegate execution to the source package manager.
+
+[`source-package-authority.md`](source-package-authority.md) owns the upstream
+package identity, provision, payload-record, and config-declaration models plus
+their fallible projection into this lifecycle and transaction contract. This
+document remains the owner of event order, arguments, installed config state,
+and selected-root execution.
 
 ## Cross-Distro Product Contract
 

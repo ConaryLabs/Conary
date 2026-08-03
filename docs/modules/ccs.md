@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-30
-revision: 57
-summary: Convert foreign packages through typed authoring, host capability, lifecycle, and native export contracts
+last_updated: 2026-08-03
+revision: 58
+summary: Convert foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -357,6 +357,23 @@ CCS sits at the center of Conary's format pipeline. All package formats
 CAS-compatible content (SHA-256 keyed blobs), and the chunking system
 enables delta-efficient distribution via the Remi server.
 
+### Source authority design target
+
+The current parser-to-converter bridge still uses the flattened
+`PackageMetadata`, `ProvidedCapability`, and `ConfigFileInfo` types. W5 removes
+that bridge; new conversion work must not add another consumer to it. The
+canonical target is
+[`docs/specs/source-package-authority.md`](../specs/source-package-authority.md):
+RPM, Debian, and ALPM parsers retain their native ontologies, and named
+fallible projections serve dependency resolution, CCS authoring, and native
+transaction planning. Exact identity is separate from declared capabilities,
+and source config declarations are separate from materialized payload nodes.
+
+Issues #104 and #105 implement that hard cut as sibling slices. Until both
+land, this section describes the active design target rather than shipped CCS
+behavior; [`docs/specs/ccs-format-v2.md`](../specs/ccs-format-v2.md) remains the
+current signed-format contract.
+
 ## Fixture Ownership
 
 The first fixture ownership map for CCS conversion lives in
@@ -663,4 +680,5 @@ component selection; no script-disabling bypass exists, and component names
 do not infer lifecycle ownership.
 
 See also: [docs/specs/ccs-format-v2.md](/docs/specs/ccs-format-v2.md),
+[docs/specs/source-package-authority.md](/docs/specs/source-package-authority.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).
