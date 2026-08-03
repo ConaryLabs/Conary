@@ -46,7 +46,7 @@ pub enum PackagingDiagnosticCode {
     CommandRiskEvidence,
     CookFailed,
     PublishGateFailed,
-    CcsV2ValidationFailed,
+    CcsV3ValidationFailed,
     CcsFormatVersionRejected,
     ProjectPublishPreflightFailed,
     PublishJsonUnsupported,

@@ -105,7 +105,7 @@ pub fn prepare_package_for_batch(
         architecture: pkg.architecture().map(|s| s.to_string()),
         description: pkg.description().map(|s| s.to_string()),
         extracted_files,
-        provides: pkg.provides().to_vec(),
+        provides: pkg.resolution_capabilities()?,
         requirements: pkg.requirements().to_vec(),
         relations: pkg.relations().to_vec(),
         relation_removals: Vec::new(),

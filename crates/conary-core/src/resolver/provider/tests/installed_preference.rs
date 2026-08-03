@@ -10,6 +10,7 @@ fn with_provide(mut identity: PackageIdentity, name: &str) -> PackageIdentity {
         version_relation: None,
         version_scheme: VersionScheme::Rpm,
         architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
     }];
     identity
 }

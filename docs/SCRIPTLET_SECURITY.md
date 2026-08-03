@@ -195,7 +195,7 @@ explicit warning.
 
 ## Signed CCS Hooks
 
-CCS hook declarations are covered by signed CCS v2 authority. Package-scoped
+CCS hook declarations are covered by signed CCS v3 authority. Package-scoped
 pre-install, post-install, and persisted pre-remove hooks are preflighted
 against the selected root.
 

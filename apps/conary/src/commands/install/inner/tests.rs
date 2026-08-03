@@ -42,7 +42,7 @@ struct FakePackage {
     name: String,
     version: String,
     version_scheme: VersionScheme,
-    provides: Vec<conary_core::packages::traits::ProvidedCapability>,
+    provides: Vec<conary_core::repository::dependency_model::ProvidedCapability>,
     files: Vec<PackageFile>,
     extracted_files: Vec<ExtractedFile>,
     config_files: Vec<ConfigFileInfo>,
@@ -133,8 +133,11 @@ impl PackageFormat for FakePackage {
         &[]
     }
 
-    fn provides(&self) -> &[conary_core::packages::traits::ProvidedCapability] {
-        &self.provides
+    fn resolution_capabilities(
+        &self,
+    ) -> conary_core::Result<Vec<conary_core::repository::dependency_model::ProvidedCapability>>
+    {
+        Ok(self.provides.clone())
     }
 
     fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {

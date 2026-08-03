@@ -1,18 +1,18 @@
-// conary-core/src/ccs/v2/validation/config.rs
+// conary-core/src/ccs/v3/validation/config.rs
 
 //! Exact signed configuration and package-policy validation.
 
-use super::super::diagnostics::{V2Diagnostic, V2DiagnosticCode};
-use super::super::schema::{AuthorityDocumentV2, PackageDataV2, PackagePolicyV2};
+use super::super::diagnostics::{V3Diagnostic, V3DiagnosticCode};
+use super::super::schema::{AuthorityDocumentV3, PackageDataV3, PackagePolicyV3};
 
 pub(super) fn validate_package_policy(
-    policy: &PackagePolicyV2,
+    policy: &PackagePolicyV3,
     field: &str,
-    diagnostics: &mut Vec<V2Diagnostic>,
+    diagnostics: &mut Vec<V3Diagnostic>,
 ) {
     if policy.allow_host_mutation {
-        diagnostics.push(V2Diagnostic::error(
-            V2DiagnosticCode::KindContractViolation,
+        diagnostics.push(V3Diagnostic::error(
+            V3DiagnosticCode::KindContractViolation,
             "package requests host mutation that the selected-root installer does not implement",
             Some(format!("{field}.allow_host_mutation")),
             "keep host mutation disabled until a typed transaction consumer exists",
@@ -21,9 +21,9 @@ pub(super) fn validate_package_policy(
 }
 
 pub(super) fn validate_config_authority(
-    data: &PackageDataV2,
-    authority: &AuthorityDocumentV2,
-    diagnostics: &mut Vec<V2Diagnostic>,
+    data: &PackageDataV3,
+    authority: &AuthorityDocumentV3,
+    diagnostics: &mut Vec<V3Diagnostic>,
 ) {
     let source_format = authority
         .lifecycle
@@ -34,8 +34,8 @@ pub(super) fn validate_config_authority(
 
     for config in &data.config {
         if let Err(error) = validate_config_path(&config.path) {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 error,
                 Some("kind.package.config.path".to_string()),
                 "write a canonical absolute config path into signed authority",
@@ -45,8 +45,8 @@ pub(super) fn validate_config_authority(
             .insert(config.path.as_str(), config.semantics)
             .is_some()
         {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!("config path {} is declared more than once", config.path),
                 Some("kind.package.config".to_string()),
                 "write exactly one signed config declaration per path",
@@ -55,8 +55,8 @@ pub(super) fn validate_config_authority(
 
         let semantics = config.semantics;
         if semantics.ghost && semantics.remove_on_upgrade {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} cannot be both ghost and remove-on-upgrade",
                     config.path
@@ -67,8 +67,8 @@ pub(super) fn validate_config_authority(
         }
         if semantics.ghost && source_format != Some(crate::ccs::native_lifecycle::SourceFormat::Rpm)
         {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "ghost config path {} requires signed RPM source authority",
                     config.path
@@ -80,8 +80,8 @@ pub(super) fn validate_config_authority(
         if semantics.remove_on_upgrade
             && source_format != Some(crate::ccs::native_lifecycle::SourceFormat::Deb)
         {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "remove-on-upgrade config path {} requires signed Debian source authority",
                     config.path
@@ -98,8 +98,8 @@ pub(super) fn validate_config_authority(
             .collect::<Vec<_>>();
         if semantics.ghost || semantics.remove_on_upgrade {
             if !matching_files.is_empty() {
-                diagnostics.push(V2Diagnostic::error(
-                    V2DiagnosticCode::KindContractViolation,
+                diagnostics.push(V3Diagnostic::error(
+                    V3DiagnosticCode::KindContractViolation,
                     format!(
                         "config path {} must be absent from payload for its signed semantics",
                         config.path
@@ -112,8 +112,8 @@ pub(super) fn validate_config_authority(
         }
 
         if matching_files.len() != 1 {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} must identify exactly one signed payload file",
                     config.path
@@ -129,8 +129,8 @@ pub(super) fn validate_config_authority(
             crate::payload::PayloadNodeKind::Regular { .. }
                 | crate::payload::PayloadNodeKind::Symlink { .. }
         ) {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} is not a regular file or symlink",
                     config.path
@@ -140,8 +140,8 @@ pub(super) fn validate_config_authority(
             ));
         }
         if file.config != Some(semantics) {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} semantics do not match signed file authority",
                     config.path
@@ -157,8 +157,8 @@ pub(super) fn validate_config_authority(
             continue;
         };
         if config_by_path.get(file.path.as_str()) != Some(&semantics) {
-            diagnostics.push(V2Diagnostic::error(
-                V2DiagnosticCode::KindContractViolation,
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
                 format!(
                     "file {} config semantics have no matching package authority",
                     file.path

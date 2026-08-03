@@ -361,13 +361,15 @@ mod tests {
                 RepositoryProvide {
                     name: "widget-api".to_string(),
                     kind: RepositoryCapabilityKind::Generic,
-                    version: Some("3".to_string()),
+                    version: Some("3.0.0".to_string()),
                     version_relation: Some(
                         crate::repository::dependency_model::ProvideVersionRelation::Equal,
                     ),
                     architecture_qualifier:
                         crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
-                    native_text: Some("widget-api = 3".to_string()),
+                    native_text: Some("widget-api = 3.0.0".to_string()),
+                    provenance:
+                        crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
                 },
             ]
         }
@@ -538,7 +540,7 @@ mod tests {
         }));
         assert!(row.provides.iter().any(|provide| {
             provide.capability == "widget-api"
-                && provide.version.as_deref() == Some("3")
+                && provide.version.as_deref() == Some("3.0.0")
                 && provide.kind == "generic"
         }));
         assert_eq!(row.requirement_groups.len(), 2);

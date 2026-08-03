@@ -191,6 +191,7 @@ fn transaction_identity(package: &PreparedPackage, native_architecture: &str) ->
                 version_relation: provide.version_relation,
                 version_scheme: provide.version_scheme,
                 architecture_qualifier: provide.architecture_qualifier.clone(),
+                provenance: provide.provenance.clone(),
             })
             .collect(),
     }

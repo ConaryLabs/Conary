@@ -170,9 +170,13 @@ crates/conary-core/      Core library crate
     |   +-- path.rs      safe_join, sanitize_filename, sanitize_path
     +-- packages/        Format parsers
     |   +-- rpm.rs       RPM parser
+    |   +-- rpm/authority.rs Lossless RPM identity and declared-capability records
     |   +-- deb.rs       DEB parser
+    |   +-- deb/authority.rs Lossless Debian identity and declared-capability records
     |   +-- arch.rs      Arch parser
-    |   +-- common.rs    Current unified PackageMetadata bridge; W5 removal target
+    |   +-- arch/authority.rs Lossless ALPM identity and declared-capability records
+    |   +-- source_authority.rs Closed format dispatch and consumer projections
+    |   +-- common.rs    Temporary config/lifecycle/payload bridge; #105 removal target
     +-- ccs/             Native package format
     |   +-- builder.rs   CCS package builder
     |   +-- manifest.rs  Root CCS TOML/CBOR manifest schema and validation hub
@@ -313,9 +317,9 @@ This is the primary operation. The flow from
    +-- Download package(s) - parallel via rayon if multiple
    |   +-- For Remi: fetch CCS chunks, assemble package
    |   +-- For foreign formats: download RPM/DEB/Arch package file
-   +-- Parse source metadata into the current unified PackageMetadata bridge
-   |   +-- W5 replaces this with lossless RPM, Debian, or ALPM authority
-   |   +-- Explicit fallible projections serve resolution, CCS, and transactions
+   +-- Parse identity and provisions into lossless RPM, Debian, or ALPM authority
+   |   +-- Explicit fallible projections serve resolution and CCS v3 signing
+   |   +-- #105 removes the remaining common config-declaration bridge
    +-- Detect package format (magic bytes or extension)
    +-- Convert RPM/DEB/Arch input to source-independent CCS on-the-fly
    +-- Resolve source requirements against the typed host capability inventory
@@ -668,16 +672,18 @@ reverified against the model's explicit `[include].trusted_keys`; unsigned
 collections, missing trust roots, signer-ID mismatches, and stale cache
 metadata fail closed.
 
-**Source package authority pipeline**: The current parser implementation still
-routes RPM, Debian, and Arch facts through a common `PackageMetadata` bridge.
-That bridge is an active pre-alpha removal target because it conflates exact
-identity, declared capabilities, and format-specific configuration
-declarations before a consumer is known. The W5 contract in
+**Source package authority pipeline**: RPM, Debian, and Arch parsers retain
+exact identity and declared provisions in format-specific authority records.
+The closed `SourcePackageAuthority` dispatch exposes named, fallible
+projections for dependency resolution and CCS v3 signing; exact identity is
+never recovered from or inserted into the declared-capability list. The
+temporary `PackageMetadata` bridge now carries only configuration, lifecycle,
+and payload facts while issue #105 completes the configuration hard cut. The
+W5 contract in
 [`docs/specs/source-package-authority.md`](specs/source-package-authority.md)
-replaces it with lossless format-specific authority and explicit fallible
-projections for dependency resolution, CCS authoring, and native transaction
-planning. Conversion remains transparent to the caller, but normalization is
-owned by the named consumer rather than initial parsing.
+owns the remaining lossless format-specific authority and consumer boundaries.
+Conversion remains transparent to the caller, but normalization is owned by
+the named consumer rather than initial parsing.
 
 **Namespace isolation**: Scriptlets run in Linux containers (mount, PID, IPC,
 UTS namespaces) with resource limits. Capability enforcement uses mandatory

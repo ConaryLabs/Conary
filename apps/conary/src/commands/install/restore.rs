@@ -63,6 +63,7 @@ impl TargetStateView {
                     version_relation: provide.version_relation,
                     version_scheme: provide.version_scheme,
                     architecture_qualifier: provide.architecture_qualifier,
+                    provenance: provide.provenance,
                 });
             }
         }
@@ -79,19 +80,20 @@ impl TargetStateView {
         Ok(())
     }
 
-    fn add_prepared_install(&mut self, prepared: &PreparedInstall) {
+    fn add_prepared_install(&mut self, prepared: &PreparedInstall) -> Result<()> {
         let version_scheme = prepared.pkg.version_scheme();
         let provided_capabilities = prepared
             .pkg
-            .provides()
-            .iter()
+            .resolution_capabilities()?
+            .into_iter()
             .map(|provide| ProvidedCapability {
                 kind: provide.kind,
-                name: provide.name.clone(),
-                version: provide.version.clone(),
+                name: provide.name,
+                version: provide.version,
                 version_relation: provide.version_relation,
                 version_scheme: provide.version_scheme,
-                architecture_qualifier: provide.architecture_qualifier.clone(),
+                architecture_qualifier: provide.architecture_qualifier,
+                provenance: provide.provenance,
             })
             .collect::<Vec<_>>();
         self.packages.push(package_identity(TargetPackageIdentity {
@@ -104,6 +106,7 @@ impl TargetStateView {
             provided_capabilities,
             installed_trove_id: None,
         }));
+        Ok(())
     }
 }
 
@@ -193,8 +196,8 @@ pub(crate) fn build_target_state_view(
 pub(crate) fn add_prepared_install_to_target_state(
     target_state: &mut TargetStateView,
     prepared: &PreparedInstall,
-) {
-    target_state.add_prepared_install(prepared);
+) -> Result<()> {
+    target_state.add_prepared_install(prepared)
 }
 
 pub(crate) fn validate_prepared_install_dependencies(
@@ -434,7 +437,7 @@ mod tests {
 
     struct FakePackage {
         requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
-        provides: Vec<conary_core::packages::traits::ProvidedCapability>,
+        provides: Vec<conary_core::repository::dependency_model::ProvidedCapability>,
     }
 
     impl PackageFormat for FakePackage {
@@ -472,8 +475,11 @@ mod tests {
             &self.requirements
         }
 
-        fn provides(&self) -> &[conary_core::packages::traits::ProvidedCapability] {
-            &self.provides
+        fn resolution_capabilities(
+            &self,
+        ) -> conary_core::Result<Vec<conary_core::repository::dependency_model::ProvidedCapability>>
+        {
+            Ok(self.provides.clone())
         }
 
         fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
@@ -591,6 +597,8 @@ mod tests {
             version_relation: None,
             version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
             architecture_qualifier: Default::default(),
+            provenance:
+                conary_core::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
         };
         let split = TargetStateView {
             packages: vec![

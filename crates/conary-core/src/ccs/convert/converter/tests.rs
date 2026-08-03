@@ -1,7 +1,7 @@
 // conary-core/src/ccs/convert/converter/tests.rs
 
 use super::*;
-use crate::ccs::v2::PackageKindV2;
+use crate::ccs::v3::PackageKindV3;
 use crate::packages::native_abi::*;
 use crate::packages::traits::{
     ConfigFileInfo, DiagnosticScriptletPhase, ExtractedFile, PackageFile, PackageFormat,
@@ -90,34 +90,56 @@ fn scriptlet_bundle_types_are_publicly_exported() {
 }
 
 fn make_test_metadata() -> PackageMetadata {
-    PackageMetadata {
-        package_path: PathBuf::from("/tmp/test-1.0.0.rpm"),
-        name: "test-package".to_string(),
-        version: "1.0.0".to_string(),
-        version_scheme: crate::repository::versioning::VersionScheme::Rpm,
-        architecture: Some("x86_64".to_string()),
-        debian_multi_arch: None,
-        description: Some("Test package".to_string()),
-        files: vec![PackageFile {
-            path: "/usr/bin/test".to_string(),
-            node: PayloadNode::regular(0o755),
-            content: Some(content_authority(TEST_PAYLOAD)),
-        }],
-        requirements: vec![],
-        provides: vec![],
-        relations: vec![],
-        diagnostic_scriptlet_evidence: Vec::new(),
-        native_scriptlet_abi: vec![rpm_native_entry(
-            "rpm:%pre",
-            "%pre",
-            "getent passwd testuser || useradd -r testuser",
-            RpmScriptletSlot::Pre,
-            NativeLifecyclePath::PreInstall,
-            NativeTransactionPosition::BeforePayload,
-            NativeScriptletSupport::Parsed,
-        )],
-        config_files: vec![],
-    }
+    let mut metadata = PackageMetadata::new(
+        PathBuf::from("/tmp/test-1.0.0.rpm"),
+        "test-package".to_string(),
+        "1.0.0".to_string(),
+        crate::repository::versioning::VersionScheme::Rpm,
+    );
+    set_test_identity(
+        &mut metadata,
+        "test-package",
+        "1.0.0",
+        crate::repository::versioning::VersionScheme::Rpm,
+        Some("x86_64"),
+        None,
+    );
+    metadata.description = Some("Test package".to_string());
+    metadata.files = vec![PackageFile {
+        path: "/usr/bin/test".to_string(),
+        node: PayloadNode::regular(0o755),
+        content: Some(content_authority(TEST_PAYLOAD)),
+    }];
+    metadata.native_scriptlet_abi = vec![rpm_native_entry(
+        "rpm:%pre",
+        "%pre",
+        "getent passwd testuser || useradd -r testuser",
+        RpmScriptletSlot::Pre,
+        NativeLifecyclePath::PreInstall,
+        NativeTransactionPosition::BeforePayload,
+        NativeScriptletSupport::Parsed,
+    )];
+    metadata
+}
+
+fn set_test_identity(
+    metadata: &mut PackageMetadata,
+    name: &str,
+    version: &str,
+    version_scheme: crate::repository::versioning::VersionScheme,
+    architecture: Option<&str>,
+    debian_multi_arch: Option<crate::repository::dependency_model::DebianMultiArch>,
+) {
+    metadata.source_authority = crate::packages::source_authority::SourcePackageAuthority::Ccs(
+        crate::packages::source_authority::CcsPackageAuthority {
+            name: name.to_string(),
+            version: version.to_string(),
+            version_scheme,
+            architecture: architecture.map(str::to_string),
+            debian_multi_arch,
+            capabilities: Vec::new(),
+        },
+    );
 }
 
 fn make_test_files() -> Vec<ExtractedFile> {
@@ -299,7 +321,7 @@ fn conversion_result_embeds_native_lifecycle_bundle() {
         .native_lifecycle
         .as_ref()
         .unwrap();
-    assert_eq!(bundle.source_package, metadata.name);
+    assert_eq!(bundle.source_package, metadata.name());
     assert_eq!(
         result
             .native_lifecycle
@@ -345,7 +367,7 @@ fn conversion_preserves_strong_source_order_in_signed_ccs_authority() {
     );
     assert_eq!(package.requirements(), metadata.requirements);
     assert_eq!(
-        package.v2_authority().unwrap().requirements,
+        package.v3_authority().unwrap().requirements,
         metadata.requirements
     );
 }
@@ -355,7 +377,14 @@ fn arch_install_conversion_requires_exact_source_profile() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut metadata = make_test_metadata();
     metadata.package_path = PathBuf::from("/tmp/test-1.0.0.pkg.tar.zst");
-    metadata.version_scheme = crate::repository::versioning::VersionScheme::Arch;
+    set_test_identity(
+        &mut metadata,
+        "test-package",
+        "1.0.0",
+        crate::repository::versioning::VersionScheme::Arch,
+        Some("x86_64"),
+        None,
+    );
     metadata.diagnostic_scriptlet_evidence.clear();
     metadata.native_scriptlet_abi = vec![arch_install_function_entry(
         "post_install",
@@ -492,11 +521,14 @@ fn conversion_preserves_exact_source_architecture_tokens_in_signed_identity() {
         ),
     ] {
         let mut metadata = make_test_metadata();
-        metadata.name = name.to_string();
-        metadata.version = "1".to_string();
-        metadata.version_scheme = scheme;
-        metadata.architecture = Some(architecture.to_string());
-        metadata.debian_multi_arch = multi_arch;
+        set_test_identity(
+            &mut metadata,
+            name,
+            "1",
+            scheme,
+            Some(architecture),
+            multi_arch,
+        );
         metadata.native_scriptlet_abi.clear();
         metadata.diagnostic_scriptlet_evidence.clear();
 
@@ -509,7 +541,7 @@ fn conversion_preserves_exact_source_architecture_tokens_in_signed_identity() {
             )
             .unwrap();
         let package = verified_converted_package(&result);
-        let identity = &package.v2_authority().unwrap().identity;
+        let identity = &package.v3_authority().unwrap().identity;
         assert_eq!(identity.version_scheme, scheme);
         assert_eq!(identity.architecture.as_deref(), Some(architecture));
         assert_eq!(identity.debian_multi_arch, multi_arch);
@@ -521,7 +553,14 @@ fn conversion_rejects_missing_source_architecture_authority() {
     let temp_dir = tempfile::tempdir().unwrap();
     let converter = passive_test_converter(temp_dir.path());
     let mut metadata = make_test_metadata();
-    metadata.architecture = None;
+    set_test_identity(
+        &mut metadata,
+        "test-package",
+        "1.0.0",
+        crate::repository::versioning::VersionScheme::Rpm,
+        None,
+        None,
+    );
 
     let error = converter
         .convert_in_memory_for_test(
@@ -535,7 +574,7 @@ fn conversion_rejects_missing_source_architecture_authority() {
     assert!(matches!(
         error,
         ConversionError::BuildError(message)
-            if message.contains("v2 package identity architecture is required")
+            if message.contains("v3 package identity architecture is required")
     ));
 }
 
@@ -582,8 +621,8 @@ fn converted_rpm_preserves_exact_config_and_ghost_authority() {
 
     assert_eq!(package.config_files(), metadata.config_files);
     assert_eq!(package.manifest().config.files, metadata.config_files);
-    let authority = package.v2_authority().unwrap();
-    let PackageKindV2::Package(data) = &authority.kind else {
+    let authority = package.v3_authority().unwrap();
+    let PackageKindV3::Package(data) = &authority.kind else {
         panic!("converted package did not carry package authority");
     };
     assert_eq!(data.config.len(), 2);
@@ -606,9 +645,14 @@ fn converted_rpm_preserves_exact_config_and_ghost_authority() {
 fn converted_deb_preserves_remove_on_upgrade_without_inventing_payload() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut metadata = make_test_metadata();
-    metadata.version_scheme = crate::repository::versioning::VersionScheme::Debian;
-    metadata.architecture = Some("amd64".to_string());
-    metadata.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
+    set_test_identity(
+        &mut metadata,
+        "test-package",
+        "1.0.0",
+        crate::repository::versioning::VersionScheme::Debian,
+        Some("amd64"),
+        Some(crate::repository::dependency_model::DebianMultiArch::No),
+    );
     metadata.native_scriptlet_abi.clear();
     metadata.config_files = vec![ConfigFileInfo {
         path: "/etc/test-package.retired".to_string(),
@@ -642,7 +686,14 @@ fn conversion_boundary_records_foreign_scriptlet_command_risk() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut metadata = make_test_metadata();
     metadata.package_path = PathBuf::from("/tmp/test-1.0.0.pkg.tar.zst");
-    metadata.version_scheme = crate::repository::versioning::VersionScheme::Arch;
+    set_test_identity(
+        &mut metadata,
+        "test-package",
+        "1.0.0",
+        crate::repository::versioning::VersionScheme::Arch,
+        Some("x86_64"),
+        None,
+    );
     metadata.diagnostic_scriptlet_evidence.clear();
     metadata.native_scriptlet_abi = vec![arch_install_function_entry(
         "post_install",
@@ -712,7 +763,7 @@ fn converted_ccs_archive_round_trip_preserves_native_lifecycle_bundle() {
     let archive = crate::ccs::archive_reader::inspect_untrusted_ccs_archive(file).unwrap();
     let bundle = archive.manifest.native_lifecycle.as_ref().unwrap();
 
-    assert_eq!(bundle.source_package, metadata.name);
+    assert_eq!(bundle.source_package, metadata.name());
     bundle.validate().unwrap();
 }
 

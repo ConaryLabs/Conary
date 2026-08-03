@@ -46,7 +46,7 @@ pub async fn cmd_ccs_install(
     let verification = verify::verify_package(package_path, &trust_policy)
         .context("CCS package authority verification failed")?;
     println!(
-        "Verified signed CCS v2 authority ({} payload files)",
+        "Verified signed CCS v3 authority ({} payload files)",
         verification.files_checked()
     );
 

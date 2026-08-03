@@ -182,7 +182,7 @@ impl ConversionService {
         let package_architecture = repo_pkg
             .architecture
             .clone()
-            .or_else(|| metadata.architecture.clone())
+            .or_else(|| metadata.architecture().map(str::to_string))
             .ok_or_else(|| anyhow!("converted package has no exact architecture identity"))?;
         let ccs_filename = format!("{}.ccs", content_hash.as_str());
         let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
@@ -194,8 +194,8 @@ impl ConversionService {
 
         let mut converted = ConvertedPackage::new_repository(
             source_profile.clone(),
-            metadata.name.clone(),
-            metadata.version.clone(),
+            metadata.name().to_string(),
+            metadata.version().to_string(),
             package_architecture.clone(),
             format.to_string(),
             original_checksum.clone(),
@@ -262,13 +262,15 @@ impl ConversionService {
 
         info!(
             "Recorded conversion in database (source_profile={}, name={}, version={})",
-            source_profile, metadata.name, metadata.version
+            source_profile,
+            metadata.name(),
+            metadata.version()
         );
 
         let scriptlet_summary = converted.scriptlet_summary()?;
         Ok(ServerConversionResult {
-            name: metadata.name,
-            version: metadata.version,
+            name: metadata.name().to_string(),
+            version: metadata.version().to_string(),
             source_profile: Some(source_profile),
             chunk_hashes,
             total_size,

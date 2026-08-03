@@ -1,8 +1,8 @@
-// conary-core/src/ccs/v2/authoring.rs
+// conary-core/src/ccs/v3/authoring.rs
 
 use super::schema::*;
 use crate::ccs::builder::BuildResult;
-use crate::ccs::v2::PackageKindTagV2;
+use crate::ccs::v3::PackageKindTagV3;
 use crate::repository::dependency_model::RepositoryRequirementGroup;
 use crate::repository::versioning::VersionScheme;
 use anyhow::{Result, bail};
@@ -38,7 +38,7 @@ pub struct AuthoringFinding {
     pub blocks_publish: bool,
 }
 
-pub fn lint_manifest_for_v2_authoring(
+pub fn lint_manifest_for_v3_authoring(
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Vec<AuthoringFinding> {
     let mut findings = Vec::new();
@@ -48,7 +48,7 @@ pub fn lint_manifest_for_v2_authoring(
             bucket: AuthoringFindingBucket::Contract,
             severity: AuthoringFindingSeverity::Error,
             field: Some("package.release"),
-            message: "v2 package authoring requires package.release".to_string(),
+            message: "v3 package authoring requires package.release".to_string(),
             suggestion: "add release = \"1\" under [package]",
             blocks_build: true,
             blocks_local_test: true,
@@ -67,7 +67,7 @@ pub fn lint_manifest_for_v2_authoring(
             bucket: AuthoringFindingBucket::Contract,
             severity: AuthoringFindingSeverity::Error,
             field: Some("package.platform.arch"),
-            message: "v2 package authoring requires exact architecture authority".to_string(),
+            message: "v3 package authoring requires exact architecture authority".to_string(),
             suggestion: "set arch = \"noarch\" under [package.platform] for an architecture-independent Conary package, or use the exact target architecture token",
             blocks_build: true,
             blocks_local_test: true,
@@ -80,7 +80,7 @@ pub fn lint_manifest_for_v2_authoring(
             bucket: AuthoringFindingBucket::Contract,
             severity: AuthoringFindingSeverity::Error,
             field: Some("components.default"),
-            message: "v2 package authoring requires exactly one non-empty default component name"
+            message: "v3 package authoring requires exactly one non-empty default component name"
                 .to_string(),
             suggestion: "set [components].default = [\"runtime\"]",
             blocks_build: true,
@@ -94,15 +94,15 @@ pub fn lint_manifest_for_v2_authoring(
     findings
 }
 
-pub struct V2AuthoringInput<'a> {
+pub struct V3AuthoringInput<'a> {
     pub build: &'a BuildResult,
     pub local_dev: bool,
     pub debug_toml: Option<String>,
 }
 
-impl std::fmt::Debug for V2AuthoringInput<'_> {
+impl std::fmt::Debug for V3AuthoringInput<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("V2AuthoringInput")
+        f.debug_struct("V3AuthoringInput")
             .field("local_dev", &self.local_dev)
             .field("debug_toml", &self.debug_toml.as_ref().map(|_| "<toml>"))
             .finish_non_exhaustive()
@@ -110,18 +110,18 @@ impl std::fmt::Debug for V2AuthoringInput<'_> {
 }
 
 #[derive(Debug)]
-pub struct ProjectedV2Package {
-    pub authority: AuthorityDocumentV2,
+pub struct ProjectedV3Package {
+    pub authority: AuthorityDocumentV3,
     pub payloads: Vec<crate::packages::payload::PackagePayloadFile>,
     pub debug_toml: Option<String>,
 }
 
-pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<ProjectedV2Package> {
+pub fn project_build_result_to_v3(input: V3AuthoringInput<'_>) -> Result<ProjectedV3Package> {
     validate_payload_sources(input.build)?;
     let payloads = input.build.payloads.clone();
     let debug_toml = input.debug_toml.clone();
-    let authority = project_build_result_authority_to_v2(input)?;
-    Ok(ProjectedV2Package {
+    let authority = project_build_result_authority_to_v3(input)?;
+    Ok(ProjectedV3Package {
         authority,
         payloads,
         debug_toml,
@@ -129,14 +129,14 @@ pub fn project_build_result_to_v2(input: V2AuthoringInput<'_>) -> Result<Project
 }
 
 /// Project signed metadata without reassembling whole-file payload bytes.
-pub fn project_build_result_authority_to_v2(
-    input: V2AuthoringInput<'_>,
-) -> Result<AuthorityDocumentV2> {
+pub fn project_build_result_authority_to_v3(
+    input: V3AuthoringInput<'_>,
+) -> Result<AuthorityDocumentV3> {
     let package = &input.build.manifest.package;
     let release = package.release.as_str();
     let kind = package.kind;
-    if kind != PackageKindTagV2::Package {
-        bail!("M4b only supports package authoring for v2 build");
+    if kind != PackageKindTagV3::Package {
+        bail!("M4b only supports package authoring for v3 build");
     }
 
     let config_authority = config_authority_for_manifest(&input.build.manifest, input.build)?;
@@ -146,18 +146,18 @@ pub fn project_build_result_authority_to_v2(
         .build
         .files
         .iter()
-        .map(|file| FileAuthorityV2 {
+        .map(|file| FileAuthorityV3 {
             path: file.path.clone(),
             node: file.node.clone(),
             content: file.content.clone(),
             component: file.component.clone(),
             config: config_authority.get(&file.path).copied(),
-            conflict: ConflictPolicyV2::Error,
+            conflict: ConflictPolicyV3::Error,
         })
         .collect::<Vec<_>>();
     let config = config_authority
         .iter()
-        .map(|(path, semantics)| ConfigAuthorityV2 {
+        .map(|(path, semantics)| ConfigAuthorityV3 {
             path: path.clone(),
             semantics: *semantics,
         })
@@ -171,7 +171,7 @@ pub fn project_build_result_authority_to_v2(
         .map(|(name, component)| {
             (
                 name.clone(),
-                ComponentAuthorityV2 {
+                ComponentAuthorityV3 {
                     name: name.clone(),
                     default: name == &default_component,
                     file_count: component.files.len() as u32,
@@ -183,7 +183,7 @@ pub fn project_build_result_authority_to_v2(
     if components.is_empty() {
         components.insert(
             default_component.clone(),
-            ComponentAuthorityV2 {
+            ComponentAuthorityV3 {
                 name: default_component,
                 default: true,
                 file_count: 0,
@@ -225,9 +225,9 @@ pub fn project_build_result_authority_to_v2(
         .and_then(|provenance| provenance.foreign_conversion_boundary.as_ref())
         .map(crate::ccs::attestation::canonical_json_hash)
         .transpose()?;
-    let authority = AuthorityDocumentV2 {
-        format_version: FORMAT_VERSION_V2,
-        identity: PackageIdentityV2 {
+    let authority = AuthorityDocumentV3 {
+        format_version: FORMAT_VERSION_V3,
+        identity: PackageIdentityV3 {
             name: package.name.clone(),
             version: package.version.clone(),
             version_scheme: package.version_scheme,
@@ -241,21 +241,21 @@ pub fn project_build_result_authority_to_v2(
                 .platform
                 .as_ref()
                 .map(|platform| platform.os.clone()),
-            kind: PackageKindTagV2::Package,
+            kind: PackageKindTagV3::Package,
         },
-        kind: PackageKindV2::Package(PackageDataV2 {
+        kind: PackageKindV3::Package(PackageDataV3 {
             files,
             config,
-            policy: PackagePolicyV2::default(),
+            policy: PackagePolicyV3::default(),
         }),
-        provides: project_provides(&input.build.manifest),
+        provided_capabilities: project_manifest_capabilities(&input.build.manifest),
         requirements: project_requirements(&input.build.manifest),
         relations: input.build.manifest.relations.clone(),
-        capabilities: input.build.manifest.capabilities.clone(),
+        execution_capabilities: input.build.manifest.capabilities.clone(),
         file_capabilities,
         components,
         lifecycle,
-        provenance: ProvenanceAuthorityV2 {
+        provenance: ProvenanceAuthorityV3 {
             origin_class: manifest_provenance
                 .and_then(|provenance| provenance.origin_class.clone())
                 .or_else(|| Some("native-built".to_string())),
@@ -277,43 +277,40 @@ pub fn project_build_result_authority_to_v2(
     Ok(authority)
 }
 
-fn project_provides(manifest: &crate::ccs::manifest::CcsManifest) -> Vec<ProvidedCapabilityV2> {
+fn project_manifest_capabilities(
+    manifest: &crate::ccs::manifest::CcsManifest,
+) -> Vec<ProvidedCapabilityV3> {
     let scheme = manifest.package.version_scheme;
-    let mut entries = vec![provided_capability(
-        DependencyKindV2::Package,
-        &manifest.package.name,
-        Some(&manifest.package.version),
-        scheme,
-    )];
+    let mut entries = Vec::new();
     entries.extend(
         manifest
             .provides
             .capabilities
             .iter()
-            .map(|name| provided_capability(DependencyKindV2::Capability, name, None, scheme)),
+            .map(|name| provided_capability(DependencyKindV3::Capability, name, None, scheme)),
     );
     entries.extend(
         manifest
             .provides
             .sonames
             .iter()
-            .map(|name| provided_capability(DependencyKindV2::Soname, name, None, scheme)),
+            .map(|name| provided_capability(DependencyKindV3::Soname, name, None, scheme)),
     );
     entries.extend(
         manifest
             .provides
             .binaries
             .iter()
-            .map(|name| provided_capability(DependencyKindV2::Binary, name, None, scheme)),
+            .map(|name| provided_capability(DependencyKindV3::Binary, name, None, scheme)),
     );
     entries.extend(
         manifest
             .provides
             .pkgconfig
             .iter()
-            .map(|name| provided_capability(DependencyKindV2::PkgConfig, name, None, scheme)),
+            .map(|name| provided_capability(DependencyKindV3::PkgConfig, name, None, scheme)),
     );
-    sort_and_deduplicate_provides(entries)
+    sort_and_deduplicate_capabilities(entries)
 }
 
 pub(super) fn project_requirements(
@@ -329,12 +326,12 @@ pub(super) fn project_requirements(
 }
 
 fn provided_capability(
-    kind: DependencyKindV2,
+    kind: DependencyKindV3,
     name: &str,
     provider_version: Option<&str>,
     version_scheme: VersionScheme,
-) -> ProvidedCapabilityV2 {
-    ProvidedCapabilityV2 {
+) -> ProvidedCapabilityV3 {
+    ProvidedCapabilityV3 {
         kind,
         name: name.to_string(),
         provider_version: provider_version.map(str::to_string),
@@ -342,12 +339,15 @@ fn provided_capability(
             .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
         version_scheme,
         architecture_qualifier: Default::default(),
+        provenance: crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
         target: None,
         component: None,
     }
 }
 
-fn sort_and_deduplicate_provides(entries: Vec<ProvidedCapabilityV2>) -> Vec<ProvidedCapabilityV2> {
+fn sort_and_deduplicate_capabilities(
+    entries: Vec<ProvidedCapabilityV3>,
+) -> Vec<ProvidedCapabilityV3> {
     let mut keyed = BTreeMap::new();
     for entry in entries {
         let key = (
@@ -366,22 +366,22 @@ fn sort_and_deduplicate_provides(entries: Vec<ProvidedCapabilityV2>) -> Vec<Prov
     keyed.into_values().collect()
 }
 
-fn dependency_kind_order(kind: DependencyKindV2) -> u8 {
+fn dependency_kind_order(kind: DependencyKindV3) -> u8 {
     match kind {
-        DependencyKindV2::Package => 0,
-        DependencyKindV2::Capability => 1,
-        DependencyKindV2::File => 2,
-        DependencyKindV2::Path => 3,
-        DependencyKindV2::Binary => 4,
-        DependencyKindV2::Soname => 5,
-        DependencyKindV2::PkgConfig => 6,
+        DependencyKindV3::Package => 0,
+        DependencyKindV3::Capability => 1,
+        DependencyKindV3::File => 2,
+        DependencyKindV3::Path => 3,
+        DependencyKindV3::Binary => 4,
+        DependencyKindV3::Soname => 5,
+        DependencyKindV3::PkgConfig => 6,
     }
 }
 
 fn config_authority_for_manifest(
     manifest: &crate::ccs::manifest::CcsManifest,
     build: &BuildResult,
-) -> Result<BTreeMap<String, ConfigSemanticsV2>> {
+) -> Result<BTreeMap<String, ConfigSemanticsV3>> {
     let build_paths = build
         .files
         .iter()
@@ -405,7 +405,7 @@ fn config_authority_for_manifest(
                 config.path
             );
         }
-        let semantics = ConfigSemanticsV2 {
+        let semantics = ConfigSemanticsV3 {
             noreplace: config.noreplace,
             ghost: config.ghost,
             remove_on_upgrade: config.remove_on_upgrade,
@@ -449,11 +449,11 @@ fn file_capability_authority_for_manifest(
 fn select_default_component(build: &BuildResult) -> Result<String> {
     let manifest_defaults = &build.manifest.components.default;
     if manifest_defaults.len() != 1 || manifest_defaults[0].trim().is_empty() {
-        bail!("v2 package authoring requires exactly one named default component");
+        bail!("v3 package authoring requires exactly one named default component");
     }
     let default_component = manifest_defaults[0].clone();
     if !build.components.is_empty() && !build.components.contains_key(&default_component) {
-        bail!("v2 package default component '{default_component}' is not present in build output");
+        bail!("v3 package default component '{default_component}' is not present in build output");
     }
     Ok(default_component)
 }

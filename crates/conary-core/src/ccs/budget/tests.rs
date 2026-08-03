@@ -2,22 +2,22 @@
 
 use super::*;
 use crate::ccs::manifest::FileCapability;
-use crate::ccs::v2::schema::{
-    ComponentAuthorityV2, ConfigAuthorityV2, ConfigSemanticsV2, ConflictPolicyV2,
-    LifecycleScriptExecutionV2, LifecycleScriptV2, PackageDataV2,
+use crate::ccs::v3::schema::{
+    ComponentAuthorityV3, ConfigAuthorityV3, ConfigSemanticsV3, ConflictPolicyV3,
+    LifecycleScriptExecutionV3, LifecycleScriptV3, PackageDataV3,
 };
 use crate::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadTimestamp};
 use std::collections::BTreeMap;
 
-fn package_data(authority: &mut AuthorityDocumentV2) -> &mut PackageDataV2 {
-    let PackageKindV2::Package(data) = &mut authority.kind else {
+fn package_data(authority: &mut AuthorityDocumentV3) -> &mut PackageDataV3 {
+    let PackageKindV3::Package(data) = &mut authority.kind else {
         panic!("fixture must be a package");
     };
     data
 }
 
-fn file_at(path: &str) -> FileAuthorityV2 {
-    FileAuthorityV2 {
+fn file_at(path: &str) -> FileAuthorityV3 {
+    FileAuthorityV3 {
         path: path.to_string(),
         node: PayloadNode::regular(0o644),
         content: Some(PayloadContentAuthority {
@@ -26,15 +26,15 @@ fn file_at(path: &str) -> FileAuthorityV2 {
         }),
         component: "main".to_string(),
         config: None,
-        conflict: ConflictPolicyV2::Error,
+        conflict: ConflictPolicyV3::Error,
     }
 }
 
-fn with_files(name: &str, count: usize, path_of: impl Fn(usize) -> String) -> AuthorityDocumentV2 {
-    let mut authority = AuthorityDocumentV2::empty_package_for_tests(name);
+fn with_files(name: &str, count: usize, path_of: impl Fn(usize) -> String) -> AuthorityDocumentV3 {
+    let mut authority = AuthorityDocumentV3::empty_package_for_tests(name);
     authority.components.insert(
         "main".to_string(),
-        ComponentAuthorityV2 {
+        ComponentAuthorityV3 {
             name: "main".to_string(),
             default: true,
             file_count: count as u32,
@@ -100,7 +100,7 @@ fn file_authority_fixed_bytes_is_an_upper_bound() {
     ];
 
     for kind in variants {
-        let file = FileAuthorityV2 {
+        let file = FileAuthorityV3 {
             path: String::new(),
             node: PayloadNode {
                 kind,
@@ -118,12 +118,12 @@ fn file_authority_fixed_bytes_is_an_upper_bound() {
                 size: u64::MAX,
             }),
             component: String::new(),
-            config: Some(ConfigSemanticsV2 {
+            config: Some(ConfigSemanticsV3 {
                 noreplace: true,
                 ghost: true,
                 remove_on_upgrade: true,
             }),
-            conflict: ConflictPolicyV2::Replace,
+            conflict: ConflictPolicyV3::Replace,
         };
         let encoded = encoded_len(&file, "file").unwrap();
         assert!(
@@ -250,7 +250,7 @@ fn every_structural_dimension_fails_one_over_its_own_limit() {
     for index in 0..=CCS_BUDGET.max_components {
         authority.components.insert(
             format!("c{index}"),
-            ComponentAuthorityV2 {
+            ComponentAuthorityV3 {
                 name: format!("c{index}"),
                 default: false,
                 file_count: 0,
@@ -283,12 +283,12 @@ fn every_structural_dimension_fails_one_over_its_own_limit() {
 
     // Lifecycle script body.
     authority = with_files("script", 1, |index| format!("/f{index}"));
-    authority.lifecycle.post_install = Some(LifecycleScriptV2 {
+    authority.lifecycle.post_install = Some(LifecycleScriptV3 {
         interpreter: "/bin/sh".to_string(),
         body: "x".repeat(CCS_BUDGET.max_script_body_bytes as usize + 1),
         capabilities: Vec::new(),
         reversible: None,
-        execution: LifecycleScriptExecutionV2::SandboxedTargetRoot,
+        execution: LifecycleScriptExecutionV3::SandboxedTargetRoot,
     });
     assert_eq!(
         CCS_BUDGET
@@ -312,7 +312,7 @@ fn near_limit_values_on_each_dimension_stay_admissible() {
     package_data(&mut authority).files[2].component = widest_component.clone();
     authority.components.insert(
         widest_component.clone(),
-        ComponentAuthorityV2 {
+        ComponentAuthorityV3 {
             name: widest_component,
             default: false,
             file_count: 1,
@@ -323,9 +323,9 @@ fn near_limit_values_on_each_dimension_stay_admissible() {
     for index in 0..CCS_BUDGET.max_xattrs_per_node {
         xattrs.insert(format!("user.x{index}"), vec![0_u8; 8]);
     }
-    package_data(&mut authority).config = vec![ConfigAuthorityV2 {
+    package_data(&mut authority).config = vec![ConfigAuthorityV3 {
         path: "/etc/near-limit.conf".to_string(),
-        semantics: ConfigSemanticsV2 {
+        semantics: ConfigSemanticsV3 {
             noreplace: true,
             ghost: false,
             remove_on_upgrade: false,
@@ -343,7 +343,7 @@ fn near_limit_values_on_each_dimension_stay_admissible() {
 
 #[test]
 fn signed_file_capabilities_are_structurally_budgeted() {
-    let mut authority = AuthorityDocumentV2::package_for_tests("file-capable-budget");
+    let mut authority = AuthorityDocumentV3::package_for_tests("file-capable-budget");
     authority.file_capabilities = vec![FileCapability {
         path: "/usr/bin/hello".to_string(),
         capabilities: vec!["cap_net_bind_service".to_string()],

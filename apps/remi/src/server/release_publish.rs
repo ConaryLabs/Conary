@@ -251,16 +251,15 @@ mod tests {
     use axum::http::{Method, Request};
     use conary_core::ccs::attestation::{
         BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, BuildOutputIdentity,
-        canonical_json_hash, compute_v2_content_identity, compute_v2_file_merkle_root,
+        canonical_json_hash, compute_v3_content_identity, compute_v3_file_merkle_root,
         sign_build_attestation,
     };
-    use conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
+    use conary_core::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
     use conary_core::ccs::signing::SigningKeyPair;
-    use conary_core::ccs::v2::schema::{
-        AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
-        FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-        PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2,
-        ProvidedCapabilityV2,
+    use conary_core::ccs::v3::schema::{
+        AuthorityDocumentV3, ComponentAuthorityV3, ConflictPolicyV3, FORMAT_VERSION_V3,
+        FileAuthorityV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3, PackageKindTagV3,
+        PackageKindV3, PackagePolicyV3, ProvenanceAuthorityV3,
     };
     use conary_core::db::schema;
     use conary_core::payload::{PayloadContentAuthority, PayloadNode};
@@ -513,10 +512,10 @@ mod tests {
             "1.0.0",
             "1",
             b"service payload",
-            LifecycleAuthorityV2 {
-                services: vec![conary_core::ccs::v2::schema::LifecycleServiceV2 {
+            LifecycleAuthorityV3 {
+                services: vec![conary_core::ccs::v3::schema::LifecycleServiceV3 {
                     name: "conary-example.service".to_string(),
-                    action: conary_core::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+                    action: conary_core::ccs::v3::schema::LifecycleServiceActionV3::Restart,
                     reversible: None,
                 }],
                 ..Default::default()
@@ -546,10 +545,10 @@ mod tests {
             "1.0.0",
             "1",
             b"service payload",
-            LifecycleAuthorityV2 {
-                services: vec![conary_core::ccs::v2::schema::LifecycleServiceV2 {
+            LifecycleAuthorityV3 {
+                services: vec![conary_core::ccs::v3::schema::LifecycleServiceV3 {
                     name: "other.service".to_string(),
-                    action: conary_core::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+                    action: conary_core::ccs::v3::schema::LifecycleServiceActionV3::Restart,
                     reversible: None,
                 }],
                 ..Default::default()
@@ -713,21 +712,6 @@ mod tests {
         attested_release_artifact_with_release(signer, name, version, "1", b"release payload")
     }
 
-    fn exact_self_provider(name: &str, version: &str) -> ProvidedCapabilityV2 {
-        ProvidedCapabilityV2 {
-            kind: DependencyKindV2::Package,
-            name: name.to_string(),
-            provider_version: Some(version.to_string()),
-            version_relation: Some(
-                conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
-            ),
-            version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
-            architecture_qualifier: Default::default(),
-            target: None,
-            component: None,
-        }
-    }
-
     fn attested_release_artifact_with_release(
         signer: &SigningKeyPair,
         name: &str,
@@ -741,7 +725,7 @@ mod tests {
             version,
             release,
             payload,
-            LifecycleAuthorityV2::default(),
+            LifecycleAuthorityV3::default(),
         )
     }
 
@@ -751,7 +735,7 @@ mod tests {
         version: &str,
         release: &str,
         payload: &[u8],
-        lifecycle: LifecycleAuthorityV2,
+        lifecycle: LifecycleAuthorityV3,
     ) -> TestArtifact {
         let temp = tempfile::tempdir().unwrap();
         let evidence = sample_hermetic_evidence_for_tests(name, version);
@@ -759,9 +743,9 @@ mod tests {
         let payload_path = "/usr/share/payload".to_string();
         let payload_hash = conary_core::hash::sha256(payload);
         let payloads = BTreeMap::from([(payload_path.clone(), payload.to_vec())]);
-        let authority = AuthorityDocumentV2 {
-            format_version: FORMAT_VERSION_V2,
-            identity: PackageIdentityV2 {
+        let authority = AuthorityDocumentV3 {
+            format_version: FORMAT_VERSION_V3,
+            identity: PackageIdentityV3 {
                 name: name.to_string(),
                 version: version.to_string(),
                 version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
@@ -769,10 +753,10 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 debian_multi_arch: None,
                 platform: Some("linux".to_string()),
-                kind: PackageKindTagV2::Package,
+                kind: PackageKindTagV3::Package,
             },
-            kind: PackageKindV2::Package(PackageDataV2 {
-                files: vec![FileAuthorityV2 {
+            kind: PackageKindV3::Package(PackageDataV3 {
+                files: vec![FileAuthorityV3 {
                     path: payload_path,
                     node: PayloadNode::regular(0o644),
                     content: Some(PayloadContentAuthority {
@@ -781,19 +765,19 @@ mod tests {
                     }),
                     component: "main".to_string(),
                     config: None,
-                    conflict: ConflictPolicyV2::Error,
+                    conflict: ConflictPolicyV3::Error,
                 }],
                 config: Vec::new(),
-                policy: PackagePolicyV2::default(),
+                policy: PackagePolicyV3::default(),
             }),
-            provides: vec![exact_self_provider(name, version)],
+            provided_capabilities: Vec::new(),
             requirements: Vec::new(),
             relations: Vec::new(),
-            capabilities: None,
+            execution_capabilities: None,
             file_capabilities: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
-                ComponentAuthorityV2 {
+                ComponentAuthorityV3 {
                     name: "main".to_string(),
                     default: true,
                     file_count: 1,
@@ -801,7 +785,7 @@ mod tests {
                 },
             )]),
             lifecycle,
-            provenance: ProvenanceAuthorityV2 {
+            provenance: ProvenanceAuthorityV3 {
                 origin_class: Some("native-built".to_string()),
                 hardening_level: Some("hermetic".to_string()),
                 build_input_identity: Some("sha256:build-input".to_string()),
@@ -811,7 +795,7 @@ mod tests {
             debug_toml_sha256: None,
         };
         let output_identity = BuildOutputIdentity {
-            file_merkle_root: compute_v2_file_merkle_root(&authority).unwrap(),
+            file_merkle_root: compute_v3_file_merkle_root(&authority).unwrap(),
             package_name: name.to_string(),
             package_version: version.to_string(),
             package_release: release.to_string(),
@@ -819,7 +803,7 @@ mod tests {
             origin_class: "native-built".to_string(),
             hardening_level: "hermetic".to_string(),
             hermetic_evidence_hash: hermetic_evidence_hash.clone(),
-            canonical_content_identity: compute_v2_content_identity(&authority).unwrap(),
+            canonical_content_identity: compute_v3_content_identity(&authority).unwrap(),
         };
         let payload = BuildAttestationPayload {
             schema_version: BUILD_ATTESTATION_SCHEMA_V1,
@@ -842,7 +826,7 @@ mod tests {
         };
         let envelope = sign_build_attestation(payload, signer).unwrap();
         let package_path = temp.path().join("release.ccs");
-        write_v2_ccs_package_from_bounded_memory_for_tests(
+        write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,
@@ -872,9 +856,9 @@ mod tests {
         let payload_path = "/usr/share/payload".to_string();
         let payload_hash = conary_core::hash::sha256(payload);
         let payloads = BTreeMap::from([(payload_path.clone(), payload.to_vec())]);
-        let authority = AuthorityDocumentV2 {
-            format_version: FORMAT_VERSION_V2,
-            identity: PackageIdentityV2 {
+        let authority = AuthorityDocumentV3 {
+            format_version: FORMAT_VERSION_V3,
+            identity: PackageIdentityV3 {
                 name: name.to_string(),
                 version: version.to_string(),
                 version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
@@ -882,10 +866,10 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 debian_multi_arch: None,
                 platform: Some("linux".to_string()),
-                kind: PackageKindTagV2::Package,
+                kind: PackageKindTagV3::Package,
             },
-            kind: PackageKindV2::Package(PackageDataV2 {
-                files: vec![FileAuthorityV2 {
+            kind: PackageKindV3::Package(PackageDataV3 {
+                files: vec![FileAuthorityV3 {
                     path: payload_path,
                     node: PayloadNode::regular(0o644),
                     content: Some(PayloadContentAuthority {
@@ -894,27 +878,27 @@ mod tests {
                     }),
                     component: "main".to_string(),
                     config: None,
-                    conflict: ConflictPolicyV2::Error,
+                    conflict: ConflictPolicyV3::Error,
                 }],
                 config: Vec::new(),
-                policy: PackagePolicyV2::default(),
+                policy: PackagePolicyV3::default(),
             }),
-            provides: vec![exact_self_provider(name, version)],
+            provided_capabilities: Vec::new(),
             requirements: Vec::new(),
             relations: Vec::new(),
-            capabilities: None,
+            execution_capabilities: None,
             file_capabilities: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
-                ComponentAuthorityV2 {
+                ComponentAuthorityV3 {
                     name: "main".to_string(),
                     default: true,
                     file_count: 1,
                     total_size: payload.len() as u64,
                 },
             )]),
-            lifecycle: LifecycleAuthorityV2::default(),
-            provenance: ProvenanceAuthorityV2 {
+            lifecycle: LifecycleAuthorityV3::default(),
+            provenance: ProvenanceAuthorityV3 {
                 origin_class: Some("native-built".to_string()),
                 hardening_level: Some("hermetic".to_string()),
                 build_input_identity: Some("sha256:build-input".to_string()),
@@ -924,7 +908,7 @@ mod tests {
             debug_toml_sha256: None,
         };
         let package_path = temp.path().join("local-dev.ccs");
-        write_v2_ccs_package_from_bounded_memory_for_tests(
+        write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,

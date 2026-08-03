@@ -1,16 +1,16 @@
 ---
 last_updated: 2026-08-03
-revision: 9
-summary: Canonical current signed CCS v2 authority, archive, payload, and trust contract pending the W5 hard cut
+revision: 10
+summary: Canonical current signed CCS v3 identity, capability, archive, payload, and trust contract
 ---
 
-# CCS Package Format v2
+# CCS Package Format v3
 
-CCS v2 is Conary's sole native package format. There is no supported CCS v1
-authoring, signing, parsing, installation, migration, or publication path.
-Pre-alpha v1 artifacts must be rebuilt from source or discarded.
+CCS v3 is Conary's sole native package format. There is no supported CCS v1 or
+v2 authoring, signing, parsing, installation, migration, or publication path.
+Pre-alpha v1 and v2 artifacts must be rebuilt from source or discarded.
 
-The Rust schema in `crates/conary-core/src/ccs/v2/schema.rs` is the executable
+The Rust schema in `crates/conary-core/src/ccs/v3/schema.rs` is the executable
 owner of individual fields. This document owns the stable archive, authority,
 and trust boundaries between producers and consumers.
 
@@ -20,7 +20,7 @@ A package is a gzip-compressed tar archive. Its accepted entries are:
 
 | Path | Requirement | Authority |
 |---|---|---|
-| `MANIFEST` | exactly one regular file | canonical CBOR `AuthorityDocumentV2` |
+| `MANIFEST` | exactly one regular file | canonical CBOR `AuthorityDocumentV3` |
 | `MANIFEST.sig` | exactly one regular file for every usable package | Ed25519 signature over the exact `MANIFEST` bytes |
 | `MANIFEST.toml` | optional regular file | diagnostic projection only; its digest must match signed authority when present |
 | `MANIFEST.attestation.json` | optional regular file | build-attestation envelope bound by signed provenance |
@@ -35,7 +35,7 @@ There is no `components/<name>.json` entry. That projection re-encoded every
 signed file record in JSON, measured at 1.8x the CBOR authority it duplicated,
 and it could add no authority because verification had to prove it matched the
 `MANIFEST` exactly. Component views are derived from signed authority by
-`crates/conary-core/src/ccs/v2/component_view.rs`.
+`crates/conary-core/src/ccs/v3/component_view.rs`.
 
 The reader rejects duplicate authority, signatures, projections, or objects;
 unknown files and directories; authority that does not arrive first;
@@ -49,14 +49,14 @@ become package authority.
 
 ## Signed Authority
 
-`MANIFEST` decodes as `AuthorityDocumentV2` with `format_version = 2`. It
+`MANIFEST` decodes as `AuthorityDocumentV3` with `format_version = 3`. It
 contains:
 
 - exact identity: name, version, version scheme, positive decimal CCS build
   release, optional platform, package kind, exact source-native architecture
   token, and required Debian `Multi-Arch` authority for Debian identities;
 - one typed package, group, or redirect body whose tag agrees with identity;
-- exact provides, requirements, relations, and component summaries;
+- provenance-tagged capabilities, exact requirements, relations, and component summaries;
 - exact payload paths, node variants, content digests and sizes, component
   ownership, per-path config semantics (`noreplace`, `ghost`, and
   `remove_on_upgrade`), and conflict policy;
@@ -89,20 +89,24 @@ release cannot collide or be re-resolved to one another.
 The native authoring template emits Conary `noarch` explicitly for an
 architecture-independent package. Authors replace it with an exact target
 token when payloads are architecture-specific. Missing and blank architecture
-authority are rejected by authoring preflight and signed-v2 validation;
+authority are rejected by authoring preflight and signed-v3 validation;
 consumers never substitute the current host architecture.
 
 Each provided capability signs its exact kind, name, version scheme,
 architecture qualifier, and either no version authority or a paired typed
 relation and version boundary. RPM may use all five ordered relations; Debian,
-Arch, and Conary providers may use only equality. The package self-provider is
-exact equality with the signed package version. Package version is never a
-fallback for a missing provider version. Requirements, relations, complete
-provider authority, package capability declarations, and file-capability
-declarations all participate in CCS content identity.
+Arch, and Conary providers may use only equality. It also signs one closed
+provenance role: `author-declared`, `source-declared` with source format and
+record position, or `source-derived-file` with source format and path. Exact
+package identity exists only in `identity`; resolution derives its one exact
+package-name provider from that field. A same-name source capability may carry
+a different compatibility version without becoming a second identity.
+Requirements, relations, complete capability authority, package execution
+capability declarations, and file-capability declarations all participate in
+CCS content identity.
 
 An ordinary config declaration identifies exactly one signed regular-file or
-symlink payload whose `FileAuthorityV2.config` repeats the same semantics.
+symlink payload whose `FileAuthorityV3.config` repeats the same semantics.
 RPM ghost config and Debian remove-on-upgrade declarations are package
 authority without incoming payload and require the corresponding signed native
 source contract. Verified package construction projects these exact
@@ -198,7 +202,7 @@ release signer set and attestation policy. An empty trust set, missing
 signature, untrusted key, invalid signature, or required timestamp failure is
 fatal.
 
-The signing command accepts only a structurally valid v2 archive, replaces the
+The signing command accepts only a structurally valid v3 archive, replaces the
 signature in a staged copy, verifies the complete authority and payload under
 the new key, and atomically publishes the result only after that proof passes.
 
@@ -221,7 +225,7 @@ delegate transaction ownership to the source package manager.
 
 The sole build-result writer is
 `write_signed_current_ccs_package`. Low-level tests and already-projected
-producers may use `write_v2_ccs_package`; both require a signing key. There is
+producers may use `write_v3_ccs_package`; both require a signing key. There is
 no unsigned writer.
 
 The normal local loop is:
@@ -247,20 +251,20 @@ does not open an archive without trust.
 
 ## Rejection Contract
 
-Readers reject every `format_version` other than `2`. The format-1 rejection
-test uses a small hand-authored retired header so the repository does not need
-a v1 writer, schema, projection, fixture factory, or format specification.
+Readers reject every `format_version` other than `3`. Retired-format rejection
+test uses small hand-authored v1 and v2 headers so the repository does not need
+a retired writer, schema, projection, fixture factory, or format specification.
 Git history is the only source for the removed pre-alpha implementation.
 
-## Planned W5 Hard Cut
+## W5 Sibling Completion
 
-This document describes current shipped behavior. The approved W5 target in
-[`source-package-authority.md`](source-package-authority.md) replaces v2 with
-one current-only v3 authority that separates exact identity from capability
-provenance and source config declarations from materialized payload nodes.
-Issues #104 and #105 implement that sibling sequence. Until both land, no v3
-behavior is claimed here; after they land, v2 readers, writers, fixtures, and
-adapters are deleted rather than retained as compatibility paths.
+This document describes the current v3 identity/capability contract delivered
+by issue #104. The approved W5 target in
+[`source-package-authority.md`](source-package-authority.md) also separates
+source config declarations from materialized payload nodes; issue #105 owns
+that sibling completion. No release may be cut between the two slices. Retired
+v2 readers, writers, fixtures, and adapters do not remain as compatibility
+paths.
 
 ## Proof
 
@@ -268,7 +272,7 @@ Focused verification for this contract is:
 
 ```bash
 cargo test -p conary-core ccs::budget
-cargo test -p conary-core ccs::v2
+cargo test -p conary-core ccs::v3
 cargo test -p conary-core ccs::archive_reader
 cargo test -p conary-core ccs::verify
 cargo test -p conary-core ccs::package

@@ -6,14 +6,14 @@ use axum::http::{Method, StatusCode};
 use axum::response::Response;
 use conary_core::ccs::attestation::{
     BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, BuildOutputIdentity, canonical_json_hash,
-    compute_v2_content_identity, compute_v2_file_merkle_root, sign_build_attestation,
+    compute_v3_content_identity, compute_v3_file_merkle_root, sign_build_attestation,
 };
-use conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
+use conary_core::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use conary_core::ccs::signing::SigningKeyPair;
-use conary_core::ccs::v2::schema::{
-    AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
-    FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-    PackageKindTagV2, PackageKindV2, PackagePolicyV2, ProvenanceAuthorityV2, ProvidedCapabilityV2,
+use conary_core::ccs::v3::schema::{
+    AuthorityDocumentV3, ComponentAuthorityV3, ConflictPolicyV3, FORMAT_VERSION_V3,
+    FileAuthorityV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3, PackageKindTagV3,
+    PackageKindV3, PackagePolicyV3, ProvenanceAuthorityV3,
 };
 use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use conary_core::recipe::hermetic::{
@@ -21,10 +21,6 @@ use conary_core::recipe::hermetic::{
     DivergenceReport, HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence, RecipeIdentity,
     ReproducibilityRecord, SourceIdentity,
 };
-use conary_core::repository::dependency_model::{
-    ProvideArchitectureQualifier, ProvideVersionRelation,
-};
-use conary_core::repository::versioning::VersionScheme;
 use remi::server::config::{ReleasePublishSection, TrustedBuildAttestationSigner};
 use remi::server::{ServerConfig, ServerState};
 use rusqlite::params;
@@ -321,9 +317,9 @@ fn release_artifact_with_attestation(
     let hermetic_evidence_hash = canonical_json_hash(&evidence).unwrap();
     let payload_path = "/usr/share/m4c-payload".to_string();
     let payload_hash = conary_core::hash::sha256(payload);
-    let authority = AuthorityDocumentV2 {
-        format_version: FORMAT_VERSION_V2,
-        identity: PackageIdentityV2 {
+    let authority = AuthorityDocumentV3 {
+        format_version: FORMAT_VERSION_V3,
+        identity: PackageIdentityV3 {
             name: name.to_string(),
             version: version.to_string(),
             version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
@@ -331,10 +327,10 @@ fn release_artifact_with_attestation(
             architecture: Some(TEST_ARCH.to_string()),
             debian_multi_arch: None,
             platform: Some("linux".to_string()),
-            kind: PackageKindTagV2::Package,
+            kind: PackageKindTagV3::Package,
         },
-        kind: PackageKindV2::Package(PackageDataV2 {
-            files: vec![FileAuthorityV2 {
+        kind: PackageKindV3::Package(PackageDataV3 {
+            files: vec![FileAuthorityV3 {
                 path: payload_path.clone(),
                 node: PayloadNode::regular(0o644),
                 content: Some(PayloadContentAuthority {
@@ -343,36 +339,27 @@ fn release_artifact_with_attestation(
                 }),
                 component: "main".to_string(),
                 config: None,
-                conflict: ConflictPolicyV2::Error,
+                conflict: ConflictPolicyV3::Error,
             }],
             config: Vec::new(),
-            policy: PackagePolicyV2::default(),
+            policy: PackagePolicyV3::default(),
         }),
-        provides: vec![ProvidedCapabilityV2 {
-            kind: DependencyKindV2::Package,
-            name: name.to_string(),
-            provider_version: Some(version.to_string()),
-            version_relation: Some(ProvideVersionRelation::Equal),
-            version_scheme: VersionScheme::Conary,
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            target: None,
-            component: None,
-        }],
+        provided_capabilities: Vec::new(),
         requirements: Vec::new(),
         relations: Vec::new(),
-        capabilities: None,
+        execution_capabilities: None,
         file_capabilities: Vec::new(),
         components: BTreeMap::from([(
             "main".to_string(),
-            ComponentAuthorityV2 {
+            ComponentAuthorityV3 {
                 name: "main".to_string(),
                 default: true,
                 file_count: 1,
                 total_size: payload.len() as u64,
             },
         )]),
-        lifecycle: LifecycleAuthorityV2::default(),
-        provenance: ProvenanceAuthorityV2 {
+        lifecycle: LifecycleAuthorityV3::default(),
+        provenance: ProvenanceAuthorityV3 {
             origin_class: Some("native-built".to_string()),
             hardening_level: Some("hermetic".to_string()),
             build_input_identity: Some("sha256:build-input".to_string()),
@@ -382,7 +369,7 @@ fn release_artifact_with_attestation(
         debug_toml_sha256: None,
     };
     let output_identity = BuildOutputIdentity {
-        file_merkle_root: compute_v2_file_merkle_root(&authority).unwrap(),
+        file_merkle_root: compute_v3_file_merkle_root(&authority).unwrap(),
         package_name: name.to_string(),
         package_version: version.to_string(),
         package_release: release.to_string(),
@@ -390,7 +377,7 @@ fn release_artifact_with_attestation(
         origin_class: "native-built".to_string(),
         hardening_level: "hermetic".to_string(),
         hermetic_evidence_hash: hermetic_evidence_hash.clone(),
-        canonical_content_identity: compute_v2_content_identity(&authority).unwrap(),
+        canonical_content_identity: compute_v3_content_identity(&authority).unwrap(),
     };
     let payloads = BTreeMap::from([(payload_path, payload.to_vec())]);
     let attestation = BuildAttestationPayload {
@@ -414,7 +401,7 @@ fn release_artifact_with_attestation(
     };
     let envelope = sign_build_attestation(attestation, signer).unwrap();
     let package_path = temp.path().join("release.ccs");
-    write_v2_ccs_package_from_bounded_memory_for_tests(
+    write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,

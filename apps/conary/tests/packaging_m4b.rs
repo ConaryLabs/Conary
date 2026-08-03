@@ -241,7 +241,7 @@ fn declarative_lifecycle_authoring_is_source_independent() {
 }
 
 #[test]
-fn dependency_authoring_builds_typed_v2_authority() {
+fn dependency_authoring_builds_typed_v3_authority() {
     let fixture = MinimalPackageFixture::new();
     let manifest_path = fixture.project_dir().join("ccs.toml");
     let text = std::fs::read_to_string(&manifest_path).unwrap().replace(

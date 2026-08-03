@@ -184,7 +184,7 @@ pub(super) fn make_conversion_result(package_path: Option<std::path::PathBuf>) -
             version: "1.0".to_string(),
             version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
             release: "1".to_string(),
-            kind: conary_core::ccs::v2::PackageKindTagV2::Package,
+            kind: conary_core::ccs::v3::PackageKindTagV3::Package,
             debian_multi_arch: None,
             description: "test package".to_string(),
             license: None,

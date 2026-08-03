@@ -1,7 +1,7 @@
-// conary-core/src/ccs/v2/lifecycle.rs
+// conary-core/src/ccs/v3/lifecycle.rs
 
 //! Exact projection between native manifest lifecycle declarations and signed
-//! CCS v2 lifecycle authority.
+//! CCS v3 lifecycle authority.
 
 use super::schema::*;
 use crate::ccs::manifest::{
@@ -10,22 +10,22 @@ use crate::ccs::manifest::{
     UserHook,
 };
 
-pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthorityV2 {
+pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthorityV3 {
     let capabilities = manifest
         .scriptlets
         .capabilities
         .iter()
-        .map(|capability| LifecycleScriptCapabilityV2 {
+        .map(|capability| LifecycleScriptCapabilityV3 {
             name: capability.name.clone(),
             paths: capability.paths.clone(),
         })
         .collect::<Vec<_>>();
-    LifecycleAuthorityV2 {
+    LifecycleAuthorityV3 {
         users: manifest
             .hooks
             .users
             .iter()
-            .map(|hook| LifecycleUserV2 {
+            .map(|hook| LifecycleUserV3 {
                 name: hook.name.clone(),
                 system: hook.system,
                 home: hook.home.clone(),
@@ -38,7 +38,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .groups
             .iter()
-            .map(|hook| LifecycleGroupV2 {
+            .map(|hook| LifecycleGroupV3 {
                 name: hook.name.clone(),
                 system: hook.system,
                 reversible: hook.reversible,
@@ -48,7 +48,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .directories
             .iter()
-            .map(|hook| LifecycleDirectoryV2 {
+            .map(|hook| LifecycleDirectoryV3 {
                 path: hook.path.clone(),
                 mode: hook.mode.clone(),
                 owner: hook.owner.clone(),
@@ -61,7 +61,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .services
             .iter()
-            .map(|hook| LifecycleServiceV2 {
+            .map(|hook| LifecycleServiceV3 {
                 name: hook.name.clone(),
                 action: service_action_from_manifest(&hook.action),
                 reversible: hook.reversible,
@@ -71,7 +71,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .systemd
             .iter()
-            .map(|hook| LifecycleSystemdV2 {
+            .map(|hook| LifecycleSystemdV3 {
                 unit: hook.unit.clone(),
                 enable: hook.enable,
                 reversible: hook.reversible,
@@ -81,7 +81,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .tmpfiles
             .iter()
-            .map(|hook| LifecycleTmpfilesV2 {
+            .map(|hook| LifecycleTmpfilesV3 {
                 entry_type: hook.entry_type.clone(),
                 path: hook.path.clone(),
                 mode: hook.mode.clone(),
@@ -96,7 +96,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .sysctl
             .iter()
-            .map(|hook| LifecycleSysctlV2 {
+            .map(|hook| LifecycleSysctlV3 {
                 key: hook.key.clone(),
                 value: hook.value.clone(),
                 reversible: hook.reversible,
@@ -106,7 +106,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .hooks
             .alternatives
             .iter()
-            .map(|hook| LifecycleAlternativeV2 {
+            .map(|hook| LifecycleAlternativeV3 {
                 link: hook.link.clone(),
                 name: hook.name.clone(),
                 path: hook.path.clone(),
@@ -130,7 +130,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
 }
 
 pub(crate) fn apply_authority_to_manifest(
-    authority: &LifecycleAuthorityV2,
+    authority: &LifecycleAuthorityV3,
     manifest: &mut CcsManifest,
 ) -> Result<(), String> {
     validate_script_capability_projection(authority)?;
@@ -233,55 +233,55 @@ pub(crate) fn apply_authority_to_manifest(
     Ok(())
 }
 
-fn service_action_from_manifest(action: &ServiceAction) -> LifecycleServiceActionV2 {
+fn service_action_from_manifest(action: &ServiceAction) -> LifecycleServiceActionV3 {
     match action {
-        ServiceAction::Enable => LifecycleServiceActionV2::Enable,
-        ServiceAction::Disable => LifecycleServiceActionV2::Disable,
-        ServiceAction::Start => LifecycleServiceActionV2::Start,
-        ServiceAction::Stop => LifecycleServiceActionV2::Stop,
-        ServiceAction::Reload => LifecycleServiceActionV2::Reload,
-        ServiceAction::Restart => LifecycleServiceActionV2::Restart,
-        ServiceAction::TryRestart => LifecycleServiceActionV2::TryRestart,
-        ServiceAction::ReloadOrRestart => LifecycleServiceActionV2::ReloadOrRestart,
-        ServiceAction::ReloadOrTryRestart => LifecycleServiceActionV2::ReloadOrTryRestart,
+        ServiceAction::Enable => LifecycleServiceActionV3::Enable,
+        ServiceAction::Disable => LifecycleServiceActionV3::Disable,
+        ServiceAction::Start => LifecycleServiceActionV3::Start,
+        ServiceAction::Stop => LifecycleServiceActionV3::Stop,
+        ServiceAction::Reload => LifecycleServiceActionV3::Reload,
+        ServiceAction::Restart => LifecycleServiceActionV3::Restart,
+        ServiceAction::TryRestart => LifecycleServiceActionV3::TryRestart,
+        ServiceAction::ReloadOrRestart => LifecycleServiceActionV3::ReloadOrRestart,
+        ServiceAction::ReloadOrTryRestart => LifecycleServiceActionV3::ReloadOrTryRestart,
     }
 }
 
-fn service_action_to_manifest(action: LifecycleServiceActionV2) -> ServiceAction {
+fn service_action_to_manifest(action: LifecycleServiceActionV3) -> ServiceAction {
     match action {
-        LifecycleServiceActionV2::Enable => ServiceAction::Enable,
-        LifecycleServiceActionV2::Disable => ServiceAction::Disable,
-        LifecycleServiceActionV2::Start => ServiceAction::Start,
-        LifecycleServiceActionV2::Stop => ServiceAction::Stop,
-        LifecycleServiceActionV2::Reload => ServiceAction::Reload,
-        LifecycleServiceActionV2::Restart => ServiceAction::Restart,
-        LifecycleServiceActionV2::TryRestart => ServiceAction::TryRestart,
-        LifecycleServiceActionV2::ReloadOrRestart => ServiceAction::ReloadOrRestart,
-        LifecycleServiceActionV2::ReloadOrTryRestart => ServiceAction::ReloadOrTryRestart,
+        LifecycleServiceActionV3::Enable => ServiceAction::Enable,
+        LifecycleServiceActionV3::Disable => ServiceAction::Disable,
+        LifecycleServiceActionV3::Start => ServiceAction::Start,
+        LifecycleServiceActionV3::Stop => ServiceAction::Stop,
+        LifecycleServiceActionV3::Reload => ServiceAction::Reload,
+        LifecycleServiceActionV3::Restart => ServiceAction::Restart,
+        LifecycleServiceActionV3::TryRestart => ServiceAction::TryRestart,
+        LifecycleServiceActionV3::ReloadOrRestart => ServiceAction::ReloadOrRestart,
+        LifecycleServiceActionV3::ReloadOrTryRestart => ServiceAction::ReloadOrTryRestart,
     }
 }
 
 fn script_from_manifest(
     hook: &ScriptHook,
-    capabilities: &[LifecycleScriptCapabilityV2],
-) -> LifecycleScriptV2 {
-    LifecycleScriptV2 {
+    capabilities: &[LifecycleScriptCapabilityV3],
+) -> LifecycleScriptV3 {
+    LifecycleScriptV3 {
         interpreter: "/bin/sh".to_string(),
         body: hook.script.clone(),
         capabilities: capabilities.to_vec(),
         reversible: hook.reversible,
-        execution: LifecycleScriptExecutionV2::SandboxedTargetRoot,
+        execution: LifecycleScriptExecutionV3::SandboxedTargetRoot,
     }
 }
 
-fn script_to_manifest(hook: &LifecycleScriptV2) -> ScriptHook {
+fn script_to_manifest(hook: &LifecycleScriptV3) -> ScriptHook {
     ScriptHook {
         script: hook.body.clone(),
         reversible: hook.reversible,
     }
 }
 
-fn validate_script_capability_projection(authority: &LifecycleAuthorityV2) -> Result<(), String> {
+fn validate_script_capability_projection(authority: &LifecycleAuthorityV3) -> Result<(), String> {
     for (phase, script) in [
         ("post-install", authority.post_install.as_ref()),
         ("pre-remove", authority.pre_remove.as_ref()),
@@ -353,7 +353,7 @@ mod tests {
         manifest.hooks.alternatives.push(AlternativeHook {
             link: "/usr/bin/example".to_string(),
             name: "example".to_string(),
-            path: "/usr/bin/example-v2".to_string(),
+            path: "/usr/bin/example-v3".to_string(),
             priority: 80,
             reversible: Some(true),
         });
@@ -376,7 +376,7 @@ mod tests {
         let authority = authority_from_manifest(&manifest);
         let mut encoded = Vec::new();
         ciborium::ser::into_writer(&authority, &mut encoded).unwrap();
-        let decoded: LifecycleAuthorityV2 = ciborium::from_reader(encoded.as_slice()).unwrap();
+        let decoded: LifecycleAuthorityV3 = ciborium::from_reader(encoded.as_slice()).unwrap();
         let mut execution_manifest = CcsManifest::new_minimal("lifecycle", "1.0.0");
         apply_authority_to_manifest(&decoded, &mut execution_manifest).unwrap();
 
@@ -390,7 +390,7 @@ mod tests {
         );
         assert_eq!(
             decoded.post_install.as_ref().unwrap().execution,
-            LifecycleScriptExecutionV2::SandboxedTargetRoot
+            LifecycleScriptExecutionV3::SandboxedTargetRoot
         );
     }
 }

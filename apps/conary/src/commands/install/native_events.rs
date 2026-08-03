@@ -52,7 +52,7 @@ pub(super) struct NativeInstallInput<'a> {
     pub package_version: &'a str,
     pub package_arch: Option<&'a str>,
     pub version_scheme: VersionScheme,
-    pub provides: &'a [conary_core::packages::traits::ProvidedCapability],
+    pub provides: &'a [conary_core::repository::dependency_model::ProvidedCapability],
     pub new_bundle: Option<&'a NativeLifecycleBundle>,
     pub old_trove: Option<&'a Trove>,
     pub relation_removals: &'a [PackageRelationRemoval],

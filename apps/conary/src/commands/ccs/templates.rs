@@ -3,7 +3,7 @@
 use anyhow::Result;
 use conary_core::ccs::CcsManifest;
 use conary_core::ccs::manifest::{Service, ServiceAction};
-use conary_core::ccs::v2::PackageKindTagV2;
+use conary_core::ccs::v3::PackageKindTagV3;
 use conary_core::packages::traits::ConfigFileInfo;
 
 use super::CcsInitTemplate;
@@ -24,7 +24,7 @@ pub fn build_manifest(
 fn minimal_file_manifest(name: &str, version: &str) -> Result<CcsManifest> {
     let mut manifest = CcsManifest::new_minimal(name, version);
     manifest.package.release = "1".to_string();
-    manifest.package.kind = PackageKindTagV2::Package;
+    manifest.package.kind = PackageKindTagV3::Package;
     manifest.package.description = format!("{name} package");
     Ok(manifest)
 }
@@ -55,14 +55,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn minimal_file_template_writes_v2_identity_fields() {
+    fn minimal_file_template_writes_v3_identity_fields() {
         let manifest = build_manifest(Some(CcsInitTemplate::MinimalFile), "hello", "0.1.0")
             .expect("template manifest");
 
         assert_eq!(manifest.package.name, "hello");
         assert_eq!(manifest.package.version, "0.1.0");
         assert_eq!(manifest.package.release.as_str(), "1");
-        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
+        assert_eq!(manifest.package.kind, PackageKindTagV3::Package);
         assert_eq!(
             manifest
                 .package
@@ -79,7 +79,7 @@ mod tests {
             .expect("template manifest");
 
         assert_eq!(manifest.package.release.as_str(), "1");
-        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
+        assert_eq!(manifest.package.kind, PackageKindTagV3::Package);
         assert_eq!(
             manifest.config.files,
             vec![ConfigFileInfo {
@@ -99,7 +99,7 @@ mod tests {
             .expect("template manifest");
 
         assert_eq!(manifest.package.release.as_str(), "1");
-        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
+        assert_eq!(manifest.package.kind, PackageKindTagV3::Package);
         assert_eq!(manifest.hooks.services.len(), 1);
         assert_eq!(manifest.hooks.services[0].name, "conary-example.service");
         assert!(matches!(

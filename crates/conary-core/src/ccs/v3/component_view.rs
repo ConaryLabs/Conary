@@ -1,6 +1,6 @@
-// conary-core/src/ccs/v2/component_view.rs
+// conary-core/src/ccs/v3/component_view.rs
 
-//! Component and file views derived from signed CCS v2 authority.
+//! Component and file views derived from signed CCS v3 authority.
 //!
 //! The archive used to carry a `components/<name>.json` copy of every file
 //! record. That projection duplicated the signed file array in a second
@@ -9,13 +9,13 @@
 //! signed authority is now the sole owner, and every component view is derived
 //! from it here.
 
-use super::schema::{AuthorityDocumentV2, PackageKindV2};
+use super::schema::{AuthorityDocumentV3, PackageKindV3};
 use crate::ccs::builder::{ComponentData, FileEntry};
 use std::collections::HashMap;
 
 /// Project every signed payload node into the shared builder file view.
-pub fn file_entries(authority: &AuthorityDocumentV2) -> Vec<FileEntry> {
-    let PackageKindV2::Package(data) = &authority.kind else {
+pub fn file_entries(authority: &AuthorityDocumentV3) -> Vec<FileEntry> {
+    let PackageKindV3::Package(data) = &authority.kind else {
         return Vec::new();
     };
     data.files
@@ -35,7 +35,7 @@ pub fn file_entries(authority: &AuthorityDocumentV2) -> Vec<FileEntry> {
 /// Every component named in signed authority appears, including one that owns
 /// no payload node, and each file lands in exactly the component its signed
 /// record names.
-pub fn components(authority: &AuthorityDocumentV2) -> HashMap<String, ComponentData> {
+pub fn components(authority: &AuthorityDocumentV3) -> HashMap<String, ComponentData> {
     let mut components = authority
         .components
         .keys()
@@ -86,14 +86,14 @@ pub fn component_hash(files: &[FileEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::v2::schema::ComponentAuthorityV2;
+    use crate::ccs::v3::schema::ComponentAuthorityV3;
 
     #[test]
     fn derived_components_cover_signed_names_including_empty_ones() {
-        let mut authority = AuthorityDocumentV2::package_for_tests("derived");
+        let mut authority = AuthorityDocumentV3::package_for_tests("derived");
         authority.components.insert(
             "docs".to_string(),
-            ComponentAuthorityV2 {
+            ComponentAuthorityV3 {
                 name: "docs".to_string(),
                 default: false,
                 file_count: 0,
@@ -113,8 +113,8 @@ mod tests {
 
     #[test]
     fn derived_file_view_preserves_exact_signed_payload_authority() {
-        let authority = AuthorityDocumentV2::package_for_tests("derived-files");
-        let PackageKindV2::Package(data) = &authority.kind else {
+        let authority = AuthorityDocumentV3::package_for_tests("derived-files");
+        let PackageKindV3::Package(data) = &authority.kind else {
             panic!("fixture should be a package");
         };
 

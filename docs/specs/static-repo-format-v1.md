@@ -145,7 +145,10 @@ index.
               "name": "acme-widget",
               "kind": "PackageName",
               "version": "1.4.2",
-              "native_text": null
+              "version_relation": "equal",
+              "architecture_qualifier": { "kind": "implicit" },
+              "native_text": null,
+              "provenance": { "role": "exact-identity" }
             }
           ],
           "requirements": [
@@ -216,7 +219,13 @@ Field rules:
   names like `foo..bar`).
   `description` is optional. `provides`, `requirements`, and `relations` are
   required typed arrays, even when empty. `provides` MUST contain exactly one
-  `PackageName` self-provide whose name and version match the package entry.
+  `PackageName` entry with `provenance.role = "exact-identity"`; its name,
+  version, exact relation, and implicit architecture qualifier MUST match the
+  package entry. Other provenance-bearing capabilities remain distinct even
+  when a source declaration intentionally reuses the package name at another
+  compatibility version. Each versioned capability carries a paired
+  `version_relation`, and source-declared or source-derived entries carry their
+  exact source format plus record index or source path.
   A publisher MUST project capability kinds from the verified CCS authority
   document or manifest field that declared them. It MUST NOT infer `File`,
   `Soname`, `Virtual`, or any other kind from punctuation, path shape, or a

@@ -3,7 +3,7 @@
 //!
 //! This module implements the CCS native package format, including:
 //! - Manifest parsing (ccs.toml)
-//! - Signed v2 authority manifest (canonical CBOR)
+//! - Signed v3 authority manifest (canonical CBOR)
 //! - Package building
 //! - Package inspection and verification
 //! - Package installation (via PackageFormat trait)
@@ -29,7 +29,7 @@ pub mod native_transaction;
 pub mod package;
 pub mod policy;
 pub mod signing;
-pub mod v2;
+pub mod v3;
 pub mod verify;
 
 pub use budget::{

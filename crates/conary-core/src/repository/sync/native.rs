@@ -143,6 +143,7 @@ pub(super) fn normalized_repository_capabilities(
                 )
                 .with_version_relation(provide.version_relation)
                 .with_architecture_qualifier(provide.architecture_qualifier.clone())
+                .with_provenance(provide.provenance.clone())
             })
             .collect()
     } else {

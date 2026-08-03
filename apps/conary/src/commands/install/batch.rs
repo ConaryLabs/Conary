@@ -76,7 +76,7 @@ pub struct PreparedPackage {
     /// Exact positive requirement groups declared by the package.
     pub requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     /// Exact source-native capabilities declared by the package.
-    pub provides: Vec<conary_core::packages::traits::ProvidedCapability>,
+    pub provides: Vec<conary_core::repository::dependency_model::ProvidedCapability>,
     /// Exact source-native negative/replacement relation groups.
     pub relations: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     /// Installed packages selected by exact relation evaluation immediately

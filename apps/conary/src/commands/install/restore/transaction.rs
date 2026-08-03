@@ -538,14 +538,19 @@ fn prepare_install_graph(
     selected_path: &Path,
     prepared_installs: &[PreparedInstall],
 ) -> Result<(PreparedNativeTransaction, ExecutionMode)> {
+    let capabilities = prepared_installs
+        .iter()
+        .map(|prepared| prepared.pkg.resolution_capabilities())
+        .collect::<conary_core::Result<Vec<_>>>()?;
     let inputs = prepared_installs
         .iter()
-        .map(|prepared| NativeInstallInput {
+        .zip(&capabilities)
+        .map(|(prepared, capabilities)| NativeInstallInput {
             package_name: prepared.pkg.name(),
             package_version: prepared.pkg.version(),
             package_arch: prepared.pkg.architecture(),
             version_scheme: prepared.semantics.version_scheme,
-            provides: prepared.pkg.provides(),
+            provides: capabilities,
             new_bundle: prepared.native_lifecycle_state.bundle_to_persist.as_ref(),
             old_trove: prepared.old_trove_to_upgrade.as_ref(),
             relation_removals: &[],

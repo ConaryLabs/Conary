@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use crate::db::models::{InstalledRequirementGroup, ProvideEntry, Trove};
 use crate::error::{Error, Result};
 use crate::packages::PackageFormat;
-use crate::packages::traits::ProvidedCapability;
+use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::dependency_model::{
     PackageRelationRemovalMode, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
@@ -119,6 +119,7 @@ pub fn plan_package_relations(
     incoming: &dyn PackageFormat,
     incoming_scheme: VersionScheme,
 ) -> Result<PackageRelationPlan> {
+    let provides = incoming.resolution_capabilities()?;
     plan_package_relation_facts(
         conn,
         IncomingPackageRelations {
@@ -126,7 +127,7 @@ pub fn plan_package_relations(
             version: incoming.version(),
             architecture: incoming.architecture(),
             version_scheme: incoming_scheme,
-            provides: incoming.provides(),
+            provides: &provides,
             relations: incoming.relations(),
         },
     )

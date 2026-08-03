@@ -243,21 +243,21 @@ impl ConversionService {
         let mut skipped_phases = Vec::new();
 
         let started = Instant::now();
-        let (mut metadata, files, format) = self.parse_package(&pkg_path, source_profile)?;
+        let (metadata, files, format) = self.parse_package(&pkg_path, source_profile)?;
         phase_timings.push(ConversionPhaseTiming {
             phase: ConversionPhase::ArchiveExtraction,
             duration_ms: started.elapsed().as_millis(),
         });
 
         let started = Instant::now();
-        Self::apply_repository_identity(&mut metadata, &repo_pkg);
-        Self::merge_repository_provides(&repository_metadata, &mut metadata)?;
+        Self::validate_repository_identity(&metadata, &repo_pkg)?;
+        let capability_count = metadata.source_authority.declared_capabilities()?.len();
         info!(
             "Parsed: {} v{} ({} files, {} native provides)",
-            metadata.name,
-            metadata.version,
+            metadata.name(),
+            metadata.version(),
             files.files().len(),
-            metadata.provides.len()
+            capability_count
         );
         phase_timings.push(ConversionPhaseTiming {
             phase: ConversionPhase::NativeShellAstExtraction,

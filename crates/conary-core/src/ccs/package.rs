@@ -5,19 +5,20 @@
 //! This module provides a PackageFormat implementation for CCS packages,
 //! enabling them to be installed using the same infrastructure as RPM/DEB/Arch.
 
-mod v2_projection;
+mod v3_projection;
 
 use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use crate::db::models::{InstallReason, InstallSource, Trove, TroveType};
 use crate::error::{Error, Result};
 use crate::packages::payload::PackagePayload;
-use crate::packages::traits::{ConfigFileInfo, PackageFile, PackageFormat, ProvidedCapability};
+use crate::packages::traits::{ConfigFileInfo, PackageFile, PackageFormat};
+use crate::repository::dependency_model::ProvidedCapability;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use v2_projection::{
-    config_files_from_v2_authority, files_from_v2_authority, install_manifest_from_v2,
-    provides_from_v2_authority,
+use v3_projection::{
+    capabilities_from_v3_authority, config_files_from_v3_authority, files_from_v3_authority,
+    install_manifest_from_v3,
 };
 
 /// A parsed CCS package ready for installation
@@ -27,12 +28,12 @@ pub struct CcsPackage {
     package_path: PathBuf,
     /// Parsed manifest
     manifest: CcsManifest,
-    /// Parsed v2 authority, when this package is native CCS v2.
-    v2_authority: Option<crate::ccs::v2::AuthorityDocumentV2>,
-    /// Parsed v2 build attestation envelope from MANIFEST.attestation.json.
-    v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
-    /// Parsed v2 foreign conversion boundary from MANIFEST.conversion-boundary.json.
-    v2_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
+    /// Parsed v3 authority, when this package is native CCS v3.
+    v3_authority: Option<crate::ccs::v3::AuthorityDocumentV3>,
+    /// Parsed v3 build attestation envelope from MANIFEST.attestation.json.
+    v3_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+    /// Parsed v3 foreign conversion boundary from MANIFEST.conversion-boundary.json.
+    v3_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
     /// File entries from FILES.json
     files: Vec<FileEntry>,
     /// Component data
@@ -44,7 +45,7 @@ pub struct CcsPackage {
     /// Cached exact positive requirements for the trait.
     requirements: Vec<crate::repository::dependency_model::RepositoryRequirementGroup>,
     /// Cached exact capability providers for the trait
-    provides: Vec<ProvidedCapability>,
+    resolution_capabilities: Vec<ProvidedCapability>,
     /// Cached config files for the trait
     config_files_cache: Vec<ConfigFileInfo>,
 }
@@ -55,21 +56,21 @@ impl CcsPackage {
         &self.manifest
     }
 
-    /// Get the parsed v2 authority, when present.
-    pub fn v2_authority(&self) -> Option<&crate::ccs::v2::AuthorityDocumentV2> {
-        self.v2_authority.as_ref()
+    /// Get the parsed v3 authority, when present.
+    pub fn v3_authority(&self) -> Option<&crate::ccs::v3::AuthorityDocumentV3> {
+        self.v3_authority.as_ref()
     }
 
-    pub fn v2_build_attestation(
+    pub fn v3_build_attestation(
         &self,
     ) -> Option<&crate::ccs::attestation::BuildAttestationEnvelope> {
-        self.v2_build_attestation.as_ref()
+        self.v3_build_attestation.as_ref()
     }
 
-    pub fn v2_foreign_conversion_boundary(
+    pub fn v3_foreign_conversion_boundary(
         &self,
     ) -> Option<&crate::ccs::attestation::ForeignConversionBoundary> {
-        self.v2_foreign_conversion_boundary.as_ref()
+        self.v3_foreign_conversion_boundary.as_ref()
     }
 
     pub fn from_verified_archive(
@@ -78,28 +79,28 @@ impl CcsPackage {
     ) -> Result<Self> {
         let package_path = PathBuf::from(path);
         let authority = verification.authority();
-        let manifest = install_manifest_from_v2(
+        let manifest = install_manifest_from_v3(
             authority,
             verification.build_attestation().cloned(),
             verification.foreign_conversion_boundary().cloned(),
         )?;
-        let files = files_from_v2_authority(authority)?;
+        let files = files_from_v3_authority(authority)?;
         let requirements = Self::convert_requirements(&manifest);
-        let provides = provides_from_v2_authority(authority);
+        let resolution_capabilities = capabilities_from_v3_authority(authority);
         let package_files = Self::convert_files(&files);
-        let config_files_cache = config_files_from_v2_authority(authority)?;
+        let config_files_cache = config_files_from_v3_authority(authority)?;
         Ok(Self {
             package_path,
             manifest,
-            v2_authority: Some(authority.clone()),
-            v2_build_attestation: verification.build_attestation().cloned(),
-            v2_foreign_conversion_boundary: verification.foreign_conversion_boundary().cloned(),
+            v3_authority: Some(authority.clone()),
+            v3_build_attestation: verification.build_attestation().cloned(),
+            v3_foreign_conversion_boundary: verification.foreign_conversion_boundary().cloned(),
             files,
             components: verification.components().clone(),
             payload: verification.payload().clone(),
             package_files,
             requirements,
-            provides,
+            resolution_capabilities,
             config_files_cache,
         })
     }
@@ -150,33 +151,33 @@ impl CcsPackage {
 
 #[cfg(test)]
 impl CcsPackage {
-    pub(crate) fn from_v2_authority_for_tests(
-        authority: crate::ccs::v2::AuthorityDocumentV2,
+    pub(crate) fn from_v3_authority_for_tests(
+        authority: crate::ccs::v3::AuthorityDocumentV3,
         build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
         foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
     ) -> Result<Self> {
-        let manifest = install_manifest_from_v2(
+        let manifest = install_manifest_from_v3(
             &authority,
             build_attestation.clone(),
             foreign_conversion_boundary.clone(),
         )?;
-        let files = files_from_v2_authority(&authority)?;
+        let files = files_from_v3_authority(&authority)?;
         let requirements = Self::convert_requirements(&manifest);
-        let provides = provides_from_v2_authority(&authority);
+        let resolution_capabilities = capabilities_from_v3_authority(&authority);
         let package_files = Self::convert_files(&files);
-        let config_files_cache = config_files_from_v2_authority(&authority)?;
+        let config_files_cache = config_files_from_v3_authority(&authority)?;
         Ok(Self {
-            package_path: PathBuf::from("v2-test.ccs"),
+            package_path: PathBuf::from("v3-test.ccs"),
             manifest,
-            v2_authority: Some(authority),
-            v2_build_attestation: build_attestation,
-            v2_foreign_conversion_boundary: foreign_conversion_boundary,
+            v3_authority: Some(authority),
+            v3_build_attestation: build_attestation,
+            v3_foreign_conversion_boundary: foreign_conversion_boundary,
             files,
             components: HashMap::new(),
             payload: PackagePayload::default(),
             package_files,
             requirements,
-            provides,
+            resolution_capabilities,
             config_files_cache,
         })
     }
@@ -218,7 +219,7 @@ impl PackageFormat for CcsPackage {
     }
 
     fn debian_multi_arch(&self) -> Option<crate::repository::dependency_model::DebianMultiArch> {
-        self.v2_authority
+        self.v3_authority
             .as_ref()
             .and_then(|authority| authority.identity.debian_multi_arch)
     }
@@ -235,8 +236,8 @@ impl PackageFormat for CcsPackage {
         &self.requirements
     }
 
-    fn provides(&self) -> &[ProvidedCapability] {
-        &self.provides
+    fn resolution_capabilities(&self) -> Result<Vec<ProvidedCapability>> {
+        Ok(self.resolution_capabilities.clone())
     }
 
     fn relations(&self) -> &[crate::repository::dependency_model::RepositoryRequirementGroup] {
@@ -430,7 +431,7 @@ arch = "noarch"
     }
 
     #[test]
-    fn signed_v2_file_capabilities_round_trip_to_verified_install_manifest() {
+    fn signed_v3_file_capabilities_round_trip_to_verified_install_manifest() {
         let temp = tempfile::tempdir().unwrap();
         let source_dir = temp.path().join("src");
         fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
@@ -510,16 +511,16 @@ inheritable = false
         let temp = tempfile::tempdir().unwrap();
         let package_path = temp.path().join("size-lie.ccs");
         let mut authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("size-lie");
-        let crate::ccs::v2::schema::PackageKindV2::Package(data) = &mut authority.kind else {
+            crate::ccs::v3::test_support::package_authority_with_one_file("size-lie");
+        let crate::ccs::v3::schema::PackageKindV3::Package(data) = &mut authority.kind else {
             panic!("fixture must be a package");
         };
         data.files[0].content.as_mut().unwrap().size += 1;
         authority.components.get_mut("main").unwrap().total_size += 1;
-        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
         let signing_key = SigningKeyPair::generate();
 
-        let error = crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+        let error = crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,
@@ -532,22 +533,22 @@ inheritable = false
         assert!(
             error
                 .to_string()
-                .contains("does not match signed v2 authority")
+                .contains("does not match signed v3 authority")
         );
     }
 
     #[test]
-    fn v2_packages_do_not_reconstruct_missing_authority_from_projections() {
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("adapter-v2");
+    fn v3_packages_do_not_reconstruct_missing_authority_from_projections() {
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("adapter-v3");
         let package =
-            CcsPackage::from_v2_authority_for_tests(authority.clone(), None, None).unwrap();
-        assert_eq!(package.manifest().package.name, "adapter-v2");
-        assert!(package.v2_authority().is_some());
+            CcsPackage::from_v3_authority_for_tests(authority.clone(), None, None).unwrap();
+        assert_eq!(package.manifest().package.name, "adapter-v3");
+        assert!(package.v3_authority().is_some());
     }
 
     #[test]
-    fn v2_positive_dependency_kinds_reach_package_format_without_string_guessing() {
-        use crate::ccs::v2::schema::{DependencyKindV2, ProvidedCapabilityV2};
+    fn v3_positive_dependency_kinds_reach_package_format_without_string_guessing() {
+        use crate::ccs::v3::schema::{DependencyKindV3, ProvidedCapabilityV3};
         use crate::repository::dependency_model::{
             RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
             RepositoryRequirementKind,
@@ -567,82 +568,74 @@ inheritable = false
         };
 
         let mut authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("typed-v2");
+            crate::ccs::v3::test_support::package_authority_with_one_file("typed-v3");
         authority.requirements = vec![
             requirement("web-server", RepositoryCapabilityKind::Virtual),
             requirement("soname(libssl.so.3)", RepositoryCapabilityKind::Soname),
             requirement("binary(sh)", RepositoryCapabilityKind::Generic),
         ];
-        authority.provides = vec![
-            ProvidedCapabilityV2 {
-                kind: DependencyKindV2::Package,
-                name: "typed-v2".to_string(),
-                provider_version: Some("1.0.0".to_string()),
-                version_relation: Some(
-                    crate::repository::dependency_model::ProvideVersionRelation::Equal,
-                ),
-                version_scheme: crate::repository::versioning::VersionScheme::Conary,
-                architecture_qualifier: Default::default(),
-                target: None,
-                component: None,
-            },
-            ProvidedCapabilityV2 {
-                kind: DependencyKindV2::Capability,
+        authority.provided_capabilities = vec![
+            ProvidedCapabilityV3 {
+                kind: DependencyKindV3::Capability,
                 name: "http-client".to_string(),
                 provider_version: None,
                 version_relation: None,
                 version_scheme: crate::repository::versioning::VersionScheme::Conary,
                 architecture_qualifier: Default::default(),
+                provenance:
+                    crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
                 target: None,
                 component: None,
             },
-            ProvidedCapabilityV2 {
-                kind: DependencyKindV2::PkgConfig,
-                name: "typed-v2".to_string(),
+            ProvidedCapabilityV3 {
+                kind: DependencyKindV3::PkgConfig,
+                name: "typed-v3".to_string(),
                 provider_version: None,
                 version_relation: None,
                 version_scheme: crate::repository::versioning::VersionScheme::Conary,
                 architecture_qualifier: Default::default(),
+                provenance:
+                    crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
                 target: None,
                 component: None,
             },
         ];
 
         let package =
-            CcsPackage::from_v2_authority_for_tests(authority.clone(), None, None).unwrap();
-        let provides = package
-            .provides()
+            CcsPackage::from_v3_authority_for_tests(authority.clone(), None, None).unwrap();
+        let resolution_capabilities = package.resolution_capabilities().unwrap();
+        let provides = resolution_capabilities
             .iter()
             .map(|provide| provide.name.as_str())
             .collect::<Vec<_>>();
 
         assert_eq!(package.requirements(), authority.requirements.as_slice());
-        assert_eq!(provides, vec!["typed-v2", "http-client", "typed-v2"]);
+        assert_eq!(provides, vec!["typed-v3", "http-client", "typed-v3"]);
         assert!(package.manifest().provides.capabilities.is_empty());
         assert!(package.manifest().provides.pkgconfig.is_empty());
     }
 
     #[test]
-    fn v2_projection_preserves_attestation_metadata() {
+    fn v3_projection_preserves_attestation_metadata() {
         let authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("attested-v2");
+            crate::ccs::v3::test_support::package_authority_with_one_file("attested-v3");
         let key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("publish");
         let envelope = crate::ccs::attestation::test_support::sample_envelope_for_tests(&key);
         let package =
-            CcsPackage::from_v2_authority_for_tests(authority, Some(envelope.clone()), None)
+            CcsPackage::from_v3_authority_for_tests(authority, Some(envelope.clone()), None)
                 .unwrap();
         let provenance = package.manifest().provenance.as_ref().unwrap();
         assert_eq!(provenance.build_attestation.as_ref(), Some(&envelope));
     }
 
     #[test]
-    fn parse_rejects_native_v2_and_verified_parse_accepts_after_verification() {
+    fn parse_rejects_native_v3_and_verified_parse_accepts_after_verification() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("adapter-v2.ccs");
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("adapter-v2");
-        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let path = temp.path().join("adapter-v3.ccs");
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("adapter-v3");
+        let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
         let key = crate::ccs::signing::SigningKeyPair::generate();
-        crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+        crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority, &payloads, &path, &key, None, None, None,
         )
         .unwrap();
@@ -661,7 +654,7 @@ inheritable = false
         .unwrap();
         let package =
             CcsPackage::from_verified_archive(path.to_str().unwrap(), &verification).unwrap();
-        assert!(package.v2_authority().is_some());
+        assert!(package.v3_authority().is_some());
 
         let untrusted_key = crate::ccs::signing::SigningKeyPair::generate();
         let verified_error = crate::ccs::verify::verify_package(

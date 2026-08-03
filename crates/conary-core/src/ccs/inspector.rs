@@ -35,7 +35,7 @@ impl UntrustedPackageInspection {
         // Files come from the signed authority. The archive no longer carries a
         // duplicated `components/*.json` copy of the same records.
         let files: Vec<FileEntry> =
-            crate::ccs::v2::component_view::file_entries(&contents.v2_authority);
+            crate::ccs::v3::component_view::file_entries(&contents.v3_authority);
 
         Ok(Self {
             manifest: contents.manifest,

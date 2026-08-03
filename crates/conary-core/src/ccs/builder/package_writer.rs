@@ -21,8 +21,8 @@ use std::sync::Arc;
 pub(super) const BOUNDED_MEMORY_FIXTURE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[doc(hidden)]
-pub fn write_v2_ccs_package_from_bounded_memory_for_tests(
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
+pub fn write_v3_ccs_package_from_bounded_memory_for_tests(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
     payloads_by_path: &std::collections::BTreeMap<String, Vec<u8>>,
     output_path: &Path,
     signing_key: &super::super::signing::SigningKeyPair,
@@ -30,7 +30,7 @@ pub fn write_v2_ccs_package_from_bounded_memory_for_tests(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<()> {
-    use crate::ccs::v2::schema::PackageKindV2;
+    use crate::ccs::v3::schema::PackageKindV3;
     use crate::packages::payload::{PackagePayloadFile, ReopenablePayload};
 
     let total = payloads_by_path.values().try_fold(0_u64, |total, bytes| {
@@ -54,8 +54,8 @@ pub fn write_v2_ccs_package_from_bounded_memory_for_tests(
             .prefix(".conary-ccs-memory-fixture-")
             .tempdir_in(output_parent)?,
     );
-    let PackageKindV2::Package(package) = &authority.kind else {
-        anyhow::bail!("v2 package writer only writes package payloads");
+    let PackageKindV3::Package(package) = &authority.kind else {
+        anyhow::bail!("v3 package writer only writes package payloads");
     };
     let mut payloads = Vec::with_capacity(package.files.len());
     let mut expected_paths = std::collections::HashSet::new();
@@ -90,7 +90,7 @@ pub fn write_v2_ccs_package_from_bounded_memory_for_tests(
     {
         anyhow::bail!("in-memory fixture carries unsigned payload path {extra}");
     }
-    write_v2_ccs_package_from_sources(
+    write_v3_ccs_package_from_sources(
         authority,
         &payloads,
         output_path,
@@ -102,8 +102,8 @@ pub fn write_v2_ccs_package_from_bounded_memory_for_tests(
 }
 
 /// Emit a signed CCS archive from independently reopenable payload sources.
-pub fn write_v2_ccs_package_from_sources(
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
+pub fn write_v3_ccs_package_from_sources(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
     payloads: &[crate::packages::payload::PackagePayloadFile],
     output_path: &Path,
     signing_key: &super::super::signing::SigningKeyPair,
@@ -117,7 +117,7 @@ pub fn write_v2_ccs_package_from_sources(
             anyhow::bail!("payload source path {} appears more than once", file.path);
         }
     }
-    write_v2_ccs_package_with_open(
+    write_v3_ccs_package_with_open(
         authority,
         output_path,
         signing_key,
@@ -135,8 +135,8 @@ pub fn write_v2_ccs_package_from_sources(
     )
 }
 
-fn write_v2_ccs_package_with_open<'a>(
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
+fn write_v3_ccs_package_with_open<'a>(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
     output_path: &Path,
     signing_key: &super::super::signing::SigningKeyPair,
     debug_toml: Option<&str>,
@@ -145,7 +145,7 @@ fn write_v2_ccs_package_with_open<'a>(
     mut open_payload: impl FnMut(&str) -> Result<Box<dyn std::io::Read + 'a>>,
 ) -> Result<()> {
     use crate::ccs::budget::CCS_BUDGET;
-    use crate::ccs::v2::schema::PackageKindV2;
+    use crate::ccs::v3::schema::PackageKindV3;
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use tar::Builder;
@@ -154,7 +154,7 @@ fn write_v2_ccs_package_with_open<'a>(
     // so a package this writer emits is admissible to the reader by
     // construction rather than by coincidence.
     let census =
-        crate::ccs::v2::authority_census(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
+        crate::ccs::v3::authority_census(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
     let output_parent = output_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -197,8 +197,8 @@ fn write_v2_ccs_package_with_open<'a>(
     )?;
     fs::write(temp_dir.path().join("MANIFEST.sig"), signature_document)?;
 
-    let PackageKindV2::Package(data) = &authority.kind else {
-        anyhow::bail!("M4a v2 writer only writes package payloads");
+    let PackageKindV3::Package(data) = &authority.kind else {
+        anyhow::bail!("M4a v3 writer only writes package payloads");
     };
 
     let objects_dir = temp_dir.path().join("objects");
@@ -219,7 +219,7 @@ fn write_v2_ccs_package_with_open<'a>(
                 .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
                 .with_context(|| {
                     format!(
-                        "payload for {} does not match signed v2 authority",
+                        "payload for {} does not match signed v3 authority",
                         file.path
                     )
                 })?;
@@ -263,14 +263,14 @@ pub fn write_signed_current_ccs_package(
         .manifest
         .to_toml()
         .context("serialize CCS diagnostic projection")?;
-    let projected = crate::ccs::v2::project_build_result_to_v2(crate::ccs::v2::V2AuthoringInput {
+    let projected = crate::ccs::v3::project_build_result_to_v3(crate::ccs::v3::V3AuthoringInput {
         build: result,
         local_dev,
         debug_toml: Some(debug_toml),
     })
-    .context("project current CCS v2 authority")?;
+    .context("project current CCS v3 authority")?;
     let provenance = result.manifest.provenance.as_ref();
-    write_v2_ccs_package_from_sources(
+    write_v3_ccs_package_from_sources(
         &projected.authority,
         &projected.payloads,
         output_path,
@@ -414,20 +414,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_v2_package_preserves_signed_authority() {
+    fn write_v3_package_preserves_signed_authority() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("hello-v2.ccs");
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("hello-v2");
-        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let path = temp.path().join("hello-v3.ccs");
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("hello-v3");
+        let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
         let key = crate::ccs::signing::SigningKeyPair::generate();
 
-        write_v2_ccs_package_from_bounded_memory_for_tests(
+        write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &path,
             &key,
             Some(
-                "[package]\nname = \"hello-v2\"\nversion = \"1.0.0\"\nversion_scheme = \"conary\"\ndescription = \"debug\"\n",
+                "[package]\nname = \"hello-v3\"\nversion = \"1.0.0\"\nversion_scheme = \"conary\"\ndescription = \"debug\"\n",
             ),
             None,
             None,
@@ -438,7 +438,7 @@ mod tests {
             std::fs::File::open(path).unwrap(),
         )
         .unwrap();
-        assert_eq!(contents.v2_authority.identity.name, "hello-v2");
+        assert_eq!(contents.v3_authority.identity.name, "hello-v3");
         assert_eq!(contents.components["main"].files.len(), 1);
         assert_eq!(contents.census.files, 1);
         assert_eq!(contents.census.payload_objects, 1);
@@ -448,10 +448,10 @@ mod tests {
     fn writer_emits_no_duplicated_component_projection() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("no-projection.ccs");
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("nodup");
-        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("nodup");
+        let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
         let key = crate::ccs::signing::SigningKeyPair::generate();
-        write_v2_ccs_package_from_bounded_memory_for_tests(
+        write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority, &payloads, &path, &key, None, None, None,
         )
         .unwrap();

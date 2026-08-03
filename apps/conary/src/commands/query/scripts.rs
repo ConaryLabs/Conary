@@ -140,7 +140,7 @@ fn load_verified_ccs_package(
     let file = std::fs::File::open(package_path)
         .with_context(|| format!("open package file {package_path}"))?;
     inspect_untrusted_ccs_archive(file)
-        .with_context(|| format!("{package_path} is not a current signed CCS v2 archive"))?;
+        .with_context(|| format!("{package_path} is not a current signed CCS v3 archive"))?;
     let policy_path = options
         .policy_path
         .as_deref()

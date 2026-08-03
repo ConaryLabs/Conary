@@ -207,22 +207,25 @@ impl DebianParser {
     fn parse_structured_provides(&self, provides_str: &str) -> Result<Vec<RepositoryProvide>> {
         let mut result = Vec::new();
 
-        for provide in provides_str.split(',') {
+        for (record_index, provide) in provides_str.split(',').enumerate() {
             let provide = provide.trim();
             if provide.is_empty() {
                 return Err(Error::ParseError(format!(
                     "invalid Debian Provides field with an empty comma-separated entry: {provides_str}"
                 )));
             }
-            result.push(
-                crate::repository::package_relation::parse_debian_provide(provide).map_err(
-                    |error| {
-                        Error::ParseError(format!(
-                            "invalid Debian Provides atom '{provide}': {error}"
-                        ))
-                    },
-                )?,
-            );
+            let mut parsed = crate::repository::package_relation::parse_debian_provide(provide)
+                .map_err(|error| {
+                    Error::ParseError(format!("invalid Debian Provides atom '{provide}': {error}"))
+                })?;
+            parsed.provenance =
+                crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                    format: crate::repository::dependency_model::SourcePackageFormat::Debian,
+                    record_index: u32::try_from(record_index).map_err(|_| {
+                        Error::ParseError("Debian repository provide index exceeds u32".to_string())
+                    })?,
+                };
+            result.push(parsed);
         }
 
         Ok(result)
@@ -838,6 +841,13 @@ mod tests {
             .expect("virtual provide missing");
         assert_eq!(mta.kind, RepositoryCapabilityKind::Virtual);
         assert!(mta.version.is_none());
+        assert_eq!(
+            mta.provenance,
+            crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                format: crate::repository::dependency_model::SourcePackageFormat::Debian,
+                record_index: 0,
+            }
+        );
 
         let smtp = pkg
             .provides
@@ -846,6 +856,13 @@ mod tests {
             .expect("versioned virtual provide missing");
         assert_eq!(smtp.kind, RepositoryCapabilityKind::Virtual);
         assert_eq!(smtp.version.as_deref(), Some("1.0"));
+        assert_eq!(
+            smtp.provenance,
+            crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                format: crate::repository::dependency_model::SourcePackageFormat::Debian,
+                record_index: 1,
+            }
+        );
     }
 
     #[test]

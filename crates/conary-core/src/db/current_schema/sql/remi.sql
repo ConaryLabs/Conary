@@ -12,9 +12,9 @@ CREATE TABLE converted_packages (
             -- Checksum of the original package file. Repository conversion
             -- identity is scoped by exact source_profile.
             original_checksum TEXT NOT NULL,
-            -- Exact normalized repository-provide projection merged into a
-            -- repository conversion. Installed conversions have no repository
-            -- metadata projection.
+            -- Exact normalized repository-provide cache projection. It
+            -- invalidates stale conversions but never mutates source artifact
+            -- authority. Installed conversions have no repository projection.
             repository_provides_digest TEXT,
             -- Conversion algorithm version (re-convert if upgraded)
             conversion_version INTEGER NOT NULL DEFAULT 1,

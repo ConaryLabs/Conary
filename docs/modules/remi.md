@@ -101,10 +101,10 @@ because sync does not consume them.
 `GET /v1/{distro}/metadata` is not a client-sync fallback.
 
 For Fedora, normalized provides include every generator-selected `<file>`
-record from authenticated `primary.xml` as `kind = "file"`. The sparse page and
-per-name lookup project that persisted typed row unchanged; Remi does not
-derive file providers from package names or filter them through its own path
-rules.
+record from authenticated `primary.xml` as `kind = "file"` with exact
+`source-derived-file` provenance. The sparse page and per-name lookup project
+that persisted typed row unchanged; Remi does not derive file providers from
+package names or filter them through its own path rules.
 
 Remi opens SQLite once for each HTTP page, selects all visible package/version
 rows for the page together, and batch-loads their normalized provides and
@@ -220,13 +220,13 @@ and public profile.
 
 Remi release push is the first native CCS publication intake surface. The
 route remains `POST /v1/admin/releases/{distro}` with bearer-token admin auth,
-but accepted CCS v2 uploads are stored in `native_package_publications` and
+but accepted CCS v3 uploads are stored in `native_package_publications` and
 projected into `repository_packages`; they are not synthetic
 `converted_packages` rows. Native uploads stage privately, run the shared static
 publish gate against `release_publish.trusted_build_attestation_signers`.
 There is no parallel `/v1/admin/packages/{distro}` publication route.
 After structural parsing, signature/trust verification, and the shared static
-publish gate pass, Remi validates signed CCS v2 lifecycle authority
+publish gate pass, Remi validates signed CCS v3 lifecycle authority
 structurally. The route selects a repository feed, never a destination
 compatibility policy. Unsupported route slugs fail before storage or artifact
 verification. Package rows, native rows, chunks, and TUF targets are published
@@ -257,12 +257,14 @@ The current schema separates installed conversions from repository-serving
 artifacts with a required discriminator. Installed rows require an exact trove
 identity and cannot carry serving fields. Repository rows require their exact
 distro/name/version/architecture identity, chunk list, total size, content
-hash, CCS path, and SHA-256 digest of the normalized repository-provide
-projection merged into signed CCS authority; public, OCI, index, search, chunk,
-and garbage-collection paths validate that typed artifact instead of filling
+hash, CCS path, and SHA-256 digest of the normalized repository-provide cache
+projection. That digest invalidates cached conversions when repository metadata
+changes, but repository rows never mutate identity or capabilities parsed from
+the authenticated source artifact. Public, OCI, index, search, chunk, and
+garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 22 is a
+schema rejects missing, empty, or malformed values. Schema revision 24 is a
 pre-alpha hard cut: prior databases are rebuilt and re-ingested from configured
 repository authority rather than migrated. Local conversion tracking is
 written only after the CCS install transaction commits.
@@ -291,13 +293,14 @@ local filesystem paths are not part of any public response.
 
 Server conversion has two terminal outcomes: ready or failed. A ready
 conversion is advertised and served when its conversion version and lifecycle
-summary are current, its stored repository-provide digest exactly matches the
-current normalized source package, and its CCS/CAS objects exist. A native
+summary are current, its stored repository-provide cache digest exactly matches
+the current normalized repository metadata, and its CCS/CAS objects exist. A native
 metadata refresh removes mismatched conversion rows in the same SQLite
-transaction. Cold conversion carries one immutable provider snapshot through
-cache lookup, CCS signing, and persistence, then revalidates it under the
-database write transaction so a concurrent refresh cannot publish mixed
-authority. CCS cache files use their emitted content hash as the local filename
+transaction. Cold conversion carries one immutable repository-metadata digest
+through cache lookup and persistence, then revalidates it under the database
+write transaction so a concurrent refresh cannot publish stale source input.
+CCS identity and capabilities come solely from the downloaded artifact. CCS
+cache files use their emitted content hash as the local filename
 instead of a mutable package-name/version slot. Lifecycle program content,
 diagnostic classes, package names, and command-name matches do not create a
 second serving decision.

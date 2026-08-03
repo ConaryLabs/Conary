@@ -90,17 +90,21 @@ fn arch_hook_depends_accepts_incoming_virtual_provide_from_native_install_input(
         "hook dependency must not be inferred from the incoming payload"
     );
 
-    let provides = [conary_core::packages::traits::ProvidedCapability {
-        kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
-        name: "cache-provider".to_string(),
-        version: Some("2:1.0-2".to_string()),
-        version_relation: Some(
-            conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
-        ),
-        version_scheme: VersionScheme::Arch,
-        architecture_qualifier:
-            conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
-    }];
+    let provides = [
+        conary_core::repository::dependency_model::ProvidedCapability {
+            kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::Virtual,
+            name: "cache-provider".to_string(),
+            version: Some("2:1.0-2".to_string()),
+            version_relation: Some(
+                conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+            ),
+            version_scheme: VersionScheme::Arch,
+            architecture_qualifier:
+                conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+            provenance:
+                conary_core::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
+        },
+    ];
     let with_provide = PreparedNativeTransaction::prepare_batch(
         &conn,
         &[NativeInstallInput {

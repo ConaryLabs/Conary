@@ -36,10 +36,10 @@ pub fn build_native_lifecycle_bundle(
         source_release: input.source_release.map(str::to_string),
         source_arch: input
             .source_arch
-            .or(input.source_metadata.architecture.as_deref())
+            .or(input.source_metadata.architecture())
             .map(str::to_string),
-        source_package: input.source_metadata.name.clone(),
-        source_version: input.source_metadata.version.clone(),
+        source_package: input.source_metadata.name().to_string(),
+        source_version: input.source_metadata.version().to_string(),
         source_checksum,
         version_scheme: version_scheme(source_format),
         conversion_tool: input.conversion_tool.to_string(),
@@ -77,22 +77,33 @@ pub fn build_direct_native_lifecycle_bundle(
         return Ok(None);
     }
 
-    let metadata = PackageMetadata {
-        package_path: PathBuf::new(),
-        name: package.name().to_string(),
-        version: package.version().to_string(),
-        version_scheme: package.version_scheme(),
-        architecture: package.architecture().map(str::to_string),
-        debian_multi_arch: package.debian_multi_arch(),
-        description: package.description().map(str::to_string),
-        files: package.files().to_vec(),
-        requirements: package.requirements().to_vec(),
-        provides: package.provides().to_vec(),
-        relations: package.relations().to_vec(),
-        diagnostic_scriptlet_evidence: Vec::new(),
-        native_scriptlet_abi: native_entries.to_vec(),
-        config_files: package.config_files().to_vec(),
-    };
+    let capabilities = package
+        .resolution_capabilities()?
+        .into_iter()
+        .filter(|capability| {
+            capability.provenance
+                != crate::repository::dependency_model::CapabilityProvenance::ExactIdentity
+        })
+        .collect();
+    let mut metadata = PackageMetadata::new(
+        PathBuf::new(),
+        package.name().to_string(),
+        package.version().to_string(),
+        package.version_scheme(),
+    );
+    if let crate::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    {
+        authority.architecture = package.architecture().map(str::to_string);
+        authority.debian_multi_arch = package.debian_multi_arch();
+        authority.capabilities = capabilities;
+    }
+    metadata.description = package.description().map(str::to_string);
+    metadata.files = package.files().to_vec();
+    metadata.requirements = package.requirements().to_vec();
+    metadata.relations = package.relations().to_vec();
+    metadata.native_scriptlet_abi = native_entries.to_vec();
+    metadata.config_files = package.config_files().to_vec();
     let build = build_native_lifecycle_bundle(ScriptletBundleInput {
         source_metadata: &metadata,
         final_metadata: &metadata,

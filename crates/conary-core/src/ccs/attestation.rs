@@ -157,33 +157,33 @@ pub fn verify_build_attestation_envelope(
         .context("verify build attestation signature")
 }
 
-pub fn compute_v2_content_identity(
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
+pub fn compute_v3_content_identity(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
 ) -> Result<String> {
-    crate::ccs::v2::compute_v2_content_identity(authority)
+    crate::ccs::v3::compute_v3_content_identity(authority)
 }
 
-pub fn compute_v2_file_merkle_root(
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
+pub fn compute_v3_file_merkle_root(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
 ) -> Result<String> {
-    crate::ccs::v2::compute_v2_file_merkle_root(authority)
+    crate::ccs::v3::compute_v3_file_merkle_root(authority)
 }
 
 pub fn compute_build_output_identity(
     package: &crate::ccs::package::CcsPackage,
 ) -> Result<BuildOutputIdentity> {
     let authority = package
-        .v2_authority()
-        .context("build output identity requires verified CCS v2 authority")?;
-    compute_build_output_identity_from_v2(authority)
+        .v3_authority()
+        .context("build output identity requires verified CCS v3 authority")?;
+    compute_build_output_identity_from_v3(authority)
 }
 
-pub fn compute_build_output_identity_from_v2(
-    authority: &crate::ccs::v2::AuthorityDocumentV2,
+pub fn compute_build_output_identity_from_v3(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
 ) -> Result<BuildOutputIdentity> {
     let provenance = &authority.provenance;
     Ok(BuildOutputIdentity {
-        file_merkle_root: compute_v2_file_merkle_root(authority)?,
+        file_merkle_root: compute_v3_file_merkle_root(authority)?,
         package_name: authority.identity.name.clone(),
         package_version: authority.identity.version.clone(),
         package_release: authority.identity.release.clone(),
@@ -191,16 +191,16 @@ pub fn compute_build_output_identity_from_v2(
         origin_class: provenance
             .origin_class
             .clone()
-            .context("v2 build output identity requires origin_class")?,
+            .context("v3 build output identity requires origin_class")?,
         hardening_level: provenance
             .hardening_level
             .clone()
-            .context("v2 build output identity requires hardening_level")?,
+            .context("v3 build output identity requires hardening_level")?,
         hermetic_evidence_hash: provenance
             .hermetic_evidence_hash
             .clone()
-            .context("v2 build output identity requires hermetic_evidence_hash")?,
-        canonical_content_identity: compute_v2_content_identity(authority)?,
+            .context("v3 build output identity requires hermetic_evidence_hash")?,
+        canonical_content_identity: compute_v3_content_identity(authority)?,
     })
 }
 
@@ -274,14 +274,14 @@ pub(crate) mod test_support {
         sign_build_attestation(sample_payload_for_tests(), key).unwrap()
     }
 
-    pub(crate) fn sample_v2_envelope_for_tests(
-        authority: &crate::ccs::v2::AuthorityDocumentV2,
+    pub(crate) fn sample_v3_envelope_for_tests(
+        authority: &crate::ccs::v3::AuthorityDocumentV3,
         key: &crate::ccs::signing::SigningKeyPair,
         policy_digest: &str,
     ) -> BuildAttestationEnvelope {
         let provenance = &authority.provenance;
         let output_identity = BuildOutputIdentity {
-            file_merkle_root: compute_v2_file_merkle_root(authority).unwrap(),
+            file_merkle_root: compute_v3_file_merkle_root(authority).unwrap(),
             package_name: authority.identity.name.clone(),
             package_version: authority.identity.version.clone(),
             package_release: authority.identity.release.clone(),
@@ -289,7 +289,7 @@ pub(crate) mod test_support {
             origin_class: provenance.origin_class.clone().unwrap(),
             hardening_level: provenance.hardening_level.clone().unwrap(),
             hermetic_evidence_hash: provenance.hermetic_evidence_hash.clone().unwrap(),
-            canonical_content_identity: compute_v2_content_identity(authority).unwrap(),
+            canonical_content_identity: compute_v3_content_identity(authority).unwrap(),
         };
         let mut payload = sample_payload_for_tests();
         payload.origin_class = output_identity.origin_class.clone();
@@ -379,7 +379,7 @@ mod tests {
         let first_key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("first");
         let second_key = crate::ccs::signing::SigningKeyPair::generate().with_key_id("second");
         let (_first_temp, first) = signed_package_for_identity_tests(&first_key, "m2-policy-v1");
-        let (_second_temp, second) = signed_package_for_identity_tests(&second_key, "m2-policy-v2");
+        let (_second_temp, second) = signed_package_for_identity_tests(&second_key, "m2-policy-v3");
 
         let first_identity = compute_build_output_identity(&first).unwrap();
         let second_identity = compute_build_output_identity(&second).unwrap();

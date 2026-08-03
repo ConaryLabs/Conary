@@ -1,12 +1,12 @@
-// conary-core/src/ccs/v2/manifest_projection.rs
+// conary-core/src/ccs/v3/manifest_projection.rs
 
-//! Shared projection of signed v2 identity into the compatibility manifest.
+//! Shared projection of signed v3 identity into the compatibility manifest.
 
-use super::AuthorityDocumentV2;
+use super::AuthorityDocumentV3;
 use crate::ccs::manifest::{CcsManifest, Platform};
 
 pub(crate) fn project_manifest_identity(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     description: String,
 ) -> CcsManifest {
     let mut manifest =
@@ -36,8 +36,8 @@ mod tests {
     use crate::repository::versioning::VersionScheme;
 
     #[test]
-    fn exact_v2_identity_overwrites_native_authoring_defaults() {
-        let mut authority = AuthorityDocumentV2::package_for_tests("identity-projection");
+    fn exact_v3_identity_overwrites_native_authoring_defaults() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("identity-projection");
         authority.identity.version_scheme = VersionScheme::Debian;
         authority.identity.release = "7".to_string();
         authority.identity.architecture = Some("all".to_string());

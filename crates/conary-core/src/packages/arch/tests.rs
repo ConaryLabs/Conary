@@ -6,6 +6,7 @@ use crate::packages::traits::{
     NativeArgumentValue, NativeLifecyclePath, NativeScriptletFormat, NativeScriptletKind,
     NativeScriptletMetadata, NativeTransactionPosition,
 };
+use crate::repository::dependency_model::RepositoryCapabilityKind;
 use std::io::Write;
 
 #[test]
@@ -130,10 +131,10 @@ fn pkginfo_relation_rejects_malformed_exact_constraint() {
 
 #[test]
 fn arch_provides_are_exact_typed_provider_contracts() {
-    let parsed = ArchPackage::parse_provides(
+    let parsed = ArchPackage::parse_declared_capability_records(
         "example",
-        "1.0-1",
         &[
+            "example=0.9".to_string(),
             "virtual-abi=2".to_string(),
             "unversioned".to_string(),
             "libwlroots-0.18.so=libwlroots-0.18.so-64".to_string(),
@@ -144,7 +145,7 @@ fn arch_provides_are_exact_typed_provider_contracts() {
 
     assert_eq!(parsed.len(), 5);
     assert_eq!(parsed[0].kind, RepositoryCapabilityKind::PackageName);
-    assert_eq!(parsed[0].version.as_deref(), Some("1.0-1"));
+    assert_eq!(parsed[0].version.as_deref(), Some("0.9"));
     assert_eq!(parsed[1].kind, RepositoryCapabilityKind::Virtual);
     assert_eq!(parsed[1].version.as_deref(), Some("2"));
     assert_eq!(parsed[2].version, None);
@@ -155,8 +156,9 @@ fn arch_provides_are_exact_typed_provider_contracts() {
     assert_eq!(parsed[4].kind, RepositoryCapabilityKind::Soname);
     assert_eq!(parsed[4].version, None);
 
-    let error = ArchPackage::parse_provides("example", "1.0-1", &["virtual-abi>=2".to_string()])
-        .unwrap_err();
+    let error =
+        ArchPackage::parse_declared_capability_records("example", &["virtual-abi>=2".to_string()])
+            .unwrap_err();
     assert!(error.to_string().contains("exact '='"));
 }
 

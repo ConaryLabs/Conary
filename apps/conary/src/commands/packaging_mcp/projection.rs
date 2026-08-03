@@ -103,7 +103,7 @@ fn diagnostic_code_to_error_kind(code: PackagingDiagnosticCode) -> AgentErrorKin
         | PackagingDiagnosticCode::UnpinnedDependency
         | PackagingDiagnosticCode::CommandRiskEvidence
         | PackagingDiagnosticCode::PublishGateFailed
-        | PackagingDiagnosticCode::CcsV2ValidationFailed
+        | PackagingDiagnosticCode::CcsV3ValidationFailed
         | PackagingDiagnosticCode::CcsFormatVersionRejected
         | PackagingDiagnosticCode::ProjectPublishPreflightFailed => {
             AgentErrorKind::ValidationFailed

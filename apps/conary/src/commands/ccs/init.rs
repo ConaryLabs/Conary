@@ -181,7 +181,7 @@ fn detect_project_and_update_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::ccs::v2::PackageKindTagV2;
+    use conary_core::ccs::v3::PackageKindTagV3;
 
     #[test]
     fn project_detection_preserves_template_identity_fields() {
@@ -211,7 +211,7 @@ license = "MIT"
         assert_eq!(manifest.package.description, "cargo description");
         assert_eq!(manifest.package.license.as_deref(), Some("MIT"));
         assert_eq!(manifest.package.release.as_str(), "1");
-        assert_eq!(manifest.package.kind, PackageKindTagV2::Package);
+        assert_eq!(manifest.package.kind, PackageKindTagV3::Package);
         assert_eq!(
             manifest
                 .package

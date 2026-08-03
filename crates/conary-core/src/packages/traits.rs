@@ -5,14 +5,13 @@
 use crate::db::models::Trove;
 use crate::error::Result;
 use crate::packages::payload::PackagePayload;
+use crate::packages::source_authority::{CcsPackageAuthority, SourcePackageAuthority};
 use crate::payload::{PayloadContentAuthority, PayloadNode};
-use crate::repository::dependency_model::{
-    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
-    RepositoryCapabilityKind, RepositoryRequirementGroup,
-};
-use crate::repository::versioning::{VersionScheme, validate_repo_version};
+use crate::repository::dependency_model::{DebianMultiArch, RepositoryRequirementGroup};
+use crate::repository::versioning::VersionScheme;
 
 pub use crate::packages::native_abi::*;
+pub use crate::repository::dependency_model::ProvidedCapability;
 
 /// Metadata about a file within a package
 #[derive(Debug, Clone)]
@@ -29,46 +28,6 @@ pub struct ExtractedFile {
     pub node: PayloadNode,
     pub content: Vec<u8>,
     pub content_authority: Option<PayloadContentAuthority>,
-}
-
-/// Exact capability provided by one parsed package.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProvidedCapability {
-    pub kind: RepositoryCapabilityKind,
-    pub name: String,
-    /// Provider range boundary, never a comparison expression.
-    pub version: Option<String>,
-    /// Typed relation associated with `version`.
-    pub version_relation: Option<ProvideVersionRelation>,
-    pub version_scheme: VersionScheme,
-    pub architecture_qualifier: ProvideArchitectureQualifier,
-}
-
-impl ProvidedCapability {
-    pub fn validate(&self) -> Result<()> {
-        if self.name.trim().is_empty() {
-            return Err(crate::error::Error::ParseError(
-                "provided capability name is empty".to_string(),
-            ));
-        }
-        if self.version.is_some() != self.version_relation.is_some() {
-            return Err(crate::error::Error::ParseError(format!(
-                "provided capability '{}' must carry both a version relation and boundary, or neither",
-                self.name
-            )));
-        }
-        if let Some(version) = self.version.as_deref() {
-            validate_repo_version(self.version_scheme, version).map_err(|error| {
-                crate::error::Error::ParseError(format!(
-                    "provided capability '{}' has invalid {} provider version: {error}",
-                    self.name,
-                    self.version_scheme.as_str()
-                ))
-            })?;
-        }
-        Ok(())
-    }
 }
 
 /// Non-authoritative lifecycle label attached to flattened diagnostic evidence.
@@ -170,6 +129,26 @@ pub trait PackageFormat {
         None
     }
 
+    /// Exact source-format identity and declared capability records.
+    fn source_authority(&self) -> Result<SourcePackageAuthority> {
+        let capabilities = self
+            .resolution_capabilities()?
+            .into_iter()
+            .filter(|capability| {
+                capability.provenance
+                    != crate::repository::dependency_model::CapabilityProvenance::ExactIdentity
+            })
+            .collect();
+        Ok(SourcePackageAuthority::Ccs(CcsPackageAuthority {
+            name: self.name().to_string(),
+            version: self.version().to_string(),
+            version_scheme: self.version_scheme(),
+            architecture: self.architecture().map(str::to_string),
+            debian_multi_arch: self.debian_multi_arch(),
+            capabilities,
+        }))
+    }
+
     /// Get the package summary/description
     fn description(&self) -> Option<&str>;
 
@@ -182,12 +161,9 @@ pub trait PackageFormat {
     /// must remain intact through conversion and persistence.
     fn requirements(&self) -> &[RepositoryRequirementGroup];
 
-    /// Get the list of native capabilities this package provides.
-    ///
-    /// Defaults to an empty slice for formats that do not expose native
-    /// provide metadata.
-    fn provides(&self) -> &[ProvidedCapability] {
-        &[]
+    /// Project exact identity and declared capabilities for resolution.
+    fn resolution_capabilities(&self) -> Result<Vec<ProvidedCapability>> {
+        Ok(Vec::new())
     }
 
     /// Get source-native conflict, break, replacement, and obsolete relations.

@@ -254,7 +254,7 @@ async fn execute_restore_plan_with_root(
             },
         )
         .await?;
-        add_prepared_install_to_target_state(&mut target_state, &prepared);
+        add_prepared_install_to_target_state(&mut target_state, &prepared)?;
         prepared_installs.push(prepared);
     }
     for (_, member) in &plan.to_upgrade {
@@ -275,7 +275,7 @@ async fn execute_restore_plan_with_root(
             },
         )
         .await?;
-        add_prepared_install_to_target_state(&mut target_state, &prepared);
+        add_prepared_install_to_target_state(&mut target_state, &prepared)?;
         prepared_installs.push(prepared);
     }
     for prepared in &prepared_installs {

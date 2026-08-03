@@ -6,13 +6,15 @@ use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::common::PackageMetadata;
 use crate::packages::payload::PackagePayload;
+use crate::packages::rpm::authority::{RpmDeclaredCapability, RpmPackageAuthority};
+use crate::packages::source_authority::SourcePackageAuthority;
 use crate::packages::traits::{
     ConfigFileInfo, NativeArgumentContract, NativeArgumentValue, NativeEnvironmentFact,
     NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
     NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
     NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
-    PackageFile, PackageFormat, ProvidedCapability, RpmHeaderContextMetadata,
-    RpmHeaderFactMetadata, RpmHeaderFactSource, RpmHeaderValueMetadata, RpmMacroContextMetadata,
+    PackageFile, PackageFormat, RpmHeaderContextMetadata, RpmHeaderFactMetadata,
+    RpmHeaderFactSource, RpmHeaderValueMetadata, RpmMacroContextMetadata,
     RpmMacroDefinitionMetadata, RpmMacroDefinitionSource, RpmNativeScriptletMetadata,
     RpmScriptletCriticality, RpmScriptletFlagsMetadata, RpmScriptletProgram,
     RpmScriptletRuntimeMetadata, RpmScriptletSlot, RpmSysusersDirective, RpmSysusersMetadata,
@@ -29,6 +31,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use tracing::debug;
 
+pub mod authority;
 mod payload;
 /// RPM package representation
 mod scriptlets;
@@ -82,17 +85,19 @@ impl RpmPackage {
     }
 
     /// Extract native provides from RPM package metadata.
-    fn extract_provides(pkg: &Package) -> Result<Vec<ProvidedCapability>> {
+    fn extract_declared_capability_records(pkg: &Package) -> Result<Vec<RpmDeclaredCapability>> {
         let mut provides = Vec::new();
         let package_name = pkg
             .metadata
             .get_name()
             .map_err(|error| Error::ParseError(format!("Failed to read RPM name: {error}")))?;
 
-        for entry in pkg
+        for (record_index, entry) in pkg
             .metadata
             .get_provides()
             .map_err(|error| Error::ParseError(format!("Failed to read RPM provides: {error}")))?
+            .into_iter()
+            .enumerate()
         {
             // rpmlib provides are synthesized by the package-manager runtime,
             // not supplied by an installable package:
@@ -111,7 +116,10 @@ impl RpmPackage {
             let version_relation = rpm_provide_relation(&entry.name, &entry.version, entry.flags)?;
             let version = version_relation.map(|_| entry.version.to_string());
 
-            let provide = ProvidedCapability {
+            let provide = RpmDeclaredCapability {
+                header_index: u32::try_from(record_index).map_err(|_| {
+                    Error::ParseError("RPM provide record index exceeds u32".to_string())
+                })?,
                 kind: if entry.name == package_name {
                     RepositoryCapabilityKind::PackageName
                 } else {
@@ -120,10 +128,8 @@ impl RpmPackage {
                 name: entry.name.to_string(),
                 version,
                 version_relation,
-                version_scheme: VersionScheme::Rpm,
                 architecture_qualifier: Default::default(),
             };
-            provide.validate()?;
             provides.push(provide);
         }
 
@@ -394,21 +400,22 @@ impl PackageFormat for RpmPackage {
             .metadata
             .get_release()
             .map_err(|error| Error::ParseError(format!("Failed to get RPM release: {error}")))?;
-        let epoch = if pkg
-            .metadata
-            .header
-            .entry_is_present(rpm::IndexTag::RPMTAG_EPOCH)
-        {
-            pkg.metadata
-                .get_epoch()
-                .map_err(|error| Error::ParseError(format!("Failed to get RPM epoch: {error}")))?
-        } else {
-            0
-        };
-        let version = if epoch == 0 {
-            format!("{version}-{release}")
-        } else {
+        let epoch =
+            if pkg
+                .metadata
+                .header
+                .entry_is_present(rpm::IndexTag::RPMTAG_EPOCH)
+            {
+                Some(pkg.metadata.get_epoch().map_err(|error| {
+                    Error::ParseError(format!("Failed to get RPM epoch: {error}"))
+                })?)
+            } else {
+                None
+            };
+        let evr = if let Some(epoch) = epoch {
             format!("{epoch}:{version}-{release}")
+        } else {
+            format!("{version}-{release}")
         };
 
         let architecture = Some(
@@ -440,7 +447,7 @@ impl PackageFormat for RpmPackage {
             })
             .collect();
         let requirements = Self::extract_requirements(&pkg)?;
-        let provides = Self::extract_provides(&pkg)?;
+        let provides = Self::extract_declared_capability_records(&pkg)?;
         let relations = Self::extract_relations(&pkg)?;
 
         // Extract exact native lifecycle entries and config-file policy.
@@ -459,15 +466,18 @@ impl PackageFormat for RpmPackage {
 
         let meta = PackageMetadata {
             package_path: PathBuf::from(path),
-            name,
-            version,
-            version_scheme: VersionScheme::Rpm,
-            architecture,
-            debian_multi_arch: None,
+            source_authority: SourcePackageAuthority::Rpm(RpmPackageAuthority {
+                name,
+                epoch,
+                version,
+                release: release.to_string(),
+                evr,
+                architecture: architecture.clone().expect("RPM architecture is required"),
+                provides,
+            }),
             description,
             files,
             requirements,
-            provides,
             relations,
             diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi,
@@ -513,8 +523,14 @@ impl PackageFormat for RpmPackage {
         self.meta.requirements()
     }
 
-    fn provides(&self) -> &[ProvidedCapability] {
-        self.meta.provides()
+    fn resolution_capabilities(
+        &self,
+    ) -> Result<Vec<crate::repository::dependency_model::ProvidedCapability>> {
+        self.meta.resolution_capabilities()
+    }
+
+    fn source_authority(&self) -> Result<SourcePackageAuthority> {
+        Ok(self.meta.source_authority.clone())
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {

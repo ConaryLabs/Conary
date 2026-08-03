@@ -635,6 +635,10 @@ fn filter_candidates_uses_provide_version_for_virtual_capabilities() {
         version_relation: Some(crate::repository::dependency_model::ProvideVersionRelation::Equal),
         version_scheme: VersionScheme::Rpm,
         architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+            format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+            record_index: 0,
+        },
     }];
     let candidate = provider.add_solvable(identity).unwrap();
 

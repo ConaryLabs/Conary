@@ -3,9 +3,10 @@
 //! Normalized repository-native capability tables.
 
 use crate::error::Result;
-use crate::packages::traits::ProvidedCapability;
+use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::dependency_model::{
-    ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RepositoryCapabilityKind,
 };
 use crate::repository::distro::version_scheme_from_db;
 use crate::repository::versioning::VersionScheme;
@@ -26,6 +27,7 @@ pub struct RepositoryProvide {
     pub version_scheme: VersionScheme,
     /// Exact source-native architecture qualifier for this capability.
     pub architecture_qualifier: ProvideArchitectureQualifier,
+    pub provenance: CapabilityProvenance,
 }
 
 impl RepositoryProvide {
@@ -48,6 +50,7 @@ impl RepositoryProvide {
             raw,
             version_scheme,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::AuthorDeclared,
         }
     }
 
@@ -69,14 +72,20 @@ impl RepositoryProvide {
         self
     }
 
+    #[must_use]
+    pub fn with_provenance(mut self, provenance: CapabilityProvenance) -> Self {
+        self.provenance = provenance;
+        self
+    }
+
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
         let (qualifier_kind, architecture) =
             architecture_qualifier_to_db(&self.architecture_qualifier);
         conn.execute(
             "INSERT INTO repository_provides
              (repository_package_id, capability, version, kind, raw, version_scheme,
-              version_relation, architecture_qualifier_kind, architecture)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              version_relation, architecture_qualifier_kind, architecture, provenance)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 self.repository_package_id,
                 &self.capability,
@@ -87,6 +96,7 @@ impl RepositoryProvide {
                 self.version_relation.map(ProvideVersionRelation::as_str),
                 qualifier_kind,
                 architecture,
+                provenance_to_db(&self.provenance)?,
             ],
         )?;
         let id = conn.last_insert_rowid();
@@ -102,8 +112,8 @@ impl RepositoryProvide {
         let mut stmt = conn.prepare_cached(
             "INSERT INTO repository_provides
              (repository_package_id, capability, version, kind, raw, version_scheme,
-              version_relation, architecture_qualifier_kind, architecture)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              version_relation, architecture_qualifier_kind, architecture, provenance)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
 
         for provide in provides {
@@ -119,6 +129,7 @@ impl RepositoryProvide {
                 provide.version_relation.map(ProvideVersionRelation::as_str),
                 qualifier_kind,
                 architecture,
+                provenance_to_db(&provide.provenance)?,
             ])?;
         }
 
@@ -131,7 +142,7 @@ impl RepositoryProvide {
     ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
-                    version_scheme, architecture_qualifier_kind, architecture
+                    version_scheme, architecture_qualifier_kind, architecture, provenance
              FROM repository_provides
              WHERE repository_package_id = ?1
              ORDER BY capability, version",
@@ -142,17 +153,8 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
-    /// Project the exact normalized rows for one repository package into the
-    /// capability type signed into converted CCS authority.
-    pub fn conversion_capabilities(
-        conn: &Connection,
-        repository_package_id: i64,
-    ) -> Result<Vec<ProvidedCapability>> {
-        Self::conversion_capabilities_with_digest(conn, repository_package_id)
-            .map(|(capabilities, _)| capabilities)
-    }
-
-    /// Return one atomic projection and digest for conversion-cache identity.
+    /// Return one atomic repository-metadata projection and digest for
+    /// conversion-cache invalidation. These rows never mutate artifact authority.
     pub fn conversion_capabilities_with_digest(
         conn: &Connection,
         repository_package_id: i64,
@@ -175,7 +177,7 @@ impl RepositoryProvide {
         let mut stmt = conn.prepare(
             "SELECT p.id, p.repository_package_id, p.capability, p.version,
                     p.version_relation, p.kind, p.raw, p.version_scheme,
-                    p.architecture_qualifier_kind, p.architecture,
+                    p.architecture_qualifier_kind, p.architecture, p.provenance,
                     rp.id, rp.checksum
              FROM repository_packages rp
              JOIN repositories r ON r.id = rp.repository_id
@@ -201,7 +203,7 @@ impl RepositoryProvide {
                         .get::<_, Option<i64>>(0)?
                         .map(|_| Self::from_row(row))
                         .transpose()?;
-                    Ok((row.get::<_, i64>(10)?, row.get::<_, String>(11)?, provide))
+                    Ok((row.get::<_, i64>(11)?, row.get::<_, String>(12)?, provide))
                 },
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -255,8 +257,8 @@ impl RepositoryProvide {
         Ok((capabilities, digest))
     }
 
-    /// Digest the exact repository-provide projection that influences native
-    /// conversion output.
+    /// Digest repository metadata that invalidates a cached native conversion
+    /// without becoming signed artifact identity or capability authority.
     pub fn conversion_capabilities_digest(
         conn: &Connection,
         repository_package_id: i64,
@@ -288,6 +290,7 @@ impl RepositoryProvide {
             version_relation: self.version_relation,
             version_scheme: self.version_scheme,
             architecture_qualifier: self.architecture_qualifier.clone(),
+            provenance: self.provenance.clone(),
         })
     }
 
@@ -315,7 +318,7 @@ impl RepositoryProvide {
                 .join(", ");
             let sql = format!(
                 "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
-                        version_scheme, architecture_qualifier_kind, architecture
+                        version_scheme, architecture_qualifier_kind, architecture, provenance
                  FROM repository_provides
                  WHERE repository_package_id IN ({placeholders})"
             );
@@ -342,7 +345,7 @@ impl RepositoryProvide {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
              FROM repository_provides rp
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
@@ -361,7 +364,7 @@ impl RepositoryProvide {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
              FROM repository_provides rp
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
@@ -395,7 +398,7 @@ impl RepositoryProvide {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture, pkg.name
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance, pkg.name
              FROM repository_provides rp
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
@@ -414,8 +417,9 @@ impl RepositoryProvide {
                     raw: row.get(6)?,
                     version_scheme: version_scheme_from_row(row, 7)?,
                     architecture_qualifier: architecture_qualifier_from_row(row, 8, 9)?,
+                    provenance: provenance_from_row(row, 10)?,
                 };
-                let pkg_name: String = row.get(10)?;
+                let pkg_name: String = row.get(11)?;
                 Ok((provide, pkg_name))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -431,7 +435,7 @@ impl RepositoryProvide {
         let mut stmt = conn.prepare(
             "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
              FROM repository_provides rp
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
@@ -476,8 +480,26 @@ impl RepositoryProvide {
             raw: row.get(6)?,
             version_scheme: version_scheme_from_row(row, 7)?,
             architecture_qualifier: architecture_qualifier_from_row(row, 8, 9)?,
+            provenance: provenance_from_row(row, 10)?,
         })
     }
+}
+
+fn provenance_to_db(provenance: &CapabilityProvenance) -> Result<String> {
+    serde_json::to_string(provenance).map_err(|error| {
+        crate::Error::InternalError(format!("serialize capability provenance: {error}"))
+    })
+}
+
+fn provenance_from_row(row: &Row<'_>, column: usize) -> rusqlite::Result<CapabilityProvenance> {
+    let raw = row.get::<_, String>(column)?;
+    serde_json::from_str(&raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
 }
 
 fn version_scheme_from_row(row: &Row<'_>, column: usize) -> rusqlite::Result<VersionScheme> {
@@ -599,7 +621,11 @@ mod tests {
             Some("mail-transport-agent".to_string()),
             VersionScheme::Rpm,
         )
-        .with_architecture_qualifier(ProvideArchitectureQualifier::Exact("arm64".to_string()));
+        .with_architecture_qualifier(ProvideArchitectureQualifier::Exact("arm64".to_string()))
+        .with_provenance(CapabilityProvenance::SourceDeclared {
+            format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+            record_index: 7,
+        });
         provide.insert(&conn).unwrap();
 
         let found = RepositoryProvide::find_by_repository_package(&conn, 1).unwrap();
@@ -610,6 +636,7 @@ mod tests {
             found[0].architecture_qualifier,
             ProvideArchitectureQualifier::Exact("arm64".to_string())
         );
+        assert_eq!(found[0].provenance, provide.provenance);
     }
 
     #[test]
@@ -633,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_capability_digest_tracks_only_exact_signed_projection() {
+    fn conversion_cache_digest_tracks_only_exact_repository_projection() {
         let conn = test_db();
         seed_repo_and_package(&conn);
 
@@ -662,7 +689,7 @@ mod tests {
         assert_eq!(
             RepositoryProvide::conversion_capabilities_digest(&conn, 1).unwrap(),
             with_shell,
-            "raw diagnostic text and duplicate rows do not change signed capability authority"
+            "raw diagnostic text and duplicate rows do not change the cache projection"
         );
 
         let mut kernel_install = RepositoryProvide::new(

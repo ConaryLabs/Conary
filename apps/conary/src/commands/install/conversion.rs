@@ -368,22 +368,7 @@ pub async fn try_convert_to_ccs(
         .with_context(|| format!("Failed to extract files for conversion: {}", pkg.name()))?;
 
     // Build PackageMetadata from the package
-    let metadata = PackageMetadata {
-        package_path: package_path.to_path_buf(),
-        name: pkg.name().to_string(),
-        version: pkg.version().to_string(),
-        version_scheme: pkg.version_scheme(),
-        architecture: pkg.architecture().map(|s| s.to_string()),
-        debian_multi_arch: pkg.debian_multi_arch(),
-        description: pkg.description().map(|s| s.to_string()),
-        files: pkg.files().to_vec(),
-        requirements: pkg.requirements().to_vec(),
-        provides: pkg.provides().to_vec(),
-        relations: pkg.relations().to_vec(),
-        diagnostic_scriptlet_evidence: Vec::new(),
-        native_scriptlet_abi: pkg.native_scriptlet_abi().to_vec(),
-        config_files: pkg.config_files().to_vec(),
-    };
+    let metadata = PackageMetadata::from_package(package_path.to_path_buf(), pkg)?;
 
     // Create temp directory for CCS output
     let ccs_temp = TempDir::new().context("Failed to create temp directory for CCS conversion")?;

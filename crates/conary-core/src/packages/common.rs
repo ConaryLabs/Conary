@@ -6,10 +6,11 @@
 //! and ensuring consistent behavior.
 
 use crate::db::models::{Trove, TroveType};
+use crate::packages::source_authority::{CcsPackageAuthority, SourcePackageAuthority};
 use crate::packages::traits::{
     ConfigFileInfo, DiagnosticScriptletEvidence, NativeScriptletEntry, PackageFile,
-    ProvidedCapability,
 };
+use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::dependency_model::{DebianMultiArch, RepositoryRequirementGroup};
 use crate::repository::versioning::VersionScheme;
 use std::path::{Path, PathBuf};
@@ -23,24 +24,14 @@ use std::path::{Path, PathBuf};
 pub struct PackageMetadata {
     /// Path to the package file
     pub package_path: PathBuf,
-    /// Package name
-    pub name: String,
-    /// Package version
-    pub version: String,
-    /// Native version algebra for requirements and provides.
-    pub version_scheme: VersionScheme,
-    /// Exact source-native architecture token.
-    pub architecture: Option<String>,
-    /// Exact Debian `Multi-Arch` package behavior, when defined by the source.
-    pub debian_multi_arch: Option<DebianMultiArch>,
+    /// Sole source identity and declared-capability authority.
+    pub source_authority: SourcePackageAuthority,
     /// Package description/summary
     pub description: Option<String>,
     /// Files contained in the package
     pub files: Vec<PackageFile>,
     /// Exact positive package requirements and sole dependency authority.
     pub requirements: Vec<RepositoryRequirementGroup>,
-    /// Native package-provided capabilities.
-    pub provides: Vec<ProvidedCapability>,
     /// Exact source-native conflict and replacement relations.
     pub relations: Vec<RepositoryRequirementGroup>,
     /// Non-authoritative flattened script text for conversion diagnostics only.
@@ -52,6 +43,23 @@ pub struct PackageMetadata {
 }
 
 impl PackageMetadata {
+    pub fn from_package(
+        package_path: PathBuf,
+        package: &dyn crate::packages::traits::PackageFormat,
+    ) -> crate::error::Result<Self> {
+        Ok(Self {
+            package_path,
+            source_authority: package.source_authority()?,
+            description: package.description().map(str::to_string),
+            files: package.files().to_vec(),
+            requirements: package.requirements().to_vec(),
+            relations: package.relations().to_vec(),
+            diagnostic_scriptlet_evidence: Vec::new(),
+            native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
+            config_files: package.config_files().to_vec(),
+        })
+    }
+
     /// Create new metadata with required fields
     pub fn new(
         package_path: PathBuf,
@@ -61,15 +69,17 @@ impl PackageMetadata {
     ) -> Self {
         Self {
             package_path,
-            name,
-            version,
-            version_scheme,
-            architecture: None,
-            debian_multi_arch: None,
+            source_authority: SourcePackageAuthority::Ccs(CcsPackageAuthority {
+                name,
+                version,
+                version_scheme,
+                architecture: None,
+                debian_multi_arch: None,
+                capabilities: Vec::new(),
+            }),
             description: None,
             files: Vec::new(),
             requirements: Vec::new(),
-            provides: Vec::new(),
             relations: Vec::new(),
             diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi: Vec::new(),
@@ -79,27 +89,27 @@ impl PackageMetadata {
 
     /// Get the package name
     pub fn name(&self) -> &str {
-        &self.name
+        self.source_authority.name()
     }
 
     /// Get the package version
     pub fn version(&self) -> &str {
-        &self.version
+        self.source_authority.version()
     }
 
     /// Get the native version algebra.
     pub fn version_scheme(&self) -> VersionScheme {
-        self.version_scheme
+        self.source_authority.version_scheme()
     }
 
     /// Get the package architecture
     pub fn architecture(&self) -> Option<&str> {
-        self.architecture.as_deref()
+        self.source_authority.architecture()
     }
 
     /// Get exact Debian `Multi-Arch` behavior.
     pub fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
-        self.debian_multi_arch
+        self.source_authority.debian_multi_arch()
     }
 
     /// Get the package description
@@ -118,8 +128,8 @@ impl PackageMetadata {
     }
 
     /// Get the list of native provides
-    pub fn provides(&self) -> &[ProvidedCapability] {
-        &self.provides
+    pub fn resolution_capabilities(&self) -> crate::error::Result<Vec<ProvidedCapability>> {
+        self.source_authority.resolution_capabilities()
     }
 
     /// Get exact source-native conflict and replacement relations.
@@ -147,14 +157,14 @@ impl PackageMetadata {
     /// This is the standard conversion used by all package formats.
     pub fn to_trove(&self) -> Trove {
         let mut trove = Trove::new(
-            self.name.clone(),
-            self.version.clone(),
+            self.name().to_string(),
+            self.version().to_string(),
             TroveType::Package,
-            self.version_scheme,
+            self.version_scheme(),
         );
 
-        trove.architecture = self.architecture.clone();
-        trove.debian_multi_arch = self.debian_multi_arch;
+        trove.architecture = self.architecture().map(str::to_string);
+        trove.debian_multi_arch = self.debian_multi_arch();
         trove.description = self.description.clone();
 
         trove
@@ -195,7 +205,10 @@ mod tests {
             "2.0.0".to_string(),
             VersionScheme::Rpm,
         );
-        meta.architecture = Some("x86_64".to_string());
+        let SourcePackageAuthority::Ccs(authority) = &mut meta.source_authority else {
+            unreachable!()
+        };
+        authority.architecture = Some("x86_64".to_string());
         meta.description = Some("A test package".to_string());
 
         assert_eq!(meta.name(), "my-package");
@@ -212,7 +225,10 @@ mod tests {
             "1.2.3".to_string(),
             VersionScheme::Debian,
         );
-        meta.architecture = Some("aarch64".to_string());
+        let SourcePackageAuthority::Ccs(authority) = &mut meta.source_authority else {
+            unreachable!()
+        };
+        authority.architecture = Some("aarch64".to_string());
         meta.description = Some("Example package".to_string());
 
         let trove = meta.to_trove();

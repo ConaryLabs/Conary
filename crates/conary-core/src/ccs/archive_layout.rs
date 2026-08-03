@@ -1,6 +1,6 @@
 // conary-core/src/ccs/archive_layout.rs
 
-//! The directory layout a CCS v2 archive is allowed to contain.
+//! The directory layout a CCS v3 archive is allowed to contain.
 //!
 //! One owner for the layout vocabulary. The writer emits these names, and both
 //! the streaming verifier and the archive reader admit exactly this set, so a
@@ -23,7 +23,7 @@ pub const COMPONENTS_DIR: &str = "components";
 /// Content-addressed object directory.
 pub const OBJECTS_DIR: &str = "objects";
 
-/// Whether `path` is a directory entry the CCS v2 layout defines.
+/// Whether `path` is a directory entry the CCS v3 layout defines.
 ///
 /// Accepts the two top-level directories and the two-hex-character fan-out
 /// directories beneath `objects/`. Anything else is rejected: an unrecognized

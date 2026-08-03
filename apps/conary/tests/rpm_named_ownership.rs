@@ -4,6 +4,8 @@
 //! selected target root supplies the numeric identity used at apply time.
 
 use conary_core::db::models::{FileEntry, InstallSource, Trove, TroveType};
+use conary_core::packages::rpm::RpmPackage;
+use conary_core::packages::traits::PackageFormat;
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
 };
@@ -209,6 +211,27 @@ fn rpm_install_resolves_named_ownership_from_selected_target_root() {
         USER_NAME,
         GROUP_NAME,
     );
+    let parsed = RpmPackage::parse(rpm_path.to_str().unwrap()).unwrap();
+    let capabilities = parsed.resolution_capabilities().unwrap();
+    assert_eq!(
+        capabilities
+            .iter()
+            .filter(|capability| {
+                capability.provenance
+                    == conary_core::repository::dependency_model::CapabilityProvenance::ExactIdentity
+            })
+            .count(),
+        1
+    );
+    assert!(capabilities.iter().any(|capability| {
+        capability.kind
+            == conary_core::repository::dependency_model::RepositoryCapabilityKind::PackageName
+            && capability.name == parsed.name()
+            && capability.version.as_deref() == Some(parsed.version())
+            && capability.version_scheme == parsed.version_scheme()
+            && capability.architecture_qualifier
+                == conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit
+    }));
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .args([

@@ -430,6 +430,7 @@ fn install_ccs_package_transactionally_inner(
     conary_core::transaction::validate_package_relation_plan(conn, &relation_plan)
         .context("CCS package conflicts and replacements cannot be applied")?;
     let native_lifecycle_bundle = pkg.manifest().native_lifecycle.as_ref();
+    let resolution_capabilities = pkg.resolution_capabilities()?;
     let native_transaction = PreparedNativeTransaction::prepare_install(
         conn,
         NativeInstallInput {
@@ -437,7 +438,7 @@ fn install_ccs_package_transactionally_inner(
             package_version: pkg.version(),
             package_arch: pkg.architecture(),
             version_scheme: semantics.version_scheme,
-            provides: pkg.provides(),
+            provides: &resolution_capabilities,
             new_bundle: native_lifecycle_bundle,
             old_trove,
             relation_removals: &relation_plan.removals,

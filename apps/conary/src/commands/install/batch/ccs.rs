@@ -108,7 +108,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         description: package.description().map(str::to_string),
         extracted_files,
         requirements: package.requirements().to_vec(),
-        provides: package.provides().to_vec(),
+        provides: package.resolution_capabilities()?,
         relations: package.relations().to_vec(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),

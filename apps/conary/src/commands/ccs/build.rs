@@ -94,7 +94,7 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
         anyhow::bail!("--key and --local-dev require a CCS output target");
     }
     if builds_ccs {
-        let findings = conary_core::ccs::v2::authoring::lint_manifest_for_v2_authoring(&manifest);
+        let findings = conary_core::ccs::v3::authoring::lint_manifest_for_v3_authoring(&manifest);
         if findings.iter().any(|finding| finding.blocks_build) {
             for finding in &findings {
                 if finding.blocks_build {
@@ -184,16 +184,16 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
             match *t {
                 "ccs" => {
                     println!();
-                    println!("Writing signed CCS v2 package...");
+                    println!("Writing signed CCS v3 package...");
                     let debug_toml = manifest.to_toml().context("serialize debug ccs.toml")?;
-                    let projected = conary_core::ccs::v2::project_build_result_to_v2(
-                        conary_core::ccs::v2::V2AuthoringInput {
+                    let projected = conary_core::ccs::v3::project_build_result_to_v3(
+                        conary_core::ccs::v3::V3AuthoringInput {
                             build: result,
                             local_dev: options.local_dev,
                             debug_toml: Some(debug_toml),
                         },
                     )
-                    .context("project v2 package authority")?;
+                    .context("project v3 package authority")?;
                     let signing_key = if options.local_dev {
                         super::local_dev::load_or_create_local_dev_key()?
                     } else {
@@ -206,7 +206,7 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                         ))
                         .map_err(anyhow::Error::from)?
                     };
-                    builder::write_v2_ccs_package_from_sources(
+                    builder::write_v3_ccs_package_from_sources(
                         &projected.authority,
                         &projected.payloads,
                         &output_path,
@@ -215,7 +215,7 @@ pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                         None,
                         None,
                     )
-                    .context("Failed to write CCS v2 package")?;
+                    .context("Failed to write CCS v3 package")?;
                     if options.local_dev {
                         println!(
                             "  Signed with local-dev CCS key; release publish will reject this artifact."

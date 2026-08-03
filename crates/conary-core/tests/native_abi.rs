@@ -619,22 +619,7 @@ fn assert_conversion_preserves_native_entries(
 }
 
 fn metadata_from_package(package: &impl PackageFormat, package_path: &Path) -> PackageMetadata {
-    PackageMetadata {
-        package_path: package_path.to_path_buf(),
-        name: package.name().to_string(),
-        version: package.version().to_string(),
-        version_scheme: package.version_scheme(),
-        architecture: package.architecture().map(str::to_string),
-        debian_multi_arch: package.debian_multi_arch(),
-        description: package.description().map(str::to_string),
-        files: package.files().to_vec(),
-        requirements: package.requirements().to_vec(),
-        provides: package.provides().to_vec(),
-        relations: package.relations().to_vec(),
-        diagnostic_scriptlet_evidence: Vec::new(),
-        native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
-        config_files: package.config_files().to_vec(),
-    }
+    PackageMetadata::from_package(package_path.to_path_buf(), package).unwrap()
 }
 
 fn write_rpm_fixture(dir: &Path) -> PathBuf {

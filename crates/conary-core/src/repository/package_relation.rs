@@ -557,6 +557,10 @@ pub(crate) fn parse_debian_provide(input: &str) -> Result<RepositoryProvide, Str
         version,
         architecture_qualifier,
         native_text: Some(input.trim().to_string()),
+        provenance: crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+            format: crate::repository::dependency_model::SourcePackageFormat::Debian,
+            record_index: 0,
+        },
     })
 }
 

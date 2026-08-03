@@ -35,9 +35,9 @@ Each fixture family should record:
 |-----------|-------|------------|
 | `foreign-package-lifecycle-contracts` | Source parsers, CCS lifecycle bundle, and transaction planner | `cargo test -p conary-core native_abi`; `cargo test -p conary-core native_lifecycle`; `cargo test -p conary-core native_transaction` |
 | `host-executable-interface-fixtures` | Core test support and checked-in host tools | `cargo test -p conary-core bootstrap::guest_profile::tests`; `cargo test -p conary-core ccs::hooks` |
-| `ccs-v2-native-authority-fixtures` | CCS v2 native authority | `cargo test -p conary-core ccs::v2`; `cargo test -p conary --test packaging_m4a` |
-| `ccs-v2-local-authoring-smoke` | CCS v2 local authoring | `cargo test -p conary --test packaging_m4b` |
-| `ccs-v2-lifecycle-authoring-proof` | CCS v2 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v2` |
+| `ccs-v3-native-authority-fixtures` | CCS v3 native authority | `cargo test -p conary-core ccs::v3`; `cargo test -p conary --test packaging_m4a` |
+| `ccs-v3-local-authoring-smoke` | CCS v3 local authoring | `cargo test -p conary --test packaging_m4b` |
+| `ccs-v3-lifecycle-authoring-proof` | CCS v3 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v3` |
 | `m4d-supported-profile-cutover` | Repository feed profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
 | `native-lifecycle-query-fixtures` | Native lifecycle query surfaces | `cargo test -p conary --test query_scripts` |
 | `rpm-hardlink-transaction` | RPM payload projection and CCS conversion | `cargo test -p conary-core packages::rpm::payload`; `cargo test -p conary --test conversion_integration golden_conversion` |
@@ -172,41 +172,41 @@ Each fixture family should record:
   revalidation, or authorize host mutation. Do not replace this boundary with
   retries, sleeps, test serialization, or error-string exceptions.
 
-### ccs-v2-native-authority-fixtures
+### ccs-v3-native-authority-fixtures
 
-- **Owner:** CCS v2 contract:
-  `crates/conary-core/src/ccs/v2/`; archive/package routing:
+- **Owner:** CCS v3 contract:
+  `crates/conary-core/src/ccs/v3/`; archive/package routing:
   `crates/conary-core/src/ccs/archive_reader.rs` and
   `crates/conary-core/src/ccs/package.rs`.
-- **Purpose:** Signed native CCS v2 authority, exact-byte signature
+- **Purpose:** Signed native CCS v3 authority, exact-byte signature
   verification, verified install parsing, publish-gate compatibility, and
   fail-closed rejection of format-v1 or default-reconstructed authority.
 - **Fixture sources:** in-test builders under
-  `crates/conary-core/src/ccs/v2/test_support.rs`;
+  `crates/conary-core/src/ccs/v3/test_support.rs`;
   `apps/conary/tests/packaging_m4a.rs`; targeted unit fixtures in
   `crates/conary-core/src/ccs/{archive_reader,package,verify}.rs`.
-- **Consumes:** CCS v2 schema/reader/validation/identity tests, verifier tests,
+- **Consumes:** CCS v3 schema/reader/validation/identity tests, verifier tests,
   static publish-gate tests, and M4a CLI install integration tests.
-- **Fast proof:** `cargo test -p conary-core ccs::v2`;
+- **Fast proof:** `cargo test -p conary-core ccs::v3`;
   `cargo test -p conary --test packaging_m4a`.
 - **Medium proof:** `cargo test -p conary-core ccs::verify`;
   `cargo test -p conary-core repository::static_repo::publish_gate`.
 - **Slow proof:** No slow gate for fixture-map-only changes.
 - **Regeneration:** Hand-maintained Rust builders until M4b authoring emits
-  native v2 packages directly.
-- **Safety notes:** v2 native fixtures are signed `format_version = 2`
+  native v3 packages directly.
+- **Safety notes:** v3 native fixtures are signed `format_version = 3`
   authority with complete file, component, dependency, provenance,
   TOML-debug-hash, and content-identity coverage. The sole format-v1 rejection
   fixture is a hand-authored CBOR header; the retired writer, schema,
   projection, and general fixture factory do not remain in the tree.
 
-### ccs-v2-local-authoring-smoke
+### ccs-v3-local-authoring-smoke
 
-- **Owner:** CCS v2 local authoring commands:
+- **Owner:** CCS v3 local authoring commands:
   `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`;
-  authority projection: `crates/conary-core/src/ccs/v2/authoring.rs`.
+  authority projection: `crates/conary-core/src/ccs/v3/authoring.rs`.
 - **Purpose:** Minimal-file native authoring loop from `ccs.toml` through lint,
-  local-dev or explicit-key v2 build, local-dev verify, isolated dry-run test,
+  local-dev or explicit-key v3 build, local-dev verify, isolated dry-run test,
   typed source-to-install-prefix mapping without implicit ancestor ownership,
   and static publish rejection for local-dev/host-hardened artifacts.
 - **Fixture sources:** in-test project builder in
@@ -215,20 +215,20 @@ Each fixture family should record:
   declarative lifecycle, typed dependency authoring, local-dev trust, and
   isolated dry-run tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4b`.
-- **Medium proof:** `cargo test -p conary-core ccs::v2`;
+- **Medium proof:** `cargo test -p conary-core ccs::v3`;
   `cargo test -p conary-core repository::static_repo::publish_gate`.
 - **Slow proof:** No slow gate for M4b fixture-map-only changes.
 - **Regeneration:** Temporary source trees are generated during tests.
 - **Safety notes:** Local-dev keys are isolated with test HOME/XDG directories.
-  Local-dev v2 artifacts are for local verify/test only and must remain
+  Local-dev v3 artifacts are for local verify/test only and must remain
   rejected by static publish and Remi release trust.
 
-### ccs-v2-lifecycle-authoring-proof
+### ccs-v3-lifecycle-authoring-proof
 
-- **Owner:** CCS v2 native authoring commands:
-  `apps/conary/src/commands/ccs/`; v2 projection/validation:
-  `crates/conary-core/src/ccs/v2/authoring.rs`;
-  debug projection: `crates/conary-core/src/ccs/v2/debug_projection.rs`;
+- **Owner:** CCS v3 native authoring commands:
+  `apps/conary/src/commands/ccs/`; v3 projection/validation:
+  `crates/conary-core/src/ccs/v3/authoring.rs`;
+  debug projection: `crates/conary-core/src/ccs/v3/debug_projection.rs`;
   repository feed catalog:
   `crates/conary-core/src/repository/supported_profiles/`.
 - **Purpose:** M4e proof that config-only and lifecycle-bearing native packages
@@ -238,12 +238,12 @@ Each fixture family should record:
 - **Fixture sources:** generated `minimal-file`, `config-noreplace`, and
   `service` projects in `apps/conary/tests/packaging_m4b.rs` and
   `apps/conary/tests/packaging_m4e.rs`; debug projection unit fixtures in
-  `crates/conary-core/src/ccs/v2/debug_projection.rs`.
+  `crates/conary-core/src/ccs/v3/debug_projection.rs`.
 - **Consumes:** M4e CLI lint/build/verify/test corpus, arbitrary declarative
-  lifecycle, and v2 reader/debug-projection consistency tests.
+  lifecycle, and v3 reader/debug-projection consistency tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4e`;
-  `cargo test -p conary-core ccs::v2::debug_projection`.
-- **Medium proof:** `cargo test -p conary-core ccs::v2`;
+  `cargo test -p conary-core ccs::v3::debug_projection`.
+- **Medium proof:** `cargo test -p conary-core ccs::v3`;
   `cargo test -p conary-core supported_profiles`;
   `cargo test -p conary --test packaging_m4a`;
   `cargo test -p conary --test packaging_m4b`;
@@ -266,7 +266,7 @@ Each fixture family should record:
 - **Fast proof:** `cargo test -p conary-core supported_profiles`;
   `cargo test -p conary --test packaging_m4d`;
   `cargo test -p remi route`.
-- **Medium proof:** `cargo test -p conary-core ccs::v2`;
+- **Medium proof:** `cargo test -p conary-core ccs::v3`;
   `cargo test -p remi conversion`;
   `cargo test -p conary-core remi_sync`.
 - **Safety notes:** `debian` is a valid version-scheme string for Ubuntu
@@ -278,10 +278,10 @@ Each fixture family should record:
 - **Owner:** Remi native publication:
   `apps/remi/src/server/native_publish/`; release upload route/staging:
   `apps/remi/src/server/release_publish.rs`.
-- **Purpose:** Release-eligible CCS v2 artifacts published through local Remi
+- **Purpose:** Release-eligible CCS v3 artifacts published through local Remi
   without conversion-shaped storage, including source-independent lifecycle
   authority validated structurally rather than by a route allowlist.
-- **Fixture sources:** in-test release-eligible v2 builders in
+- **Fixture sources:** in-test release-eligible v3 builders in
   `apps/remi/src/server/release_publish.rs` and
   `apps/conary/tests/packaging_m4c.rs`.
 - **Consumes:** native release upload, arbitrary declarative lifecycle upload,
@@ -297,7 +297,7 @@ Each fixture family should record:
   `cargo test -p remi search_rebuild_preserves_native_release_identity_and_converted_false`.
 - **Slow proof:** No cloud or QEMU proof is required for local native
   publication; run `cargo test -p remi` when public serving behavior changes.
-- **Regeneration:** Temporary signed and attested v2 packages are generated in
+- **Regeneration:** Temporary signed and attested v3 packages are generated in
   Rust tests.
 - **Safety notes:** fixtures must prove no `converted_packages` row is written,
   local-dev or otherwise publish-gate-rejected artifacts write no public state,

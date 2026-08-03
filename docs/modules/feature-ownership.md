@@ -383,6 +383,7 @@ package transactions.
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
 `crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
+`crates/conary-core/src/repository/parsers/fedora/provides.rs`;
 `crates/conary-core/src/repository/sync.rs`;
 `crates/conary-core/src/repository/download.rs`;
 `crates/conary-core/src/repository/rpm_dependency.rs`;
@@ -592,14 +593,14 @@ packages, install CCS packages, and preserve their exact lifecycle ABIs.
 **Start here:** `crates/conary-core/src/ccs/`;
 `crates/conary-core/src/payload.rs`;
 `crates/conary-core/src/ccs/budget.rs`;
-`crates/conary-core/src/ccs/v2/`;
-`crates/conary-core/src/ccs/v2/authoring.rs`;
-`crates/conary-core/src/ccs/v2/component_view.rs`;
-`crates/conary-core/src/ccs/v2/debug_projection.rs`;
+`crates/conary-core/src/ccs/v3/`;
+`crates/conary-core/src/ccs/v3/authoring.rs`;
+`crates/conary-core/src/ccs/v3/component_view.rs`;
+`crates/conary-core/src/ccs/v3/debug_projection.rs`;
 `crates/conary-core/src/repository/supported_profiles/`;
 `crates/conary-core/src/ccs/archive_reader.rs`;
 `crates/conary-core/src/ccs/package.rs`;
-`crates/conary-core/src/ccs/package/v2_projection.rs`;
+`crates/conary-core/src/ccs/package/v3_projection.rs`;
 `crates/conary-core/src/ccs/convert/`;
 `crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`;
 `crates/conary-core/src/ccs/convert/scriptlet_bundle/`;
@@ -681,11 +682,11 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `apps/conary/src/commands/install/payload_identity.rs`;
 `apps/conary/tests/rpm_named_ownership.rs`;
 `packaging/ccs/*`;
-`docs/specs/ccs-format-v2.md`;
+`docs/specs/ccs-format-v3.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
 **Focused proof:** `cargo test -p conary-core ccs::budget`;
-`cargo test -p conary-core ccs::v2`;
+`cargo test -p conary-core ccs::v3`;
 `cargo test -p conary-core ccs::archive_reader`;
 `cargo test -p conary-core ccs::verify`;
 `cargo test -p conary-core filesystem::cas`;
@@ -716,10 +717,10 @@ issue and draft pull request while the change is still in flight.
 every CCS structural and operator-resource limit. Do not add a limit constant
 to a reader, writer, or archive path: add a dimension to the budget so
 authoring preflight and verification stay one owner and the writer cannot emit
-a package the reader refuses. Start in `crates/conary-core/src/ccs/v2/` for v2
+a package the reader refuses. Start in `crates/conary-core/src/ccs/v3/` for v3
 authority, validation, diagnostics, archive reading, debug projection, and
 content identity. Use `archive_reader.rs` and `package.rs` only as
-version-routing/adaptation surfaces. CCS v2 package and lifecycle authority is
+version-routing/adaptation surfaces. CCS v3 package and lifecycle authority is
 source-independent and must not contain a destination distro gate; transaction
 planning resolves it against typed host capabilities. Debug TOML is never
 install authority. `crates/conary-core/src/payload.rs` is the sole exact payload
@@ -979,7 +980,7 @@ and snapshot replacement is atomic.
 **Capability:** own configured upstream repository feeds: public IDs,
 dependency flavor, version scheme, Remi route slugs, repository hints, and
 source parser selection. Feed profiles describe where packages come from; they
-do not describe destination compatibility or CCS v2 lifecycle policy.
+do not describe destination compatibility or CCS v3 lifecycle policy.
 
 **Start here:** `crates/conary-core/src/repository/supported_profiles/`.
 CLI repository commands, Remi route validation, conversion lookup/parser

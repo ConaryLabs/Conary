@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v2/schema.rs
+// conary-core/src/ccs/v3/schema.rs
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -7,26 +7,27 @@ use crate::capability::CapabilityDeclaration;
 use crate::ccs::manifest::FileCapability;
 use crate::payload::{PayloadContentAuthority, PayloadNode};
 use crate::repository::dependency_model::{
-    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    CapabilityProvenance, DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
     RepositoryRequirementGroup,
 };
 use crate::repository::versioning::VersionScheme;
 
-pub const FORMAT_VERSION_V2: u16 = 2;
+pub const FORMAT_VERSION_V3: u16 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AuthorityDocumentV2 {
+pub struct AuthorityDocumentV3 {
     pub format_version: u16,
-    pub identity: PackageIdentityV2,
-    pub kind: PackageKindV2,
+    pub identity: PackageIdentityV3,
+    pub kind: PackageKindV3,
     #[serde(default)]
-    pub provides: Vec<ProvidedCapabilityV2>,
+    #[serde(rename = "capabilities")]
+    pub provided_capabilities: Vec<ProvidedCapabilityV3>,
     #[serde(default)]
     pub requirements: Vec<RepositoryRequirementGroup>,
     #[serde(default)]
     pub relations: Vec<RepositoryRequirementGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<CapabilityDeclaration>,
+    pub execution_capabilities: Option<CapabilityDeclaration>,
     /// Exact Linux file capability declarations bound to signed package files.
     ///
     /// Debug TOML is never install authority; authored declarations are
@@ -35,17 +36,17 @@ pub struct AuthorityDocumentV2 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_capabilities: Vec<FileCapability>,
     #[serde(default)]
-    pub components: BTreeMap<String, ComponentAuthorityV2>,
+    pub components: BTreeMap<String, ComponentAuthorityV3>,
     #[serde(default)]
-    pub lifecycle: LifecycleAuthorityV2,
+    pub lifecycle: LifecycleAuthorityV3,
     #[serde(default)]
-    pub provenance: ProvenanceAuthorityV2,
+    pub provenance: ProvenanceAuthorityV3,
     #[serde(default)]
     pub debug_toml_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PackageIdentityV2 {
+pub struct PackageIdentityV3 {
     pub name: String,
     pub version: String,
     pub version_scheme: VersionScheme,
@@ -56,12 +57,12 @@ pub struct PackageIdentityV2 {
     pub debian_multi_arch: Option<DebianMultiArch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    pub kind: PackageKindTagV2,
+    pub kind: PackageKindTagV3,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum PackageKindTagV2 {
+pub enum PackageKindTagV3 {
     Package,
     Group,
     Redirect,
@@ -69,35 +70,35 @@ pub enum PackageKindTagV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", tag = "type", content = "data")]
-pub enum PackageKindV2 {
-    Package(PackageDataV2),
-    Group(GroupDataV2),
-    Redirect(RedirectDataV2),
+pub enum PackageKindV3 {
+    Package(PackageDataV3),
+    Group(GroupDataV3),
+    Redirect(RedirectDataV3),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct PackageDataV2 {
+pub struct PackageDataV3 {
     #[serde(default)]
-    pub files: Vec<FileAuthorityV2>,
+    pub files: Vec<FileAuthorityV3>,
     #[serde(default)]
-    pub config: Vec<ConfigAuthorityV2>,
+    pub config: Vec<ConfigAuthorityV3>,
     #[serde(default)]
-    pub policy: PackagePolicyV2,
+    pub policy: PackagePolicyV3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GroupDataV2 {
-    pub members: Vec<GroupMemberV2>,
+pub struct GroupDataV3 {
+    pub members: Vec<GroupMemberV3>,
     #[serde(default)]
-    pub provides: Vec<DependencyEntryV2>,
+    pub provides: Vec<DependencyEntryV3>,
     #[serde(default)]
-    pub conflicts: Vec<DependencyEntryV2>,
+    pub conflicts: Vec<DependencyEntryV3>,
     #[serde(default)]
-    pub policy: PackagePolicyV2,
+    pub policy: PackagePolicyV3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RedirectDataV2 {
+pub struct RedirectDataV3 {
     pub to: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_constraint: Option<String>,
@@ -106,21 +107,21 @@ pub struct RedirectDataV2 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GroupMemberV2 {
-    pub requirement: DependencyEntryV2,
-    pub strength: GroupMemberStrengthV2,
+pub struct GroupMemberV3 {
+    pub requirement: DependencyEntryV3,
+    pub strength: GroupMemberStrengthV3,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum GroupMemberStrengthV2 {
+pub enum GroupMemberStrengthV3 {
     Required,
     Recommended,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DependencyEntryV2 {
-    pub kind: DependencyKindV2,
+pub struct DependencyEntryV3 {
+    pub kind: DependencyKindV3,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_constraint: Option<String>,
@@ -132,8 +133,8 @@ pub struct DependencyEntryV2 {
 
 /// Exact capability supplied by this signed package authority.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProvidedCapabilityV2 {
-    pub kind: DependencyKindV2,
+pub struct ProvidedCapabilityV3 {
+    pub kind: DependencyKindV3,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_version: Option<String>,
@@ -141,6 +142,7 @@ pub struct ProvidedCapabilityV2 {
     pub version_relation: Option<ProvideVersionRelation>,
     pub version_scheme: VersionScheme,
     pub architecture_qualifier: ProvideArchitectureQualifier,
+    pub provenance: CapabilityProvenance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,7 +151,7 @@ pub struct ProvidedCapabilityV2 {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum DependencyKindV2 {
+pub enum DependencyKindV3 {
     Package,
     Capability,
     File,
@@ -160,20 +162,20 @@ pub enum DependencyKindV2 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FileAuthorityV2 {
+pub struct FileAuthorityV3 {
     pub path: String,
     pub node: PayloadNode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<PayloadContentAuthority>,
     pub component: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<ConfigSemanticsV2>,
+    pub config: Option<ConfigSemanticsV3>,
     #[serde(default)]
-    pub conflict: ConflictPolicyV2,
+    pub conflict: ConflictPolicyV3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ComponentAuthorityV2 {
+pub struct ComponentAuthorityV3 {
     pub name: String,
     pub default: bool,
     pub file_count: u32,
@@ -182,7 +184,7 @@ pub struct ComponentAuthorityV2 {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigSemanticsV2 {
+pub struct ConfigSemanticsV3 {
     pub noreplace: bool,
     pub ghost: bool,
     pub remove_on_upgrade: bool,
@@ -190,14 +192,14 @@ pub struct ConfigSemanticsV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigAuthorityV2 {
+pub struct ConfigAuthorityV3 {
     pub path: String,
-    pub semantics: ConfigSemanticsV2,
+    pub semantics: ConfigSemanticsV3,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum ConflictPolicyV2 {
+pub enum ConflictPolicyV3 {
     #[default]
     Error,
     Replace,
@@ -205,32 +207,32 @@ pub enum ConflictPolicyV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleAuthorityV2 {
+pub struct LifecycleAuthorityV3 {
     #[serde(default)]
-    pub users: Vec<LifecycleUserV2>,
+    pub users: Vec<LifecycleUserV3>,
     #[serde(default)]
-    pub groups: Vec<LifecycleGroupV2>,
+    pub groups: Vec<LifecycleGroupV3>,
     #[serde(default)]
-    pub directories: Vec<LifecycleDirectoryV2>,
+    pub directories: Vec<LifecycleDirectoryV3>,
     #[serde(default)]
-    pub services: Vec<LifecycleServiceV2>,
+    pub services: Vec<LifecycleServiceV3>,
     #[serde(default)]
-    pub systemd: Vec<LifecycleSystemdV2>,
+    pub systemd: Vec<LifecycleSystemdV3>,
     #[serde(default)]
-    pub tmpfiles: Vec<LifecycleTmpfilesV2>,
+    pub tmpfiles: Vec<LifecycleTmpfilesV3>,
     #[serde(default)]
-    pub sysctl: Vec<LifecycleSysctlV2>,
+    pub sysctl: Vec<LifecycleSysctlV3>,
     #[serde(default)]
-    pub alternatives: Vec<LifecycleAlternativeV2>,
+    pub alternatives: Vec<LifecycleAlternativeV3>,
     /// Package-scoped capability declarations from `ccs.toml`. Each
     /// executable hook repeats this exact set so its standalone execution
     /// contract remains complete.
     #[serde(default)]
-    pub script_capabilities: Vec<LifecycleScriptCapabilityV2>,
+    pub script_capabilities: Vec<LifecycleScriptCapabilityV3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_install: Option<LifecycleScriptV2>,
+    pub post_install: Option<LifecycleScriptV3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pre_remove: Option<LifecycleScriptV2>,
+    pub pre_remove: Option<LifecycleScriptV3>,
     /// Exact package-manager-native lifecycle contract carried by converted
     /// packages. This is signed install authority, not debug-TOML evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,7 +241,7 @@ pub struct LifecycleAuthorityV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleUserV2 {
+pub struct LifecycleUserV3 {
     pub name: String,
     pub system: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,7 +256,7 @@ pub struct LifecycleUserV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleGroupV2 {
+pub struct LifecycleGroupV3 {
     pub name: String,
     pub system: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,7 +265,7 @@ pub struct LifecycleGroupV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleDirectoryV2 {
+pub struct LifecycleDirectoryV3 {
     pub path: String,
     pub mode: String,
     pub owner: String,
@@ -276,16 +278,16 @@ pub struct LifecycleDirectoryV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleServiceV2 {
+pub struct LifecycleServiceV3 {
     pub name: String,
-    pub action: LifecycleServiceActionV2,
+    pub action: LifecycleServiceActionV3,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reversible: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum LifecycleServiceActionV2 {
+pub enum LifecycleServiceActionV3 {
     Enable,
     Disable,
     Start,
@@ -299,7 +301,7 @@ pub enum LifecycleServiceActionV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleSystemdV2 {
+pub struct LifecycleSystemdV3 {
     pub unit: String,
     pub enable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,7 +310,7 @@ pub struct LifecycleSystemdV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleTmpfilesV2 {
+pub struct LifecycleTmpfilesV3 {
     #[serde(rename = "type")]
     pub entry_type: String,
     pub path: String,
@@ -323,7 +325,7 @@ pub struct LifecycleTmpfilesV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleSysctlV2 {
+pub struct LifecycleSysctlV3 {
     pub key: String,
     pub value: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,7 +334,7 @@ pub struct LifecycleSysctlV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleAlternativeV2 {
+pub struct LifecycleAlternativeV3 {
     pub link: String,
     pub name: String,
     pub path: String,
@@ -343,24 +345,24 @@ pub struct LifecycleAlternativeV2 {
 
 /// Executable native CCS lifecycle authority.
 ///
-/// `interpreter` and `execution` are explicit even though v2 currently admits
+/// `interpreter` and `execution` are explicit even though v3 currently admits
 /// only the contract implemented by `HookExecutor`. This prevents an
 /// interpreter or execution-root guess from entering install authority.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleScriptV2 {
+pub struct LifecycleScriptV3 {
     pub interpreter: String,
     pub body: String,
     #[serde(default)]
-    pub capabilities: Vec<LifecycleScriptCapabilityV2>,
+    pub capabilities: Vec<LifecycleScriptCapabilityV3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reversible: Option<bool>,
-    pub execution: LifecycleScriptExecutionV2,
+    pub execution: LifecycleScriptExecutionV3,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LifecycleScriptCapabilityV2 {
+pub struct LifecycleScriptCapabilityV3 {
     pub name: String,
     #[serde(default)]
     pub paths: Vec<String>,
@@ -368,15 +370,15 @@ pub struct LifecycleScriptCapabilityV2 {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum LifecycleScriptExecutionV2 {
+pub enum LifecycleScriptExecutionV3 {
     SandboxedTargetRoot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct ProvenanceAuthorityV2 {
+pub struct ProvenanceAuthorityV3 {
     /// Install-time provenance facts. Build attestation envelopes live in
     /// MANIFEST.attestation.json; the build-time classifier version remains
-    /// in that attestation envelope, not in v2 package authority.
+    /// in that attestation envelope, not in v3 package authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -390,17 +392,17 @@ pub struct ProvenanceAuthorityV2 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct PackagePolicyV2 {
+pub struct PackagePolicyV3 {
     /// M4a carries only host-mutation policy. Required-capability,
     /// public-serving, and trust-metadata policy fields are reserved for M4b+.
     #[serde(default)]
     pub allow_host_mutation: bool,
 }
 
-impl DependencyEntryV2 {
+impl DependencyEntryV3 {
     pub fn package(name: impl Into<String>) -> Self {
         Self {
-            kind: DependencyKindV2::Package,
+            kind: DependencyKindV3::Package,
             name: name.into(),
             version_constraint: None,
             target: None,
@@ -409,7 +411,7 @@ impl DependencyEntryV2 {
     }
 }
 
-impl AuthorityDocumentV2 {
+impl AuthorityDocumentV3 {
     pub fn to_cbor(&self) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
         let mut buf = Vec::new();
         ciborium::into_writer(self, &mut buf)?;
@@ -430,15 +432,15 @@ impl AuthorityDocumentV2 {
         let mut authority = Self::empty_package_for_tests(name);
         authority.components = BTreeMap::from([(
             "main".to_string(),
-            ComponentAuthorityV2 {
+            ComponentAuthorityV3 {
                 name: "main".to_string(),
                 default: true,
                 file_count: 1,
                 total_size: 12,
             },
         )]);
-        if let PackageKindV2::Package(data) = &mut authority.kind {
-            data.files.push(FileAuthorityV2 {
+        if let PackageKindV3::Package(data) = &mut authority.kind {
+            data.files.push(FileAuthorityV3 {
                 path: "/usr/bin/hello".to_string(),
                 node: PayloadNode::regular(0o755),
                 content: Some(PayloadContentAuthority {
@@ -447,7 +449,7 @@ impl AuthorityDocumentV2 {
                 }),
                 component: "main".to_string(),
                 config: None,
-                conflict: ConflictPolicyV2::Error,
+                conflict: ConflictPolicyV3::Error,
             });
         }
         authority
@@ -456,8 +458,8 @@ impl AuthorityDocumentV2 {
     #[cfg(test)]
     pub(crate) fn empty_package_for_tests(name: &str) -> Self {
         Self {
-            format_version: FORMAT_VERSION_V2,
-            identity: PackageIdentityV2 {
+            format_version: FORMAT_VERSION_V3,
+            identity: PackageIdentityV3 {
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
                 version_scheme: VersionScheme::Conary,
@@ -465,26 +467,17 @@ impl AuthorityDocumentV2 {
                 architecture: Some("x86_64".to_string()),
                 debian_multi_arch: None,
                 platform: Some("linux".to_string()),
-                kind: PackageKindTagV2::Package,
+                kind: PackageKindTagV3::Package,
             },
-            kind: PackageKindV2::Package(PackageDataV2::default()),
-            provides: vec![ProvidedCapabilityV2 {
-                kind: DependencyKindV2::Package,
-                name: name.to_string(),
-                provider_version: Some("1.0.0".to_string()),
-                version_relation: Some(ProvideVersionRelation::Equal),
-                version_scheme: VersionScheme::Conary,
-                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-                target: None,
-                component: None,
-            }],
+            kind: PackageKindV3::Package(PackageDataV3::default()),
+            provided_capabilities: Vec::new(),
             requirements: Vec::new(),
             relations: Vec::new(),
-            capabilities: None,
+            execution_capabilities: None,
             file_capabilities: Vec::new(),
             components: BTreeMap::new(),
-            lifecycle: LifecycleAuthorityV2::default(),
-            provenance: ProvenanceAuthorityV2 {
+            lifecycle: LifecycleAuthorityV3::default(),
+            provenance: ProvenanceAuthorityV3 {
                 origin_class: Some("native-built".to_string()),
                 hardening_level: Some("hermetic".to_string()),
                 build_input_identity: Some("sha256:build-input".to_string()),
@@ -502,18 +495,17 @@ mod tests {
 
     #[test]
     fn package_kind_serializes_as_tagged_enum() {
-        let authority = AuthorityDocumentV2::package_for_tests("hello");
+        let authority = AuthorityDocumentV3::package_for_tests("hello");
         let bytes = authority.to_cbor().unwrap();
-        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
-        assert_eq!(decoded.format_version, FORMAT_VERSION_V2);
-        assert!(matches!(decoded.kind, PackageKindV2::Package(_)));
+        let decoded = AuthorityDocumentV3::from_cbor(&bytes).unwrap();
+        assert_eq!(decoded.format_version, FORMAT_VERSION_V3);
+        assert!(matches!(decoded.kind, PackageKindV3::Package(_)));
     }
 
     #[test]
-    fn typed_relations_round_trip_in_signed_v2_authority() {
-        let mut authority = AuthorityDocumentV2::package_for_tests("replacement");
+    fn typed_relations_round_trip_in_signed_v3_authority() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("replacement");
         authority.identity.version_scheme = VersionScheme::Rpm;
-        authority.provides[0].version_scheme = VersionScheme::Rpm;
         authority.relations.push(
             crate::repository::package_relation::parse_native_relation(
                 crate::repository::dependency_model::RepositoryRequirementKind::Obsolete,
@@ -524,16 +516,16 @@ mod tests {
         );
 
         let bytes = authority.to_cbor().unwrap();
-        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
+        let decoded = AuthorityDocumentV3::from_cbor(&bytes).unwrap();
 
         assert_eq!(decoded.relations, authority.relations);
         super::super::validation::validate_authority(&decoded).unwrap();
     }
 
     #[test]
-    fn package_capabilities_round_trip_in_signed_v2_authority() {
-        let mut authority = AuthorityDocumentV2::package_for_tests("capable");
-        authority.capabilities = Some(crate::capability::CapabilityDeclaration {
+    fn package_capabilities_round_trip_in_signed_v3_authority() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("capable");
+        authority.execution_capabilities = Some(crate::capability::CapabilityDeclaration {
             rationale: Some("needs repository access".to_string()),
             network: crate::capability::NetworkCapabilities {
                 connect_tcp: vec![443],
@@ -543,15 +535,18 @@ mod tests {
         });
 
         let bytes = authority.to_cbor().unwrap();
-        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
+        let decoded = AuthorityDocumentV3::from_cbor(&bytes).unwrap();
 
-        assert_eq!(decoded.capabilities, authority.capabilities);
+        assert_eq!(
+            decoded.execution_capabilities,
+            authority.execution_capabilities
+        );
         super::super::validation::validate_authority(&decoded).unwrap();
     }
 
     #[test]
-    fn file_capabilities_round_trip_in_signed_v2_authority() {
-        let mut authority = AuthorityDocumentV2::package_for_tests("file-capable");
+    fn file_capabilities_round_trip_in_signed_v3_authority() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("file-capable");
         authority.file_capabilities = vec![FileCapability {
             path: "/usr/bin/hello".to_string(),
             capabilities: vec!["cap_net_bind_service".to_string()],
@@ -561,7 +556,7 @@ mod tests {
         }];
 
         let bytes = authority.to_cbor().unwrap();
-        let decoded = AuthorityDocumentV2::from_cbor(&bytes).unwrap();
+        let decoded = AuthorityDocumentV3::from_cbor(&bytes).unwrap();
 
         assert_eq!(decoded.file_capabilities, authority.file_capabilities);
         super::super::validation::validate_authority(&decoded).unwrap();
@@ -569,7 +564,7 @@ mod tests {
 
     #[test]
     fn tmpfiles_authority_round_trips_exact_seven_columns() {
-        let tmpfiles = LifecycleTmpfilesV2 {
+        let tmpfiles = LifecycleTmpfilesV3 {
             entry_type: "x!$".to_string(),
             path: "/var/cache/example/*".to_string(),
             mode: "-".to_string(),
@@ -581,7 +576,7 @@ mod tests {
         };
         let mut encoded = Vec::new();
         ciborium::ser::into_writer(&tmpfiles, &mut encoded).unwrap();
-        let decoded: LifecycleTmpfilesV2 = ciborium::from_reader(encoded.as_slice()).unwrap();
+        let decoded: LifecycleTmpfilesV3 = ciborium::from_reader(encoded.as_slice()).unwrap();
 
         assert_eq!(decoded, tmpfiles);
     }
@@ -596,26 +591,26 @@ mod tests {
             "group": "root"
         });
 
-        assert!(serde_json::from_value::<LifecycleTmpfilesV2>(removed_shape).is_err());
+        assert!(serde_json::from_value::<LifecycleTmpfilesV3>(removed_shape).is_err());
     }
 
     #[test]
     fn group_requires_members_and_has_no_payload_fields() {
-        let group = PackageKindV2::Group(GroupDataV2 {
-            members: vec![GroupMemberV2 {
-                requirement: DependencyEntryV2::package("hello"),
-                strength: GroupMemberStrengthV2::Required,
+        let group = PackageKindV3::Group(GroupDataV3 {
+            members: vec![GroupMemberV3 {
+                requirement: DependencyEntryV3::package("hello"),
+                strength: GroupMemberStrengthV3::Required,
             }],
             provides: Vec::new(),
             conflicts: Vec::new(),
-            policy: PackagePolicyV2::default(),
+            policy: PackagePolicyV3::default(),
         });
-        assert!(matches!(group, PackageKindV2::Group(_)));
+        assert!(matches!(group, PackageKindV3::Group(_)));
     }
 
     #[test]
     fn redirect_has_minimum_authority_fields() {
-        let redirect = RedirectDataV2 {
+        let redirect = RedirectDataV3 {
             to: "new-name".to_string(),
             version_constraint: Some(">=1.0.0".to_string()),
             reason: Some("package renamed".to_string()),

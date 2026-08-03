@@ -17,6 +17,45 @@
 use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
+/// Source package format that established a signed or persisted capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourcePackageFormat {
+    Rpm,
+    Debian,
+    Alpm,
+    Ccs,
+}
+
+impl SourcePackageFormat {
+    #[must_use]
+    pub const fn version_scheme(self) -> VersionScheme {
+        match self {
+            Self::Rpm => VersionScheme::Rpm,
+            Self::Debian => VersionScheme::Debian,
+            Self::Alpm => VersionScheme::Arch,
+            Self::Ccs => VersionScheme::Conary,
+        }
+    }
+}
+
+/// Why a capability exists. Exact package identity is deliberately distinct
+/// from every declared or derived capability.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "kebab-case")]
+pub enum CapabilityProvenance {
+    ExactIdentity,
+    AuthorDeclared,
+    SourceDeclared {
+        format: SourcePackageFormat,
+        record_index: u32,
+    },
+    SourceDerivedFile {
+        format: SourcePackageFormat,
+        source_path: String,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Exact source profile
 // ---------------------------------------------------------------------------
@@ -216,6 +255,98 @@ pub enum ProvideVersionRelation {
     GreaterThan,
 }
 
+/// Capability projected for dependency resolution, persistence, or signing.
+/// Native parsers retain their source-specific records and construct this DTO
+/// only at a named consumer boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidedCapability {
+    pub kind: RepositoryCapabilityKind,
+    pub name: String,
+    pub version: Option<String>,
+    pub version_relation: Option<ProvideVersionRelation>,
+    pub version_scheme: VersionScheme,
+    pub architecture_qualifier: ProvideArchitectureQualifier,
+    pub provenance: CapabilityProvenance,
+}
+
+impl ProvidedCapability {
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(crate::error::Error::ParseError(
+                "provided capability name is empty".to_string(),
+            ));
+        }
+        if self.version.is_some() != self.version_relation.is_some() {
+            return Err(crate::error::Error::ParseError(format!(
+                "provided capability '{}' must carry both a version relation and boundary, or neither",
+                self.name
+            )));
+        }
+        if let Some(version) = self.version.as_deref() {
+            super::versioning::validate_repo_version(self.version_scheme, version).map_err(
+                |error| {
+                    crate::error::Error::ParseError(format!(
+                        "provided capability '{}' has invalid {} provider version: {error}",
+                        self.name,
+                        self.version_scheme.as_str()
+                    ))
+                },
+            )?;
+        }
+        if self.version_scheme != VersionScheme::Rpm
+            && self
+                .version_relation
+                .is_some_and(|relation| relation != ProvideVersionRelation::Equal)
+        {
+            return Err(crate::error::Error::ParseError(format!(
+                "non-RPM provided capability '{}' may only carry an exact version relation",
+                self.name
+            )));
+        }
+        if matches!(
+            &self.architecture_qualifier,
+            ProvideArchitectureQualifier::Exact(architecture) if architecture.trim().is_empty()
+        ) {
+            return Err(crate::error::Error::ParseError(format!(
+                "provided capability '{}' has an empty exact architecture qualifier",
+                self.name
+            )));
+        }
+        match &self.provenance {
+            CapabilityProvenance::ExactIdentity
+                if self.kind != RepositoryCapabilityKind::PackageName
+                    || self.version_relation != Some(ProvideVersionRelation::Equal)
+                    || self.architecture_qualifier != ProvideArchitectureQualifier::Implicit =>
+            {
+                return Err(crate::error::Error::ParseError(
+                    "exact package identity must be an exact, implicit-architecture package-name provider"
+                        .to_string(),
+                ));
+            }
+            CapabilityProvenance::SourceDeclared { format, .. }
+            | CapabilityProvenance::SourceDerivedFile { format, .. }
+                if format.version_scheme() != self.version_scheme =>
+            {
+                return Err(crate::error::Error::ParseError(format!(
+                    "provided capability '{}' source format contradicts its version scheme",
+                    self.name
+                )));
+            }
+            CapabilityProvenance::SourceDerivedFile { source_path, .. }
+                if self.kind != RepositoryCapabilityKind::File || !source_path.starts_with('/') =>
+            {
+                return Err(crate::error::Error::ParseError(
+                    "source-derived file capability requires a file kind and absolute source path"
+                        .to_string(),
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 impl ProvideVersionRelation {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -268,6 +399,9 @@ pub struct RepositoryProvide {
 
     /// The original native text for diagnostics (e.g. `"kernel-core-uname-r = 6.19.6-200.fc44.x86_64"`).
     pub native_text: Option<String>,
+
+    /// Consumer-visible origin of this provider row.
+    pub provenance: CapabilityProvenance,
 }
 
 impl RepositoryProvide {
@@ -282,6 +416,7 @@ impl RepositoryProvide {
             version_relation,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
+            provenance: CapabilityProvenance::ExactIdentity,
         }
     }
 
@@ -296,6 +431,7 @@ impl RepositoryProvide {
             version_relation,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
+            provenance: CapabilityProvenance::AuthorDeclared,
         }
     }
 
@@ -310,6 +446,7 @@ impl RepositoryProvide {
             version_relation,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
+            provenance: CapabilityProvenance::AuthorDeclared,
         }
     }
 
@@ -323,6 +460,7 @@ impl RepositoryProvide {
             version_relation: None,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             native_text: None,
+            provenance: CapabilityProvenance::AuthorDeclared,
         }
     }
 }
@@ -737,5 +875,26 @@ mod tests {
             RepositoryRequirementClause::versioned("libc6".to_string(), ">= 2.34".to_string());
         assert_eq!(clause.version_constraint.as_deref(), Some(">= 2.34"));
         assert!(clause.capability_kind.is_none());
+    }
+
+    #[test]
+    fn capability_validation_rejects_malformed_provenance_and_architecture() {
+        let mut capability = ProvidedCapability {
+            kind: RepositoryCapabilityKind::File,
+            name: "/usr/bin/tool".to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Arch,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile {
+                format: SourcePackageFormat::Alpm,
+                source_path: "usr/bin/tool".to_string(),
+            },
+        };
+        assert!(capability.validate().is_err());
+
+        capability.provenance = CapabilityProvenance::AuthorDeclared;
+        capability.architecture_qualifier = ProvideArchitectureQualifier::Exact(String::new());
+        assert!(capability.validate().is_err());
     }
 }

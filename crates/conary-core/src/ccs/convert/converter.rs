@@ -2,7 +2,7 @@
 //! Native package to CCS format converter
 //!
 //! Takes exact native package metadata plus extracted payloads and emits a
-//! signed CCS v2 archive.
+//! signed CCS v3 archive.
 
 mod evidence;
 
@@ -11,10 +11,10 @@ use evidence::*;
 
 use crate::ccs::attestation::{
     FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary, canonical_json_hash,
-    compute_build_output_identity_from_v2,
+    compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, ComponentData, FileEntry, write_v2_ccs_package_from_sources,
+    BuildResult, ComponentData, FileEntry, write_v3_ccs_package_from_sources,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
 use crate::ccs::convert::scriptlet_bundle::{
@@ -26,7 +26,7 @@ use crate::ccs::manifest::{
 use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::signing::SigningKeyPair;
-use crate::ccs::v2::PackageKindTagV2;
+use crate::ccs::v3::PackageKindTagV3;
 use crate::hash::{Hash, HashAlgorithm};
 use crate::packages::common::PackageMetadata;
 use crate::packages::payload::PackagePayloadFile;
@@ -75,7 +75,7 @@ pub struct ConversionResult {
     pub native_lifecycle: Option<NativeLifecycleBundle>,
     /// Compact lifecycle metadata derived from the embedded bundle.
     pub scriptlet_metadata: ScriptletBundleSummary,
-    /// Exact Ed25519 public key that authenticated the emitted CCS v2 package.
+    /// Exact Ed25519 public key that authenticated the emitted CCS v3 package.
     pub signing_public_key: String,
 }
 
@@ -123,7 +123,7 @@ impl NativePackageConverter {
         self
     }
 
-    /// Set the authority key required to emit a trusted CCS v2 package.
+    /// Set the authority key required to emit a trusted CCS v3 package.
     pub fn with_signing_key(mut self, key: Arc<SigningKeyPair>) -> Self {
         self.signing_key = Some(key);
         self
@@ -156,11 +156,11 @@ impl NativePackageConverter {
                 )));
             }
         };
-        if metadata.version_scheme != expected_version_scheme {
+        if metadata.version_scheme() != expected_version_scheme {
             return Err(ConversionError::ManifestError(format!(
                 "source package format '{format}' requires '{}' version authority, got '{}'",
                 expected_version_scheme.as_str(),
-                metadata.version_scheme.as_str()
+                metadata.version_scheme().as_str()
             )));
         }
 
@@ -192,7 +192,7 @@ impl NativePackageConverter {
             source_format: format,
             source_profile: self.source_profile.as_deref(),
             source_release: self.source_release.as_deref(),
-            source_arch: metadata.architecture.as_deref(),
+            source_arch: metadata.architecture(),
             source_checksum: Some(&checksum),
             conversion_tool: self.conversion_tool.as_str(),
             conversion_tool_version: env!("CARGO_PKG_VERSION"),
@@ -226,8 +226,8 @@ impl NativePackageConverter {
                 "Foreign conversion requires an explicit CCS authority signing key".to_string(),
             )
         })?;
-        let mut authority = crate::ccs::v2::project_build_result_authority_to_v2(
-            crate::ccs::v2::V2AuthoringInput {
+        let mut authority = crate::ccs::v3::project_build_result_authority_to_v3(
+            crate::ccs::v3::V3AuthoringInput {
                 build: &build_result,
                 local_dev: false,
                 debug_toml: None,
@@ -235,22 +235,22 @@ impl NativePackageConverter {
         )
         .map_err(|error| {
             ConversionError::BuildError(format!(
-                "Failed to project foreign conversion into CCS v2 authority: {error}"
+                "Failed to project foreign conversion into CCS v3 authority: {error}"
             ))
         })?;
         authority.provenance.origin_class = Some("foreign-converted".to_string());
         authority.provenance.hardening_level = Some("hermetic".to_string());
         authority.provenance.build_input_identity = Some(build_input_identity);
         authority.provenance.hermetic_evidence_hash = Some(conversion_evidence_hash);
-        authority.identity.debian_multi_arch = metadata.debian_multi_arch;
-        authority.provides = signed_native_provides(metadata);
-        crate::ccs::v2::validate_authority(&authority).map_err(|error| {
+        authority.identity.debian_multi_arch = metadata.debian_multi_arch();
+        authority.provided_capabilities = project_source_capabilities(metadata)?;
+        crate::ccs::v3::validate_authority(&authority).map_err(|error| {
             ConversionError::BuildError(format!(
                 "Foreign conversion produced invalid typed provider authority: {error}"
             ))
         })?;
 
-        let output_identity = compute_build_output_identity_from_v2(&authority).map_err(|e| {
+        let output_identity = compute_build_output_identity_from_v3(&authority).map_err(|e| {
             ConversionError::BuildError(format!(
                 "Failed to compute foreign conversion output identity: {}",
                 e
@@ -294,16 +294,16 @@ impl NativePackageConverter {
         authority.provenance.foreign_conversion_boundary_hash = Some(boundary_hash);
         let debug_toml = toml::to_string_pretty(&build_result.manifest).map_err(|error| {
             ConversionError::ManifestError(format!(
-                "Failed to serialize CCS v2 diagnostic projection: {error}"
+                "Failed to serialize CCS v3 diagnostic projection: {error}"
             ))
         })?;
         authority.debug_toml_sha256 = Some(crate::hash::sha256(debug_toml.as_bytes()));
-        crate::ccs::v2::validate_authority(&authority).map_err(|error| {
+        crate::ccs::v3::validate_authority(&authority).map_err(|error| {
             ConversionError::BuildError(format!(
-                "Foreign conversion produced invalid CCS v2 authority: {error}"
+                "Foreign conversion produced invalid CCS v3 authority: {error}"
             ))
         })?;
-        write_v2_ccs_package_from_sources(
+        write_v3_ccs_package_from_sources(
             &authority,
             files,
             &package_path,
@@ -380,24 +380,24 @@ impl NativePackageConverter {
         hooks: &Hooks,
     ) -> Result<CcsManifest, ConversionError> {
         // Build platform info
-        let platform = metadata.architecture.as_ref().map(|arch| Platform {
+        let platform = metadata.architecture().map(|arch| Platform {
             os: "linux".to_string(),
-            arch: Some(arch.clone()),
+            arch: Some(arch.to_string()),
             libc: "gnu".to_string(),
             abi: None,
         });
 
         let manifest = CcsManifest {
             package: Package {
-                name: metadata.name.clone(),
-                version: metadata.version.clone(),
-                version_scheme: metadata.version_scheme,
+                name: metadata.name().to_string(),
+                version: metadata.version().to_string(),
+                version_scheme: metadata.version_scheme(),
                 description: metadata.description.clone().unwrap_or_else(|| {
                     format!("Converted from {} package", metadata.package_path.display())
                 }),
                 release: "1".to_string(),
-                kind: PackageKindTagV2::Package,
-                debian_multi_arch: metadata.debian_multi_arch,
+                kind: PackageKindTagV3::Package,
+                debian_multi_arch: metadata.debian_multi_arch(),
                 license: None,
                 homepage: None,
                 repository: None,
@@ -480,40 +480,36 @@ fn build_streaming_result(
     })
 }
 
-fn signed_native_provides(metadata: &PackageMetadata) -> Vec<crate::ccs::v2::ProvidedCapabilityV2> {
-    use crate::ccs::v2::schema::DependencyKindV2;
-    use crate::repository::dependency_model::{
-        ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
-    };
+fn project_source_capabilities(
+    metadata: &PackageMetadata,
+) -> Result<Vec<crate::ccs::v3::ProvidedCapabilityV3>, ConversionError> {
+    use crate::ccs::v3::schema::DependencyKindV3;
+    use crate::repository::dependency_model::RepositoryCapabilityKind;
 
-    let mut signed = vec![crate::ccs::v2::ProvidedCapabilityV2 {
-        kind: DependencyKindV2::Package,
-        name: metadata.name.clone(),
-        provider_version: Some(metadata.version.clone()),
-        version_relation: Some(ProvideVersionRelation::Equal),
-        version_scheme: metadata.version_scheme,
-        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-        target: None,
-        component: None,
-    }];
-    for provide in &metadata.provides {
-        let projected = crate::ccs::v2::ProvidedCapabilityV2 {
+    let mut signed = Vec::new();
+    for provide in metadata
+        .source_authority
+        .declared_capabilities()
+        .map_err(|error| ConversionError::BuildError(error.to_string()))?
+    {
+        let projected = crate::ccs::v3::ProvidedCapabilityV3 {
             kind: match provide.kind {
-                RepositoryCapabilityKind::PackageName => DependencyKindV2::Package,
+                RepositoryCapabilityKind::PackageName => DependencyKindV3::Package,
                 RepositoryCapabilityKind::Generic | RepositoryCapabilityKind::Virtual => {
-                    DependencyKindV2::Capability
+                    DependencyKindV3::Capability
                 }
-                RepositoryCapabilityKind::File => DependencyKindV2::File,
-                RepositoryCapabilityKind::Path => DependencyKindV2::Path,
-                RepositoryCapabilityKind::Binary => DependencyKindV2::Binary,
-                RepositoryCapabilityKind::Soname => DependencyKindV2::Soname,
-                RepositoryCapabilityKind::PkgConfig => DependencyKindV2::PkgConfig,
+                RepositoryCapabilityKind::File => DependencyKindV3::File,
+                RepositoryCapabilityKind::Path => DependencyKindV3::Path,
+                RepositoryCapabilityKind::Binary => DependencyKindV3::Binary,
+                RepositoryCapabilityKind::Soname => DependencyKindV3::Soname,
+                RepositoryCapabilityKind::PkgConfig => DependencyKindV3::PkgConfig,
             },
             name: provide.name.clone(),
             provider_version: provide.version.clone(),
             version_relation: provide.version_relation,
             version_scheme: provide.version_scheme,
             architecture_qualifier: provide.architecture_qualifier.clone(),
+            provenance: provide.provenance.clone(),
             target: None,
             component: None,
         };
@@ -521,7 +517,7 @@ fn signed_native_provides(metadata: &PackageMetadata) -> Vec<crate::ccs::v2::Pro
             signed.push(projected);
         }
     }
-    signed
+    Ok(signed)
 }
 
 #[cfg(test)]

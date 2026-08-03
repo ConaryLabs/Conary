@@ -59,8 +59,8 @@ pub struct ConvertedPackage {
     pub original_format: String,
     /// Checksum of original package file (skip if already converted)
     pub original_checksum: String,
-    /// Digest of the exact repository-provide projection merged into a
-    /// repository conversion. Installed conversions carry no repository view.
+    /// Digest of the exact repository-provide cache projection. It invalidates
+    /// stale conversions but never mutates source artifact authority.
     pub repository_provides_digest: Option<String>,
     /// Conversion algorithm version (re-convert if upgraded)
     pub conversion_version: i32,

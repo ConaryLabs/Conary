@@ -24,11 +24,11 @@ fn record_authority_manifest_entry(
 
 fn require_current_authority_manifest(manifest_bytes: Option<Vec<u8>>) -> Result<Vec<u8>> {
     let bytes =
-        manifest_bytes.ok_or_else(|| anyhow::anyhow!("Package missing required v2 MANIFEST"))?;
-    let authority = conary_core::ccs::v2::AuthorityDocumentV2::from_cbor(&bytes)
-        .context("Package MANIFEST is not current CCS v2 authority")?;
-    conary_core::ccs::v2::validation::validate_authority(&authority).map_err(|error| {
-        anyhow::anyhow!("Package MANIFEST is not valid CCS v2 authority: {error}")
+        manifest_bytes.ok_or_else(|| anyhow::anyhow!("Package missing required v3 MANIFEST"))?;
+    let authority = conary_core::ccs::v3::AuthorityDocumentV3::from_cbor(&bytes)
+        .context("Package MANIFEST is not current CCS v3 authority")?;
+    conary_core::ccs::v3::validation::validate_authority(&authority).map_err(|error| {
+        anyhow::anyhow!("Package MANIFEST is not valid CCS v3 authority: {error}")
     })?;
     Ok(bytes)
 }
@@ -118,7 +118,7 @@ pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>)
 
     // Refuse to bless a retired or structurally invalid archive.
     conary_core::ccs::archive_reader::inspect_untrusted_ccs_archive(File::open(package_path)?)
-        .context("Package is not a structurally valid current CCS v2 archive")?;
+        .context("Package is not a structurally valid current CCS v3 archive")?;
 
     // Open and read the package.
     let file = File::open(package_path)?;
@@ -128,7 +128,7 @@ pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>)
     // Create temp directory for extraction
     let temp_dir = tempfile::tempdir()?;
 
-    // Extract all files and capture the sole v2 MANIFEST authority.
+    // Extract all files and capture the sole v3 MANIFEST authority.
     let mut manifest_bytes: Option<Vec<u8>> = None;
 
     for entry in archive.entries()? {
@@ -187,7 +187,7 @@ pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>)
         staged.path(),
         &conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]),
     )
-    .context("Signed CCS v2 package failed complete authority and payload verification")?;
+    .context("Signed CCS v3 package failed complete authority and payload verification")?;
     staged
         .persist(&output_path)
         .map_err(|error| error.error)
@@ -226,7 +226,7 @@ mod tests {
             require_current_authority_manifest(captured)
                 .unwrap_err()
                 .to_string()
-                .contains("required v2 MANIFEST")
+                .contains("required v3 MANIFEST")
         );
     }
 
@@ -238,7 +238,7 @@ mod tests {
             require_current_authority_manifest(captured)
                 .unwrap_err()
                 .to_string()
-                .contains("current CCS v2 authority")
+                .contains("current CCS v3 authority")
         );
 
         let mut duplicate = Some(vec![1]);

@@ -210,9 +210,9 @@ fn canonical_conary_entry(
     }
 
     let authority = verified.authority();
-    let crate::ccs::v2::schema::PackageKindV2::Package(package) = &authority.kind else {
+    let crate::ccs::v3::schema::PackageKindV3::Package(package) = &authority.kind else {
         return Err(Error::ParseError(
-            "CCS v2 self-update authority is not a package".to_string(),
+            "CCS v3 self-update authority is not a package".to_string(),
         ));
     };
     let mut signed_entries = package
@@ -220,11 +220,11 @@ fn canonical_conary_entry(
         .iter()
         .filter(|candidate| candidate.path == "/usr/bin/conary");
     let signed = signed_entries.next().ok_or_else(|| {
-        Error::ParseError("CCS v2 authority does not declare /usr/bin/conary".to_string())
+        Error::ParseError("CCS v3 authority does not declare /usr/bin/conary".to_string())
     })?;
     if signed_entries.next().is_some() {
         return Err(Error::ParseError(
-            "CCS v2 authority declares /usr/bin/conary more than once".to_string(),
+            "CCS v3 authority declares /usr/bin/conary more than once".to_string(),
         ));
     }
     if signed.node != file.node
@@ -232,7 +232,7 @@ fn canonical_conary_entry(
         || signed.component != file.component
     {
         return Err(Error::ParseError(
-            "CCS v2 /usr/bin/conary authority disagrees with component payload".to_string(),
+            "CCS v3 /usr/bin/conary authority disagrees with component payload".to_string(),
         ));
     }
 
@@ -599,7 +599,7 @@ mod tests {
             &crate::ccs::verify::TrustPolicy::strict(vec![key.public_key_base64()]),
         )
         .unwrap_err();
-        assert_error_chain_contains(&error, "missing required current v2 MANIFEST authority");
+        assert_error_chain_contains(&error, "missing required current v3 MANIFEST authority");
     }
 
     #[test]
@@ -627,7 +627,7 @@ mod tests {
 
         let verified = verify_test_self_update_ccs(&ccs_path, &key);
         let content_hash = crate::hash::sha256(&content);
-        let crate::ccs::v2::schema::PackageKindV2::Package(package) = &verified.authority().kind
+        let crate::ccs::v3::schema::PackageKindV3::Package(package) = &verified.authority().kind
         else {
             panic!("self-update fixture must carry package authority");
         };
