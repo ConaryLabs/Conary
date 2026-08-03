@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v2/authoring/tests.rs
+// conary-core/src/ccs/v3/authoring/tests.rs
 
 use super::*;
 use crate::ccs::builder::test_support;
@@ -18,11 +18,11 @@ fn config_file(path: &str, noreplace: bool) -> crate::packages::traits::ConfigFi
 }
 
 #[test]
-fn projection_requires_release_for_v2_package_authoring() {
+fn projection_requires_release_for_v3_package_authoring() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.release.clear();
 
-    let error = project_build_result_to_v2(V2AuthoringInput {
+    let error = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -39,9 +39,9 @@ fn projection_requires_release_for_v2_package_authoring() {
 fn projection_builds_complete_local_dev_package_authority() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -72,7 +72,7 @@ fn projection_rejects_missing_architecture_authority() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.platform = None;
 
-    let error = project_build_result_to_v2(V2AuthoringInput {
+    let error = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -100,14 +100,17 @@ fn projection_preserves_exact_package_capability_authority() {
     };
     build.manifest.capabilities = Some(declaration.clone());
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
     })
     .unwrap();
 
-    assert_eq!(projected.authority.capabilities, Some(declaration));
+    assert_eq!(
+        projected.authority.execution_capabilities,
+        Some(declaration)
+    );
 }
 
 #[test]
@@ -129,7 +132,7 @@ fn projection_signs_canonical_file_capability_authority() {
         inheritable: false,
     }];
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -158,7 +161,7 @@ fn projection_rejects_file_capability_without_exact_regular_build_output() {
         effective: true,
         inheritable: false,
     }];
-    let error = project_build_result_to_v2(V2AuthoringInput {
+    let error = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -189,7 +192,7 @@ fn projection_rejects_file_capability_without_exact_regular_build_output() {
     )
     .unwrap();
     build.total_size = 0;
-    let error = project_build_result_to_v2(V2AuthoringInput {
+    let error = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -210,7 +213,7 @@ fn projection_gives_payloadless_packages_an_explicit_empty_default_component() {
     build.payloads.clear();
     build.total_size = 0;
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -228,7 +231,7 @@ fn projection_gives_payloadless_packages_an_explicit_empty_default_component() {
 fn projection_rejects_ambiguous_or_missing_default_component_authority() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.components.default = vec!["runtime".to_string(), "lib".to_string()];
-    let ambiguous = project_build_result_to_v2(V2AuthoringInput {
+    let ambiguous = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -237,7 +240,7 @@ fn projection_rejects_ambiguous_or_missing_default_component_authority() {
     assert!(ambiguous.to_string().contains("exactly one"));
 
     build.manifest.components.default = vec!["lib".to_string()];
-    let missing = project_build_result_to_v2(V2AuthoringInput {
+    let missing = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: None,
@@ -250,7 +253,7 @@ fn projection_rejects_ambiguous_or_missing_default_component_authority() {
 fn projection_preserves_reopenable_payload_when_chunk_metadata_is_present() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
 
     let chunks = [b"hel".to_vec(), b"lo\n".to_vec()];
     let chunk_hashes = chunks
@@ -261,7 +264,7 @@ fn projection_preserves_reopenable_payload_when_chunk_metadata_is_present() {
     build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
     build.chunked = true;
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -281,9 +284,9 @@ fn projection_preserves_reopenable_payload_when_chunk_metadata_is_present() {
 fn projection_keeps_host_hardening_for_release_key_signing_path() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: false,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -305,10 +308,10 @@ fn projection_marks_noreplace_config_files() {
         b"message = \"hello\"\n",
     );
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     build.manifest.config.files = vec![config_file("/etc/conary-example/config.toml", true)];
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -316,10 +319,10 @@ fn projection_marks_noreplace_config_files() {
     .unwrap();
 
     let package = match &projected.authority.kind {
-        PackageKindV2::Package(package) => package,
+        PackageKindV3::Package(package) => package,
         other => panic!("expected package authority, got {other:?}"),
     };
-    let expected = ConfigSemanticsV2 {
+    let expected = ConfigSemanticsV3 {
         noreplace: true,
         ghost: false,
         remove_on_upgrade: false,
@@ -338,10 +341,10 @@ fn projection_marks_replace_config_when_noreplace_is_false() {
         b"message = \"hello\"\n",
     );
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     build.manifest.config.files = vec![config_file("/etc/conary-example/config.toml", false)];
 
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -349,10 +352,10 @@ fn projection_marks_replace_config_when_noreplace_is_false() {
     .unwrap();
 
     let package = match &projected.authority.kind {
-        PackageKindV2::Package(package) => package,
+        PackageKindV3::Package(package) => package,
         other => panic!("expected package authority, got {other:?}"),
     };
-    let expected = ConfigSemanticsV2 {
+    let expected = ConfigSemanticsV3 {
         noreplace: false,
         ghost: false,
         remove_on_upgrade: false,
@@ -365,10 +368,10 @@ fn projection_marks_replace_config_when_noreplace_is_false() {
 fn projection_rejects_config_path_absent_from_payload() {
     let mut build = test_support::minimal_file_build_result("demo", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     build.manifest.config.files = vec![config_file("/etc/conary-example/config.toml", true)];
 
-    let error = project_build_result_to_v2(V2AuthoringInput {
+    let error = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -387,10 +390,10 @@ fn projection_rejects_relative_config_paths() {
         b"message = \"hello\"\n",
     );
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     build.manifest.config.files = vec![config_file("etc/conary-example/config.toml", true)];
 
-    let error = project_build_result_to_v2(V2AuthoringInput {
+    let error = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -405,7 +408,7 @@ fn projection_rejects_relative_config_paths() {
 fn lint_manifest_reports_empty_release() {
     let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
     manifest.package.release.clear();
-    let findings = lint_manifest_for_v2_authoring(&manifest);
+    let findings = lint_manifest_for_v3_authoring(&manifest);
 
     assert!(findings.iter().any(|f| f.field == Some("package.release")));
     assert!(findings.iter().all(|f| f.blocks_build));
@@ -423,7 +426,7 @@ fn lint_manifest_rejects_missing_or_empty_architecture_authority() {
         let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
         manifest.package.platform = platform;
 
-        let findings = lint_manifest_for_v2_authoring(&manifest);
+        let findings = lint_manifest_for_v3_authoring(&manifest);
         assert!(findings.iter().any(|finding| {
             finding.code == "m4b-missing-architecture"
                 && finding.field == Some("package.platform.arch")
@@ -442,7 +445,7 @@ fn lint_manifest_rejects_ambiguous_or_empty_default_component_authority() {
         let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
         manifest.components.default = defaults;
 
-        let findings = lint_manifest_for_v2_authoring(&manifest);
+        let findings = lint_manifest_for_v3_authoring(&manifest);
         assert!(findings.iter().any(|finding| {
             finding.code == "m4b-default-component"
                 && finding.field == Some("components.default")
@@ -455,14 +458,14 @@ fn lint_manifest_rejects_ambiguous_or_empty_default_component_authority() {
 fn lint_manifest_allows_declarative_lifecycle_without_distro_gate() {
     let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
     manifest.package.release = "1".to_string();
-    manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     manifest.hooks.services.push(crate::ccs::manifest::Service {
         name: "hello.service".to_string(),
         action: crate::ccs::manifest::ServiceAction::Restart,
         reversible: None,
     });
 
-    let findings = lint_manifest_for_v2_authoring(&manifest);
+    let findings = lint_manifest_for_v3_authoring(&manifest);
     assert!(findings.iter().all(|finding| !finding.blocks_build));
 }
 
@@ -470,13 +473,13 @@ fn lint_manifest_allows_declarative_lifecycle_without_distro_gate() {
 fn lint_manifest_allows_script_lifecycle_with_signed_execution_contract() {
     let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("hello", "0.1.0");
     manifest.package.release = "1".to_string();
-    manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     manifest.hooks.post_install = Some(crate::ccs::manifest::ScriptHook {
         script: "echo configured".to_string(),
         reversible: None,
     });
 
-    let findings = lint_manifest_for_v2_authoring(&manifest);
+    let findings = lint_manifest_for_v3_authoring(&manifest);
     assert!(findings.iter().all(|finding| !finding.blocks_build));
 }
 
@@ -489,7 +492,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
         b"#!/bin/sh\necho conary-example\n",
     );
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     build
         .manifest
         .hooks
@@ -585,7 +588,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
             cleanup: None,
             reversible: None,
         });
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -594,7 +597,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
 
     assert_eq!(
         projected.authority.lifecycle.services[0].action,
-        LifecycleServiceActionV2::Restart
+        LifecycleServiceActionV3::Restart
     );
     let tmpfiles = &projected.authority.lifecycle.tmpfiles[0];
     assert_eq!(tmpfiles.entry_type, "L+!$");
@@ -625,7 +628,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
     assert_eq!(script.body, "printf configured");
     assert_eq!(
         script.execution,
-        LifecycleScriptExecutionV2::SandboxedTargetRoot
+        LifecycleScriptExecutionV3::SandboxedTargetRoot
     );
     assert_eq!(script.capabilities[0].paths, vec!["/etc/systemd/system"]);
     assert_eq!(
@@ -638,7 +641,7 @@ fn projection_maps_declarative_lifecycle_hooks_to_signed_authority() {
 fn projection_carries_typed_requires_and_provides_without_distro_gates() {
     let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
     build.manifest.package.release = "1".to_string();
-    build.manifest.package.kind = crate::ccs::v2::PackageKindTagV2::Package;
+    build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
     build.manifest.requirements.extend([
         RepositoryRequirementGroup::simple(
             RepositoryRequirementKind::Depends,
@@ -675,11 +678,11 @@ fn projection_carries_typed_requires_and_provides_without_distro_gates() {
     build.manifest.provides.pkgconfig.push("hello".to_string());
 
     assert!(
-        lint_manifest_for_v2_authoring(&build.manifest)
+        lint_manifest_for_v3_authoring(&build.manifest)
             .iter()
             .all(|finding| !finding.blocks_build)
     );
-    let projected = project_build_result_to_v2(V2AuthoringInput {
+    let projected = project_build_result_to_v3(V3AuthoringInput {
         build: &build,
         local_dev: true,
         debug_toml: Some(build.manifest.to_toml().unwrap()),
@@ -701,15 +704,15 @@ fn projection_carries_typed_requires_and_provides_without_distro_gates() {
         })
     }));
     for (kind, name) in [
-        (DependencyKindV2::Capability, "web-server"),
-        (DependencyKindV2::Soname, "libhello.so.1"),
-        (DependencyKindV2::Binary, "hello"),
-        (DependencyKindV2::PkgConfig, "hello"),
+        (DependencyKindV3::Capability, "web-server"),
+        (DependencyKindV3::Soname, "libhello.so.1"),
+        (DependencyKindV3::Binary, "hello"),
+        (DependencyKindV3::PkgConfig, "hello"),
     ] {
         assert!(
             projected
                 .authority
-                .provides
+                .provided_capabilities
                 .iter()
                 .any(|entry| entry.kind == kind && entry.name == name)
         );

@@ -1,13 +1,13 @@
-// conary-core/src/ccs/v2/reader.rs
+// conary-core/src/ccs/v3/reader.rs
 
-use super::schema::AuthorityDocumentV2;
+use super::schema::AuthorityDocumentV3;
 use super::validation::validate_authority_structure;
 use crate::ccs::verify::{PackageSignature, TrustPolicy, VerifyError, verify_manifest_signature};
 use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone)]
-pub struct ReadAuthorityV2 {
-    pub authority: AuthorityDocumentV2,
+pub struct ReadAuthorityV3 {
+    pub authority: AuthorityDocumentV3,
     pub raw_manifest: Vec<u8>,
     pub signature: PackageSignature,
     pub build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
@@ -21,14 +21,14 @@ pub fn read_authority_document(
     build_attestation_raw: Option<&str>,
     foreign_conversion_boundary_raw: Option<&str>,
     policy: &TrustPolicy,
-) -> Result<ReadAuthorityV2> {
+) -> Result<ReadAuthorityV3> {
     let authority =
-        AuthorityDocumentV2::from_cbor(raw_manifest).context("decode CCS v2 MANIFEST")?;
+        AuthorityDocumentV3::from_cbor(raw_manifest).context("decode CCS v3 MANIFEST")?;
     validate_authority_structure(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
     let signature_raw = signature_raw.ok_or(VerifyError::NotSigned)?;
     let signature: PackageSignature =
         serde_json::from_str(signature_raw).context("parse MANIFEST.sig")?;
-    verify_v2_signature(raw_manifest, &signature, policy)?;
+    verify_v3_signature(raw_manifest, &signature, policy)?;
     verify_debug_toml_hash(&authority, toml_raw)?;
     validate_debug_toml(&authority, toml_raw)?;
     let build_attestation = build_attestation_raw
@@ -40,7 +40,7 @@ pub fn read_authority_document(
         .transpose()
         .context("parse MANIFEST.conversion-boundary.json")?;
     verify_conversion_boundary_hash(&authority, foreign_conversion_boundary.as_ref())?;
-    Ok(ReadAuthorityV2 {
+    Ok(ReadAuthorityV3 {
         authority,
         raw_manifest: raw_manifest.to_vec(),
         signature,
@@ -49,52 +49,52 @@ pub fn read_authority_document(
     })
 }
 
-fn verify_v2_signature(
+fn verify_v3_signature(
     raw_manifest: &[u8],
     package_signature: &PackageSignature,
     policy: &TrustPolicy,
 ) -> Result<()> {
     verify_manifest_signature(raw_manifest, package_signature, policy)
-        .context("verify CCS v2 MANIFEST signature")
+        .context("verify CCS v3 MANIFEST signature")
 }
 
-fn verify_debug_toml_hash(authority: &AuthorityDocumentV2, toml_raw: Option<&[u8]>) -> Result<()> {
+fn verify_debug_toml_hash(authority: &AuthorityDocumentV3, toml_raw: Option<&[u8]>) -> Result<()> {
     if let Some(expected) = &authority.debug_toml_sha256 {
         let toml_raw =
-            toml_raw.context("v2 debug TOML hash present but MANIFEST.toml is missing")?;
+            toml_raw.context("v3 debug TOML hash present but MANIFEST.toml is missing")?;
         let actual = crate::hash::sha256(toml_raw);
         if &actual != expected {
-            bail!("v2 TOML manifest integrity check failed: expected {expected}, got {actual}");
+            bail!("v3 TOML manifest integrity check failed: expected {expected}, got {actual}");
         }
     }
     Ok(())
 }
 
-fn validate_debug_toml(authority: &AuthorityDocumentV2, toml_raw: Option<&[u8]>) -> Result<()> {
+fn validate_debug_toml(authority: &AuthorityDocumentV3, toml_raw: Option<&[u8]>) -> Result<()> {
     let Some(toml_raw) = toml_raw else {
         return Ok(());
     };
     let toml_manifest = crate::ccs::manifest::CcsManifest::parse(
-        std::str::from_utf8(toml_raw).context("decode v2 MANIFEST.toml as UTF-8")?,
+        std::str::from_utf8(toml_raw).context("decode v3 MANIFEST.toml as UTF-8")?,
     )
-    .context("parse v2 MANIFEST.toml debug projection")?;
+    .context("parse v3 MANIFEST.toml debug projection")?;
     super::debug_projection::reject_unsupported_debug_toml_install_authority(&toml_manifest)?;
     super::debug_projection::validate_debug_toml_projection(authority, &toml_manifest)?;
     Ok(())
 }
 
 fn verify_conversion_boundary_hash(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<()> {
     if let Some(expected) = &authority.provenance.foreign_conversion_boundary_hash {
         let boundary = boundary.context(
-            "v2 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing",
+            "v3 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing",
         )?;
         let actual = crate::ccs::attestation::canonical_json_hash(boundary)?;
         if &actual != expected {
             bail!(
-                "v2 foreign conversion boundary hash mismatch: expected {expected}, got {actual}"
+                "v3 foreign conversion boundary hash mismatch: expected {expected}, got {actual}"
             );
         }
     }
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn verifies_signature_against_exact_archived_manifest_bytes() {
-        let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("signed");
+        let authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("signed");
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
         let signature = key.sign(&raw);
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn rejects_toml_debug_drift() {
-        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("debug");
+        let mut authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("debug");
         authority.debug_toml_sha256 = Some(crate::hash::sha256(b"original"));
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
@@ -178,13 +178,13 @@ noreplace = true
 ghost = false
 remove_on_upgrade = false
 "#;
-        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("demo");
+        let mut authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("demo");
         authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
-        if let crate::ccs::v2::schema::PackageKindV2::Package(package) = &mut authority.kind {
+        if let crate::ccs::v3::schema::PackageKindV3::Package(package) = &mut authority.kind {
             let file = package.files.first_mut().unwrap();
             file.path = "/etc/conary-example/config.toml".to_string();
             file.node.mode = libc::S_IFREG | 0o644;
-            let semantics = crate::ccs::v2::schema::ConfigSemanticsV2 {
+            let semantics = crate::ccs::v3::schema::ConfigSemanticsV3 {
                 noreplace: true,
                 ghost: false,
                 remove_on_upgrade: false,
@@ -192,7 +192,7 @@ remove_on_upgrade = false
             file.config = Some(semantics);
             package
                 .config
-                .push(crate::ccs::v2::schema::ConfigAuthorityV2 {
+                .push(crate::ccs::v3::schema::ConfigAuthorityV3 {
                     path: "/etc/conary-example/config.toml".to_string(),
                     semantics,
                 });
@@ -215,10 +215,10 @@ remove_on_upgrade = false
 
     #[test]
     fn reader_accepts_lifecycle_authority_without_no_profile_rejection() {
-        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("svc");
-        authority.lifecycle.services = vec![crate::ccs::v2::schema::LifecycleServiceV2 {
+        let mut authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("svc");
+        authority.lifecycle.services = vec![crate::ccs::v3::schema::LifecycleServiceV3 {
             name: "conary-example.service".to_string(),
-            action: crate::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+            action: crate::ccs::v3::schema::LifecycleServiceActionV3::Restart,
             reversible: None,
         }];
         let raw = authority.to_cbor().unwrap();
@@ -252,11 +252,11 @@ description = "demo package"
 name = "conary-example.service"
 action = "restart"
 "#;
-        let mut authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("demo");
+        let mut authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("demo");
         authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
-        authority.lifecycle.services = vec![crate::ccs::v2::schema::LifecycleServiceV2 {
+        authority.lifecycle.services = vec![crate::ccs::v3::schema::LifecycleServiceV3 {
             name: "conary-example.service".to_string(),
-            action: crate::ccs::v2::schema::LifecycleServiceActionV2::Restart,
+            action: crate::ccs::v3::schema::LifecycleServiceActionV3::Restart,
             reversible: None,
         }];
         let raw = authority.to_cbor().unwrap();
@@ -276,7 +276,7 @@ action = "restart"
     }
 
     #[test]
-    fn v2_debug_toml_requirements_must_match_signed_authority() {
+    fn v3_debug_toml_requirements_must_match_signed_authority() {
         let toml = r#"
 [package]
 name = "hello"
@@ -296,16 +296,16 @@ description = "hello"
             )
             .unwrap(),
         );
-        let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("hello");
+        let authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("hello");
         let error =
-            crate::ccs::v2::debug_projection::validate_debug_toml_projection(&authority, &manifest)
+            crate::ccs::v3::debug_projection::validate_debug_toml_projection(&authority, &manifest)
                 .unwrap_err();
         assert!(error.to_string().contains("requirement projection"));
     }
 
     #[test]
     fn rejects_modified_manifest_signature() {
-        let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("tamper");
+        let authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("tamper");
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
         let mut signature = key.sign(&raw);
@@ -328,7 +328,7 @@ description = "hello"
     #[test]
     fn rejects_file_capability_authority_added_after_signing() {
         let mut authority =
-            crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("capability-tamper");
+            crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("capability-tamper");
         let signed_raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
         let signature = key.sign(&signed_raw);
@@ -352,12 +352,12 @@ description = "hello"
         )
         .unwrap_err();
 
-        assert!(format!("{error:#}").contains("verify CCS v2 MANIFEST signature"));
+        assert!(format!("{error:#}").contains("verify CCS v3 MANIFEST signature"));
     }
 
     #[test]
     fn rejects_unsupported_signature_algorithms() {
-        let authority = crate::ccs::v2::schema::AuthorityDocumentV2::package_for_tests("algo");
+        let authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("algo");
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();
         let mut signature = key.sign(&raw);

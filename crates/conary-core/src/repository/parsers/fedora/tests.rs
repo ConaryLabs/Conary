@@ -1,6 +1,7 @@
 // conary-core/src/repository/parsers/fedora/tests.rs
 
 use super::*;
+use crate::repository::dependency_model::RepositoryCapabilityKind;
 use crate::repository::dependency_model::{ConditionalRequirementBehavior, ProvideVersionRelation};
 
 fn parser() -> FedoraParser {
@@ -273,7 +274,12 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
     assert!(files.iter().all(|provide| provide.version.is_none()
         && provide.version_relation.is_none()
         && provide.architecture_qualifier
-            == crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit));
+            == crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit
+        && provide.provenance
+            == crate::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
+                format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+                source_path: provide.name.clone(),
+            }));
 }
 
 #[test]

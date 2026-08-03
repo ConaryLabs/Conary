@@ -7,8 +7,8 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::VerifyingKey;
 
 use crate::repository::dependency_model::{
-    ConditionalRequirementBehavior, RepositoryCapabilityKind, RepositoryProvide,
-    RepositoryRequirementGroup, RepositoryRequirementKind,
+    ConditionalRequirementBehavior, ProvidedCapability, RepositoryCapabilityKind,
+    RepositoryProvide, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::versioning::{VersionScheme, parse_repo_constraint};
 
@@ -172,16 +172,26 @@ impl StaticPackageEntry {
 
     fn validate_provides(&self) -> Result<()> {
         let mut seen = HashSet::new();
-        let mut self_provides = 0;
+        let mut exact_identities = 0;
         for provide in &self.provides {
-            validate_non_empty(&provide.name, "package.provides[].name")?;
-            if provide.version.as_deref().is_some_and(str::is_empty) {
-                bail!("package.provides[].version must not be empty");
+            ProvidedCapability {
+                kind: provide.kind,
+                name: provide.name.clone(),
+                version: provide.version.clone(),
+                version_relation: provide.version_relation,
+                version_scheme: self.version_scheme,
+                architecture_qualifier: provide.architecture_qualifier.clone(),
+                provenance: provide.provenance.clone(),
             }
+            .validate()
+            .context("package.provides[] violates the shared capability grammar")?;
             if !seen.insert((
                 provide.kind,
                 provide.name.as_str(),
                 provide.version.as_deref(),
+                provide.version_relation,
+                &provide.architecture_qualifier,
+                &provide.provenance,
             )) {
                 bail!(
                     "duplicate package provide {:?} {} {:?}",
@@ -190,21 +200,31 @@ impl StaticPackageEntry {
                     provide.version
                 );
             }
-            if provide.kind == RepositoryCapabilityKind::PackageName && provide.name == self.name {
-                if provide.version.as_deref() != Some(self.version.as_str()) {
+            if provide.provenance
+                == crate::repository::dependency_model::CapabilityProvenance::ExactIdentity
+            {
+                if provide.kind != RepositoryCapabilityKind::PackageName
+                    || provide.name != self.name
+                    || provide.version.as_deref() != Some(self.version.as_str())
+                    || provide.version_relation
+                        != Some(
+                            crate::repository::dependency_model::ProvideVersionRelation::Equal,
+                        )
+                    || provide.architecture_qualifier
+                        != crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit
+                {
                     bail!(
-                        "package-name provide '{}' version {:?} does not match package version '{}'",
-                        provide.name,
-                        provide.version,
+                        "exact package identity provider does not match package '{}-{}'",
+                        self.name,
                         self.version
                     );
                 }
-                self_provides += 1;
+                exact_identities += 1;
             }
         }
-        if self_provides != 1 {
+        if exact_identities != 1 {
             bail!(
-                "package '{}' must declare exactly one matching package-name self-provide",
+                "package '{}' must declare exactly one matching exact package identity",
                 self.name
             );
         }
@@ -528,8 +548,10 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
         "name": "acme-widget",
         "kind": "PackageName",
         "version": "1.4.2",
+        "version_relation": "equal",
         "architecture_qualifier": {{ "kind": "implicit" }},
-        "native_text": null
+        "native_text": null,
+        "provenance": {{ "role": "exact-identity" }}
       }}],
       "requirements": [],
 
@@ -548,8 +570,10 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
         "name": "acme-widget",
         "kind": "PackageName",
         "version": "1.4.2",
+        "version_relation": "equal",
         "architecture_qualifier": {{ "kind": "implicit" }},
-        "native_text": null
+        "native_text": null,
+        "provenance": {{ "role": "exact-identity" }}
       }}],
       "requirements": [],
 
@@ -579,6 +603,41 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
 
         let error = StaticIndex::parse(&serde_json::to_string(&value).unwrap()).unwrap_err();
         assert!(error.to_string().contains("provides"), "{error}");
+    }
+
+    #[test]
+    fn static_index_preserves_same_name_compatibility_capability() {
+        let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
+            1,
+            "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        ))
+        .unwrap();
+        value["packages"][0]["version_scheme"] = serde_json::json!("arch");
+        value["packages"][0]["provides"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "acme-widget",
+                "kind": "PackageName",
+                "version": "1.4",
+                "version_relation": "equal",
+                "architecture_qualifier": { "kind": "implicit" },
+                "native_text": "acme-widget=1.4",
+                "provenance": {
+                    "role": "source-declared",
+                    "format": "alpm",
+                    "record_index": 0
+                }
+            }));
+
+        let index = StaticIndex::parse(&serde_json::to_string(&value).unwrap()).unwrap();
+
+        assert_eq!(index.packages[0].provides.len(), 2);
+        assert_eq!(
+            index.packages[0].provides[1].version.as_deref(),
+            Some("1.4")
+        );
     }
 
     #[test]
@@ -730,8 +789,10 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
         "name": "acme-widget",
         "kind": "PackageName",
         "version": "1.4.2",
+        "version_relation": "equal",
         "architecture_qualifier": {{ "kind": "implicit" }},
-        "native_text": null
+        "native_text": null,
+        "provenance": {{ "role": "exact-identity" }}
       }}],
       "requirements": [],
 

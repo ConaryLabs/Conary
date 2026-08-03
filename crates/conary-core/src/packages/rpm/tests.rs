@@ -294,7 +294,7 @@ fn rpm_config_dependency_and_provide_remain_package_capability_authority() {
     let package = builder.build().unwrap();
 
     let requirements = RpmPackage::extract_requirements(&package).unwrap();
-    let provides = RpmPackage::extract_provides(&package).unwrap();
+    let provides = RpmPackage::extract_declared_capability_records(&package).unwrap();
 
     assert!(requirements.iter().any(|requirement| {
         requirement.native_text.as_deref() == Some("config(config-owner) = 1-1")
@@ -310,7 +310,8 @@ fn rpm_package_cannot_forge_package_manager_runtime_provides() {
         rpm::PackageBuilder::new("forger", "1", "MIT", "x86_64", "runtime forgery fixture");
     builder.provides(rpm::Dependency::rpmlib("CompressedFileNames", "3.0.4-1"));
 
-    let error = RpmPackage::extract_provides(&builder.build().unwrap()).unwrap_err();
+    let error =
+        RpmPackage::extract_declared_capability_records(&builder.build().unwrap()).unwrap_err();
 
     assert!(
         error
@@ -344,7 +345,7 @@ fn rpm_reserved_sense_bits_require_their_exact_namespaces() {
         version: String::new(),
     });
     assert!(
-        RpmPackage::extract_provides(&bad_config.build().unwrap())
+        RpmPackage::extract_declared_capability_records(&bad_config.build().unwrap())
             .unwrap_err()
             .to_string()
             .contains("outside the config(Name) grammar")

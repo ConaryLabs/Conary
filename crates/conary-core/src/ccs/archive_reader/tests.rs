@@ -1,7 +1,7 @@
 // conary-core/src/ccs/archive_reader/tests.rs
 
 use super::*;
-use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
+use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use crate::ccs::signing::SigningKeyPair;
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -11,9 +11,9 @@ use tar::Builder;
 fn current_package() -> (tempfile::TempDir, std::path::PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("current.ccs");
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("current");
-    let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    write_v2_ccs_package_from_bounded_memory_for_tests(
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("current");
+    let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
+    write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &path,
@@ -52,11 +52,11 @@ fn archive_of(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
 }
 
 #[test]
-fn inspection_is_explicitly_untrusted_and_v2_only() {
+fn inspection_is_explicitly_untrusted_and_v3_only() {
     let (_temp, path) = current_package();
     let archive = inspect_untrusted_ccs_archive(File::open(&path).unwrap()).unwrap();
 
-    assert_eq!(archive.v2_authority.identity.name, "current");
+    assert_eq!(archive.v3_authority.identity.name, "current");
     assert_eq!(archive.manifest.package.name, "current");
     assert_eq!(
         archive
@@ -65,15 +65,15 @@ fn inspection_is_explicitly_untrusted_and_v2_only() {
             .platform
             .as_ref()
             .and_then(|platform| platform.arch.as_deref()),
-        archive.v2_authority.identity.architecture.as_deref()
+        archive.v3_authority.identity.architecture.as_deref()
     );
     assert_eq!(
         archive.manifest.package.debian_multi_arch,
-        archive.v2_authority.identity.debian_multi_arch
+        archive.v3_authority.identity.debian_multi_arch
     );
     assert_eq!(
         archive.manifest.requirements,
-        archive.v2_authority.requirements
+        archive.v3_authority.requirements
     );
     assert!(archive.signature_raw.is_some());
     assert_eq!(archive.census.files, 1);
@@ -81,37 +81,39 @@ fn inspection_is_explicitly_untrusted_and_v2_only() {
 }
 
 #[test]
-fn current_contract_detection_rejects_v1() {
+fn current_contract_detection_rejects_retired_formats() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("v1.ccs");
-    let mut manifest = Vec::new();
-    ciborium::into_writer(
-        &serde_json::json!({
-            "format_version": 1,
-            "name": "retired-v1-fixture",
-        }),
-        &mut manifest,
-    )
-    .unwrap();
-    std::fs::write(&path, archive_of(&[entry("MANIFEST", manifest)])).unwrap();
+    for version in [1, 2] {
+        let path = temp.path().join(format!("v{version}.ccs"));
+        let mut manifest = Vec::new();
+        ciborium::into_writer(
+            &serde_json::json!({
+                "format_version": version,
+                "name": format!("retired-v{version}-fixture"),
+            }),
+            &mut manifest,
+        )
+        .unwrap();
+        std::fs::write(&path, archive_of(&[entry("MANIFEST", manifest)])).unwrap();
 
-    let error = inspect_untrusted_ccs_archive(File::open(&path).unwrap()).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("CCS v1 archive authority is unsupported")
-    );
-    let error = has_current_ccs_archive_contract(path).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("CCS v1 archive authority is unsupported")
-    );
+        let error = inspect_untrusted_ccs_archive(File::open(&path).unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("CCS v{version} archive authority is unsupported"))
+        );
+        let error = has_current_ccs_archive_contract(&path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("CCS v{version} archive authority is unsupported"))
+        );
+    }
 }
 
 #[test]
 fn inspection_rejects_noncanonical_object_paths() {
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("bad-object");
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("bad-object");
     let bytes = archive_of(&[
         entry("MANIFEST", authority.to_cbor().unwrap()),
         entry("objects/not-a-digest", b"payload".to_vec()),
@@ -123,7 +125,7 @@ fn inspection_rejects_noncanonical_object_paths() {
 
 #[test]
 fn inspection_rejects_duplicate_manifest_authority() {
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("duplicate");
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("duplicate");
     let raw = authority.to_cbor().unwrap();
     let bytes = archive_of(&[entry("MANIFEST", raw.clone()), entry("./MANIFEST", raw)]);
 
@@ -133,7 +135,7 @@ fn inspection_rejects_duplicate_manifest_authority() {
 
 #[test]
 fn inspection_requires_authority_before_every_other_archived_file() {
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("ordered");
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("ordered");
     let bytes = archive_of(&[
         entry("MANIFEST.sig", b"{}".to_vec()),
         entry("MANIFEST", authority.to_cbor().unwrap()),
@@ -150,7 +152,7 @@ fn inspection_requires_authority_before_every_other_archived_file() {
 
 #[test]
 fn inspection_rejects_unsigned_and_oversized_payload_objects() {
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("payload-bounds");
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("payload-bounds");
     let unsigned = b"not in signed authority".to_vec();
     let hash = crate::hash::sha256(&unsigned);
     let bytes = archive_of(&[

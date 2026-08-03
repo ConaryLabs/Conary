@@ -42,7 +42,7 @@ fn new_artifact_repo_with_key_dir_prepares_initial_publish_key() {
 }
 
 #[test]
-fn project_form_attestation_reemits_v2_package_as_v2() {
+fn project_form_attestation_reemits_v3_package_as_v3() {
     let temp = tempfile::tempdir().unwrap();
     let key_dir = temp.path().join("keys-local");
     let context = prepare_project_form_static_context(
@@ -60,12 +60,12 @@ fn project_form_attestation_reemits_v2_package_as_v2() {
         hermetic_evidence: Some(evidence),
         ..Default::default()
     };
-    let package_path = temp.path().join("project-v2.ccs");
-    let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("project-v2");
+    let package_path = temp.path().join("project-v3.ccs");
+    let mut authority = crate::ccs::v3::test_support::package_authority_with_one_file("project-v3");
     authority.provenance.hermetic_evidence_hash = Some(evidence_hash);
-    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+    crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
-        &crate::ccs::v2::test_support::one_file_payloads_for_tests(),
+        &crate::ccs::v3::test_support::one_file_payloads_for_tests(),
         &package_path,
         &context.active_publish_key,
         None,
@@ -86,8 +86,8 @@ fn project_form_attestation_reemits_v2_package_as_v2() {
         fs::File::open(attested).unwrap(),
     )
     .unwrap();
-    assert_eq!(archive.v2_authority.identity.name, "project-v2");
-    assert!(archive.v2_build_attestation.is_some());
+    assert_eq!(archive.v3_authority.identity.name, "project-v3");
+    assert!(archive.v3_build_attestation.is_some());
 }
 
 #[test]

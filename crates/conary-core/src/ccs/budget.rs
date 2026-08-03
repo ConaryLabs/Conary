@@ -1,6 +1,6 @@
 // conary-core/src/ccs/budget.rs
 
-//! The single canonical structural and operator-resource budget for CCS v2.
+//! The single canonical structural and operator-resource budget for CCS v3.
 //!
 //! Both ends of the format share this owner. Authoring preflight admits the
 //! authority it is about to sign, and untrusted inspection plus signature-first
@@ -17,8 +17,8 @@
 //! payload, metadata, entry-count, decompressed-stream, and spool limits from
 //! this same owner instead of maintaining a second package-parser limit table.
 
-use super::v2::schema::{
-    AuthorityDocumentV2, FileAuthorityV2, LifecycleAuthorityV2, PackageKindV2,
+use super::v3::schema::{
+    AuthorityDocumentV3, FileAuthorityV3, LifecycleAuthorityV3, PackageKindV3,
 };
 use crate::payload::PayloadNodeKind;
 
@@ -26,7 +26,7 @@ use crate::payload::PayloadNodeKind;
 #[path = "budget/tests.rs"]
 mod tests;
 
-/// Exact CBOR cost of one `FileAuthorityV2` record excluding its variable
+/// Exact CBOR cost of one `FileAuthorityV3` record excluding its variable
 /// length authority (install path, component name, link target, xattrs).
 ///
 /// A minimal regular-file record measures 238 bytes and the widest variant with
@@ -320,7 +320,7 @@ impl ArchiveDecodeBounds {
     }
 }
 
-/// The canonical CCS v2 budget.
+/// The canonical CCS v3 budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CcsStructuralBudget {
     pub max_files: u64,
@@ -537,7 +537,7 @@ impl CcsStructuralBudget {
     ///
     /// `ciborium` refuses a declared nesting depth beyond the limit before it
     /// descends, so a hostile depth declaration costs no allocation.
-    pub fn decode_authority(&self, raw: &[u8]) -> anyhow::Result<AuthorityDocumentV2> {
+    pub fn decode_authority(&self, raw: &[u8]) -> anyhow::Result<AuthorityDocumentV3> {
         admit(
             BudgetDimension::AuthorityBytes,
             "MANIFEST",
@@ -545,7 +545,7 @@ impl CcsStructuralBudget {
             self.max_authority_bytes(),
         )?;
         ciborium::de::from_reader_with_recursion_limit(raw, self.max_cbor_nesting_depth)
-            .map_err(|error| anyhow::anyhow!("invalid CCS v2 MANIFEST: {error}"))
+            .map_err(|error| anyhow::anyhow!("invalid CCS v3 MANIFEST: {error}"))
     }
 
     /// Measure and admit a decoded authority document against every dimension.
@@ -553,7 +553,7 @@ impl CcsStructuralBudget {
     /// This is the one function authoring preflight and verification share.
     pub fn admit_authority(
         &self,
-        authority: &AuthorityDocumentV2,
+        authority: &AuthorityDocumentV3,
     ) -> BudgetResult<AuthorityCensus> {
         let mut census = AuthorityCensus::default();
 
@@ -572,7 +572,7 @@ impl CcsStructuralBudget {
             census.name_bytes = sum("components", [census.name_bytes, name.len() as u64])?;
         }
 
-        if let PackageKindV2::Package(data) = &authority.kind {
+        if let PackageKindV3::Package(data) = &authority.kind {
             census.files = data.files.len() as u64;
             admit(
                 BudgetDimension::FileCount,
@@ -647,7 +647,7 @@ impl CcsStructuralBudget {
 
     fn admit_identity_strings(
         &self,
-        authority: &AuthorityDocumentV2,
+        authority: &AuthorityDocumentV3,
         census: &mut AuthorityCensus,
     ) -> BudgetResult<()> {
         for (field, value) in [
@@ -679,13 +679,13 @@ impl CcsStructuralBudget {
     /// exact byte census is itself bounded work.
     fn admit_sections(
         &self,
-        authority: &AuthorityDocumentV2,
+        authority: &AuthorityDocumentV3,
         census: &mut AuthorityCensus,
     ) -> BudgetResult<()> {
         admit(
             BudgetDimension::ProvideCount,
-            "provides",
-            authority.provides.len() as u64,
+            "capabilities",
+            authority.provided_capabilities.len() as u64,
             self.max_provides,
         )?;
         admit(
@@ -732,7 +732,10 @@ impl CcsStructuralBudget {
         let mut bytes = 0_u64;
         for (field, encoded) in [
             ("identity", encoded_len(&authority.identity, "identity")?),
-            ("provides", encoded_len(&authority.provides, "provides")?),
+            (
+                "execution_capabilities",
+                encoded_len(&authority.provided_capabilities, "capabilities")?,
+            ),
             (
                 "requirements",
                 encoded_len(&authority.requirements, "requirements")?,
@@ -740,7 +743,7 @@ impl CcsStructuralBudget {
             ("relations", encoded_len(&authority.relations, "relations")?),
             (
                 "capabilities",
-                encoded_len(&authority.capabilities, "capabilities")?,
+                encoded_len(&authority.execution_capabilities, "execution_capabilities")?,
             ),
             (
                 "file_capabilities",
@@ -768,7 +771,7 @@ impl CcsStructuralBudget {
         Ok(())
     }
 
-    fn admit_lifecycle(&self, lifecycle: &LifecycleAuthorityV2) -> BudgetResult<()> {
+    fn admit_lifecycle(&self, lifecycle: &LifecycleAuthorityV3) -> BudgetResult<()> {
         let native_entries = lifecycle
             .native_lifecycle
             .as_ref()
@@ -811,7 +814,7 @@ impl CcsStructuralBudget {
 
     fn admit_file(
         &self,
-        file: &FileAuthorityV2,
+        file: &FileAuthorityV3,
         census: &mut AuthorityCensus,
         payload_objects: &mut std::collections::BTreeSet<String>,
     ) -> BudgetResult<()> {

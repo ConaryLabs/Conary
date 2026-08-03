@@ -8,8 +8,9 @@ use clap::Parser;
 use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::db::models::{
     Repository, RepositoryPackage, RepositoryPackageKey, RepositoryPackageKeyStatus,
-    SecurityAdvisorySupport,
+    RepositoryProvide, SecurityAdvisorySupport,
 };
+use conary_core::repository::dependency_model::CapabilityProvenance;
 use conary_core::trust::ceremony::{create_initial_root, create_initial_root_single_key};
 use conary_core::trust::keys::{sign_tuf_metadata, signing_keypair_to_tuf_key};
 use conary_core::trust::metadata::{RootMetadata, Signed};
@@ -324,13 +325,16 @@ fn insert_synced_visibility(conn: &Connection, repo_id: i64) {
     );
     package.architecture = Some("x86_64".to_string());
     let package_id = package.insert(conn).unwrap();
-    conn.execute(
-        "INSERT INTO repository_provides
-         (repository_package_id, capability, kind, version_scheme,
-          architecture_qualifier_kind)
-         VALUES (?1, ?2, 'package', 'rpm', 'implicit')",
-        params![package_id, "acme-widget"],
+    RepositoryProvide::new(
+        package_id,
+        "acme-widget".to_string(),
+        None,
+        "package".to_string(),
+        None,
+        conary_core::repository::versioning::VersionScheme::Rpm,
     )
+    .with_provenance(CapabilityProvenance::ExactIdentity)
+    .insert(conn)
     .unwrap();
     conn.execute(
         "INSERT INTO tuf_targets

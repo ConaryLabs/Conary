@@ -18,7 +18,7 @@ pub use crate::ccs::manifest_provenance::{
 };
 use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 use crate::ccs::policy::BuildPolicyConfig;
-use crate::ccs::v2::PackageKindTagV2;
+use crate::ccs::v3::PackageKindTagV3;
 use crate::filesystem::path::sanitize_path;
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
@@ -58,7 +58,7 @@ pub struct CcsManifest {
     #[serde(default)]
     pub provides: Provides,
 
-    /// Exact positive requirement authority. Native conversions and CCS v2
+    /// Exact positive requirement authority. Native conversions and CCS v3
     /// use this field for Boolean expressions.
     #[serde(default)]
     pub requirements: Vec<RepositoryRequirementGroup>,
@@ -346,7 +346,7 @@ impl CcsManifest {
                 version_scheme: VersionScheme::Conary,
                 description: format!("A new CCS package: {}", name),
                 release: "1".to_string(),
-                kind: PackageKindTagV2::Package,
+                kind: PackageKindTagV3::Package,
                 debian_multi_arch: None,
                 license: None,
                 homepage: None,
@@ -393,7 +393,7 @@ pub struct Package {
 
     pub release: String,
 
-    pub kind: PackageKindTagV2,
+    pub kind: PackageKindTagV3,
 
     /// Exact Debian `Multi-Arch` control-field behavior.
     #[serde(default)]

@@ -10,20 +10,21 @@ use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::archive_utils::normalize_path;
 use crate::packages::common::PackageMetadata;
+use crate::packages::deb::authority::{DebianDeclaredCapability, DebianPackageAuthority};
 use crate::packages::payload::{
     PAYLOAD_IO_BUFFER_SIZE, PackagePayload, PayloadSpool, ReopenablePayload,
 };
+use crate::packages::source_authority::SourcePackageAuthority;
 use crate::packages::traits::{
     ConfigFileInfo, DebControlMember, DebMaintainerInvocation, DebMaintainerMode,
     DebNativeScriptletMetadata, NativeArgumentContract, NativeArgumentValue,
     NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
     NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
     NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
-    PackageFile, PackageFormat, ProvidedCapability,
+    PackageFile, PackageFormat,
 };
 use crate::repository::dependency_model::{
-    DebianMultiArch, RepositoryCapabilityKind, RepositoryRequirementGroup,
-    RepositoryRequirementKind,
+    DebianMultiArch, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::versioning::VersionScheme;
@@ -34,6 +35,7 @@ use std::path::PathBuf;
 use tar::Archive;
 use tracing::debug;
 
+pub mod authority;
 pub mod debconf;
 pub mod dpkg_lifecycle;
 pub mod lifecycle_helpers;
@@ -483,40 +485,24 @@ impl DebPackage {
         payload::parse_package_payload(data_tar)
     }
 
-    fn convert_provides(
-        package_name: &str,
-        package_version: &str,
+    fn convert_declared_capability_records(
         entries: &[String],
-    ) -> Result<Vec<ProvidedCapability>> {
-        let mut provides = vec![ProvidedCapability {
-            kind: RepositoryCapabilityKind::PackageName,
-            name: package_name.to_string(),
-            version: Some(package_version.to_string()),
-            version_relation: Some(
-                crate::repository::dependency_model::ProvideVersionRelation::Equal,
-            ),
-            version_scheme: VersionScheme::Debian,
-            architecture_qualifier: Default::default(),
-        }];
-        for entry in entries {
+    ) -> Result<Vec<DebianDeclaredCapability>> {
+        let mut provides = Vec::new();
+        for (record_index, entry) in entries.iter().enumerate() {
             let native = crate::repository::package_relation::parse_debian_provide(entry)
                 .map_err(Error::ParseError)?;
-            let provide = ProvidedCapability {
-                kind: if native.name == package_name {
-                    RepositoryCapabilityKind::PackageName
-                } else {
-                    native.kind
-                },
+            let provide = DebianDeclaredCapability {
+                control_index: u32::try_from(record_index).map_err(|_| {
+                    Error::ParseError("Debian provide record index exceeds u32".to_string())
+                })?,
+                kind: native.kind,
                 name: native.name,
                 version: native.version,
                 version_relation: native.version_relation,
-                version_scheme: VersionScheme::Debian,
                 architecture_qualifier: native.architecture_qualifier,
             };
-            provide.validate()?;
-            if !provides.contains(&provide) {
-                provides.push(provide);
-            }
+            provides.push(provide);
         }
         Ok(provides)
     }
@@ -594,14 +580,15 @@ impl PackageFormat for DebPackage {
             Error::InitError("Package name not found in control file".to_string())
         })?;
 
-        let mut version = control.version.ok_or_else(|| {
+        let source_version = control.version.ok_or_else(|| {
             Error::InitError("Package version not found in control file".to_string())
         })?;
 
         // Prepend epoch if present (e.g., "2:1.0.0-1")
-        if let Some(epoch) = control.epoch {
-            version = format!("{epoch}:{version}");
-        }
+        let version = control.epoch.map_or_else(
+            || source_version.clone(),
+            |epoch| format!("{epoch}:{source_version}"),
+        );
 
         // Extract file list
         let payload = Self::parse_data_tar(&data_tar_data)?;
@@ -615,7 +602,7 @@ impl PackageFormat for DebPackage {
             })
             .collect();
 
-        let provides = Self::convert_provides(&name, &version, &control.provides)?;
+        let provides = Self::convert_declared_capability_records(&control.provides)?;
         let mut requirements =
             Self::convert_requirements(&control.dependencies, RepositoryRequirementKind::Depends)?;
         requirements.extend(Self::convert_requirements(
@@ -660,15 +647,20 @@ impl PackageFormat for DebPackage {
 
         let meta = PackageMetadata {
             package_path: PathBuf::from(path),
-            name,
-            version,
-            version_scheme: VersionScheme::Debian,
-            architecture: control.architecture,
-            debian_multi_arch: Some(control.multi_arch),
+            source_authority: SourcePackageAuthority::Debian(DebianPackageAuthority {
+                name,
+                epoch: control.epoch,
+                source_version,
+                version,
+                architecture: control.architecture.clone().ok_or_else(|| {
+                    Error::InitError("Package architecture not found in control file".to_string())
+                })?,
+                multi_arch: control.multi_arch,
+                provides,
+            }),
             description: control.description,
             files,
             requirements,
-            provides,
             relations,
             diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi,
@@ -719,8 +711,14 @@ impl PackageFormat for DebPackage {
         self.meta.requirements()
     }
 
-    fn provides(&self) -> &[ProvidedCapability] {
-        self.meta.provides()
+    fn resolution_capabilities(
+        &self,
+    ) -> Result<Vec<crate::repository::dependency_model::ProvidedCapability>> {
+        self.meta.resolution_capabilities()
+    }
+
+    fn source_authority(&self) -> Result<SourcePackageAuthority> {
+        Ok(self.meta.source_authority.clone())
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {

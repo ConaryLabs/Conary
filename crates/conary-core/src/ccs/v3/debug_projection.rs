@@ -1,11 +1,11 @@
-// conary-core/src/ccs/v2/debug_projection.rs
+// conary-core/src/ccs/v3/debug_projection.rs
 
-use super::schema::{AuthorityDocumentV2, ConfigSemanticsV2, PackageDataV2, PackageKindV2};
+use super::schema::{AuthorityDocumentV3, ConfigSemanticsV3, PackageDataV3, PackageKindV3};
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
 pub fn validate_debug_toml_projection(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Result<()> {
     validate_config_projection(authority, manifest)?;
@@ -24,7 +24,7 @@ pub(crate) fn reject_unsupported_debug_toml_install_authority(
     }
     if !unsupported.is_empty() {
         bail!(
-            "v2 debug TOML contains unsupported install authority fields: {}",
+            "v3 debug TOML contains unsupported install authority fields: {}",
             unsupported.join(", ")
         );
     }
@@ -32,7 +32,7 @@ pub(crate) fn reject_unsupported_debug_toml_install_authority(
 }
 
 fn validate_file_capability_projection(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Result<()> {
     let debug =
@@ -44,7 +44,7 @@ fn validate_file_capability_projection(
 }
 
 fn validate_requirement_projection(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Result<()> {
     if super::authoring::project_requirements(manifest) != authority.requirements {
@@ -57,12 +57,12 @@ fn validate_requirement_projection(
 }
 
 fn validate_config_projection(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Result<()> {
     let debug_config = debug_config_projection(manifest);
     let signed_config = match &authority.kind {
-        PackageKindV2::Package(package) => signed_config_projection(package),
+        PackageKindV3::Package(package) => signed_config_projection(package),
         _ if debug_config.is_empty() => BTreeMap::new(),
         _ => bail!("debug TOML config projection mismatch for non-package authority"),
     };
@@ -75,7 +75,7 @@ fn validate_config_projection(
         );
     }
 
-    if let PackageKindV2::Package(package) = &authority.kind {
+    if let PackageKindV3::Package(package) = &authority.kind {
         for (path, semantics) in &debug_config {
             let signed_file = package.files.iter().find(|file| file.path == *path);
             if semantics.ghost || semantics.remove_on_upgrade {
@@ -110,7 +110,7 @@ fn validate_config_projection(
 
 fn debug_config_projection(
     manifest: &crate::ccs::manifest::CcsManifest,
-) -> BTreeMap<String, ConfigSemanticsV2> {
+) -> BTreeMap<String, ConfigSemanticsV3> {
     manifest
         .config
         .files
@@ -118,7 +118,7 @@ fn debug_config_projection(
         .map(|entry| {
             (
                 entry.path.clone(),
-                ConfigSemanticsV2 {
+                ConfigSemanticsV3 {
                     noreplace: entry.noreplace,
                     ghost: entry.ghost,
                     remove_on_upgrade: entry.remove_on_upgrade,
@@ -128,7 +128,7 @@ fn debug_config_projection(
         .collect()
 }
 
-fn signed_config_projection(package: &PackageDataV2) -> BTreeMap<String, ConfigSemanticsV2> {
+fn signed_config_projection(package: &PackageDataV3) -> BTreeMap<String, ConfigSemanticsV3> {
     package
         .config
         .iter()
@@ -137,7 +137,7 @@ fn signed_config_projection(package: &PackageDataV2) -> BTreeMap<String, ConfigS
 }
 
 fn validate_lifecycle_projection(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     manifest: &crate::ccs::manifest::CcsManifest,
 ) -> Result<()> {
     let debug = super::lifecycle::authority_from_manifest(manifest);
@@ -150,13 +150,13 @@ fn validate_lifecycle_projection(
     Ok(())
 }
 
-fn joined_keys(map: &BTreeMap<String, ConfigSemanticsV2>) -> String {
+fn joined_keys(map: &BTreeMap<String, ConfigSemanticsV3>) -> String {
     map.keys().cloned().collect::<Vec<_>>().join(", ")
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ccs::v2::schema::*;
+    use crate::ccs::v3::schema::*;
 
     #[test]
     fn rejects_debug_config_missing_from_signed_authority() {
@@ -175,7 +175,7 @@ noreplace = true
 ghost = false
 remove_on_upgrade = false
 "#;
-        let authority = AuthorityDocumentV2::package_for_tests("demo");
+        let authority = AuthorityDocumentV3::package_for_tests("demo");
         let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
 
         let error = super::validate_debug_toml_projection(&authority, &manifest).unwrap_err();
@@ -202,10 +202,10 @@ description = "demo package"
 name = "other.service"
 action = "restart"
 "#;
-        let mut authority = AuthorityDocumentV2::package_for_tests("demo");
-        authority.lifecycle.services = vec![LifecycleServiceV2 {
+        let mut authority = AuthorityDocumentV3::package_for_tests("demo");
+        authority.lifecycle.services = vec![LifecycleServiceV3 {
             name: "conary-example.service".to_string(),
-            action: LifecycleServiceActionV2::Restart,
+            action: LifecycleServiceActionV3::Restart,
             reversible: None,
         }];
         let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
@@ -234,7 +234,7 @@ permitted = true
 effective = true
 inheritable = false
 "#;
-        let mut authority = AuthorityDocumentV2::package_for_tests("demo");
+        let mut authority = AuthorityDocumentV3::package_for_tests("demo");
         authority.file_capabilities = vec![crate::ccs::manifest::FileCapability {
             path: "/usr/bin/hello".to_string(),
             capabilities: vec!["cap_net_bind_service".to_string()],
@@ -264,10 +264,10 @@ release = "1"
 kind = "package"
 description = "demo package"
 "#;
-        let mut authority = AuthorityDocumentV2::package_for_tests("demo");
-        authority.lifecycle.services = vec![LifecycleServiceV2 {
+        let mut authority = AuthorityDocumentV3::package_for_tests("demo");
+        authority.lifecycle.services = vec![LifecycleServiceV3 {
             name: "conary-example.service".to_string(),
-            action: LifecycleServiceActionV2::Restart,
+            action: LifecycleServiceActionV3::Restart,
             reversible: None,
         }];
         let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
@@ -288,7 +288,7 @@ release = "1"
 kind = "package"
 description = "demo package"
 "#;
-        let authority = AuthorityDocumentV2::package_for_tests("demo");
+        let authority = AuthorityDocumentV3::package_for_tests("demo");
         let mut manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
         manifest
             .components

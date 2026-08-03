@@ -37,7 +37,7 @@ commands.
 - `model`: declarative system model diff/apply/check/snapshot/publish/lock
 - `resolution`: repository metadata, typed requirements, providers, and SAT
 - `generation`: generation build, switch, recovery, GC, and export
-- `ccs`: CCS authoring, conversion, install, v2, and lifecycle execution
+- `ccs`: CCS authoring, conversion, install, v3, and lifecycle execution
 - `packaging`: explicit recipes, try sessions, static repositories, trust, and sync
 - `profiles`: repository feed profiles, parser selection, and Remi route slugs
 - `remi`: Remi ingest, conversion, publication, admin, MCP, and fixture serving
@@ -140,7 +140,10 @@ commands.
   `docs/specs/source-package-authority.md`, and `docs/modules/recipe.md`.
   The source-authority specification owns the W5 lossless RPM, Debian, ALPM,
   and CCS models plus their resolution, conversion, and transaction
-  projections. Native authoring
+  projections. Identity/provision work starts in
+  `crates/conary-core/src/packages/source_authority.rs` and the three
+  `packages/{rpm,deb,arch}/authority.rs` modules; CCS signing and verification
+  start in `crates/conary-core/src/ccs/v3/`. Native authoring
   content flow starts in `crates/conary-core/src/ccs/builder.rs`,
   `builder/source.rs`, `policy/content.rs`, and `builder/package_writer.rs`.
   Debian lifecycle

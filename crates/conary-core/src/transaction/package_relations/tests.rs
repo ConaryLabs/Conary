@@ -4,7 +4,8 @@ use super::*;
 use crate::db::models::TroveType;
 use crate::db::testing::create_test_db;
 use crate::error::Error;
-use crate::packages::traits::{PackageFile, ProvidedCapability};
+use crate::packages::traits::PackageFile;
+use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::dependency_model::RepositoryRequirementGroup;
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::requirement::parse_native_requirement;
@@ -49,8 +50,8 @@ impl PackageFormat for TestPackage {
         &[]
     }
 
-    fn provides(&self) -> &[ProvidedCapability] {
-        &self.provides
+    fn resolution_capabilities(&self) -> Result<Vec<ProvidedCapability>> {
+        Ok(self.provides.clone())
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {
@@ -289,7 +290,7 @@ fn atomic_batch_attributes_installed_rich_conflict_to_all_causal_packages() {
             version: first.version(),
             architecture: first.architecture(),
             version_scheme: VersionScheme::Rpm,
-            provides: first.provides(),
+            provides: &first.provides,
             relations: first.relations(),
         },
         IncomingPackageRelations {
@@ -297,7 +298,7 @@ fn atomic_batch_attributes_installed_rich_conflict_to_all_causal_packages() {
             version: second.version(),
             architecture: second.architecture(),
             version_scheme: VersionScheme::Rpm,
-            provides: second.provides(),
+            provides: &second.provides,
             relations: second.relations(),
         },
     ];
@@ -341,7 +342,7 @@ fn atomic_batch_rejects_conflicting_co_selected_package() {
             version: first.version(),
             architecture: first.architecture(),
             version_scheme: VersionScheme::Rpm,
-            provides: first.provides(),
+            provides: &first.provides,
             relations: first.relations(),
         },
         IncomingPackageRelations {
@@ -349,7 +350,7 @@ fn atomic_batch_rejects_conflicting_co_selected_package() {
             version: second.version(),
             architecture: second.architecture(),
             version_scheme: VersionScheme::Rpm,
-            provides: second.provides(),
+            provides: &second.provides,
             relations: second.relations(),
         },
     ];
@@ -541,6 +542,7 @@ fn incoming_provider_prevents_unnecessary_deconfiguration() {
             version_relation: None,
             version_scheme: VersionScheme::Debian,
             architecture_qualifier: Default::default(),
+            provenance: crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
         }],
         relations: vec![relation],
     };

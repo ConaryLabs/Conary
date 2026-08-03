@@ -8,7 +8,8 @@
 
 use crate::error::Result;
 use crate::repository::dependency_model::{
-    ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RepositoryCapabilityKind,
 };
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -28,6 +29,7 @@ pub struct ProvideEntry {
     pub kind: RepositoryCapabilityKind,
     pub version_scheme: VersionScheme,
     pub architecture_qualifier: ProvideArchitectureQualifier,
+    pub provenance: CapabilityProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,11 +40,12 @@ pub struct InstalledProvideContract {
     pub version_relation: Option<ProvideVersionRelation>,
     pub version_scheme: VersionScheme,
     pub architecture_qualifier: ProvideArchitectureQualifier,
+    pub provenance: CapabilityProvenance,
 }
 
 impl ProvideEntry {
     /// Column list for SELECT queries.
-    const COLUMNS: &'static str = "id, trove_id, capability, version, version_relation, kind, version_scheme, architecture_qualifier_kind, architecture_qualifier";
+    const COLUMNS: &'static str = "id, trove_id, capability, version, version_relation, kind, version_scheme, architecture_qualifier_kind, architecture_qualifier, provenance";
 
     /// Create a new ProvideEntry
     pub fn new(
@@ -61,6 +64,7 @@ impl ProvideEntry {
             kind: RepositoryCapabilityKind::PackageName,
             version_scheme,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::ExactIdentity,
         }
     }
 
@@ -83,14 +87,15 @@ impl ProvideEntry {
             kind,
             version_scheme,
             architecture_qualifier,
+            provenance: CapabilityProvenance::AuthorDeclared,
         }
     }
 
     pub fn from_declared(
         trove_id: i64,
-        provide: &crate::packages::traits::ProvidedCapability,
+        provide: &crate::repository::dependency_model::ProvidedCapability,
     ) -> Self {
-        Self::new_typed(
+        let mut entry = Self::new_typed(
             trove_id,
             provide.kind,
             provide.name.clone(),
@@ -98,7 +103,9 @@ impl ProvideEntry {
             provide.version_scheme,
             provide.architecture_qualifier.clone(),
         )
-        .with_version_relation(provide.version_relation)
+        .with_version_relation(provide.version_relation);
+        entry.provenance = provide.provenance.clone();
+        entry
     }
 
     #[must_use]
@@ -115,8 +122,8 @@ impl ProvideEntry {
         conn.execute(
             "INSERT INTO provides (
                 trove_id, capability, version, version_relation, kind, version_scheme,
-                architecture_qualifier_kind, architecture_qualifier
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                architecture_qualifier_kind, architecture_qualifier, provenance
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &self.trove_id,
                 &self.capability,
@@ -126,6 +133,7 @@ impl ProvideEntry {
                 self.version_scheme.as_str(),
                 architecture_qualifier_to_db(&self.architecture_qualifier).0,
                 architecture_qualifier_to_db(&self.architecture_qualifier).1,
+                provenance_to_db(&self.provenance)?,
             ],
         )?;
 
@@ -139,8 +147,8 @@ impl ProvideEntry {
         conn.execute(
             "INSERT OR IGNORE INTO provides (
                 trove_id, capability, version, version_relation, kind, version_scheme,
-                architecture_qualifier_kind, architecture_qualifier
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                architecture_qualifier_kind, architecture_qualifier, provenance
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &self.trove_id,
                 &self.capability,
@@ -150,6 +158,7 @@ impl ProvideEntry {
                 self.version_scheme.as_str(),
                 architecture_qualifier_to_db(&self.architecture_qualifier).0,
                 architecture_qualifier_to_db(&self.architecture_qualifier).1,
+                provenance_to_db(&self.provenance)?,
             ],
         )?;
 
@@ -159,7 +168,7 @@ impl ProvideEntry {
              WHERE trove_id = ?1 AND capability = ?2 AND kind = ?3
                AND version IS ?4 AND version_relation IS ?5 AND version_scheme = ?6
                AND architecture_qualifier_kind = ?7
-               AND architecture_qualifier IS ?8",
+               AND architecture_qualifier IS ?8 AND provenance = ?9",
             params![
                 &self.trove_id,
                 &self.capability,
@@ -169,6 +178,7 @@ impl ProvideEntry {
                 self.version_scheme.as_str(),
                 architecture_qualifier_to_db(&self.architecture_qualifier).0,
                 architecture_qualifier_to_db(&self.architecture_qualifier).1,
+                provenance_to_db(&self.provenance)?,
             ],
             |row| row.get(0),
         )?;
@@ -330,7 +340,7 @@ impl ProvideEntry {
     ) -> Result<Vec<InstalledProvideContract>> {
         let mut exact_stmt = conn.prepare(
             "SELECT t.name, t.version, p.version, p.version_relation, p.version_scheme,
-                    p.architecture_qualifier_kind, p.architecture_qualifier
+                    p.architecture_qualifier_kind, p.architecture_qualifier, p.provenance
              FROM provides p
              JOIN troves t ON p.trove_id = t.id
              WHERE p.capability = ?1
@@ -345,6 +355,7 @@ impl ProvideEntry {
                     version_relation: version_relation_from_row(row, 3, 2)?,
                     version_scheme: version_scheme_from_row(row, 4)?,
                     architecture_qualifier: architecture_qualifier_from_row(row, 5, 6)?,
+                    provenance: provenance_from_row(row, 7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -357,7 +368,7 @@ impl ProvideEntry {
         };
         let mut typed_stmt = conn.prepare(
             "SELECT t.name, t.version, p.version, p.version_relation, p.version_scheme,
-                    p.architecture_qualifier_kind, p.architecture_qualifier
+                    p.architecture_qualifier_kind, p.architecture_qualifier, p.provenance
              FROM provides p
              JOIN troves t ON p.trove_id = t.id
              WHERE p.kind = ?1 AND p.capability = ?2
@@ -372,6 +383,7 @@ impl ProvideEntry {
                     version_relation: version_relation_from_row(row, 3, 2)?,
                     version_scheme: version_scheme_from_row(row, 4)?,
                     architecture_qualifier: architecture_qualifier_from_row(row, 5, 6)?,
+                    provenance: provenance_from_row(row, 7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -429,6 +441,7 @@ impl ProvideEntry {
             kind: capability_kind_from_db(&row.get::<_, String>(5)?)?,
             version_scheme: version_scheme_from_row(row, 6)?,
             architecture_qualifier: architecture_qualifier_from_row(row, 7, 8)?,
+            provenance: provenance_from_row(row, 9)?,
         })
     }
 
@@ -440,6 +453,23 @@ impl ProvideEntry {
             format!("{}({})", capability_kind_to_db(self.kind), self.capability)
         }
     }
+}
+
+fn provenance_to_db(provenance: &CapabilityProvenance) -> Result<String> {
+    serde_json::to_string(provenance).map_err(|error| {
+        crate::Error::InternalError(format!("serialize capability provenance: {error}"))
+    })
+}
+
+fn provenance_from_row(row: &Row<'_>, column: usize) -> rusqlite::Result<CapabilityProvenance> {
+    let raw = row.get::<_, String>(column)?;
+    serde_json::from_str(&raw).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
 }
 
 fn parse_typed_capability_query(capability: &str) -> Option<(&'static str, &str)> {
@@ -573,7 +603,8 @@ mod tests {
                 kind TEXT NOT NULL,
                 version_scheme TEXT NOT NULL,
                 architecture_qualifier_kind TEXT NOT NULL,
-                architecture_qualifier TEXT
+                architecture_qualifier TEXT,
+                provenance TEXT NOT NULL
             );
             CREATE INDEX idx_provides_capability ON provides(capability);
             CREATE INDEX idx_provides_kind ON provides(kind);
@@ -622,6 +653,7 @@ mod tests {
         assert_eq!(found.capability, "Text::CharWidth");
         assert_eq!(found.kind, RepositoryCapabilityKind::Generic);
         assert_eq!(found.version, Some("0.04".to_string()));
+        assert_eq!(found.provenance, CapabilityProvenance::AuthorDeclared);
     }
 
     #[test]

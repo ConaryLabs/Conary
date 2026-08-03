@@ -13,7 +13,7 @@ use conary_core::ccs::convert::{ConversionOptions, NativePackageConverter};
 use conary_core::ccs::native_lifecycle::ScriptletFidelity;
 use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::native_abi::*;
-use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile};
+use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile, PackageFormat};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use conary_core::repository::dependency_model::{
     RepositoryRequirementGroup, RepositoryRequirementKind,
@@ -145,26 +145,55 @@ fn rpm_lifecycle_entry(
 /// Create a minimal test package metadata
 fn create_test_metadata(name: &str) -> PackageMetadata {
     let content = format!("#!/bin/sh\necho {name}");
-    PackageMetadata {
-        package_path: PathBuf::from(format!("/tmp/{}-1.0.0.rpm", name)),
-        name: name.to_string(),
-        version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Rpm,
-        architecture: Some("x86_64".to_string()),
-        debian_multi_arch: None,
-        description: Some(format!("Test package: {}", name)),
-        files: vec![package_regular(
+    test_metadata(
+        PathBuf::from(format!("/tmp/{}-1.0.0.rpm", name)),
+        name,
+        "x86_64",
+        Some(format!("Test package: {}", name)),
+        vec![package_regular(
             format!("/usr/bin/{name}"),
             content.as_bytes(),
             0o755,
         )],
-        requirements: vec![],
-        provides: vec![],
-        relations: vec![],
-        diagnostic_scriptlet_evidence: vec![],
-        native_scriptlet_abi: vec![],
-        config_files: vec![],
-    }
+    )
+}
+
+fn test_metadata(
+    path: PathBuf,
+    name: &str,
+    architecture: &str,
+    description: Option<String>,
+    files: Vec<PackageFile>,
+) -> PackageMetadata {
+    let mut metadata = PackageMetadata::new(
+        path,
+        name.to_string(),
+        "1.0.0".to_string(),
+        VersionScheme::Rpm,
+    );
+    let conary_core::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    else {
+        unreachable!()
+    };
+    authority.architecture = Some(architecture.to_string());
+    metadata.description = description;
+    metadata.files = files;
+    metadata
+}
+
+fn set_test_source_scheme(
+    metadata: &mut PackageMetadata,
+    version_scheme: VersionScheme,
+    debian_multi_arch: Option<conary_core::repository::dependency_model::DebianMultiArch>,
+) {
+    let conary_core::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    else {
+        unreachable!()
+    };
+    authority.version_scheme = version_scheme;
+    authority.debian_multi_arch = debian_multi_arch;
 }
 
 /// Create test files matching the metadata
@@ -253,15 +282,12 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 "#;
-    let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/myserver-1.0.0.rpm"),
-        name: "myserver".to_string(),
-        version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Rpm,
-        architecture: Some("x86_64".to_string()),
-        debian_multi_arch: None,
-        description: Some("A test server application".to_string()),
-        files: vec![
+    let mut metadata = test_metadata(
+        PathBuf::from("/tmp/myserver-1.0.0.rpm"),
+        "myserver",
+        "x86_64",
+        Some("A test server application".to_string()),
+        vec![
             package_regular("/usr/sbin/myserver", binary_content, 0o755),
             package_regular("/etc/myserver/myserver.conf", config_content, 0o644),
             package_regular(
@@ -270,44 +296,41 @@ WantedBy=multi-user.target
                 0o644,
             ),
         ],
-        requirements: vec![
-            requirement(
-                RepositoryRequirementKind::Depends,
-                VersionScheme::Rpm,
-                "openssl-libs >= 3.0",
-            ),
-            requirement(
-                RepositoryRequirementKind::Depends,
-                VersionScheme::Rpm,
-                "glibc",
-            ),
-        ],
-        provides: vec![],
-        relations: vec![],
-        diagnostic_scriptlet_evidence: Vec::new(),
-        native_scriptlet_abi: vec![
-            rpm_lifecycle_entry(
-                "%pre",
-                RpmScriptletSlot::Pre,
-                NativeLifecyclePath::PreInstall,
-                NativeTransactionPosition::BeforePayload,
-                "getent passwd myserver || useradd -r -s /sbin/nologin myserver",
-            ),
-            rpm_lifecycle_entry(
-                "%post",
-                RpmScriptletSlot::Post,
-                NativeLifecyclePath::PostInstall,
-                NativeTransactionPosition::AfterPayload,
-                "systemctl daemon-reload\nsystemctl enable myserver",
-            ),
-        ],
-        config_files: vec![ConfigFileInfo {
-            path: "/etc/myserver/myserver.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: false,
-        }],
-    };
+    );
+    metadata.requirements = vec![
+        requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "openssl-libs >= 3.0",
+        ),
+        requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            "glibc",
+        ),
+    ];
+    metadata.native_scriptlet_abi = vec![
+        rpm_lifecycle_entry(
+            "%pre",
+            RpmScriptletSlot::Pre,
+            NativeLifecyclePath::PreInstall,
+            NativeTransactionPosition::BeforePayload,
+            "getent passwd myserver || useradd -r -s /sbin/nologin myserver",
+        ),
+        rpm_lifecycle_entry(
+            "%post",
+            RpmScriptletSlot::Post,
+            NativeLifecyclePath::PostInstall,
+            NativeTransactionPosition::AfterPayload,
+            "systemctl daemon-reload\nsystemctl enable myserver",
+        ),
+    ];
+    metadata.config_files = vec![ConfigFileInfo {
+        path: "/etc/myserver/myserver.conf".to_string(),
+        noreplace: true,
+        ghost: false,
+        remove_on_upgrade: false,
+    }];
 
     let files = vec![
         extracted_regular("/usr/sbin/myserver", binary_content, 0o755),
@@ -366,9 +389,11 @@ fn test_conversion_preserves_metadata() {
 
     let mut metadata = create_test_metadata("metadata-test");
     metadata.description = Some("A detailed description".to_string());
-    metadata.version_scheme = VersionScheme::Debian;
-    metadata.debian_multi_arch =
-        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
+    set_test_source_scheme(
+        &mut metadata,
+        VersionScheme::Debian,
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No),
+    );
     metadata.requirements = vec![requirement(
         RepositoryRequirementKind::Depends,
         VersionScheme::Debian,
@@ -447,26 +472,17 @@ fn test_file_permissions_preserved() {
     let config_content = b"config";
     let secret_content = b"secret";
 
-    let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/perms-1.0.0.rpm"),
-        name: "perms-test".to_string(),
-        version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Rpm,
-        architecture: Some("x86_64".to_string()),
-        debian_multi_arch: None,
-        description: None,
-        files: vec![
+    let metadata = test_metadata(
+        PathBuf::from("/tmp/perms-1.0.0.rpm"),
+        "perms-test",
+        "x86_64",
+        None,
+        vec![
             package_regular("/usr/bin/executable", executable_content, 0o755),
             package_regular("/etc/config", config_content, 0o644),
             package_regular("/etc/secret", secret_content, 0o600),
         ],
-        requirements: vec![],
-        provides: vec![],
-        relations: vec![],
-        diagnostic_scriptlet_evidence: vec![],
-        native_scriptlet_abi: vec![],
-        config_files: vec![],
-    };
+    );
 
     let files = vec![
         extracted_regular("/usr/bin/executable", executable_content, 0o755),
@@ -496,22 +512,13 @@ fn test_empty_package_conversion() {
 
     let converter = signed_test_converter(options);
 
-    let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/empty-1.0.0.rpm"),
-        name: "empty-pkg".to_string(),
-        version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Rpm,
-        architecture: Some("noarch".to_string()),
-        debian_multi_arch: None,
-        description: None, // No description
-        files: vec![],     // No files
-        requirements: vec![],
-        provides: vec![],
-        relations: vec![],
-        diagnostic_scriptlet_evidence: vec![],
-        native_scriptlet_abi: vec![],
-        config_files: vec![],
-    };
+    let metadata = test_metadata(
+        PathBuf::from("/tmp/empty-1.0.0.rpm"),
+        "empty-pkg",
+        "noarch",
+        None,
+        vec![],
+    );
 
     let files: Vec<ExtractedFile> = vec![];
     let checksum = source_checksum("empty native package");
@@ -540,26 +547,17 @@ fn test_large_payload_emits_verified_ccs_archive() {
     // Create a larger file (1MB of data)
     let large_content: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
 
-    let metadata = PackageMetadata {
-        package_path: PathBuf::from("/tmp/large-1.0.0.rpm"),
-        name: "large-file-pkg".to_string(),
-        version: "1.0.0".to_string(),
-        version_scheme: VersionScheme::Rpm,
-        architecture: Some("x86_64".to_string()),
-        debian_multi_arch: None,
-        description: None,
-        files: vec![package_regular(
+    let metadata = test_metadata(
+        PathBuf::from("/tmp/large-1.0.0.rpm"),
+        "large-file-pkg",
+        "x86_64",
+        None,
+        vec![package_regular(
             "/usr/share/large/data.bin",
             &large_content,
             0o644,
         )],
-        requirements: vec![],
-        provides: vec![],
-        relations: vec![],
-        diagnostic_scriptlet_evidence: vec![],
-        native_scriptlet_abi: vec![],
-        config_files: vec![],
-    };
+    );
 
     let files = vec![extracted_regular(
         "/usr/share/large/data.bin",
@@ -622,9 +620,11 @@ fn test_deb_format_tracking() {
 
     let converter = signed_test_converter(options);
     let mut metadata = create_test_metadata("deb-pkg");
-    metadata.version_scheme = VersionScheme::Debian;
-    metadata.debian_multi_arch =
-        Some(conary_core::repository::dependency_model::DebianMultiArch::No);
+    set_test_source_scheme(
+        &mut metadata,
+        VersionScheme::Debian,
+        Some(conary_core::repository::dependency_model::DebianMultiArch::No),
+    );
     let files = create_test_files("deb-pkg");
     let checksum = source_checksum("deb native package");
 
@@ -645,7 +645,7 @@ fn test_arch_format_tracking() {
 
     let converter = signed_test_converter(options);
     let mut metadata = create_test_metadata("arch-pkg");
-    metadata.version_scheme = VersionScheme::Arch;
+    set_test_source_scheme(&mut metadata, VersionScheme::Arch, None);
     let files = create_test_files("arch-pkg");
     let checksum = source_checksum("arch native package");
 
@@ -671,7 +671,7 @@ fn test_dependency_conversion() {
     let converter = signed_test_converter(options);
 
     let mut metadata = create_test_metadata("deps-pkg");
-    metadata.version_scheme = VersionScheme::Rpm;
+    set_test_source_scheme(&mut metadata, VersionScheme::Rpm, None);
     metadata.requirements = vec![
         requirement(
             RepositoryRequirementKind::Depends,
@@ -754,8 +754,7 @@ fn test_special_characters_in_package_name() {
 
     let converter = signed_test_converter(options);
 
-    let mut metadata = create_test_metadata("pkg-with-special_chars.v2");
-    metadata.name = "pkg-with-special_chars.v2".to_string();
+    let metadata = create_test_metadata("pkg-with-special_chars.v2");
 
     let files = create_test_files("pkg-with-special_chars.v2");
     let checksum = source_checksum("special character native package");

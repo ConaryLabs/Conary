@@ -14,8 +14,7 @@ use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryDependencyFlavor, RepositoryProvide,
-    RepositoryRequirementGroup, RepositoryRequirementKind,
+    RepositoryDependencyFlavor, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use crate::repository::package_relation::parse_native_relation;
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
@@ -27,6 +26,7 @@ use serde_json::json;
 use tracing::{debug, info};
 
 mod metalink;
+mod provides;
 mod relation;
 use metalink::parse_metalink_repomd_identity;
 use relation::{
@@ -871,55 +871,12 @@ impl PackageBuilder {
                 .collect::<Result<Vec<_>>>()?,
         );
 
-        // Build structured provides
-        let mut structured_provides: Vec<RepositoryProvide> = Vec::new();
-
-        // Implicit self-provide: the package name itself
-        structured_provides.push(RepositoryProvide::package_name(
-            name.clone(),
-            Some(version.clone()),
-        ));
-
-        for (prov_name, provide) in &self.provides {
-            if crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(prov_name)
-                .map_err(|error| Error::ParseError(error.to_string()))?
-                .is_some()
-            {
-                return Err(Error::ParseError(format!(
-                    "RPM repository package cannot provide package-manager runtime capability '{prov_name}'; Conary's typed runtime ledger is the sole authority"
-                )));
-            }
-            let kind = if prov_name == &name {
-                RepositoryCapabilityKind::PackageName
-            } else {
-                // RPM primary metadata exposes a capability atom, but not a
-                // separate path/soname type. Preserve that exact contract
-                // instead of inferring a semantic class from its spelling.
-                RepositoryCapabilityKind::Generic
-            };
-
-            let native_text = if provide.native_constraint.is_empty() {
-                prov_name.clone()
-            } else {
-                format!("{prov_name} {}", provide.native_constraint)
-            };
-
-            structured_provides.push(RepositoryProvide {
-                name: prov_name.clone(),
-                kind,
-                version: provide.version.clone(),
-                version_relation: provide.version_relation,
-                architecture_qualifier:
-                    crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
-                native_text: Some(native_text),
-            });
-        }
-        structured_provides.extend(
-            self.primary_files
-                .iter()
-                .cloned()
-                .map(RepositoryProvide::file),
-        );
+        let structured_provides = provides::project_repository_provides(
+            &name,
+            &version,
+            &self.provides,
+            &self.primary_files,
+        )?;
 
         let rpm_provides: Vec<String> = self
             .provides

@@ -319,9 +319,11 @@ RPM primary-file authority is derived from `createrepo_c`
 selects and emits package-owned `<file>` records in `primary.xml`, and its
 [`STATE_FILE` parser](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_parser_primary.c#L428-L445)
 reads them independently of `rpm:provides`. Conary preserves every such signed
-record as an unversioned typed file provider on the exact package. It does not
-reimplement createrepo's path-selection rule or infer providers from package
-names, payload guesses, or a curated path list.
+record as an unversioned typed file provider with `source-derived-file`
+provenance on the exact package. The projection is owned by
+`repository/parsers/fedora/provides.rs`. It does not reimplement createrepo's
+path-selection rule or infer providers from package names, payload guesses, or
+a curated path list.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:

@@ -21,7 +21,7 @@
 //! # Scope boundary
 //!
 //! [`SourcePathBytes`] can hold any non-NUL byte sequence, but Conary persists
-//! paths as `TEXT`/`String` (`ccs/v2/schema.rs`, `packages/mod.rs`, the `files`
+//! paths as `TEXT`/`String` (`ccs/v3/schema.rs`, `packages/mod.rs`, the `files`
 //! table). Storing a non-UTF-8 path therefore requires a CCS schema and
 //! database decision that this module deliberately does not make. Until that
 //! decision exists, [`DeploymentPath::to_utf8`] is the persistence boundary and

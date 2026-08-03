@@ -24,7 +24,7 @@ pub struct PayloadHints {
 impl PayloadHints {
     pub fn from_package(metadata: &PackageMetadata, files: &[ExtractedFile]) -> Self {
         let mut hints = Self::from_files(files);
-        hints.package_name = Some(metadata.name.clone());
+        hints.package_name = Some(metadata.name().to_string());
         hints.config_files = metadata
             .config_files
             .iter()

@@ -87,7 +87,7 @@ fn publish_project_form_records_hermetic_evidence_with_build_attestation() {
 
     let package_path = fixture.published_package_path();
     let package = read_package(&package_path, &fixture.publish_signing_key_path());
-    let authority = package.v2_authority().expect("v2 authority");
+    let authority = package.v3_authority().expect("v3 authority");
     assert_eq!(
         authority.provenance.hardening_level.as_deref(),
         Some("hermetic")
@@ -128,7 +128,7 @@ fn cook_isolated_records_hermetic_evidence() {
         return;
     }
     let package = read_package(&fixture.package_path(), &fixture.cook_signing_key_path);
-    let authority = package.v2_authority().expect("v2 authority");
+    let authority = package.v3_authority().expect("v3 authority");
     assert_eq!(
         authority.provenance.hardening_level.as_deref(),
         Some("hermetic")
@@ -183,7 +183,7 @@ fn publish_artifact_form_accepts_attested_project_artifact() {
     assert_stdout_contains(&output, "Published attested artifact");
     let republished = fixture.published_artifact_package_path();
     let package = read_package(&republished, &fixture.publish_signing_key_path());
-    assert!(package.v2_build_attestation().is_some());
+    assert!(package.v3_build_attestation().is_some());
 }
 
 struct RecipeFixture {

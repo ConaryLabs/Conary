@@ -1,6 +1,6 @@
 // conary-core/src/ccs/archive_reader.rs
 
-//! Explicitly untrusted CCS v2 archive inspection.
+//! Explicitly untrusted CCS v3 archive inspection.
 //!
 //! This module decodes the current archive grammar and applies the canonical
 //! structural budget in `crate::ccs::budget`. It owns no limits of its own, so
@@ -12,7 +12,7 @@ use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
-use crate::ccs::v2::AuthorityDocumentV2;
+use crate::ccs::v3::AuthorityDocumentV3;
 use anyhow::Context;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
@@ -22,7 +22,7 @@ use std::io::Read;
 use std::path::Path;
 use tar::Archive;
 
-/// Structurally decoded CCS v2 data that has not been authenticated.
+/// Structurally decoded CCS v3 data that has not been authenticated.
 ///
 /// The name is deliberate: possession of this value never authorizes install,
 /// update, restore, conversion intake, self-update, or publication.
@@ -31,19 +31,19 @@ pub struct UntrustedCcsArchive {
     /// Untrusted compatibility projection for diagnostics and display only.
     pub manifest: CcsManifest,
     /// Parsed current authority. It remains untrusted in this type.
-    pub v2_authority: AuthorityDocumentV2,
+    pub v3_authority: AuthorityDocumentV3,
     /// Exact archived authority bytes used by signature verification.
-    pub v2_manifest_raw: Vec<u8>,
+    pub v3_manifest_raw: Vec<u8>,
     /// Structural census the shared budget measured for this authority.
     pub census: AuthorityCensus,
     /// Raw build-attestation JSON, when present.
-    pub v2_build_attestation_raw: Option<String>,
+    pub v3_build_attestation_raw: Option<String>,
     /// Raw foreign-conversion-boundary JSON, when present.
-    pub v2_foreign_conversion_boundary_raw: Option<String>,
+    pub v3_foreign_conversion_boundary_raw: Option<String>,
     /// Parsed build attestation, when present.
-    pub v2_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
+    pub v3_build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
     /// Parsed foreign conversion boundary, when present.
-    pub v2_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
+    pub v3_foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
     /// Raw diagnostic TOML projection, when present.
     pub toml_raw: Option<Vec<u8>>,
     /// Raw package signature JSON. Verification requires this field.
@@ -52,7 +52,7 @@ pub struct UntrustedCcsArchive {
     pub components: HashMap<String, ComponentData>,
 }
 
-/// Structurally inspect a CCS v2 archive without granting trust.
+/// Structurally inspect a CCS v3 archive without granting trust.
 pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<UntrustedCcsArchive> {
     let mut archive = Archive::new(GzDecoder::new(reader));
     let mut state = InspectionState::default();
@@ -74,7 +74,7 @@ pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<Untru
     state.finish()
 }
 
-/// Identify the exact current CCS v2 archive contract independently of name.
+/// Identify the exact current CCS v3 archive contract independently of name.
 pub fn has_current_ccs_archive_contract(path: impl AsRef<Path>) -> anyhow::Result<bool> {
     let path = path.as_ref();
     let mut file = File::open(path)?;
@@ -104,14 +104,14 @@ pub fn has_current_ccs_archive_contract(path: impl AsRef<Path>) -> anyhow::Resul
             BudgetDimension::AuthorityBytes,
             "MANIFEST",
         )?;
-        return require_format_version_2(&raw).map(|()| true);
+        return require_format_version_3(&raw).map(|()| true);
     }
     Ok(false)
 }
 
 #[derive(Default)]
 struct InspectionState {
-    authority: Option<AuthorityDocumentV2>,
+    authority: Option<AuthorityDocumentV3>,
     census: AuthorityCensus,
     manifest_raw: Option<Vec<u8>>,
     toml_raw: Option<Vec<u8>>,
@@ -214,10 +214,10 @@ impl InspectionState {
             ceiling,
         )?;
         let raw = read_bounded(entry, ceiling, BudgetDimension::AuthorityBytes, "MANIFEST")?;
-        require_format_version_2(&raw)?;
+        require_format_version_3(&raw)?;
         let authority = CCS_BUDGET.decode_authority(&raw)?;
-        let census = crate::ccs::v2::authority_census(&authority)
-            .map_err(|error| anyhow::anyhow!("invalid CCS v2 MANIFEST: {error}"))?;
+        let census = crate::ccs::v3::authority_census(&authority)
+            .map_err(|error| anyhow::anyhow!("invalid CCS v3 MANIFEST: {error}"))?;
         CCS_BUDGET.admit_encoded_authority(&census, raw.len() as u64)?;
         self.metadata_bytes = raw.len() as u64;
         self.census = census;
@@ -318,40 +318,40 @@ impl InspectionState {
     fn finish(self) -> anyhow::Result<UntrustedCcsArchive> {
         let authority = self
             .authority
-            .context("CCS package is missing required current v2 MANIFEST authority")?;
+            .context("CCS package is missing required current v3 MANIFEST authority")?;
         let manifest_raw = self
             .manifest_raw
-            .context("CCS package is missing required current v2 MANIFEST bytes")?;
+            .context("CCS package is missing required current v3 MANIFEST bytes")?;
 
         if let Some(expected) = &authority.provenance.foreign_conversion_boundary_hash {
             let boundary = self.boundary.as_ref().context(
-                "v2 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing",
+                "v3 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing",
             )?;
             let actual = crate::ccs::attestation::canonical_json_hash(boundary)?;
             if &actual != expected {
                 anyhow::bail!(
-                    "v2 foreign conversion boundary hash mismatch: expected {expected}, got {actual}"
+                    "v3 foreign conversion boundary hash mismatch: expected {expected}, got {actual}"
                 );
             }
         }
 
         Ok(UntrustedCcsArchive {
             manifest: untrusted_manifest_projection(&authority),
-            components: crate::ccs::v2::component_view::components(&authority),
+            components: crate::ccs::v3::component_view::components(&authority),
             census: self.census,
-            v2_authority: authority,
-            v2_manifest_raw: manifest_raw,
-            v2_build_attestation_raw: self.attestation_raw,
-            v2_foreign_conversion_boundary_raw: self.boundary_raw,
-            v2_build_attestation: self.attestation,
-            v2_foreign_conversion_boundary: self.boundary,
+            v3_authority: authority,
+            v3_manifest_raw: manifest_raw,
+            v3_build_attestation_raw: self.attestation_raw,
+            v3_foreign_conversion_boundary_raw: self.boundary_raw,
+            v3_build_attestation: self.attestation,
+            v3_foreign_conversion_boundary: self.boundary,
             toml_raw: self.toml_raw,
             signature_raw: self.signature_raw,
         })
     }
 }
 
-fn require_format_version_2(raw: &[u8]) -> anyhow::Result<()> {
+fn require_format_version_3(raw: &[u8]) -> anyhow::Result<()> {
     #[derive(Deserialize)]
     struct Header {
         format_version: u64,
@@ -361,19 +361,20 @@ fn require_format_version_2(raw: &[u8]) -> anyhow::Result<()> {
         ciborium::de::from_reader_with_recursion_limit(raw, CCS_BUDGET.max_cbor_nesting_depth)
             .map_err(|error| anyhow::anyhow!("invalid CCS CBOR MANIFEST header: {error}"))?;
     match header.format_version {
-        2 => Ok(()),
-        1 => anyhow::bail!(
-            "CCS v1 archive authority is unsupported; rebuild the package as signed CCS v2"
+        3 => Ok(()),
+        1 | 2 => anyhow::bail!(
+            "CCS v{} archive authority is unsupported; rebuild the package as signed CCS v3",
+            header.format_version
         ),
-        version => anyhow::bail!("unsupported CCS MANIFEST format_version {version}; expected 2"),
+        version => anyhow::bail!("unsupported CCS MANIFEST format_version {version}; expected 3"),
     }
 }
 
-fn untrusted_manifest_projection(authority: &AuthorityDocumentV2) -> CcsManifest {
-    let mut manifest = crate::ccs::v2::project_manifest_identity(
+fn untrusted_manifest_projection(authority: &AuthorityDocumentV3) -> CcsManifest {
+    let mut manifest = crate::ccs::v3::project_manifest_identity(
         authority,
         format!(
-            "Untrusted inspection projection for CCS v2 {:?}",
+            "Untrusted inspection projection for CCS v3 {:?}",
             authority.identity.kind
         ),
     );

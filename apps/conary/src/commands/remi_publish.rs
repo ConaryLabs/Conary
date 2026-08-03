@@ -76,14 +76,14 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn remi_publish_preflight_accepts_v2_package_structure() {
+    fn remi_publish_preflight_accepts_v3_package_structure() {
         let temp = tempfile::tempdir().unwrap();
         let signer = conary_core::ccs::signing::SigningKeyPair::generate().with_key_id("local-dev");
-        let package_path = temp.path().join("native-v2.ccs");
+        let package_path = temp.path().join("native-v3.ccs");
         let payload = b"hello world\n".to_vec();
-        let authority = minimal_v2_authority_for_preflight("hello", &payload);
+        let authority = minimal_v3_authority_for_preflight("hello", &payload);
         let payloads = std::collections::BTreeMap::from([("/usr/bin/hello".to_string(), payload)]);
-        conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+        conary_core::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority,
             &payloads,
             &package_path,
@@ -155,25 +155,21 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn minimal_v2_authority_for_preflight(
+    fn minimal_v3_authority_for_preflight(
         name: &str,
         payload: &[u8],
-    ) -> conary_core::ccs::v2::schema::AuthorityDocumentV2 {
-        use conary_core::ccs::v2::schema::{
-            AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
-            FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2,
-            PackageIdentityV2, PackageKindTagV2, PackageKindV2, PackagePolicyV2,
-            ProvenanceAuthorityV2, ProvidedCapabilityV2,
+    ) -> conary_core::ccs::v3::schema::AuthorityDocumentV3 {
+        use conary_core::ccs::v3::schema::{
+            AuthorityDocumentV3, ComponentAuthorityV3, ConflictPolicyV3, FORMAT_VERSION_V3,
+            FileAuthorityV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3,
+            PackageKindTagV3, PackageKindV3, PackagePolicyV3, ProvenanceAuthorityV3,
         };
         use conary_core::payload::{PayloadContentAuthority, PayloadNode};
-        use conary_core::repository::dependency_model::{
-            ProvideArchitectureQualifier, ProvideVersionRelation,
-        };
         use std::collections::BTreeMap;
 
-        AuthorityDocumentV2 {
-            format_version: FORMAT_VERSION_V2,
-            identity: PackageIdentityV2 {
+        AuthorityDocumentV3 {
+            format_version: FORMAT_VERSION_V3,
+            identity: PackageIdentityV3 {
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
                 version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
@@ -181,10 +177,10 @@ mod tests {
                 architecture: Some("noarch".to_string()),
                 debian_multi_arch: None,
                 platform: Some("linux".to_string()),
-                kind: PackageKindTagV2::Package,
+                kind: PackageKindTagV3::Package,
             },
-            kind: PackageKindV2::Package(PackageDataV2 {
-                files: vec![FileAuthorityV2 {
+            kind: PackageKindV3::Package(PackageDataV3 {
+                files: vec![FileAuthorityV3 {
                     path: "/usr/bin/hello".to_string(),
                     node: PayloadNode::regular(0o755),
                     content: Some(PayloadContentAuthority {
@@ -193,36 +189,27 @@ mod tests {
                     }),
                     component: "main".to_string(),
                     config: None,
-                    conflict: ConflictPolicyV2::Error,
+                    conflict: ConflictPolicyV3::Error,
                 }],
                 config: Vec::new(),
-                policy: PackagePolicyV2::default(),
+                policy: PackagePolicyV3::default(),
             }),
-            provides: vec![ProvidedCapabilityV2 {
-                kind: DependencyKindV2::Package,
-                name: name.to_string(),
-                provider_version: Some("1.0.0".to_string()),
-                version_relation: Some(ProvideVersionRelation::Equal),
-                version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
-                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-                target: None,
-                component: None,
-            }],
+            provided_capabilities: Vec::new(),
             requirements: Vec::new(),
             relations: Vec::new(),
-            capabilities: None,
+            execution_capabilities: None,
             file_capabilities: Vec::new(),
             components: BTreeMap::from([(
                 "main".to_string(),
-                ComponentAuthorityV2 {
+                ComponentAuthorityV3 {
                     name: "main".to_string(),
                     default: true,
                     file_count: 1,
                     total_size: payload.len() as u64,
                 },
             )]),
-            lifecycle: LifecycleAuthorityV2::default(),
-            provenance: ProvenanceAuthorityV2 {
+            lifecycle: LifecycleAuthorityV3::default(),
+            provenance: ProvenanceAuthorityV3 {
                 origin_class: Some("native-built".to_string()),
                 hardening_level: Some("hermetic".to_string()),
                 build_input_identity: Some("sha256:build-input".to_string()),

@@ -556,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn export_requires_trusted_signed_v2_authority() {
+    fn export_requires_trusted_signed_v3_authority() {
         let temp = tempfile::tempdir().unwrap();
         let (package_path, signer) = signed_test_package(&temp);
         let output = temp.path().join("demo.oci.tar");

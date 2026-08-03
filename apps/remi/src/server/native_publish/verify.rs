@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use conary_core::ccs::v2::PackageKindTagV2;
+use conary_core::ccs::v3::PackageKindTagV3;
 use conary_core::db::models::normalize_native_architecture;
 use conary_core::hash;
 use conary_core::repository::static_repo::publish_gate::{
@@ -87,13 +87,13 @@ pub(crate) fn verify_native_artifact(
         ));
     }
 
-    let authority = candidate.package.v2_authority().ok_or_else(|| {
+    let authority = candidate.package.v3_authority().ok_or_else(|| {
         NativePublishError::unprocessable(
             NativePublishErrorCode::UnsupportedCcsFormat,
-            "release upload requires a native CCS v2 authority document",
+            "release upload requires a native CCS v3 authority document",
         )
     })?;
-    conary_core::ccs::v2::validate_authority(authority).map_err(|error| {
+    conary_core::ccs::v3::validate_authority(authority).map_err(|error| {
         NativePublishError::unprocessable(
             NativePublishErrorCode::InvalidAuthority,
             format!("native release authority validation failed: {error}"),
@@ -105,9 +105,9 @@ pub(crate) fn verify_native_artifact(
     let package_release = identity.release.clone();
     let architecture = normalize_native_architecture(identity.architecture.as_deref());
     let package_kind = match identity.kind {
-        PackageKindTagV2::Package => "package",
-        PackageKindTagV2::Group => "group",
-        PackageKindTagV2::Redirect => "redirect",
+        PackageKindTagV3::Package => "package",
+        PackageKindTagV3::Group => "group",
+        PackageKindTagV3::Redirect => "redirect",
     }
     .to_string();
     let authority_format_version = i64::from(authority.format_version);

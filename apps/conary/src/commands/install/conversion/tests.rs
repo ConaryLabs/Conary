@@ -12,13 +12,12 @@ use conary_core::db::models::{
     Repository, RepositoryPackageKey, RepositoryPackageKeyStatus, Trove,
 };
 use conary_core::hash;
-use conary_core::packages::traits::{
-    ExtractedFile, PackageFile, PackageFormat, ProvidedCapability,
-};
+use conary_core::packages::traits::{ExtractedFile, PackageFile, PackageFormat};
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
 use conary_core::repository::RepositorySourceKind;
+use conary_core::repository::dependency_model::ProvidedCapability;
 use std::collections::HashMap;
 
 struct FakeNativePackage {
@@ -103,8 +102,8 @@ impl PackageFormat for FakeNativePackage {
         &[]
     }
 
-    fn provides(&self) -> &[ProvidedCapability] {
-        &self.provides
+    fn resolution_capabilities(&self) -> conary_core::Result<Vec<ProvidedCapability>> {
+        Ok(self.provides.clone())
     }
 
     fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {

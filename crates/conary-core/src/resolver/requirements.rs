@@ -42,6 +42,7 @@ pub fn load_installed_package_identities(
                     version_relation: provide.version_relation,
                     version_scheme: provide.version_scheme,
                     architecture_qualifier: provide.architecture_qualifier,
+                    provenance: provide.provenance,
                 });
             }
             Ok(PackageIdentity {
@@ -174,6 +175,7 @@ fn repository_provided_capabilities(
             version_relation: provide.version_relation,
             version_scheme: provide.version_scheme,
             architecture_qualifier: provide.architecture_qualifier,
+            provenance: provide.provenance,
         });
     }
     Ok(capabilities)
@@ -443,19 +445,20 @@ fn atom_satisfied(
         depending_architecture: depending_architecture.to_string(),
     };
 
-    if matches!(
+    let is_package_identity_name = matches!(
         clause.capability_kind,
         None | Some(RepositoryCapabilityKind::PackageName)
-    ) && package.name == clause.name
+    ) && package.name == clause.name;
+    if is_package_identity_name
+        && constraint_architecture_matches_package(&constraint, package, native_architecture)
+        && constraint_matches_package(&constraint, &package.version, package.version_scheme)?
     {
-        if !constraint_architecture_matches_package(&constraint, package, native_architecture) {
-            return Ok(false);
-        }
-        return Ok(constraint_matches_package(
-            &constraint,
-            &package.version,
-            package.version_scheme,
-        )?);
+        return Ok(true);
+    }
+    if is_package_identity_name {
+        // A source-declared compatibility capability may deliberately reuse
+        // the package name with a different version. Failed identity matching
+        // must therefore fall through to the independent capability list.
     }
 
     for provide in package.provided_capabilities.iter().filter(|provide| {
@@ -486,8 +489,8 @@ fn atom_satisfied(
 mod tests {
     use super::*;
     use crate::repository::dependency_model::{
-        DebianMultiArch, ProvideArchitectureQualifier, RepositoryRequirementKind,
-        RequirementArchitectureQualifier,
+        DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+        RepositoryRequirementKind, RequirementArchitectureQualifier,
     };
     use crate::repository::rpm_dependency::parse_rpm_dependency;
     use crate::resolver::identity::ProvidedCapability;
@@ -518,6 +521,8 @@ mod tests {
                     version_relation: None,
                     version_scheme: VersionScheme::Rpm,
                     architecture_qualifier: Default::default(),
+                    provenance:
+                        crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
                 })
                 .collect(),
         }
@@ -538,6 +543,7 @@ mod tests {
             version_relation: None,
             version_scheme: VersionScheme::Debian,
             architecture_qualifier: qualifier,
+            provenance: crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
         }];
         package
     }
@@ -602,11 +608,48 @@ mod tests {
             version_relation: None,
             version_scheme: VersionScheme::Rpm,
             architecture_qualifier: Default::default(),
+            provenance: crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
         }];
         assert!(
             requirement_expression_satisfied(
                 &expression,
                 VersionScheme::Rpm,
+                "x86_64",
+                "x86_64",
+                &[provider],
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn same_name_alpm_compatibility_capability_is_not_conflated_with_identity() {
+        let requirement = crate::repository::requirement::parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Arch,
+            "aspnet-runtime=10.0",
+        )
+        .unwrap();
+        let mut provider = package("aspnet-runtime", &[]);
+        provider.version = "10.0.10.sdk110-1".to_string();
+        provider.version_scheme = VersionScheme::Arch;
+        provider.provided_capabilities = vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::PackageName,
+            name: "aspnet-runtime".to_string(),
+            version: Some("10.0".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Arch,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                format: crate::repository::dependency_model::SourcePackageFormat::Alpm,
+                record_index: 0,
+            },
+        }];
+
+        assert!(
+            requirement_expression_satisfied(
+                &requirement.expression,
+                VersionScheme::Arch,
                 "x86_64",
                 "x86_64",
                 &[provider],

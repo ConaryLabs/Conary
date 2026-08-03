@@ -600,10 +600,11 @@ commits each package's files, payload claims, requirements, and provides
 atomically under `AdoptedTrack` or `AdoptedFull`; package names and partial
 warning paths are not ownership authority.
 
-Schema revision 23 is a pre-alpha hard cut: it replaces
-`directory_claims` with `payload_claims` and does not migrate revision 22
-databases. Operators rebuild disposable local state from authoritative package
-and repository inputs.
+Schema revision 24 is a pre-alpha hard cut: it retains revision 23's
+`directory_claims` to `payload_claims` replacement and adds exact provider
+provenance to installed and repository capability rows. It does not migrate
+earlier databases. Operators rebuild disposable local state from authoritative
+package and repository inputs.
 
 A complete unfiltered full-system adoption also performs one exact global
 selected-root capture after every native package capture succeeds. Existing
@@ -637,7 +638,7 @@ format's typed config declaration plus three exact content identities:
   an intentional absence;
 - `N`: the incoming package artifact.
 
-Foreign conversion copies each native parser declaration into signed CCS v2
+Foreign conversion copies each native parser declaration into signed CCS v3
 authority without a path heuristic or package-wide policy collapse. The
 per-path authority preserves `noreplace`, RPM ghost ownership, and Debian
 remove-on-upgrade. Verified CCS construction projects those signed values into

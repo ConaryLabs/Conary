@@ -25,9 +25,9 @@ use conary_core::payload::{
     PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
 };
 use conary_core::repository::dependency_model::{
-    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    CapabilityProvenance, DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
-    RepositoryRequirementKind,
+    RepositoryRequirementKind, SourcePackageFormat,
 };
 use conary_core::repository::versioning::VersionScheme;
 use rusqlite::params;
@@ -48,14 +48,38 @@ fn rollback_restores_release_multi_arch_and_provider_relation_exactly() {
     snapshot.version_scheme = VersionScheme::Debian;
     snapshot.architecture = Some("amd64".to_string());
     snapshot.debian_multi_arch = Some(DebianMultiArch::Same);
-    snapshot.provides = vec![ProvideSnapshot {
-        capability: "portable-data-abi".to_string(),
-        version: Some("1".to_string()),
-        version_relation: Some(ProvideVersionRelation::Equal),
-        kind: RepositoryCapabilityKind::Virtual,
-        version_scheme: VersionScheme::Debian,
-        architecture_qualifier: ProvideArchitectureQualifier::Any,
-    }];
+    snapshot.provides = vec![
+        ProvideSnapshot {
+            capability: "portable-data".to_string(),
+            version: Some("1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            kind: RepositoryCapabilityKind::PackageName,
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::ExactIdentity,
+        },
+        ProvideSnapshot {
+            capability: "portable-data".to_string(),
+            version: Some("1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            kind: RepositoryCapabilityKind::PackageName,
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Debian,
+                record_index: 0,
+            },
+        },
+        ProvideSnapshot {
+            capability: "portable-data-abi".to_string(),
+            version: Some("1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            kind: RepositoryCapabilityKind::Virtual,
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: ProvideArchitectureQualifier::Any,
+            provenance: CapabilityProvenance::AuthorDeclared,
+        },
+    ];
 
     let tx = conn.transaction().unwrap();
     restore_snapshot(&tx, rollback_changeset_id, &snapshot).unwrap();
@@ -68,11 +92,26 @@ fn rollback_restores_release_multi_arch_and_provider_relation_exactly() {
     assert_eq!(restored.architecture.as_deref(), Some("amd64"));
     assert_eq!(restored.debian_multi_arch, Some(DebianMultiArch::Same));
     let provide = ProvideEntry::find_by_trove(&conn, restored.id.unwrap()).unwrap();
-    assert_eq!(provide.len(), 1);
-    assert_eq!(
-        provide[0].version_relation,
-        Some(ProvideVersionRelation::Equal)
+    assert_eq!(provide.len(), 3);
+    assert!(
+        provide
+            .iter()
+            .all(|provide| { provide.version_relation == Some(ProvideVersionRelation::Equal) })
     );
+    assert!(provide.iter().any(|provide| {
+        provide.capability == "portable-data"
+            && provide.provenance == CapabilityProvenance::ExactIdentity
+    }));
+    assert!(provide.iter().any(|provide| {
+        provide.capability == "portable-data"
+            && matches!(
+                provide.provenance,
+                CapabilityProvenance::SourceDeclared {
+                    format: SourcePackageFormat::Debian,
+                    record_index: 0,
+                }
+            )
+    }));
     assert_eq!(snapshot_trove(&conn, &restored).unwrap(), snapshot);
 }
 

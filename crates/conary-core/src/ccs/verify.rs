@@ -1,6 +1,6 @@
 // conary-core/src/ccs/verify.rs
 
-//! Trusted CCS v2 package verification.
+//! Trusted CCS v3 package verification.
 //!
 //! `archive_reader` remains an explicitly untrusted diagnostic decoder. This
 //! module authenticates metadata before streaming signed objects to a spool.
@@ -18,17 +18,17 @@ mod stream;
 
 #[derive(Error, Debug)]
 pub enum VerifyError {
-    #[error("CCS v2 package is not signed")]
+    #[error("CCS v3 package is not signed")]
     NotSigned,
-    #[error("invalid CCS v2 signature format: {0}")]
+    #[error("invalid CCS v3 signature format: {0}")]
     InvalidSignatureFormat(String),
-    #[error("CCS v2 signature verification failed: {0}")]
+    #[error("CCS v3 signature verification failed: {0}")]
     SignatureInvalid(String),
-    #[error("CCS v2 package signer is not trusted: {0}")]
+    #[error("CCS v3 package signer is not trusted: {0}")]
     TrustViolation(String),
-    #[error("CCS v2 payload authority failed: {0}")]
+    #[error("CCS v3 payload authority failed: {0}")]
     PayloadInvalid(String),
-    #[error("CCS v2 package structure failed: {0}")]
+    #[error("CCS v3 package structure failed: {0}")]
     PackageError(String),
 }
 
@@ -151,7 +151,7 @@ impl TrustPolicy {
 /// bytes agreed under the supplied trust policy.
 #[derive(Debug, Clone)]
 pub struct VerifiedCcsArchive {
-    authority: crate::ccs::v2::AuthorityDocumentV2,
+    authority: crate::ccs::v3::AuthorityDocumentV3,
     signature: PackageSignature,
     build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
@@ -162,7 +162,7 @@ pub struct VerifiedCcsArchive {
 }
 
 impl VerifiedCcsArchive {
-    pub fn authority(&self) -> &crate::ccs::v2::AuthorityDocumentV2 {
+    pub fn authority(&self) -> &crate::ccs::v3::AuthorityDocumentV3 {
         &self.authority
     }
 
@@ -212,7 +212,7 @@ impl VerifiedCcsArchive {
 pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerifiedCcsArchive> {
     policy.validate()?;
     let verified = stream::verify_archive(path, policy)
-        .with_context(|| format!("verify streaming CCS v2 archive {}", path.display()))?;
+        .with_context(|| format!("verify streaming CCS v3 archive {}", path.display()))?;
     Ok(VerifiedCcsArchive {
         authority: verified.authority,
         signature: verified.signature,
@@ -315,15 +315,15 @@ pub fn print_result(result: &VerifiedCcsArchive) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
+    use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
 
     fn package(signer: &SigningKeyPair) -> (tempfile::TempDir, std::path::PathBuf, TrustPolicy) {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("verified.ccs");
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("verified");
-        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-        write_v2_ccs_package_from_bounded_memory_for_tests(
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("verified");
+        let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
+        write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority, &payloads, &path, signer, None, None, None,
         )
         .unwrap();

@@ -394,6 +394,7 @@ pub(super) fn load_repo_provided_capabilities(
                 version_relation: row.version_relation,
                 version_scheme: row.version_scheme,
                 architecture_qualifier: row.architecture_qualifier,
+                provenance: row.provenance,
             })
         })
         .collect()

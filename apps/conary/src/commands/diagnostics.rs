@@ -101,19 +101,19 @@ pub(crate) fn publish_gate_code_to_diagnostic_code(
     }
 }
 
-pub(crate) fn ccs_v2_diagnostic_to_packaging(
-    diagnostic: &conary_core::ccs::v2::V2Diagnostic,
+pub(crate) fn ccs_v3_diagnostic_to_packaging(
+    diagnostic: &conary_core::ccs::v3::V3Diagnostic,
 ) -> conary_core::diagnostics::PackagingDiagnostic {
-    use conary_core::ccs::v2::V2DiagnosticCode;
+    use conary_core::ccs::v3::V3DiagnosticCode;
     use conary_core::diagnostics::{
         PackagingDiagnostic, PackagingDiagnosticCode, PackagingPhase, PackagingSuggestion,
     };
 
     let code = match diagnostic.code {
-        V2DiagnosticCode::UnsupportedFormatVersion => {
+        V3DiagnosticCode::UnsupportedFormatVersion => {
             PackagingDiagnosticCode::CcsFormatVersionRejected
         }
-        _ => PackagingDiagnosticCode::CcsV2ValidationFailed,
+        _ => PackagingDiagnosticCode::CcsV3ValidationFailed,
     };
     let mut rendered = PackagingDiagnostic::error(
         PackagingPhase::RecipeValidation,
@@ -449,18 +449,18 @@ mod tests {
     }
 
     #[test]
-    fn ccs_v2_diagnostics_map_to_packaging_diagnostics() {
-        let diagnostic = conary_core::ccs::v2::V2Diagnostic::error(
-            conary_core::ccs::v2::V2DiagnosticCode::UnsupportedFormatVersion,
+    fn ccs_v3_diagnostics_map_to_packaging_diagnostics() {
+        let diagnostic = conary_core::ccs::v3::V3Diagnostic::error(
+            conary_core::ccs::v3::V3DiagnosticCode::UnsupportedFormatVersion,
             "unsupported package format",
             Some("format_version".to_string()),
-            "rebuild as v2",
+            "rebuild as v3",
         );
-        let rendered = ccs_v2_diagnostic_to_packaging(&diagnostic);
+        let rendered = ccs_v3_diagnostic_to_packaging(&diagnostic);
         assert_eq!(
             rendered.code,
             conary_core::diagnostics::PackagingDiagnosticCode::CcsFormatVersionRejected
         );
-        assert_eq!(rendered.suggestions[0].message, "rebuild as v2");
+        assert_eq!(rendered.suggestions[0].message, "rebuild as v3");
     }
 }

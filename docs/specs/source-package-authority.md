@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-03
-revision: 1
+revision: 2
 summary: Define lossless RPM, Debian, ALPM, and CCS package authority plus explicit consumer projections
 ---
 
@@ -12,22 +12,24 @@ This specification is the design authority for roadmap workstream W5 and
 [issue #108](https://github.com/ConaryLabs/Conary/issues/108). It defines the
 hard-cut target implemented by issues
 [#104](https://github.com/ConaryLabs/Conary/issues/104) and
-[#105](https://github.com/ConaryLabs/Conary/issues/105); it does not claim that
-the target is already shipped.
+[#105](https://github.com/ConaryLabs/Conary/issues/105). Issue #104 has shipped
+the source-specific identity/provision records, CCS v3 capability provenance,
+resolver distinction, and provider persistence. Issue #105 still owns the
+configuration-declaration half, so no release may be cut between these slices.
 
-The current implementation still stores RPM, Debian, and ALPM parser output in
-one `PackageMetadata` value and exposes flattened `ProvidedCapability` and
-`ConfigFileInfo` values through `PackageFormat`. New consumers must not extend
-that surface. W5 removes it after the format-specific models and projections
-below exist.
+RPM, Debian, and ALPM identity and declared provisions now live in their
+format-specific authority modules behind `SourcePackageAuthority`.
+`PackageFormat::resolution_capabilities()` is an explicit fallible consumer
+projection with capability provenance. The temporary `PackageMetadata` and
+`ConfigFileInfo` bridge remains only for the sibling configuration slice; new
+consumers must not extend it.
 
 This specification owns package identity, dependency/provision authority,
 payload and configuration declarations, and their consumer boundaries.
 [`foreign-package-lifecycle-contracts.md`](foreign-package-lifecycle-contracts.md)
 continues to own lifecycle event order, arguments, configuration transactions,
-and selected-root execution. [`ccs-format-v2.md`](ccs-format-v2.md) describes
-the currently shipped signed CCS v2 envelope until the W5 hard cut replaces
-it.
+and selected-root execution. [`ccs-format-v3.md`](ccs-format-v3.md) describes
+the current signed CCS v3 envelope.
 
 ## Governing Rule
 
@@ -310,7 +312,7 @@ The signed CCS contract and installed database both change intentionally.
 
 - CCS v3 replaces v2; every local, cached, static-repository, and Remi v2
   artifact must be rebuilt or reconverted from authenticated source.
-- The current SQLite schema is replaced in place at the next schema revision.
+- SQLite schema revision 24 replaces the current schema in place.
   Installed and repository provider rows must distinguish identity-derived
   matches from declared/derived capabilities, and config persistence must
   distinguish source declarations from materialized node and transaction
@@ -321,9 +323,8 @@ The signed CCS contract and installed database both change intentionally.
 - Remi conversion records and indexes tied to v2 authority are rebuilt before
   public serving. A mixed v2/v3 serving state is invalid.
 
-The exact numeric database revision is chosen at implementation landing time
-from then-current `SCHEMA_VERSION`; this specification fixes the rebuild
-property, not a stale future number.
+The rebuild property is intentional: revision 24 has no migration or dual-read
+path from the retired provider representation.
 
 ## Conformance And Closeout
 

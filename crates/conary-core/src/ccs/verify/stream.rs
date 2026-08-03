@@ -6,7 +6,7 @@ use super::{PackageSignature, TrustPolicy, VerifyError};
 use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
-use crate::ccs::v2::schema::{AuthorityDocumentV2, PackageKindV2};
+use crate::ccs::v3::schema::{AuthorityDocumentV3, PackageKindV3};
 use crate::filesystem::CasStore;
 use crate::packages::payload::{
     PackagePayload, PackagePayloadFile, PayloadSpool, ReopenablePayload,
@@ -24,7 +24,7 @@ const EXPECTED_TAR_TRAILING_ZERO_BYTES: u64 = 512;
 type ArchiveDecoder = GzDecoder<BufReader<File>>;
 
 pub(super) struct StreamVerifiedArchive {
-    pub authority: AuthorityDocumentV2,
+    pub authority: AuthorityDocumentV3,
     pub signature: PackageSignature,
     pub build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
     pub foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
@@ -51,7 +51,7 @@ struct MetadataState {
 }
 
 struct AuthenticatedMetadata {
-    authority: AuthorityDocumentV2,
+    authority: AuthorityDocumentV3,
     signature: PackageSignature,
     build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<crate::ccs::attestation::ForeignConversionBoundary>,
@@ -139,7 +139,7 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
     // one fails closed rather than being skipped. Their payload is not the
     // component source: a package may legitimately carry no component entries
     // while its authority declares components.
-    let components = crate::ccs::v2::component_view::components(&authenticated.authority);
+    let components = crate::ccs::v3::component_view::components(&authenticated.authority);
 
     Ok(StreamVerifiedArchive {
         authority: authenticated.authority,
@@ -160,8 +160,8 @@ fn authenticate_metadata(
     let manifest = metadata
         .manifest
         .as_deref()
-        .context("CCS package is missing required current v2 MANIFEST authority")?;
-    let verified = crate::ccs::v2::read_authority_document(
+        .context("CCS package is missing required current v3 MANIFEST authority")?;
+    let verified = crate::ccs::v3::read_authority_document(
         manifest,
         metadata.signature.as_deref(),
         metadata.debug_toml.as_deref(),
@@ -180,8 +180,8 @@ fn authenticate_metadata(
     })
 }
 
-fn expected_objects(authority: &AuthorityDocumentV2) -> Result<(BTreeMap<String, u64>, usize)> {
-    let PackageKindV2::Package(package) = &authority.kind else {
+fn expected_objects(authority: &AuthorityDocumentV3) -> Result<(BTreeMap<String, u64>, usize)> {
+    let PackageKindV3::Package(package) = &authority.kind else {
         return Ok((BTreeMap::new(), 0));
     };
     let mut objects = BTreeMap::new();
@@ -199,7 +199,7 @@ fn expected_objects(authority: &AuthorityDocumentV2) -> Result<(BTreeMap<String,
             .validate_content(file.content.as_ref())
             .map_err(|error| {
                 VerifyError::PayloadInvalid(format!(
-                    "v2 payload authority for {} is invalid: {error}",
+                    "v3 payload authority for {} is invalid: {error}",
                     file.path
                 ))
             })?;
@@ -338,8 +338,8 @@ fn read_authority_entry(
         "MANIFEST",
     )?;
     let authority = CCS_BUDGET.decode_authority(&raw)?;
-    let census = crate::ccs::v2::authority_census(&authority)
-        .map_err(|error| VerifyError::PackageError(format!("invalid CCS v2 MANIFEST: {error}")))?;
+    let census = crate::ccs::v3::authority_census(&authority)
+        .map_err(|error| VerifyError::PackageError(format!("invalid CCS v3 MANIFEST: {error}")))?;
     CCS_BUDGET.admit_encoded_authority(&census, raw.len() as u64)?;
     state.census = Some(census);
     state.manifest = Some(raw);
@@ -398,10 +398,10 @@ fn read_object(
 }
 
 fn payload_from_authority(
-    authority: &AuthorityDocumentV2,
+    authority: &AuthorityDocumentV3,
     objects: &HashMap<String, ReopenablePayload>,
 ) -> Result<PackagePayload> {
-    let PackageKindV2::Package(package) = &authority.kind else {
+    let PackageKindV3::Package(package) = &authority.kind else {
         return Ok(PackagePayload::default());
     };
     package
@@ -599,7 +599,7 @@ fn require_known_directory(path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
+    use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
     use flate2::Compression;
     use flate2::read::GzDecoder as ReadGzDecoder;
@@ -622,10 +622,10 @@ mod tests {
     ) {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("base.ccs");
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("stream");
-        let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("stream");
+        let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
         let signer = SigningKeyPair::generate();
-        write_v2_ccs_package_from_bounded_memory_for_tests(
+        write_v3_ccs_package_from_bounded_memory_for_tests(
             &authority, &payloads, &path, &signer, None, None, None,
         )
         .unwrap();
@@ -820,8 +820,8 @@ mod tests {
 
         // The aggregate control-document ceiling is derived from this
         // package's own census, so padding is refused without allocation.
-        let authority = crate::ccs::v2::test_support::package_authority_with_one_file("stream");
-        let census = crate::ccs::v2::authority_census(&authority).unwrap();
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("stream");
+        let census = crate::ccs::v3::authority_census(&authority).unwrap();
         let ceiling = CCS_BUDGET.metadata_bytes_ceiling(&census).unwrap();
         let mut state = MetadataState {
             census: Some(census),
@@ -879,9 +879,9 @@ mod tests {
 
     #[test]
     fn signed_object_authority_uses_lowercase_sha256_and_u64_sizes() {
-        let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("stream");
+        let mut authority = crate::ccs::v3::test_support::package_authority_with_one_file("stream");
         {
-            let PackageKindV2::Package(package) = &mut authority.kind else {
+            let PackageKindV3::Package(package) = &mut authority.kind else {
                 unreachable!()
             };
             package.files[0].content.as_mut().unwrap().size = u64::from(u32::MAX) + 1;
@@ -892,7 +892,7 @@ mod tests {
             vec![u64::from(u32::MAX) + 1]
         );
 
-        let PackageKindV2::Package(package) = &mut authority.kind else {
+        let PackageKindV3::Package(package) = &mut authority.kind else {
             unreachable!()
         };
         package.files[0].content.as_mut().unwrap().sha256 = "A".repeat(64);

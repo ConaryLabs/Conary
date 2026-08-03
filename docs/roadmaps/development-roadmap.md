@@ -521,7 +521,7 @@ reruns, #72 composable system models.
 
 - Deliver general package-building and static publishing workflows usable by
   third parties, then make bootstrap a consumer of that tooling.
-- Close CCS v2 dependency-authoring, lock, and reproducibility gaps.
+- Close CCS v3 dependency-authoring, lock, and reproducibility gaps.
 - Connect model, source selection, builder, and derivation inputs end to end.
 - Improve self-hosting, recipes, groups, migration runbooks, and key/trust UX
   based on demonstrated users rather than speculative surface area.
@@ -536,7 +536,7 @@ package classes. What remains here is the broader boot and security surface.
 
 - Require fail-closed target-profile facts for public behavior.
 - Add proof-backed native adapters rather than unverified policy exceptions.
-- Make CCS v2 authority explicit across kernel, initramfs, bootloader, PAM, and
+- Make CCS v3 authority explicit across kernel, initramfs, bootloader, PAM, and
   LSM effects.
 - Derive release validation from the owning routes and fixtures.
 - Promote only target-profile rows backed by the proof corpus.

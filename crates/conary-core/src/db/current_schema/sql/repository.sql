@@ -408,6 +408,7 @@ CREATE TABLE repository_provides (
             architecture_qualifier_kind TEXT NOT NULL
                 CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
             architecture TEXT,
+            provenance TEXT NOT NULL CHECK(json_valid(provenance)),
             CHECK(
                 (version IS NULL AND version_relation IS NULL)
                 OR

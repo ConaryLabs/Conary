@@ -1,5 +1,5 @@
 // apps/remi/src/server/conversion/metadata.rs
-//! Package metadata extraction, safe CCS filenames, and native provide merging.
+//! Package metadata extraction, safe CCS filenames, and repository identity checks.
 
 use super::ConversionService;
 use anyhow::{Context, Result, anyhow, ensure};
@@ -10,29 +10,14 @@ use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::payload::PackagePayload;
 use conary_core::packages::rpm::RpmPackage;
-use conary_core::packages::traits::{PackageFormat, ProvidedCapability};
-use conary_core::repository::dependency_model::{
-    ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
-};
+use conary_core::packages::traits::PackageFormat;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
 #[cfg(test)]
 use conary_core::repository::versioning::VersionScheme;
-use conary_core::repository::versioning::VersionScheme as RepositoryVersionScheme;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-
-type ProvideIdentity = (
-    RepositoryCapabilityKind,
-    String,
-    Option<String>,
-    Option<ProvideVersionRelation>,
-    RepositoryVersionScheme,
-    ProvideArchitectureQualifier,
-);
 
 #[derive(Debug, Clone)]
 pub(super) struct RepositoryConversionMetadata {
-    pub(super) provides: Vec<ProvidedCapability>,
     pub(super) digest: String,
 }
 
@@ -63,15 +48,27 @@ impl ConversionService {
         }
     }
 
-    pub(super) fn apply_repository_identity(
-        metadata: &mut PackageMetadata,
+    pub(super) fn validate_repository_identity(
+        metadata: &PackageMetadata,
         repo_pkg: &RepositoryPackage,
-    ) {
-        metadata.name = repo_pkg.name.clone();
-        metadata.version = repo_pkg.version.clone();
-        if let Some(architecture) = &repo_pkg.architecture {
-            metadata.architecture = Some(architecture.clone());
-        }
+    ) -> Result<()> {
+        ensure!(
+            metadata.name() == repo_pkg.name,
+            "repository package name contradicts authenticated artifact identity"
+        );
+        ensure!(
+            metadata.version() == repo_pkg.version,
+            "repository package version contradicts authenticated artifact identity"
+        );
+        ensure!(
+            metadata.version_scheme() == repo_pkg.version_scheme,
+            "repository version scheme contradicts authenticated artifact identity"
+        );
+        ensure!(
+            metadata.architecture() == repo_pkg.architecture.as_deref(),
+            "repository architecture contradicts authenticated artifact identity"
+        );
+        Ok(())
     }
 
     /// Parse a downloaded package file
@@ -92,7 +89,7 @@ impl ConversionService {
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open Arch package payload: {}", e))?;
-                let metadata = Self::build_metadata(&pkg);
+                let metadata = Self::build_metadata(&pkg)?;
                 Ok((metadata, files, "arch"))
             }
             ProfilePackageFormat::Rpm => {
@@ -101,7 +98,7 @@ impl ConversionService {
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open RPM package payload: {}", e))?;
-                let metadata = Self::build_metadata(&pkg);
+                let metadata = Self::build_metadata(&pkg)?;
                 Ok((metadata, files, "rpm"))
             }
             ProfilePackageFormat::Deb => {
@@ -110,7 +107,7 @@ impl ConversionService {
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open DEB package payload: {}", e))?;
-                let metadata = Self::build_metadata(&pkg);
+                let metadata = Self::build_metadata(&pkg)?;
                 Ok((metadata, files, "deb"))
             }
         }
@@ -134,73 +131,18 @@ impl ConversionService {
                 repository_package_conversion_inputs_match(&expected_package, &current_package),
                 "repository package identity changed before conversion"
             );
-            let (provides, digest) =
+            let (_, digest) =
                 RepositoryProvide::conversion_capabilities_with_digest(&tx, repository_package_id)?;
             tx.commit()?;
-            Ok(RepositoryConversionMetadata { provides, digest })
+            Ok(RepositoryConversionMetadata { digest })
         })
         .await
         .map_err(|error| anyhow!("repository conversion metadata task panicked: {error}"))?
     }
 
-    pub(super) fn merge_repository_provides(
-        repository_metadata: &RepositoryConversionMetadata,
-        metadata: &mut PackageMetadata,
-    ) -> Result<()> {
-        if repository_metadata.provides.is_empty() {
-            return Ok(());
-        }
-
-        let mut seen: HashSet<ProvideIdentity> = metadata
-            .provides
-            .iter()
-            .map(|provide| {
-                (
-                    provide.kind,
-                    provide.name.clone(),
-                    provide.version.clone(),
-                    provide.version_relation,
-                    provide.version_scheme,
-                    provide.architecture_qualifier.clone(),
-                )
-            })
-            .collect();
-
-        for exact in &repository_metadata.provides {
-            if !seen.insert((
-                exact.kind,
-                exact.name.clone(),
-                exact.version.clone(),
-                exact.version_relation,
-                exact.version_scheme,
-                exact.architecture_qualifier.clone(),
-            )) {
-                continue;
-            }
-            metadata.provides.push(exact.clone());
-        }
-
-        Ok(())
-    }
-
     /// Build PackageMetadata from a parsed package
-    fn build_metadata<P: PackageFormat>(pkg: &P) -> PackageMetadata {
-        PackageMetadata {
-            package_path: PathBuf::new(), // Not needed for conversion
-            name: pkg.name().to_string(),
-            version: pkg.version().to_string(),
-            version_scheme: pkg.version_scheme(),
-            architecture: pkg.architecture().map(String::from),
-            debian_multi_arch: pkg.debian_multi_arch(),
-            description: pkg.description().map(String::from),
-            files: pkg.files().to_vec(),
-            requirements: pkg.requirements().to_vec(),
-            provides: pkg.provides().to_vec(),
-            relations: pkg.relations().to_vec(),
-            diagnostic_scriptlet_evidence: Vec::new(),
-            native_scriptlet_abi: pkg.native_scriptlet_abi().to_vec(),
-            config_files: pkg.config_files().to_vec(),
-        }
+    fn build_metadata<P: PackageFormat>(pkg: &P) -> Result<PackageMetadata> {
+        PackageMetadata::from_package(PathBuf::new(), pkg).map_err(Into::into)
     }
 }
 
@@ -256,14 +198,19 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_repository_identity_preserves_epoch_and_architecture() {
+    fn repository_identity_cannot_override_authenticated_artifact() {
         let mut metadata = PackageMetadata::new(
             PathBuf::from("/tmp/qemu-img.rpm"),
             "qemu-img".to_string(),
             "10.1.0-7.fc44".to_string(),
             VersionScheme::Rpm,
         );
-        metadata.architecture = Some("i686".to_string());
+        let conary_core::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+            &mut metadata.source_authority
+        else {
+            unreachable!()
+        };
+        authority.architecture = Some("i686".to_string());
 
         let mut repo_pkg = RepositoryPackage::new(
             42,
@@ -276,11 +223,11 @@ mod tests {
         );
         repo_pkg.architecture = Some("x86_64".to_string());
 
-        ConversionService::apply_repository_identity(&mut metadata, &repo_pkg);
-
-        assert_eq!(metadata.name, "qemu-img");
-        assert_eq!(metadata.version, "2:10.1.0-7.fc44");
-        assert_eq!(metadata.architecture.as_deref(), Some("x86_64"));
+        let error =
+            ConversionService::validate_repository_identity(&metadata, &repo_pkg).unwrap_err();
+        assert!(error.to_string().contains("version contradicts"));
+        assert_eq!(metadata.version(), "10.1.0-7.fc44");
+        assert_eq!(metadata.architecture(), Some("i686"));
     }
 
     #[test]
@@ -318,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn repository_native_provides_are_merged_into_conversion_metadata() {
+    fn repository_native_provides_do_not_mutate_artifact_authority() {
         let (_temp_file, conn) = create_test_db();
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
 
@@ -345,26 +292,24 @@ mod tests {
         );
         provide.insert(&conn).unwrap();
 
-        let mut metadata = PackageMetadata::new(
+        let metadata = PackageMetadata::new(
             PathBuf::from("/tmp/kernel-modules-core.rpm"),
             "kernel-modules-core".to_string(),
             "6.17.1-300.fc44".to_string(),
             VersionScheme::Rpm,
         );
 
-        let (provides, digest) =
+        let (_, digest) =
             RepositoryProvide::conversion_capabilities_with_digest(&conn, repo_pkg_id).unwrap();
-        let repository_metadata = RepositoryConversionMetadata { provides, digest };
-        ConversionService::merge_repository_provides(&repository_metadata, &mut metadata).unwrap();
+        let repository_metadata = RepositoryConversionMetadata { digest };
 
-        assert!(metadata.provides.iter().any(|provide| {
-            provide.name == "kernel-uname-r"
-                && provide.version.as_deref() == Some("6.17.1-300.fc44.x86_64")
-                && provide.version_relation
-                    == Some(
-                        conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
-                    )
-        }));
+        assert!(
+            metadata
+                .source_authority
+                .declared_capabilities()
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             repository_metadata.digest,
             RepositoryProvide::conversion_capabilities_digest(&conn, repo_pkg_id).unwrap()

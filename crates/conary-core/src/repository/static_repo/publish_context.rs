@@ -262,13 +262,13 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
         &input.context.active_publish_key,
     )?;
     let authority = package
-        .v2_authority()
-        .context("verified v2 package missing authority")?;
+        .v3_authority()
+        .context("verified v3 package missing authority")?;
     let debug_toml = verification
         .debug_toml()
         .map(std::str::from_utf8)
         .transpose()
-        .context("decode v2 MANIFEST.toml as UTF-8")?;
+        .context("decode v3 MANIFEST.toml as UTF-8")?;
     let signed_temp =
         tempfile::Builder::new()
             .prefix("conary-attested-")
@@ -277,14 +277,14 @@ pub fn attach_project_form_attestation(input: ProjectFormAttestationInput<'_>) -
                 format!("resolve parent for {}", input.package_path.display())
             })?)?;
 
-    crate::ccs::builder::write_v2_ccs_package_from_sources(
+    crate::ccs::builder::write_v3_ccs_package_from_sources(
         authority,
         package.payload().files(),
         signed_temp.path(),
         &input.context.active_publish_key,
         debug_toml,
         Some(&envelope),
-        package.v2_foreign_conversion_boundary(),
+        package.v3_foreign_conversion_boundary(),
     )?;
 
     crate::ccs::verify::verify_package(

@@ -21,10 +21,10 @@ use conary_core::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
     MutableStateManifest,
 };
-use conary_core::packages::traits::ProvidedCapability;
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
 };
+use conary_core::repository::dependency_model::ProvidedCapability;
 use conary_core::repository::dependency_model::{
     ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
     RepositoryRequirementKind,
@@ -52,6 +52,7 @@ pub(crate) fn exact_package_self_provider(
         version_relation: Some(ProvideVersionRelation::Equal),
         version_scheme,
         architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: conary_core::repository::dependency_model::CapabilityProvenance::ExactIdentity,
     }
 }
 

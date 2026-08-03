@@ -32,7 +32,10 @@ pub(super) fn foreign_conversion_evidence(
                 contract_hash: crate::hash::sha256_prefixed(
                     format!(
                         "{}:{}:{}:{}",
-                        format, metadata.name, metadata.version, checksum
+                        format,
+                        metadata.name(),
+                        metadata.version(),
+                        checksum
                     )
                     .as_bytes(),
                 ),
@@ -100,14 +103,14 @@ pub(super) fn classify_foreign_scriptlet_risk(metadata: &PackageMetadata) -> Com
         .iter()
         .map(|scriptlet| {
             classify_shell_text(
-                &format!("foreign-scriptlet:{}:{}", metadata.name, scriptlet.phase),
+                &format!("foreign-scriptlet:{}:{}", metadata.name(), scriptlet.phase),
                 &scriptlet.content,
             )
         });
     let native = metadata.native_scriptlet_abi.iter().filter_map(|entry| {
         let text = entry.body.text.as_ref()?;
         Some(classify_shell_text(
-            &format!("foreign-native-scriptlet:{}:{}", metadata.name, entry.id),
+            &format!("foreign-native-scriptlet:{}:{}", metadata.name(), entry.id),
             text,
         ))
     });

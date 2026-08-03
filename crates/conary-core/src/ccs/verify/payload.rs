@@ -4,17 +4,17 @@
 
 use super::ContentStatus;
 use crate::ccs::builder::{ComponentData, FileEntry};
-use crate::ccs::v2::schema::{AuthorityDocumentV2, PackageKindV2};
+use crate::ccs::v3::schema::{AuthorityDocumentV3, PackageKindV3};
 use crate::payload::PayloadNodeKind;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn verify_v2_archive_payload(
-    authority: &AuthorityDocumentV2,
+pub(super) fn verify_v3_archive_payload(
+    authority: &AuthorityDocumentV3,
     components: &HashMap<String, ComponentData>,
     blobs: &HashMap<String, Vec<u8>>,
 ) -> Result<ContentStatus> {
-    let PackageKindV2::Package(data) = &authority.kind else {
+    let PackageKindV3::Package(data) = &authority.kind else {
         return Ok(ContentStatus::Skipped);
     };
 
@@ -28,13 +28,13 @@ pub(super) fn verify_v2_archive_payload(
     for (component_name, component) in components {
         if !authority.components.contains_key(component_name) {
             errors.push(format!(
-                "v2 archive carries unsigned component {component_name}"
+                "v3 archive carries unsigned component {component_name}"
             ));
         }
         for component_file in &component.files {
             if !signed_files.contains(&(component_name.as_str(), component_file.path.as_str())) {
                 errors.push(format!(
-                    "v2 archive carries unsigned file {} in component {}",
+                    "v3 archive carries unsigned file {} in component {}",
                     component_file.path, component_name
                 ));
             }
@@ -48,14 +48,14 @@ pub(super) fn verify_v2_archive_payload(
             .and_then(|()| file.node.validate_content(file.content.as_ref()))
         {
             errors.push(format!(
-                "v2 payload authority for {} is invalid: {error}",
+                "v3 payload authority for {} is invalid: {error}",
                 file.path
             ));
             continue;
         }
         let Some(component) = components.get(&file.component) else {
             errors.push(format!(
-                "v2 file {} references missing component {}",
+                "v3 file {} references missing component {}",
                 file.path, file.component
             ));
             continue;
@@ -63,7 +63,7 @@ pub(super) fn verify_v2_archive_payload(
         let Some(component_file) = component.files.iter().find(|item| item.path == file.path)
         else {
             errors.push(format!(
-                "v2 signed file {} missing from component {}",
+                "v3 signed file {} missing from component {}",
                 file.path, file.component
             ));
             continue;
@@ -73,7 +73,7 @@ pub(super) fn verify_v2_archive_payload(
             || component_file.component != file.component
         {
             errors.push(format!(
-                "v2 file authority mismatch for {} in component {}",
+                "v3 file authority mismatch for {} in component {}",
                 file.path, file.component
             ));
             continue;

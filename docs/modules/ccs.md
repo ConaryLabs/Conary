@@ -47,12 +47,12 @@ Apply typed install prefix (default `/`) to source-root children
 | `CcsInstallPrefix` | builder.rs | Validated absolute mapping for source-root children; the prefix and its ancestors are not package entries |
 | `BuildResult` | builder.rs | Output: manifest, components, files, reopenable payload sources, total_size |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
-| CCS package projection | package/v2_projection.rs | Project verified signed v2 authority into install-time package data |
-| `AuthorityDocumentV2` | v2/schema.rs | Signed CCS v2 native package authority |
-| v2 manifest identity projection | v2/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
+| CCS package projection | package/v3_projection.rs | Project verified signed v3 authority into install-time package data |
+| `AuthorityDocumentV3` | v3/schema.rs | Signed CCS v3 native package authority |
+| v3 manifest identity projection | v3/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
 | `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
 | `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
-| Component view | v2/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
+| Component view | v3/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
 | `ComponentType` | components/types.rs | Closed typed names for standard component metadata; never inferred from payload paths |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
 | `PackageSignature` | signing.rs | Embedded signature with algorithm, key_id, timestamp |
@@ -216,7 +216,7 @@ produce a typed native ABI before conversion: exact lifecycle slots, body
 bytes, interpreters, invocation contracts, trigger/control metadata, and
 package-manager ordering. Source-defined strong requirement order, including
 Debian `Pre-Depends` and RPM install prerequisites, is preserved as
-`PreDepends` through repository metadata, signed CCS v2 authority, and
+`PreDepends` through repository metadata, signed CCS v3 authority, and
 installed state. Conversion persists every executable entry with a digest;
 entry presence is lifecycle authority. It does not decide event order by
 inspecting the script body and it does not suppress an entry because a command
@@ -302,31 +302,31 @@ tests live under `convert/converter/tests.rs`; lifecycle schema tests live under
 `ccs/native_transaction/tests.rs`; Remi protocol, async-client, and client
 tests live under `repository/remi/`.
 
-**v2/** -- CCS v2 native package authority. Start in
-`crates/conary-core/src/ccs/v2/` for v2 authority, validation, diagnostics,
+**v3/** -- CCS v3 native package authority. Start in
+`crates/conary-core/src/ccs/v3/` for v3 authority, validation, diagnostics,
 debug projection, archive reading, and content identity. Use
 `archive_reader.rs` and `package.rs` only as version-routing/adaptation
 surfaces.
 
-Native v2 authoring from `ccs.toml` starts in
+Native v3 authoring from `ccs.toml` starts in
 `apps/conary/src/commands/ccs/{templates.rs,lint.rs,build.rs,test.rs,local_dev.rs}`
 for command ergonomics and local-dev state,
 `crates/conary-core/src/ccs/{builder.rs,builder/source.rs,policy/content.rs,builder/package_writer.rs}`
 for source-backed collection, policy transforms, and archive emission, and
-`crates/conary-core/src/ccs/v2/authoring.rs` for projection from `BuildResult`
-into signed v2 authority. `crates/conary-core/src/ccs/v2/lifecycle.rs` owns the
+`crates/conary-core/src/ccs/v3/authoring.rs` for projection from `BuildResult`
+into signed v3 authority. `crates/conary-core/src/ccs/v3/lifecycle.rs` owns the
 exact bidirectional projection between manifest lifecycle declarations, signed
-v2 lifecycle authority, and the install-interface manifest projection.
-`crates/conary-core/src/ccs/v2/manifest_projection.rs` is the sole projection
+v3 lifecycle authority, and the install-interface manifest projection.
+`crates/conary-core/src/ccs/v3/manifest_projection.rs` is the sole projection
 of signed package identity into both install and untrusted-inspection
 compatibility manifests, so authoring defaults cannot overwrite native
 architecture or Debian `Multi-Arch` authority.
-`crates/conary-core/src/ccs/v2/validation/identity.rs` owns exact package
+`crates/conary-core/src/ccs/v3/validation/identity.rs` owns exact package
 identity and typed provider validation; the validation hub owns orchestration.
-`crates/conary-core/src/ccs/v2/validation/config.rs` owns exact per-path config
+`crates/conary-core/src/ccs/v3/validation/config.rs` owns exact per-path config
 and currently consumable package-policy validation.
 Debug TOML consistency checks live in
-`crates/conary-core/src/ccs/v2/debug_projection.rs`; debug TOML is verified
+`crates/conary-core/src/ccs/v3/debug_projection.rs`; debug TOML is verified
 against signed authority and never becomes install-time authority.
 
 **enhancement/** -- Post-conversion enrichment via trait-based plugins.
@@ -359,9 +359,11 @@ enables delta-efficient distribution via the Remi server.
 
 ### Source authority design target
 
-The current parser-to-converter bridge still uses the flattened
-`PackageMetadata`, `ProvidedCapability`, and `ConfigFileInfo` types. W5 removes
-that bridge; new conversion work must not add another consumer to it. The
+Identity and declared provisions now use format-specific authority records and
+the closed `SourcePackageAuthority` dispatch. Resolution, signing, persistence,
+and publication consume provenance-tagged projections. The temporary
+`PackageMetadata` and `ConfigFileInfo` configuration bridge remains for issue
+#105; new conversion work must not add another consumer to it. The
 canonical target is
 [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md):
 RPM, Debian, and ALPM parsers retain their native ontologies, and named
@@ -369,10 +371,10 @@ fallible projections serve dependency resolution, CCS authoring, and native
 transaction planning. Exact identity is separate from declared capabilities,
 and source config declarations are separate from materialized payload nodes.
 
-Issues #104 and #105 implement that hard cut as sibling slices. Until both
-land, this section describes the active design target rather than shipped CCS
-behavior; [`docs/specs/ccs-format-v2.md`](../specs/ccs-format-v2.md) remains the
-current signed-format contract.
+Issue #104 implements the identity/capability half and issue #105 owns source
+configuration declarations. No release may be cut between them;
+[`docs/specs/ccs-format-v3.md`](../specs/ccs-format-v3.md) is the current
+signed-format contract.
 
 ## Fixture Ownership
 
@@ -398,18 +400,18 @@ Golden conversion cases may assert diagnostic command/effect evidence, but
 exact lifecycle proof comes from source ABI, event-order, argv/stdin, and
 payload-visibility tests.
 
-## CCS v2 Native Authority
+## CCS v3 Native Authority
 
-CCS v2 packages use the CBOR `MANIFEST` with `format_version = 2` as signed
+CCS v3 packages use the CBOR `MANIFEST` with `format_version = 3` as signed
 install-time authority. `MANIFEST.toml` may be present for source/debug
 visibility, but TOML-only install behavior is not native authority. The
-implementation lives under `crates/conary-core/src/ccs/v2/`. CCS v2 is the
+implementation lives under `crates/conary-core/src/ccs/v3/`. CCS v3 is the
 sole native package contract: the repository has no v1 writer, parser,
 projection, fixture factory, or compatibility path. `MANIFEST.toml` is a
 checked projection only; malformed, unsupported, or unsigned authority never
 falls back to it. The archive carries no `components/*.json` copy of the signed
 file records: component views are derived from authority in
-`v2/component_view.rs`.
+`v3/component_view.rs`.
 
 Archive-envelope signer authority is established before that signed native
 authority is projected into a transaction. A repository-acquired CCS uses its
@@ -440,13 +442,13 @@ writing all use fixed-buffer or reopenable streams rather than whole-object
 buffers. Tar decoders enforce declared size per entry, then independently bound
 cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
-decompression-bomb resistance. `docs/specs/ccs-format-v2.md` owns the contract.
+decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
 
 Configuration authority is exact per path. Each `[[config.files]]` declaration
-and its signed v2 projection carries `noreplace`, `ghost`, and
+and its signed v3 projection carries `noreplace`, `ghost`, and
 `remove_on_upgrade`; there is no package-wide config default. Ordinary config
 paths must identify one regular-file or symlink payload and repeat the same
-semantics in `FileAuthorityV2`. RPM ghost paths and Debian
+semantics in `FileAuthorityV3`. RPM ghost paths and Debian
 remove-on-upgrade paths must be absent from payload and backed by the matching
 signed native source contract. `CcsPackage` projects only that verified
 authority into install, update, and remove transactions. Foreign conversion
@@ -457,7 +459,7 @@ Signed file conflict replacement and host-mutation policy are rejected while
 their typed transaction consumers do not exist. The reader never accepts a
 non-default signed field that installation would silently ignore.
 
-### Native CCS v2 Local Authoring Loop
+### Native CCS v3 Local Authoring Loop
 
 The minimal native authoring loop is:
 
@@ -473,7 +475,7 @@ conary ccs test package.ccs --dry-run
 architecture token. That token is signed architecture-independent authority,
 not an omitted value for the target to infer. Authors of architecture-specific
 payloads must replace it with the exact target architecture token before
-building. Authoring lint and signed-v2 verification reject missing or blank
+building. Authoring lint and signed-v3 verification reject missing or blank
 architecture authority before installation.
 
 `ccs build --source <directory> --install-prefix /usr/bin` maps each child of
@@ -627,7 +629,7 @@ children beneath symlinks created by the package remain fail-closed; an
 existing leaf symlink also keeps the separate replacement/collision semantics
 owned by the payload type.
 
-Signed v2 authority carries the complete optional package capability
+Signed v3 authority carries the complete optional package capability
 declaration used by install preflight, persistence, audit, and enforcement; the
 authoring and install projections do not reconstruct it from debug TOML.
 Package payload paths likewise do not imply lifecycle mutations. The current
@@ -638,7 +640,7 @@ authority.
 The source-independent node contract in
 `crates/conary-core/src/payload.rs` is the sole authority for payload kind,
 mode, numeric ownership, timestamp, xattrs, device identity, symlink target,
-hardlink identity, and content reference. Native parsers, CCS v2, installed
+hardlink identity, and content reference. Native parsers, CCS v3, installed
 state, and generation manifests use that same type; they do not maintain
 parallel partial file projections.
 
@@ -652,7 +654,7 @@ exact payload claim even when dpkg or libalpm semantics preserve the
 currently visible directory metadata. See
 [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md#shared-payload-ownership-and-materialization).
 
-For `[[file_capabilities]]`, the v2 writer canonicalizes the declarations into
+For `[[file_capabilities]]`, the v3 writer canonicalizes the declarations into
 signed authority and verification proves each unique path names an exact
 regular signed payload file. The verified install projection never consults
 debug TOML. The selected-root transaction applies `security.capability` before
@@ -679,6 +681,6 @@ unselected payloads. Declared CCS hooks are package-scoped and run for every
 component selection; no script-disabling bypass exists, and component names
 do not infer lifecycle ownership.
 
-See also: [docs/specs/ccs-format-v2.md](/docs/specs/ccs-format-v2.md),
+See also: [docs/specs/ccs-format-v3.md](/docs/specs/ccs-format-v3.md),
 [docs/specs/source-package-authority.md](/docs/specs/source-package-authority.md),
 [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

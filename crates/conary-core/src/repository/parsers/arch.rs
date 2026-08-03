@@ -218,7 +218,7 @@ impl ArchParser {
         )];
 
         if let Some(prov_list) = desc_fields.get("PROVIDES") {
-            for prov in prov_list {
+            for (record_index, prov) in prov_list.iter().enumerate() {
                 let parsed = parse_arch_provide(prov, name).map_err(|error| {
                     Error::ParseError(format!("invalid Arch %PROVIDES% entry '{prov}': {error}"))
                 })?;
@@ -233,6 +233,15 @@ impl ArchParser {
                     architecture_qualifier:
                         crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
                     native_text: Some(prov.clone()),
+                    provenance:
+                        crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                            format: crate::repository::dependency_model::SourcePackageFormat::Alpm,
+                            record_index: u32::try_from(record_index).map_err(|_| {
+                                Error::ParseError(
+                                    "Arch repository provide index exceeds u32".to_string(),
+                                )
+                            })?,
+                        },
                 });
             }
         }

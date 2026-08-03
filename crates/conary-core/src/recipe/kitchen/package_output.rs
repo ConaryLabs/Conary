@@ -96,7 +96,7 @@ impl Cook<'_> {
             .key_pair();
         write_signed_current_ccs_package(&build_result, &package_path, signing_key, false)
             .map_err(|error| {
-                Error::IoError(format!("Failed to write signed CCS v2 package: {error}"))
+                Error::IoError(format!("Failed to write signed CCS v3 package: {error}"))
             })?;
         verify_package(
             &package_path,
@@ -104,7 +104,7 @@ impl Cook<'_> {
         )
         .map_err(|error| {
             Error::IoError(format!(
-                "Failed to verify newly cooked CCS v2 package {}: {error}",
+                "Failed to verify newly cooked CCS v3 package {}: {error}",
                 package_path.display()
             ))
         })?;

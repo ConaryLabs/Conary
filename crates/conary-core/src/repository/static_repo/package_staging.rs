@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::ccs::package::CcsPackage;
 use crate::ccs::signing::SigningKeyPair;
-use crate::ccs::v2::schema::{DependencyKindV2, ProvidedCapabilityV2};
+use crate::ccs::v3::schema::{DependencyKindV3, ProvidedCapabilityV3};
 use crate::ccs::verify::{TrustPolicy, verify_package};
 use crate::hash;
 use crate::packages::traits::PackageFormat;
@@ -22,14 +22,6 @@ use crate::repository::static_repo::{StaticPackageEntry, validate_repo_relative_
 
 const ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 1024;
 static ATOMIC_WRITE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-type ProvideIdentity = (
-    RepositoryCapabilityKind,
-    String,
-    Option<String>,
-    Option<crate::repository::dependency_model::ProvideVersionRelation>,
-    ProvideArchitectureQualifier,
-);
 
 #[derive(Default)]
 pub(crate) struct PendingPackageWrites {
@@ -170,9 +162,9 @@ fn resign_current_package_bytes(
     verified: &crate::ccs::verify::VerifiedCcsArchive,
     publish_key: &SigningKeyPair,
 ) -> Result<Vec<u8>> {
-    use crate::ccs::v2::schema::PackageKindV2;
+    use crate::ccs::v3::schema::PackageKindV3;
 
-    let PackageKindV2::Package(_) = &verified.authority().kind else {
+    let PackageKindV3::Package(_) = &verified.authority().kind else {
         bail!("static repository publication only stages CCS package payloads");
     };
 
@@ -182,7 +174,7 @@ fn resign_current_package_bytes(
         .map(std::str::from_utf8)
         .transpose()
         .context("decode verified CCS debug projection as UTF-8")?;
-    crate::ccs::builder::write_v2_ccs_package_from_sources(
+    crate::ccs::builder::write_v3_ccs_package_from_sources(
         verified.authority(),
         package.payload().files(),
         output.path(),
@@ -287,112 +279,37 @@ fn static_provides(package: &CcsPackage) -> Result<Vec<RepositoryProvide>> {
         Some(package.version().to_string()),
         Some(crate::repository::dependency_model::ProvideVersionRelation::Equal),
         ProvideArchitectureQualifier::Implicit,
+        crate::repository::dependency_model::CapabilityProvenance::ExactIdentity,
     )]);
 
-    if let Some(authority) = package.v2_authority() {
-        for provide in &authority.provides {
-            let provide = project_v2_provide(provide)?;
-            let key = (
-                provide.kind,
-                provide.name.clone(),
-                provide.version.clone(),
-                provide.version_relation,
-                provide.architecture_qualifier.clone(),
-            );
-            if seen.insert(key) {
-                provides.push(provide);
-            }
+    let authority = package
+        .v3_authority()
+        .ok_or_else(|| anyhow!("verified CCS package is missing current v3 authority"))?;
+    for provide in &authority.provided_capabilities {
+        let provide = project_v3_provide(provide)?;
+        let key = (
+            provide.kind,
+            provide.name.clone(),
+            provide.version.clone(),
+            provide.version_relation,
+            provide.architecture_qualifier.clone(),
+            provide.provenance.clone(),
+        );
+        if seen.insert(key) {
+            provides.push(provide);
         }
-        return Ok(provides);
-    }
-
-    let manifest = package.manifest();
-    for capability in &manifest.provides.capabilities {
-        if capability != package.name() {
-            push_provide(
-                &mut provides,
-                &mut seen,
-                RepositoryProvide {
-                    name: capability.clone(),
-                    kind: RepositoryCapabilityKind::Generic,
-                    version: None,
-                    version_relation: None,
-                    architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-                    native_text: Some(capability.clone()),
-                },
-            );
-        }
-    }
-    for soname in &manifest.provides.sonames {
-        push_provide(
-            &mut provides,
-            &mut seen,
-            RepositoryProvide {
-                name: format!("soname({soname})"),
-                kind: RepositoryCapabilityKind::Soname,
-                version: None,
-                version_relation: None,
-                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-                native_text: Some(soname.clone()),
-            },
-        );
-    }
-    for binary in &manifest.provides.binaries {
-        push_provide(
-            &mut provides,
-            &mut seen,
-            RepositoryProvide {
-                name: format!("binary({binary})"),
-                kind: RepositoryCapabilityKind::Generic,
-                version: None,
-                version_relation: None,
-                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-                native_text: Some(binary.clone()),
-            },
-        );
-    }
-    for pkgconfig in &manifest.provides.pkgconfig {
-        push_provide(
-            &mut provides,
-            &mut seen,
-            RepositoryProvide {
-                name: format!("pkgconfig({pkgconfig})"),
-                kind: RepositoryCapabilityKind::Generic,
-                version: None,
-                version_relation: None,
-                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-                native_text: Some(pkgconfig.clone()),
-            },
-        );
     }
     Ok(provides)
 }
 
-fn push_provide(
-    provides: &mut Vec<RepositoryProvide>,
-    seen: &mut std::collections::HashSet<ProvideIdentity>,
-    provide: RepositoryProvide,
-) {
-    let key = (
-        provide.kind,
-        provide.name.clone(),
-        provide.version.clone(),
-        provide.version_relation,
-        provide.architecture_qualifier.clone(),
-    );
-    if seen.insert(key) {
-        provides.push(provide);
-    }
-}
-
-fn project_v2_provide(entry: &ProvidedCapabilityV2) -> Result<RepositoryProvide> {
+fn project_v3_provide(entry: &ProvidedCapabilityV3) -> Result<RepositoryProvide> {
     if entry.target.is_some() || entry.component.is_some() {
         bail!(
-            "CCS v2 provide '{}' has target/component selectors that the static index contract cannot represent",
+            "CCS v3 provide '{}' has target/component selectors that the static index contract cannot represent",
             entry.name
         );
     }
-    let kind = project_v2_capability(entry.kind);
+    let kind = project_v3_capability(entry.kind);
     Ok(RepositoryProvide {
         name: entry.name.clone(),
         kind,
@@ -400,6 +317,7 @@ fn project_v2_provide(entry: &ProvidedCapabilityV2) -> Result<RepositoryProvide>
         version_relation: entry.version_relation,
         architecture_qualifier: entry.architecture_qualifier.clone(),
         native_text: Some(entry.name.clone()),
+        provenance: entry.provenance.clone(),
     })
 }
 
@@ -415,15 +333,15 @@ fn static_requirements(package: &CcsPackage) -> Result<Vec<RepositoryRequirement
     Ok(requirements)
 }
 
-const fn project_v2_capability(kind: DependencyKindV2) -> RepositoryCapabilityKind {
+const fn project_v3_capability(kind: DependencyKindV3) -> RepositoryCapabilityKind {
     match kind {
-        DependencyKindV2::Package => RepositoryCapabilityKind::PackageName,
-        DependencyKindV2::Capability => RepositoryCapabilityKind::Virtual,
-        DependencyKindV2::File => RepositoryCapabilityKind::File,
-        DependencyKindV2::Path => RepositoryCapabilityKind::Path,
-        DependencyKindV2::Binary => RepositoryCapabilityKind::Binary,
-        DependencyKindV2::Soname => RepositoryCapabilityKind::Soname,
-        DependencyKindV2::PkgConfig => RepositoryCapabilityKind::PkgConfig,
+        DependencyKindV3::Package => RepositoryCapabilityKind::PackageName,
+        DependencyKindV3::Capability => RepositoryCapabilityKind::Virtual,
+        DependencyKindV3::File => RepositoryCapabilityKind::File,
+        DependencyKindV3::Path => RepositoryCapabilityKind::Path,
+        DependencyKindV3::Binary => RepositoryCapabilityKind::Binary,
+        DependencyKindV3::Soname => RepositoryCapabilityKind::Soname,
+        DependencyKindV3::PkgConfig => RepositoryCapabilityKind::PkgConfig,
     }
 }
 
@@ -476,14 +394,15 @@ fn write_atomic_temp_file(path: &Path, file: &mut File, bytes: &[u8]) -> Result<
 mod tests {
     use super::*;
 
-    fn dependency(kind: DependencyKindV2, name: &str) -> ProvidedCapabilityV2 {
-        ProvidedCapabilityV2 {
+    fn dependency(kind: DependencyKindV3, name: &str) -> ProvidedCapabilityV3 {
+        ProvidedCapabilityV3 {
             kind,
             name: name.to_string(),
             provider_version: None,
             version_relation: None,
             version_scheme: crate::repository::versioning::VersionScheme::Conary,
             architecture_qualifier: Default::default(),
+            provenance: crate::repository::dependency_model::CapabilityProvenance::AuthorDeclared,
             target: None,
             component: None,
         }
@@ -506,13 +425,13 @@ mod tests {
     }
 
     #[test]
-    fn v2_static_projection_uses_declared_kinds_not_name_shape() {
+    fn v3_static_projection_uses_declared_kinds_not_name_shape() {
         let mut authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("typed-static");
-        authority.provides = vec![
-            dependency(DependencyKindV2::Capability, "/looks/like/a/path.so"),
-            dependency(DependencyKindV2::Soname, "libtyped.so.1"),
-            dependency(DependencyKindV2::File, "/usr/lib/libtyped.so"),
+            crate::ccs::v3::test_support::package_authority_with_one_file("typed-static");
+        authority.provided_capabilities = vec![
+            dependency(DependencyKindV3::Capability, "/looks/like/a/path.so"),
+            dependency(DependencyKindV3::Soname, "libtyped.so.1"),
+            dependency(DependencyKindV3::File, "/usr/lib/libtyped.so"),
         ];
         authority.requirements = vec![
             requirement(
@@ -521,7 +440,7 @@ mod tests {
             ),
             requirement("binary(sh)", RepositoryCapabilityKind::Generic),
         ];
-        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+        let package = CcsPackage::from_v3_authority_for_tests(authority, None, None).unwrap();
 
         let provides = static_provides(&package).unwrap();
         assert!(provides.iter().any(|provide| {
@@ -549,9 +468,59 @@ mod tests {
     }
 
     #[test]
-    fn static_projection_preserves_exact_v2_requirement_constraints() {
+    fn static_projection_keeps_identity_and_same_name_source_capability() {
         let mut authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("targeted-static");
+            crate::ccs::v3::test_support::package_authority_with_one_file("aspnet-runtime");
+        authority.identity.version = "10.0.10.sdk110-1".to_string();
+        authority.identity.version_scheme = crate::repository::versioning::VersionScheme::Arch;
+        authority.provided_capabilities = vec![ProvidedCapabilityV3 {
+            kind: DependencyKindV3::Package,
+            name: "aspnet-runtime".to_string(),
+            provider_version: Some("10.0".to_string()),
+            version_relation: Some(
+                crate::repository::dependency_model::ProvideVersionRelation::Equal,
+            ),
+            version_scheme: crate::repository::versioning::VersionScheme::Arch,
+            architecture_qualifier: Default::default(),
+            provenance: crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                format: crate::repository::dependency_model::SourcePackageFormat::Alpm,
+                record_index: 0,
+            },
+            target: None,
+            component: None,
+        }];
+        let package = CcsPackage::from_v3_authority_for_tests(authority, None, None).unwrap();
+
+        let provides = static_provides(&package).unwrap();
+
+        assert_eq!(provides.len(), 2);
+        assert_eq!(
+            provides
+                .iter()
+                .filter(|provide| {
+                    provide.provenance
+                        == crate::repository::dependency_model::CapabilityProvenance::ExactIdentity
+                })
+                .count(),
+            1
+        );
+        assert!(provides.iter().any(|provide| {
+            provide.name == "aspnet-runtime"
+                && provide.version.as_deref() == Some("10.0")
+                && matches!(
+                    provide.provenance,
+                    crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                        format: crate::repository::dependency_model::SourcePackageFormat::Alpm,
+                        record_index: 0,
+                    }
+                )
+        }));
+    }
+
+    #[test]
+    fn static_projection_preserves_exact_v3_requirement_constraints() {
+        let mut authority =
+            crate::ccs::v3::test_support::package_authority_with_one_file("targeted-static");
         let mut requirement = requirement("target-runtime", RepositoryCapabilityKind::PackageName);
         requirement.alternatives[0].version_constraint = Some(">= 2.0.0".to_string());
         requirement.expression =
@@ -559,7 +528,7 @@ mod tests {
                 requirement.alternatives[0].clone(),
             );
         authority.requirements.push(requirement);
-        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+        let package = CcsPackage::from_v3_authority_for_tests(authority, None, None).unwrap();
 
         let requirements = static_requirements(&package).unwrap();
         assert_eq!(
@@ -573,9 +542,9 @@ mod tests {
     #[test]
     fn static_publication_rejects_missing_architecture_instead_of_inventing_noarch() {
         let mut authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("missing-arch");
+            crate::ccs::v3::test_support::package_authority_with_one_file("missing-arch");
         authority.identity.architecture = None;
-        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+        let package = CcsPackage::from_v3_authority_for_tests(authority, None, None).unwrap();
 
         let error = package_relative_path(&package).unwrap_err().to_string();
 
@@ -586,9 +555,9 @@ mod tests {
     #[test]
     fn static_publication_uses_the_exact_signed_release_identity() {
         let mut authority =
-            crate::ccs::v2::test_support::package_authority_with_one_file("exact-release");
+            crate::ccs::v3::test_support::package_authority_with_one_file("exact-release");
         authority.identity.release = "7".to_string();
-        let package = CcsPackage::from_v2_authority_for_tests(authority, None, None).unwrap();
+        let package = CcsPackage::from_v3_authority_for_tests(authority, None, None).unwrap();
 
         assert_eq!(
             package_relative_path(&package).unwrap(),

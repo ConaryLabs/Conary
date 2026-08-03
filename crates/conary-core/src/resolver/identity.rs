@@ -8,21 +8,10 @@
 //! repositories, and canonical_packages.
 
 use crate::error::Result;
-use crate::repository::dependency_model::{
-    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
-};
+use crate::repository::dependency_model::DebianMultiArch;
+pub use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, params};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvidedCapability {
-    pub kind: RepositoryCapabilityKind,
-    pub name: String,
-    pub version: Option<String>,
-    pub version_relation: Option<ProvideVersionRelation>,
-    pub version_scheme: VersionScheme,
-    pub architecture_qualifier: ProvideArchitectureQualifier,
-}
 
 /// Full package identity for resolution, replacing ConaryPackage and ResolverCandidate.
 #[derive(Debug, Clone)]

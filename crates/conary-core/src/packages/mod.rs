@@ -22,6 +22,7 @@ pub mod query_common;
 pub mod registry;
 pub mod rpm;
 pub mod rpm_query;
+pub mod source_authority;
 pub mod traits;
 
 pub use common::PackageMetadata;

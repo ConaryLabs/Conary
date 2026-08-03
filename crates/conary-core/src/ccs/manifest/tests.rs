@@ -200,7 +200,7 @@ description = "hello"
     assert_eq!(manifest.package.release, "1");
     assert_eq!(
         manifest.package.kind,
-        crate::ccs::v2::PackageKindTagV2::Package
+        crate::ccs::v3::PackageKindTagV3::Package
     );
 
     let missing_release = CcsManifest::parse(

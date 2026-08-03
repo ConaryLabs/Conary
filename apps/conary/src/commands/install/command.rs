@@ -203,6 +203,7 @@ async fn cmd_install_with_intent(
         format,
         policy.primary_profile(),
     )?;
+    let resolution_capabilities = pkg.resolution_capabilities()?;
     let native_transaction = PreparedNativeTransaction::prepare_install(
         &conn,
         NativeInstallInput {
@@ -210,7 +211,7 @@ async fn cmd_install_with_intent(
             package_version: pkg.version(),
             package_arch: pkg.architecture(),
             version_scheme: semantics.version_scheme,
-            provides: pkg.provides(),
+            provides: &resolution_capabilities,
             new_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
             old_trove: old_trove_to_upgrade.as_deref(),
             relation_removals: &relation_plan.removals,

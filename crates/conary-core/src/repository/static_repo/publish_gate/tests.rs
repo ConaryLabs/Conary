@@ -3,7 +3,7 @@
 use super::*;
 use crate::ccs::attestation::{
     BUILD_ATTESTATION_SCHEMA_V1, BuildAttestationPayload, FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
-    ForeignConversionBoundary, canonical_json_hash, compute_build_output_identity_from_v2,
+    ForeignConversionBoundary, canonical_json_hash, compute_build_output_identity_from_v3,
     sign_build_attestation,
 };
 use crate::ccs::builder::{BuildResult, write_signed_current_ccs_package};
@@ -104,18 +104,18 @@ fn artifact_gate_accepts_attested_hermetic_package() {
 }
 
 #[test]
-fn artifact_gate_accepts_attested_v2_package() {
+fn artifact_gate_accepts_attested_v3_package() {
     let signer = SigningKeyPair::generate().with_key_id("publish");
     let temp = tempfile::tempdir().unwrap();
-    let package_path = temp.path().join("attested-v2.ccs");
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("attested-v2");
-    let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    let envelope = crate::ccs::attestation::test_support::sample_v2_envelope_for_tests(
+    let package_path = temp.path().join("attested-v3.ccs");
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("attested-v3");
+    let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
+    let envelope = crate::ccs::attestation::test_support::sample_v3_envelope_for_tests(
         &authority,
         &signer,
         STATIC_PUBLISH_POLICY_DIGEST_V1,
     );
-    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+    crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -140,11 +140,11 @@ fn artifact_gate_accepts_attested_v2_package() {
 fn artifact_gate_does_not_require_command_risk_diagnostics() {
     let signer = SigningKeyPair::generate().with_key_id("publish");
     let temp = tempfile::tempdir().unwrap();
-    let package_path = temp.path().join("attested-v2-no-command-diagnostics.ccs");
+    let package_path = temp.path().join("attested-v3-no-command-diagnostics.ccs");
     let authority =
-        crate::ccs::v2::test_support::package_authority_with_one_file("no-command-diagnostics");
-    let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    let mut envelope = crate::ccs::attestation::test_support::sample_v2_envelope_for_tests(
+        crate::ccs::v3::test_support::package_authority_with_one_file("no-command-diagnostics");
+    let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
+    let mut envelope = crate::ccs::attestation::test_support::sample_v3_envelope_for_tests(
         &authority,
         &signer,
         STATIC_PUBLISH_POLICY_DIGEST_V1,
@@ -152,7 +152,7 @@ fn artifact_gate_does_not_require_command_risk_diagnostics() {
     envelope.payload.build_command_risk_report_hash.clear();
     envelope.payload.command_risk_classifier_version.clear();
     let envelope = sign_build_attestation(envelope.payload, &signer).unwrap();
-    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+    crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -178,18 +178,18 @@ fn artifact_gate_does_not_require_command_risk_diagnostics() {
 }
 
 #[test]
-fn artifact_gate_candidate_returns_verified_v2_package_for_native_intake() {
+fn artifact_gate_candidate_returns_verified_v3_package_for_native_intake() {
     let signer = SigningKeyPair::generate().with_key_id("publish");
     let temp = tempfile::tempdir().unwrap();
-    let package_path = temp.path().join("candidate-v2.ccs");
-    let authority = crate::ccs::v2::test_support::package_authority_with_one_file("candidate-v2");
-    let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    let envelope = crate::ccs::attestation::test_support::sample_v2_envelope_for_tests(
+    let package_path = temp.path().join("candidate-v3.ccs");
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("candidate-v3");
+    let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
+    let envelope = crate::ccs::attestation::test_support::sample_v3_envelope_for_tests(
         &authority,
         &signer,
         STATIC_PUBLISH_POLICY_DIGEST_V1,
     );
-    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+    crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -208,8 +208,8 @@ fn artifact_gate_candidate_returns_verified_v2_package_for_native_intake() {
     .unwrap();
 
     assert!(candidate.lint.is_passed(), "{:?}", candidate.lint);
-    let verified_authority = candidate.package.v2_authority().unwrap();
-    assert_eq!(verified_authority.identity.name, "candidate-v2");
+    let verified_authority = candidate.package.v3_authority().unwrap();
+    assert_eq!(verified_authority.identity.name, "candidate-v3");
     assert_eq!(verified_authority.identity.release, "1");
     assert_eq!(
         verified_authority.identity.architecture.as_deref(),
@@ -218,14 +218,14 @@ fn artifact_gate_candidate_returns_verified_v2_package_for_native_intake() {
 }
 
 #[test]
-fn artifact_gate_rejects_local_dev_v2_package() {
+fn artifact_gate_rejects_local_dev_v3_package() {
     let signer = SigningKeyPair::generate().with_key_id("local-dev");
     let temp = tempfile::tempdir().unwrap();
-    let package_path = temp.path().join("local-dev-v2.ccs");
-    let mut authority = crate::ccs::v2::test_support::package_authority_with_one_file("local-dev");
+    let package_path = temp.path().join("local-dev-v3.ccs");
+    let mut authority = crate::ccs::v3::test_support::package_authority_with_one_file("local-dev");
     authority.provenance.hardening_level = Some("host".to_string());
-    let payloads = crate::ccs::v2::test_support::one_file_payloads_for_tests();
-    crate::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests(
+    let payloads = crate::ccs::v3::test_support::one_file_payloads_for_tests();
+    crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         &package_path,
@@ -541,13 +541,13 @@ fn failure_text_for_artifact(
 }
 
 fn output_identity_for_build_result(result: &BuildResult) -> BuildOutputIdentity {
-    let projected = crate::ccs::v2::project_build_result_to_v2(crate::ccs::v2::V2AuthoringInput {
+    let projected = crate::ccs::v3::project_build_result_to_v3(crate::ccs::v3::V3AuthoringInput {
         build: result,
         local_dev: false,
         debug_toml: None,
     })
     .unwrap();
-    compute_build_output_identity_from_v2(&projected.authority).unwrap()
+    compute_build_output_identity_from_v3(&projected.authority).unwrap()
 }
 
 fn current_build_result_for_tests(name: &str, version: &str) -> BuildResult {

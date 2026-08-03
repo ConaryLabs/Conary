@@ -159,13 +159,14 @@ pub(super) fn persist_package_provides(
     trove_id: i64,
     package: &dyn PackageFormat,
 ) -> Result<()> {
+    let provides = package.resolution_capabilities()?;
     persist_declared_provides(
         tx,
         trove_id,
         package.name(),
         package.version(),
         package.version_scheme(),
-        package.provides(),
+        &provides,
     )
 }
 
@@ -175,7 +176,7 @@ pub(super) fn persist_declared_provides(
     package_name: &str,
     package_version: &str,
     package_scheme: conary_core::repository::versioning::VersionScheme,
-    provides: &[conary_core::packages::traits::ProvidedCapability],
+    provides: &[conary_core::repository::dependency_model::ProvidedCapability],
 ) -> Result<()> {
     let exact_self = provides
         .iter()
@@ -183,13 +184,19 @@ pub(super) fn persist_declared_provides(
             provide.kind == RepositoryCapabilityKind::PackageName
                 && provide.name == package_name
                 && provide.version.as_deref() == Some(package_version)
+                && provide.version_relation
+                    == Some(
+                        conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+                    )
                 && provide.version_scheme == package_scheme
                 && provide.architecture_qualifier == ProvideArchitectureQualifier::Implicit
+                && provide.provenance
+                    == conary_core::repository::dependency_model::CapabilityProvenance::ExactIdentity
         })
         .count();
     if exact_self != 1 {
         anyhow::bail!(
-            "package '{}-{}' must declare exactly one exact package self-provider",
+            "package '{}-{}' must declare exactly one exact package self-provider; found {exact_self}",
             package_name,
             package_version
         );

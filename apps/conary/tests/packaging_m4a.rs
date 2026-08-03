@@ -2,19 +2,15 @@
 
 mod common;
 
-use conary_core::ccs::builder::write_v2_ccs_package_from_bounded_memory_for_tests;
+use conary_core::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use conary_core::ccs::signing::SigningKeyPair;
-use conary_core::ccs::v2::schema::{
-    AuthorityDocumentV2, ComponentAuthorityV2, ConflictPolicyV2, DependencyKindV2,
-    FORMAT_VERSION_V2, FileAuthorityV2, LifecycleAuthorityV2, PackageDataV2, PackageIdentityV2,
-    PackageKindTagV2, PackageKindV2, ProvenanceAuthorityV2, ProvidedCapabilityV2,
+use conary_core::ccs::v3::schema::{
+    AuthorityDocumentV3, ComponentAuthorityV3, ConflictPolicyV3, FORMAT_VERSION_V3,
+    FileAuthorityV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3, PackageKindTagV3,
+    PackageKindV3, ProvenanceAuthorityV3,
 };
 use conary_core::ccs::verify::{TrustPolicy, verify_package};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode};
-use conary_core::repository::dependency_model::{
-    ProvideArchitectureQualifier, ProvideVersionRelation,
-};
-use conary_core::repository::versioning::VersionScheme;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::BTreeMap;
@@ -24,10 +20,10 @@ use std::process::{Command, Output};
 use tar::Builder;
 
 #[test]
-fn v2_package_verification_rejects_unsigned_manifest() {
+fn v3_package_verification_rejects_unsigned_manifest() {
     let temp = tempfile::tempdir().unwrap();
-    let package_path = temp.path().join("unsigned-v2.ccs");
-    write_unsigned_v2_package(&package_path);
+    let package_path = temp.path().join("unsigned-v3.ccs");
+    write_unsigned_v3_package(&package_path);
 
     let trusted = SigningKeyPair::generate();
     let error = verify_package(
@@ -38,18 +34,18 @@ fn v2_package_verification_rejects_unsigned_manifest() {
     let message = format!("{error:#}");
     assert!(
         message.contains("MANIFEST.sig") || message.contains("not signed"),
-        "unexpected unsigned v2 verification error: {message}"
+        "unexpected unsigned v3 verification error: {message}"
     );
 }
 
 #[test]
 fn install_rejects_removed_allow_unsigned_flag() {
     let temp = tempfile::tempdir().unwrap();
-    let package_path = temp.path().join("unsigned-v2.ccs");
+    let package_path = temp.path().join("unsigned-v3.ccs");
     let db_path = temp.path().join("conary.db");
     let root = temp.path().join("root");
     fs::create_dir_all(&root).unwrap();
-    write_unsigned_v2_package(&package_path);
+    write_unsigned_v3_package(&package_path);
 
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .arg("ccs")
@@ -70,15 +66,15 @@ fn install_rejects_removed_allow_unsigned_flag() {
 }
 
 #[test]
-fn v2_install_uses_verified_parse_after_signature_check() {
+fn v3_install_uses_verified_parse_after_signature_check() {
     let work = tempfile::tempdir().unwrap();
-    let package_path = work.path().join("signed-v2.ccs");
+    let package_path = work.path().join("signed-v3.ccs");
     let policy_path = work.path().join("trust-policy.toml");
     let root = work.path().join("root");
     let (_db_temp, db_path) = common::setup_command_test_db();
     fs::create_dir_all(&root).unwrap();
     let signer = SigningKeyPair::generate().with_key_id("publish");
-    write_signed_v2_package(&package_path, &signer);
+    write_signed_v3_package(&package_path, &signer);
     fs::write(
         &policy_path,
         format!(
@@ -106,18 +102,18 @@ fn v2_install_uses_verified_parse_after_signature_check() {
         .expect("run conary ccs install");
 
     assert_success(&output);
-    assert_stdout_contains(&output, "Package: signed-v2 v1.0.0");
+    assert_stdout_contains(&output, "Package: signed-v3 v1.0.0");
 }
 
-fn write_unsigned_v2_package(package_path: &Path) {
-    let authority = unsigned_v2_authority();
-    write_raw_v2_manifest_only(package_path, &authority);
+fn write_unsigned_v3_package(package_path: &Path) {
+    let authority = unsigned_v3_authority();
+    write_raw_v3_manifest_only(package_path, &authority);
 }
 
-fn write_signed_v2_package(package_path: &Path, signer: &SigningKeyPair) {
-    let authority = signed_v2_authority();
+fn write_signed_v3_package(package_path: &Path, signer: &SigningKeyPair) {
+    let authority = signed_v3_authority();
     let payloads = BTreeMap::from([("/usr/bin/hello".to_string(), b"hello world\n".to_vec())]);
-    write_v2_ccs_package_from_bounded_memory_for_tests(
+    write_v3_ccs_package_from_bounded_memory_for_tests(
         &authority,
         &payloads,
         package_path,
@@ -129,16 +125,16 @@ fn write_signed_v2_package(package_path: &Path, signer: &SigningKeyPair) {
     .unwrap();
 }
 
-fn unsigned_v2_authority() -> AuthorityDocumentV2 {
-    v2_authority("unsigned-v2")
+fn unsigned_v3_authority() -> AuthorityDocumentV3 {
+    v3_authority("unsigned-v3")
 }
 
-fn signed_v2_authority() -> AuthorityDocumentV2 {
-    v2_authority("signed-v2")
+fn signed_v3_authority() -> AuthorityDocumentV3 {
+    v3_authority("signed-v3")
 }
 
-fn v2_authority(name: &str) -> AuthorityDocumentV2 {
-    let file = FileAuthorityV2 {
+fn v3_authority(name: &str) -> AuthorityDocumentV3 {
+    let file = FileAuthorityV3 {
         path: "/usr/bin/hello".to_string(),
         node: PayloadNode::regular(0o755),
         content: Some(PayloadContentAuthority {
@@ -147,11 +143,11 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
         }),
         component: "main".to_string(),
         config: None,
-        conflict: ConflictPolicyV2::Error,
+        conflict: ConflictPolicyV3::Error,
     };
-    AuthorityDocumentV2 {
-        format_version: FORMAT_VERSION_V2,
-        identity: PackageIdentityV2 {
+    AuthorityDocumentV3 {
+        format_version: FORMAT_VERSION_V3,
+        identity: PackageIdentityV3 {
             name: name.to_string(),
             version: "1.0.0".to_string(),
             version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
@@ -159,38 +155,29 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
             architecture: Some(std::env::consts::ARCH.to_string()),
             debian_multi_arch: None,
             platform: Some("linux".to_string()),
-            kind: PackageKindTagV2::Package,
+            kind: PackageKindTagV3::Package,
         },
-        kind: PackageKindV2::Package(PackageDataV2 {
+        kind: PackageKindV3::Package(PackageDataV3 {
             files: vec![file],
             config: Vec::new(),
             policy: Default::default(),
         }),
-        provides: vec![ProvidedCapabilityV2 {
-            kind: DependencyKindV2::Package,
-            name: name.to_string(),
-            provider_version: Some("1.0.0".to_string()),
-            version_relation: Some(ProvideVersionRelation::Equal),
-            version_scheme: VersionScheme::Conary,
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            target: None,
-            component: None,
-        }],
+        provided_capabilities: Vec::new(),
         requirements: Vec::new(),
         relations: Vec::new(),
-        capabilities: None,
+        execution_capabilities: None,
         file_capabilities: Vec::new(),
         components: BTreeMap::from([(
             "main".to_string(),
-            ComponentAuthorityV2 {
+            ComponentAuthorityV3 {
                 name: "main".to_string(),
                 default: true,
                 file_count: 1,
                 total_size: 12,
             },
         )]),
-        lifecycle: LifecycleAuthorityV2::default(),
-        provenance: ProvenanceAuthorityV2 {
+        lifecycle: LifecycleAuthorityV3::default(),
+        provenance: ProvenanceAuthorityV3 {
             origin_class: Some("native-built".to_string()),
             hardening_level: Some("hermetic".to_string()),
             build_input_identity: Some("sha256:build-input".to_string()),
@@ -201,7 +188,7 @@ fn v2_authority(name: &str) -> AuthorityDocumentV2 {
     }
 }
 
-fn write_raw_v2_manifest_only(package_path: &Path, authority: &AuthorityDocumentV2) {
+fn write_raw_v3_manifest_only(package_path: &Path, authority: &AuthorityDocumentV3) {
     let manifest_cbor = authority.to_cbor().unwrap();
     let output = fs::File::create(package_path).unwrap();
     let encoder = GzEncoder::new(output, Compression::default());

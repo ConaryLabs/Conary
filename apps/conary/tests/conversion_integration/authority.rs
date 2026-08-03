@@ -3,6 +3,106 @@
 use super::*;
 
 #[test]
+#[ignore = "requires CONARY_ISSUE_104_FIXTURE_DIR with the two pinned official Arch artifacts"]
+fn pinned_arch_same_name_provides_convert_verify_reopen_and_resolve() {
+    use conary_core::packages::arch::ArchPackage;
+    use conary_core::repository::dependency_model::{
+        CapabilityProvenance, ProvideVersionRelation, RepositoryCapabilityKind, SourcePackageFormat,
+    };
+
+    const FIXTURES: [(&str, &str, &str); 2] = [
+        (
+            "aspnet-runtime-10.0.10.sdk110-1-x86_64.pkg.tar.zst",
+            "d3983ae27b3e6e470bc33fd060a29c2e9a4a0c5a363ea76a07dd4ce300709c9c",
+            "aspnet-runtime",
+        ),
+        (
+            "aspnet-targeting-pack-10.0.10.sdk110-1-x86_64.pkg.tar.zst",
+            "c4f557ea81af86713971cd20b193fbd4282fdbd30874973d9bd9ae0bfe15bc86",
+            "aspnet-targeting-pack",
+        ),
+    ];
+
+    let fixture_dir = PathBuf::from(
+        std::env::var_os("CONARY_ISSUE_104_FIXTURE_DIR")
+            .expect("CONARY_ISSUE_104_FIXTURE_DIR must name the pinned fixture directory"),
+    );
+    for (filename, expected_sha256, expected_name) in FIXTURES {
+        let fixture = fixture_dir.join(filename);
+        let bytes = std::fs::read(&fixture).expect("read pinned Arch artifact");
+        assert_eq!(conary_core::hash::sha256(&bytes), expected_sha256);
+
+        let package = ArchPackage::parse(fixture.to_str().expect("fixture path is UTF-8"))
+            .expect("parse pinned Arch artifact");
+        let metadata = PackageMetadata::from_package(fixture, &package)
+            .expect("project source-package authority");
+        let payload = package.package_payload().expect("open Arch payload");
+        let source_hash =
+            conary_core::hash::Hash::parse_prefixed(&format!("sha256:{expected_sha256}"))
+                .expect("valid pinned fixture hash");
+        let output = TempDir::new().expect("converter output");
+        let converter = signed_test_converter(ConversionOptions {
+            output_dir: output.path().to_path_buf(),
+        });
+        let result = converter
+            .convert_payload(&metadata, payload.files(), "arch", &source_hash)
+            .expect("convert and sign pinned Arch artifact");
+        let converted = parse_converted_package(&result);
+        let authority = converted.v3_authority().expect("signed CCS v3 authority");
+
+        assert_eq!(authority.identity.name, expected_name);
+        assert_eq!(authority.identity.version, "10.0.10.sdk110-1");
+        assert_eq!(authority.identity.version_scheme, VersionScheme::Arch);
+        assert_eq!(authority.identity.architecture.as_deref(), Some("x86_64"));
+        let same_name = authority
+            .provided_capabilities
+            .iter()
+            .find(|capability| {
+                capability.kind == conary_core::ccs::v3::schema::DependencyKindV3::Package
+                    && capability.name == expected_name
+                    && capability.provider_version.as_deref() == Some("10.0")
+            })
+            .expect("signed same-name compatibility capability");
+        assert_eq!(
+            same_name.version_relation,
+            Some(ProvideVersionRelation::Equal)
+        );
+        assert!(matches!(
+            same_name.provenance,
+            CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Alpm,
+                ..
+            }
+        ));
+
+        let resolution = converted
+            .resolution_capabilities()
+            .expect("project verified resolution authority");
+        assert_eq!(
+            resolution
+                .iter()
+                .filter(|capability| capability.provenance == CapabilityProvenance::ExactIdentity)
+                .count(),
+            1
+        );
+        assert!(resolution.iter().any(|capability| {
+            capability.kind == RepositoryCapabilityKind::PackageName
+                && capability.name == expected_name
+                && capability.version.as_deref() == Some("10.0")
+                && capability.version_relation == Some(ProvideVersionRelation::Equal)
+                && capability.version_scheme == VersionScheme::Arch
+                && matches!(
+                    capability.provenance,
+                    CapabilityProvenance::SourceDeclared {
+                        format: SourcePackageFormat::Alpm,
+                        ..
+                    }
+                )
+        }));
+    }
+}
+
+#[test]
 fn golden_conversion_native_free_is_current_without_entries() {
     let temp_dir = TempDir::new().unwrap();
     let converter = passive_converter(temp_dir.path());
@@ -144,22 +244,7 @@ fn golden_conversion_preserves_pinned_rpm_hardlink_transaction_owner() {
 
     let package =
         RpmPackage::parse(fixture.to_str().expect("fixture path is utf-8")).expect("parse fixture");
-    let metadata = PackageMetadata {
-        package_path: fixture,
-        name: package.name().to_string(),
-        version: package.version().to_string(),
-        version_scheme: package.version_scheme(),
-        architecture: package.architecture().map(str::to_string),
-        debian_multi_arch: package.debian_multi_arch(),
-        description: package.description().map(str::to_string),
-        files: package.files().to_vec(),
-        requirements: package.requirements().to_vec(),
-        provides: package.provides().to_vec(),
-        relations: package.relations().to_vec(),
-        diagnostic_scriptlet_evidence: Vec::new(),
-        native_scriptlet_abi: package.native_scriptlet_abi().to_vec(),
-        config_files: package.config_files().to_vec(),
-    };
+    let metadata = PackageMetadata::from_package(fixture, &package).expect("project metadata");
     let payload = package
         .package_payload()
         .expect("open projected fixture payload");

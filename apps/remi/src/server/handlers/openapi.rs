@@ -144,7 +144,7 @@ pub async fn openapi_spec() -> Response {
                 "post": {
                     "operationId": "uploadReleasePackage",
                     "summary": "Upload an attested release package",
-                    "description": "Uploads a native CCS v2 release package after verifying the static publish gate with configured trusted build-attestation signers. Accepted uploads are stored as native_package_publications, projected into repository_packages, and never written as synthetic converted_packages rows. Public package metadata, CAS chunk visibility, and TUF targets are committed only after the gate passes. Error bodies include machine-readable codes such as UNSUPPORTED_DISTRO, UNSUPPORTED_CCS_FORMAT, INVALID_CCS, PACKAGE_SIGNATURE_FAILED, and PUBLISH_GATE_FAILED.",
+                    "description": "Uploads a native CCS v3 release package after verifying the static publish gate with configured trusted build-attestation signers. Accepted uploads are stored as native_package_publications, projected into repository_packages, and never written as synthetic converted_packages rows. Public package metadata, CAS chunk visibility, and TUF targets are committed only after the gate passes. Error bodies include machine-readable codes such as UNSUPPORTED_DISTRO, UNSUPPORTED_CCS_FORMAT, INVALID_CCS, PACKAGE_SIGNATURE_FAILED, and PUBLISH_GATE_FAILED.",
                     "tags": ["packages"],
                     "security": [{ "bearerAuth": [] }],
                     "parameters": [{ "name": "distro", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Distribution key for the release package" }],
@@ -153,7 +153,7 @@ pub async fn openapi_spec() -> Response {
                         "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } }
                     },
                     "responses": {
-                        "201": { "description": "Native CCS v2 release package accepted and published" },
+                        "201": { "description": "Native CCS v3 release package accepted and published" },
                         "400": { "description": "Invalid upload body or CCS package, including INVALID_CCS" },
                         "401": { "description": "Invalid or missing token" },
                         "403": { "description": "Insufficient scope" },

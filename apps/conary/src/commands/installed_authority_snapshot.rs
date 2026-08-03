@@ -17,7 +17,7 @@ use conary_core::payload::{
     PayloadContentAuthority, PayloadNodeKind, PayloadSharingPolicy, ResolvedPayloadNode,
 };
 use conary_core::repository::dependency_model::{
-    DebianMultiArch, ProvideVersionRelation, RepositoryRequirementGroup,
+    CapabilityProvenance, DebianMultiArch, ProvideVersionRelation, RepositoryRequirementGroup,
 };
 use conary_core::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
@@ -555,6 +555,7 @@ pub(crate) struct ProvideSnapshot {
     pub version_scheme: VersionScheme,
     pub architecture_qualifier:
         conary_core::repository::dependency_model::ProvideArchitectureQualifier,
+    pub provenance: CapabilityProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,0 +1,139 @@
+name: deploy-remi-candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact commit already merged into main to deploy.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-and-verify
+  cancel-in-progress: false
+
+jobs:
+  deploy-remi-candidate:
+    name: deploy-remi-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require an exact commit already merged into main
+        env:
+          CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || {
+            echo "checkout does not match requested candidate SHA" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main || {
+            echo "candidate must already be merged into origin/main" >&2
+            exit 1
+          }
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Build exact Remi candidate bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p remi --release --locked
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "remi") | .version')"
+          [[ -n "$version" && "$version" != "null" ]] || {
+            echo "failed to resolve Remi package version" >&2
+            exit 1
+          }
+          candidate="remi-${version}-linux-x64"
+          cp target/release/remi "$candidate"
+          tar czf "${candidate}.tar.gz" "$candidate"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "bundle=${candidate}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "binary_sha256=$(sha256sum "$candidate" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Deploy merged Remi candidate
+        env:
+          VERSION: ${{ steps.bundle.outputs.version }}
+          BUNDLE: ${{ steps.bundle.outputs.bundle }}
+          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+          REMI_MAX_CONCURRENT: 32
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${REMI_SSH_KEY:-}" ]] || {
+            echo "REMI_SSH_KEY is required" >&2
+            exit 1
+          }
+
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
+          mkdir -p ~/.ssh
+          trap 'rm -f ~/.ssh/remi_key' EXIT
+          echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
+          chmod 600 ~/.ssh/remi_key
+          ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
+
+          remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
+          remote_repositories="/tmp/remi-repositories-${GITHUB_RUN_ID}.toml"
+          remote_helper="/tmp/remi-deploy-helper-${GITHUB_RUN_ID}"
+          helper_sha="$(sha256sum deploy/remi-deploy-helper.sh | cut -d ' ' -f 1)"
+
+          ssh $ssh_opts "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          scp $ssh_opts deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
+          ssh $ssh_opts "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
+          scp $ssh_opts "$BUNDLE" "${target}:${remote_bundle}"
+          scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
+          ssh $ssh_opts "$target" bash -s \
+            "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
+            set -euo pipefail
+            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4"
+            for attempt in $(seq 1 120); do
+              if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi --require-repopulated; then
+                exit 0
+              fi
+              echo "Remi repopulation is still in progress (${attempt}/120)" >&2
+              sleep 30
+            done
+            sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi
+            echo "Remi did not repopulate source and conversion state within one hour" >&2
+            exit 1
+          REMOTE_EOF
+      - name: Verify public Remi readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS https://remi.conary.io/health >/dev/null
+          body="$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)"
+          echo "$body"
+          jq -e '.ready == true' <<<"$body" >/dev/null
+      - name: Record exact candidate evidence
+        env:
+          CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
+          VERSION: ${{ steps.bundle.outputs.version }}
+          BINARY_SHA256: ${{ steps.bundle.outputs.binary_sha256 }}
+        shell: bash
+        run: |
+          {
+            echo "### Merged Remi candidate deployment"
+            echo
+            echo "- commit: \`$CANDIDATE_SHA\`"
+            echo "- binary version: \`$VERSION\`"
+            echo "- binary SHA-256: \`$BINARY_SHA256\`"
+            echo "- release/tag created: no"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -30,14 +30,20 @@ mutate_ccs() {
     rm -rf "$tmpdir"
 }
 
-mutate_ccs_with_payload() {
+mutate_ccs_with_oversized_object() {
     local source_ccs="$1"
     local output_ccs="$2"
     local payload="$3"
-    local tmpdir
+    local tmpdir object
     tmpdir="$(mktemp -d)"
     tar -xzf "$source_ccs" -C "$tmpdir"
-    mutate_decompression_bomb "$tmpdir" "$payload"
+    object="$(find "$tmpdir/objects" -type f | head -1)"
+    if [ -z "$object" ]; then
+        echo "FATAL: CCS v3 fixture has no payload object" >&2
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    cp --sparse=always "$payload" "$object"
     mapfile -t archive_entries < <(find "$tmpdir" -type f -printf '%P\n' | sort)
     tar -czf "$output_ccs" -C "$tmpdir" "${archive_entries[@]}"
     rm -rf "$tmpdir"
@@ -52,34 +58,36 @@ make_executable() {
 
 mutate_path_traversal() {
     local root="$1"
-    python3 - "$root/components/runtime.json" <<'PY'
-import json
+    python3 - "$root/MANIFEST" <<'PY'
+from pathlib import Path
 import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-data["files"][0]["path"] = "../../etc/shadow"
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+old = b"\x64/usr"
+new_path = b"../../etc/shadow"
+new = bytes([0x60 + len(new_path)]) + new_path
+if old not in data:
+    raise SystemExit("CCS v3 MANIFEST has no /usr payload path")
+path.write_bytes(data.replace(old, new, 1))
 PY
 }
 
 mutate_symlink_attack() {
     local root="$1"
-    python3 - "$root/components/runtime.json" <<'PY'
-import json
+    python3 - "$root/MANIFEST" <<'PY'
+from pathlib import Path
 import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-for entry in data["files"]:
-    if entry.get("node", {}).get("kind", {}).get("type") == "regular":
-        entry["path"] = "/usr/share/passwd-link"
-        break
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+old_path = b"/usr/share/payload"
+old = bytes([0x60 + len(old_path)]) + old_path
+new_path = b"/usr/share/passwd-link"
+new = bytes([0x60 + len(new_path)]) + new_path
+if old not in data:
+    raise SystemExit("CCS v3 MANIFEST has no regular symlink-attack payload")
+path.write_bytes(data.replace(old, new, 1))
 PY
 }
 
@@ -93,41 +101,6 @@ with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 data["timestamp"] = "2020-01-01T00:00:00Z"
 with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
-}
-
-mutate_decompression_bomb() {
-    local root="$1"
-    local payload="$2"
-    python3 - "$root" "$payload" <<'PY'
-import hashlib
-import json
-import os
-import sys
-
-root = sys.argv[1]
-payload = sys.argv[2]
-objects_dir = os.path.join(root, "objects")
-runtime_path = os.path.join(root, "components", "runtime.json")
-
-with open(runtime_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-with open(payload, "rb") as f:
-    content = f.read()
-
-digest = hashlib.sha256(content).hexdigest()
-os.makedirs(os.path.join(objects_dir, digest[:2]), exist_ok=True)
-with open(os.path.join(objects_dir, digest[:2], digest[2:]), "wb") as f:
-    f.write(content)
-
-entry = next(item for item in data["files"] if "content" in item)
-entry["content"]["size"] = len(content)
-entry["content"]["sha256"] = digest
-data["size"] = len(content)
-
-with open(runtime_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
@@ -152,8 +125,7 @@ PY
         --key "$FIXTURE_CCS_KEY"
     local base_ccs
     base_ccs="$(find "$fixture_dir/output" -maxdepth 1 -name '*.ccs' | head -1)"
-    rm -f "$output_path"
-    mutate_ccs_with_payload "$base_ccs" "$output_path" "$tmpdir/huge-zero.bin"
+    mutate_ccs_with_oversized_object "$base_ccs" "$output_path" "$tmpdir/huge-zero.bin"
     rm -rf "$tmpdir"
 }
 

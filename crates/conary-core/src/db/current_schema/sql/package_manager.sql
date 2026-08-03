@@ -298,6 +298,7 @@ CREATE TABLE provides (
             architecture_qualifier_kind TEXT NOT NULL
                 CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
             architecture_qualifier TEXT,
+            provenance TEXT NOT NULL CHECK(json_valid(provenance)),
             canonical_id INTEGER REFERENCES canonical_packages(id),
             CHECK(
                 (version IS NULL AND version_relation IS NULL)
@@ -318,7 +319,8 @@ CREATE UNIQUE INDEX idx_provides_exact_contract
         ON provides(
             trove_id, kind, capability, COALESCE(version, ''),
             COALESCE(version_relation, ''), version_scheme,
-            architecture_qualifier_kind, COALESCE(architecture_qualifier, '')
+            architecture_qualifier_kind, COALESCE(architecture_qualifier, ''),
+            provenance
         );
 CREATE TABLE package_requirement_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

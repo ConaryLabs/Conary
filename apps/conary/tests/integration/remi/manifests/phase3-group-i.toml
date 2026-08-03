@@ -227,7 +227,7 @@ stderr_contains = "policy"
 [[test]]
 id = "T106"
 name = "decompression_bomb_rejected"
-description = "A decompression bomb package should be rejected before exhausting resources"
+description = "An oversized archive object that contradicts signed authority should be rejected before extraction"
 timeout = 30
 group = "I"
 
@@ -240,4 +240,4 @@ conary = "ccs install /opt/remi-tests/fixtures/adversarial/malicious/decompressi
 
 [test.step.assert]
 exit_code_not = 0
-stderr_contains = "maximum size"
+stderr_contains = "signed authority requires"

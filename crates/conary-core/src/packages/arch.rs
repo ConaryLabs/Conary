@@ -5,6 +5,7 @@
 //! Parses .pkg.tar.zst and .pkg.tar.xz packages, extracting metadata from .PKGINFO
 
 mod alpm_hook;
+pub mod authority;
 mod install_script;
 mod payload;
 
@@ -17,20 +18,19 @@ use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
+use crate::packages::arch::authority::{AlpmDeclaredCapability, AlpmPackageAuthority};
 use crate::packages::archive_utils::normalize_path;
 use crate::packages::common::PackageMetadata;
 use crate::packages::payload::{PackagePayload, PayloadSpool};
+use crate::packages::source_authority::SourcePackageAuthority;
 use crate::packages::traits::{
     ArchInstallScriptletMetadata, ArchNativeScriptletMetadata, ConfigFileInfo,
     NativeArgumentContract, NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
     NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat,
     NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
     NativeTransactionOrder, NativeTransactionPosition, PackageFile, PackageFormat,
-    ProvidedCapability,
 };
-use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
-};
+use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
 use crate::repository::package_relation::{parse_arch_provide, parse_native_relation};
 use crate::repository::versioning::VersionScheme;
 use std::fs::File;
@@ -172,6 +172,7 @@ impl ArchPackage {
                         })?)
                     }
                     "arch" => info.architecture = Some(value.to_string()),
+                    "pkgtype" => info.package_type = Some(value.to_string()),
                     "license" => info.licenses.push(value.to_string()),
                     "group" => info.groups.push(value.to_string()),
                     "depend" => info.dependencies.push(value.to_string()),
@@ -315,24 +316,17 @@ impl ArchPackage {
         })
     }
 
-    fn parse_provides(
+    fn parse_declared_capability_records(
         package_name: &str,
-        package_version: &str,
         entries: &[String],
-    ) -> Result<Vec<ProvidedCapability>> {
-        let mut provides = vec![ProvidedCapability {
-            kind: RepositoryCapabilityKind::PackageName,
-            name: package_name.to_string(),
-            version: Some(package_version.to_string()),
-            version_relation: Some(
-                crate::repository::dependency_model::ProvideVersionRelation::Equal,
-            ),
-            version_scheme: VersionScheme::Arch,
-            architecture_qualifier: Default::default(),
-        }];
-        for entry in entries {
+    ) -> Result<Vec<AlpmDeclaredCapability>> {
+        let mut provides = Vec::new();
+        for (record_index, entry) in entries.iter().enumerate() {
             let parsed = parse_arch_provide(entry, package_name).map_err(Error::ParseError)?;
-            let provide = ProvidedCapability {
+            let provide = AlpmDeclaredCapability {
+                pkginfo_index: u32::try_from(record_index).map_err(|_| {
+                    Error::ParseError("ALPM provide record index exceeds u32".to_string())
+                })?,
                 kind: parsed.kind,
                 name: parsed.name,
                 version_relation: parsed
@@ -340,13 +334,9 @@ impl ArchPackage {
                     .as_ref()
                     .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
                 version: parsed.version,
-                version_scheme: VersionScheme::Arch,
                 architecture_qualifier: Default::default(),
             };
-            provide.validate()?;
-            if !provides.contains(&provide) {
-                provides.push(provide);
-            }
+            provides.push(provide);
         }
         Ok(provides)
     }
@@ -400,6 +390,7 @@ struct PkgInfo {
     description: Option<String>,
     url: Option<String>,
     architecture: Option<String>,
+    package_type: Option<String>,
     build_date: Option<String>,
     packager: Option<String>,
     size: Option<u64>,
@@ -533,7 +524,7 @@ impl PackageFormat for ArchPackage {
             .version
             .ok_or_else(|| Error::InitError("Package version not found in .PKGINFO".to_string()))?;
 
-        let provides = Self::parse_provides(&name, &version, &pkginfo.provides)?;
+        let provides = Self::parse_declared_capability_records(&name, &pkginfo.provides)?;
         let mut requirements =
             Self::parse_requirements(&pkginfo.dependencies, RepositoryRequirementKind::Depends)?;
         requirements.extend(Self::parse_requirements(
@@ -591,15 +582,18 @@ impl PackageFormat for ArchPackage {
 
         let meta = PackageMetadata {
             package_path: PathBuf::from(path),
-            name,
-            version,
-            version_scheme: VersionScheme::Arch,
-            architecture: pkginfo.architecture,
-            debian_multi_arch: None,
+            source_authority: SourcePackageAuthority::Alpm(AlpmPackageAuthority {
+                name,
+                version,
+                architecture: pkginfo.architecture.clone().ok_or_else(|| {
+                    Error::InitError("ALPM package architecture is missing".to_string())
+                })?,
+                package_type: pkginfo.package_type,
+                provides,
+            }),
             description: pkginfo.description,
             files,
             requirements,
-            provides,
             relations,
             diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi,
@@ -645,8 +639,14 @@ impl PackageFormat for ArchPackage {
         self.meta.requirements()
     }
 
-    fn provides(&self) -> &[ProvidedCapability] {
-        self.meta.provides()
+    fn resolution_capabilities(
+        &self,
+    ) -> Result<Vec<crate::repository::dependency_model::ProvidedCapability>> {
+        self.meta.resolution_capabilities()
+    }
+
+    fn source_authority(&self) -> Result<SourcePackageAuthority> {
+        Ok(self.meta.source_authority.clone())
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {
