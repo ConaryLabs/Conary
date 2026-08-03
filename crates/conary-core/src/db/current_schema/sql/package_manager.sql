@@ -471,18 +471,29 @@ CREATE TABLE config_files (
             -- Current hash on filesystem (NULL if not checked)
             current_hash TEXT,
             -- If true, preserve user's version on upgrade (like RPM %config(noreplace))
-            noreplace INTEGER NOT NULL DEFAULT 0,
+            noreplace INTEGER NOT NULL DEFAULT 0 CHECK(noreplace IN (0, 1)),
             -- RPM %ghost ownership: never create or back up, erase if present.
-            ghost INTEGER NOT NULL DEFAULT 0,
+            ghost INTEGER NOT NULL DEFAULT 0 CHECK(ghost IN (0, 1)),
+            -- Declaration-to-payload association; false retains source
+            -- authority without inventing a payload node.
+            materialized INTEGER NOT NULL DEFAULT 1
+                CHECK(materialized IN (0, 1))
+                CHECK(ghost = 0 OR materialized = 0),
             -- Debian control declaration retaining the obsolete path identity
             -- while removing it during the next upgrade.
-            remove_on_upgrade INTEGER NOT NULL DEFAULT 0,
+            remove_on_upgrade INTEGER NOT NULL DEFAULT 0
+                CHECK(remove_on_upgrade IN (0, 1))
+                CHECK(remove_on_upgrade = 0 OR materialized = 0),
             -- Status: pristine (unchanged), modified (user changed), missing (deleted)
             status TEXT NOT NULL DEFAULT 'pristine',
             -- When the modification was detected
             modified_at TEXT,
             -- Package source that declared this as config (rpm, deb, arch, auto)
-            source TEXT DEFAULT 'auto',
+            source TEXT NOT NULL DEFAULT 'auto'
+                CHECK(source IN ('rpm', 'deb', 'arch', 'auto'))
+                CHECK(ghost = 0 OR source = 'rpm')
+                CHECK(remove_on_upgrade = 0 OR source = 'deb'),
+            CHECK(ghost = 0 OR remove_on_upgrade = 0),
             UNIQUE(path)
         );
 CREATE INDEX idx_config_files_path ON config_files(path);
@@ -765,7 +776,7 @@ CREATE TABLE generation_publications (
             state_number INTEGER,
             generation_number INTEGER,
             summary TEXT NOT NULL,
-            config_transaction_json TEXT NOT NULL DEFAULT '{"schema_version":4,"entries":[]}',
+            config_transaction_json TEXT NOT NULL DEFAULT '{"schema_version":5,"entries":[]}',
             last_error TEXT,
             retry_count INTEGER NOT NULL DEFAULT 0,
             recoverable INTEGER NOT NULL DEFAULT 1,

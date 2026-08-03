@@ -7,7 +7,7 @@
 
 pub mod arch;
 pub mod archive_utils;
-pub mod common;
+pub mod config_authority;
 pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
@@ -25,7 +25,6 @@ pub mod rpm_query;
 pub mod source_authority;
 pub mod traits;
 
-pub use common::PackageMetadata;
 pub use installed_identity::InstalledPackageIdentity;
 pub use registry::{PackageFormatType, detect_format, parse_package};
 

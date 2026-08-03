@@ -17,11 +17,11 @@ use super::{
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{
     ConversionOptions, NativePackageConverter, ScriptletBundleSummary,
 };
 use conary_core::packages::PackageFormat;
-use conary_core::packages::common::PackageMetadata;
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::{SatPackage, SatSource};
 use conary_core::scriptlet::SandboxMode;
@@ -367,8 +367,7 @@ pub async fn try_convert_to_ccs(
         .map(conary_core::packages::payload::PackagePayload::into_files)
         .with_context(|| format!("Failed to extract files for conversion: {}", pkg.name()))?;
 
-    // Build PackageMetadata from the package
-    let metadata = PackageMetadata::from_package(package_path.to_path_buf(), pkg)?;
+    let metadata = ForeignConversionInput::from_package(package_path.to_path_buf(), pkg)?;
 
     // Create temp directory for CCS output
     let ccs_temp = TempDir::new().context("Failed to create temp directory for CCS conversion")?;

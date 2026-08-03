@@ -123,7 +123,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         relations: Vec::new(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
         install_reason: InstallReason::Explicit,
         selection_reason: "Test".to_string(),
         is_upgrade: false,
@@ -155,7 +155,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         relations: Vec::new(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
         install_reason: InstallReason::Explicit,
         selection_reason: "Test".to_string(),
         is_upgrade: false,
@@ -210,7 +210,7 @@ fn test_prepared_package_to_trove() {
         relations: Vec::new(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
         install_reason: InstallReason::Dependency,
         selection_reason: "selected from the exact nginx dependency closure".to_string(),
         is_upgrade: false,
@@ -258,7 +258,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         relations: Vec::new(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
         install_reason: InstallReason::Dependency,
         selection_reason: "selected from the exact parent closure".to_string(),
         is_upgrade: false,
@@ -316,7 +316,7 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         relations: Vec::new(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
         install_reason: InstallReason::Explicit,
         selection_reason: "Required by wording that must not control ownership".to_string(),
         is_upgrade: false,
@@ -755,12 +755,18 @@ fn selected_root_batch_records_declared_config_metadata() {
         "/etc/batch-config-fixture.conf",
         b"managed=true\n",
     );
-    package.config_files = vec![ConfigFileInfo {
-        path: "/etc/batch-config-fixture.conf".to_string(),
-        noreplace: true,
-        ghost: false,
-        remove_on_upgrade: false,
-    }];
+    package.config_declarations = vec![
+        conary_core::packages::config_authority::SourceConfigDeclaration::Rpm(
+            conary_core::packages::rpm::authority::RpmConfigDeclaration {
+                header_index: 0,
+                path: "/etc/batch-config-fixture.conf".to_string(),
+                noreplace: true,
+                ghost: false,
+                missing_ok: false,
+                payload: conary_core::packages::config_authority::ConfigPayloadAssociation::Matched,
+            },
+        ),
+    ];
     let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
 
     installer.install_batch(vec![package]).unwrap();

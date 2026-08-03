@@ -11,13 +11,14 @@ use crate::ccs::builder::{ComponentData, FileEntry};
 use crate::ccs::manifest::CcsManifest;
 use crate::db::models::{InstallReason, InstallSource, Trove, TroveType};
 use crate::error::{Error, Result};
+use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::packages::payload::PackagePayload;
-use crate::packages::traits::{ConfigFileInfo, PackageFile, PackageFormat};
+use crate::packages::traits::{PackageFile, PackageFormat};
 use crate::repository::dependency_model::ProvidedCapability;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use v3_projection::{
-    capabilities_from_v3_authority, config_files_from_v3_authority, files_from_v3_authority,
+    capabilities_from_v3_authority, config_declarations_from_v3_authority, files_from_v3_authority,
     install_manifest_from_v3,
 };
 
@@ -46,8 +47,8 @@ pub struct CcsPackage {
     requirements: Vec<crate::repository::dependency_model::RepositoryRequirementGroup>,
     /// Cached exact capability providers for the trait
     resolution_capabilities: Vec<ProvidedCapability>,
-    /// Cached config files for the trait
-    config_files_cache: Vec<ConfigFileInfo>,
+    /// Cached exact signed config declarations for transaction projection.
+    config_declarations: Vec<SourceConfigDeclaration>,
 }
 
 impl CcsPackage {
@@ -88,7 +89,7 @@ impl CcsPackage {
         let requirements = Self::convert_requirements(&manifest);
         let resolution_capabilities = capabilities_from_v3_authority(authority);
         let package_files = Self::convert_files(&files);
-        let config_files_cache = config_files_from_v3_authority(authority)?;
+        let config_declarations = config_declarations_from_v3_authority(authority)?;
         Ok(Self {
             package_path,
             manifest,
@@ -101,7 +102,7 @@ impl CcsPackage {
             package_files,
             requirements,
             resolution_capabilities,
-            config_files_cache,
+            config_declarations,
         })
     }
 
@@ -165,7 +166,7 @@ impl CcsPackage {
         let requirements = Self::convert_requirements(&manifest);
         let resolution_capabilities = capabilities_from_v3_authority(&authority);
         let package_files = Self::convert_files(&files);
-        let config_files_cache = config_files_from_v3_authority(&authority)?;
+        let config_declarations = config_declarations_from_v3_authority(&authority)?;
         Ok(Self {
             package_path: PathBuf::from("v3-test.ccs"),
             manifest,
@@ -178,7 +179,7 @@ impl CcsPackage {
             package_files,
             requirements,
             resolution_capabilities,
-            config_files_cache,
+            config_declarations,
         })
     }
 }
@@ -248,8 +249,8 @@ impl PackageFormat for CcsPackage {
         Ok(self.payload.clone())
     }
 
-    fn config_files(&self) -> &[ConfigFileInfo] {
-        &self.config_files_cache
+    fn config_declarations(&self) -> Result<Vec<SourceConfigDeclaration>> {
+        Ok(self.config_declarations.clone())
     }
 
     fn to_trove(&self) -> Trove {

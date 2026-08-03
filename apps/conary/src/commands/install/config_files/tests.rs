@@ -10,6 +10,29 @@ const OLD: &str = "old";
 const LOCAL: &str = "local";
 const NEW: &str = "new";
 
+fn alpm_config(path: &str) -> SourceConfigDeclaration {
+    SourceConfigDeclaration::Alpm(
+        conary_core::packages::arch::authority::AlpmConfigDeclaration {
+            pkginfo_index: 0,
+            source_path: path.trim_start_matches('/').to_string(),
+            path: path.to_string(),
+            installed_hash: None,
+            payload: conary_core::packages::config_authority::ConfigPayloadAssociation::Matched,
+        },
+    )
+}
+
+fn deb_remove(path: &str) -> SourceConfigDeclaration {
+    SourceConfigDeclaration::Debian(
+        conary_core::packages::deb::authority::DebianConfigDeclaration {
+            control_index: 0,
+            path: path.to_string(),
+            remove_on_upgrade: true,
+            payload: conary_core::packages::config_authority::ConfigPayloadAssociation::Absent,
+        },
+    )
+}
+
 fn resolved_node(kind: PayloadNodeKind, mode: u32) -> ResolvedPayloadNode {
     ResolvedPayloadNode::from_numeric_source(PayloadNode {
         kind,
@@ -191,12 +214,7 @@ fn prepared_arch_conflict_keeps_local_and_writes_pacnew() {
         &conn,
         &root,
         ConfigSource::Arch,
-        &[ConfigFileInfo {
-            path: "/etc/demo.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: false,
-        }],
+        &[alpm_config("/etc/demo.conf")],
         None,
         vec![live_regular("/etc/demo.conf", b"new", 0o100644)],
     )
@@ -256,12 +274,7 @@ fn deb_remove_on_upgrade_removes_pristine_and_saves_modified_conffiles() {
     );
     old.source = ConfigSource::Deb;
     old.insert(&conn).unwrap();
-    let declaration = ConfigFileInfo {
-        path: "/etc/obsolete.conf".to_string(),
-        noreplace: true,
-        ghost: false,
-        remove_on_upgrade: true,
-    };
+    let declaration = deb_remove("/etc/obsolete.conf");
 
     fs::write(root.join("etc/obsolete.conf"), b"old").unwrap();
     fs::write(root.join("etc/obsolete.conf.dpkg-dist"), b"stale").unwrap();
@@ -304,12 +317,7 @@ fn deb_remove_on_upgrade_removes_pristine_and_saves_modified_conffiles() {
         &conn,
         &root,
         ConfigSource::Deb,
-        &[ConfigFileInfo {
-            path: "/etc/obsolete.conf".to_string(),
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: true,
-        }],
+        &[deb_remove("/etc/obsolete.conf")],
         Some(trove_id + 1),
         Vec::new(),
     )

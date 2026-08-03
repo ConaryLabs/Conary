@@ -88,6 +88,8 @@ pub struct ConfigFile {
     pub noreplace: bool,
     /// If true, own the path without shipping or backing up content
     pub ghost: bool,
+    /// Whether the declaration identifies an installed payload node.
+    pub materialized: bool,
     /// Debian conffile declaration whose old path is removed on upgrade.
     pub remove_on_upgrade: bool,
     /// Current status
@@ -101,7 +103,7 @@ pub struct ConfigFile {
 impl ConfigFile {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, file_id, path, trove_id, original_hash, original_md5, \
-         current_hash, noreplace, ghost, remove_on_upgrade, status, modified_at, source";
+         current_hash, noreplace, ghost, materialized, remove_on_upgrade, status, modified_at, source";
 
     /// Create a new config file entry
     pub fn new(path: String, trove_id: i64, original_hash: String) -> Self {
@@ -115,6 +117,7 @@ impl ConfigFile {
             original_md5: None,
             noreplace: false,
             ghost: false,
+            materialized: true,
             remove_on_upgrade: false,
             status: ConfigStatus::Pristine,
             modified_at: None,
@@ -141,11 +144,19 @@ impl ConfigFile {
             current_hash: None,
             noreplace: false,
             ghost: true,
+            materialized: false,
             remove_on_upgrade: false,
             status: ConfigStatus::Missing,
             modified_at: None,
             source: ConfigSource::Rpm,
         }
+    }
+
+    /// Create a declaration-only path with no incoming payload node.
+    pub fn new_declaration(path: String, trove_id: i64) -> Self {
+        let mut declaration = Self::new_ghost(path, trove_id);
+        declaration.ghost = false;
+        declaration
     }
 
     /// Insert this config file into the database
@@ -154,9 +165,9 @@ impl ConfigFile {
             "INSERT INTO config_files (
                 file_id, path, trove_id, package_name, package_version,
                 package_architecture, original_hash, original_md5, current_hash,
-                noreplace, ghost, remove_on_upgrade, status, modified_at, source
+                noreplace, ghost, materialized, remove_on_upgrade, status, modified_at, source
              )
-             SELECT ?1, ?2, ?3, name, version, architecture, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+             SELECT ?1, ?2, ?3, name, version, architecture, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
              FROM troves WHERE id = ?3",
             params![
                 self.file_id,
@@ -167,6 +178,7 @@ impl ConfigFile {
                 &self.current_hash,
                 self.noreplace as i32,
                 self.ghost as i32,
+                self.materialized as i32,
                 self.remove_on_upgrade as i32,
                 self.status.as_str(),
                 &self.modified_at,
@@ -185,9 +197,9 @@ impl ConfigFile {
             "INSERT INTO config_files (
                 file_id, path, trove_id, package_name, package_version,
                 package_architecture, original_hash, original_md5, current_hash,
-                noreplace, ghost, remove_on_upgrade, status, modified_at, source
+                noreplace, ghost, materialized, remove_on_upgrade, status, modified_at, source
              )
-             SELECT ?1, ?2, ?3, name, version, architecture, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+             SELECT ?1, ?2, ?3, name, version, architecture, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
              FROM troves WHERE id = ?3
              ON CONFLICT(path) DO UPDATE SET
                 file_id = excluded.file_id,
@@ -200,6 +212,7 @@ impl ConfigFile {
                 current_hash = excluded.current_hash,
                 noreplace = excluded.noreplace,
                 ghost = excluded.ghost,
+                materialized = excluded.materialized,
                 remove_on_upgrade = excluded.remove_on_upgrade,
                 status = excluded.status,
                 modified_at = excluded.modified_at,
@@ -213,6 +226,7 @@ impl ConfigFile {
                 &self.current_hash,
                 self.noreplace as i32,
                 self.ghost as i32,
+                self.materialized as i32,
                 self.remove_on_upgrade as i32,
                 self.status.as_str(),
                 &self.modified_at,
@@ -359,18 +373,18 @@ impl ConfigFile {
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let status_str: String = row.get(10)?;
-        let source_str: String = row.get(12)?;
+        let status_str: String = row.get(11)?;
+        let source_str: String = row.get(13)?;
         let status = ConfigStatus::from_str(&status_str).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                10,
+                11,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
         })?;
         let source = ConfigSource::from_str(&source_str).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                12,
+                13,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
@@ -386,9 +400,10 @@ impl ConfigFile {
             current_hash: row.get(6)?,
             noreplace: row.get::<_, i32>(7)? != 0,
             ghost: row.get::<_, i32>(8)? != 0,
-            remove_on_upgrade: row.get::<_, i32>(9)? != 0,
+            materialized: row.get::<_, i32>(9)? != 0,
+            remove_on_upgrade: row.get::<_, i32>(10)? != 0,
             status,
-            modified_at: row.get(11)?,
+            modified_at: row.get(12)?,
             source,
         })
     }
@@ -545,12 +560,21 @@ mod tests {
                 original_hash TEXT,
                 original_md5 TEXT,
                 current_hash TEXT,
-                noreplace INTEGER NOT NULL DEFAULT 0,
-                ghost INTEGER NOT NULL DEFAULT 0,
-                remove_on_upgrade INTEGER NOT NULL DEFAULT 0,
+                noreplace INTEGER NOT NULL DEFAULT 0 CHECK(noreplace IN (0, 1)),
+                ghost INTEGER NOT NULL DEFAULT 0 CHECK(ghost IN (0, 1)),
+                materialized INTEGER NOT NULL DEFAULT 1
+                    CHECK(materialized IN (0, 1))
+                    CHECK(ghost = 0 OR materialized = 0),
+                remove_on_upgrade INTEGER NOT NULL DEFAULT 0
+                    CHECK(remove_on_upgrade IN (0, 1))
+                    CHECK(remove_on_upgrade = 0 OR materialized = 0),
                 status TEXT NOT NULL DEFAULT 'pristine',
                 modified_at TEXT,
-                source TEXT DEFAULT 'auto',
+                source TEXT NOT NULL DEFAULT 'auto'
+                    CHECK(source IN ('rpm', 'deb', 'arch', 'auto'))
+                    CHECK(ghost = 0 OR source = 'rpm')
+                    CHECK(remove_on_upgrade = 0 OR source = 'deb'),
+                CHECK(ghost = 0 OR remove_on_upgrade = 0),
                 UNIQUE(path)
             );
 
@@ -587,6 +611,23 @@ mod tests {
         assert_eq!(found.path, "/etc/nginx/nginx.conf");
         assert_eq!(found.original_hash.as_deref(), Some("abc123"));
         assert_eq!(found.status, ConfigStatus::Pristine);
+    }
+
+    #[test]
+    fn declaration_only_config_round_trips_without_payload_authority() {
+        let (_temp, conn) = create_test_db();
+        let mut declaration = ConfigFile::new_declaration("/etc/declared-only.conf".to_string(), 1);
+        declaration.source = ConfigSource::Arch;
+        declaration.insert(&conn).unwrap();
+
+        let stored = ConfigFile::find_by_path(&conn, "/etc/declared-only.conf")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.source, ConfigSource::Arch);
+        assert!(!stored.materialized);
+        assert!(!stored.ghost);
+        assert!(stored.file_id.is_none());
+        assert!(stored.original_hash.is_none());
     }
 
     #[test]

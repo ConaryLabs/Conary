@@ -1,11 +1,11 @@
 // conary-core/tests/native_abi.rs
 
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::{
     SigningKeyPair,
     convert::{ConversionOptions, NativePackageConverter},
 };
 use conary_core::db::models::{Trove, TroveType};
-use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::native_scriptlet_support::upstream_native_scriptlet_support_rows;
 use conary_core::packages::traits::{
     ArchAlpmHookOperation, ArchAlpmHookTriggerType, ArchNativeScriptletMetadata, DebControlMember,
@@ -618,8 +618,11 @@ fn assert_conversion_preserves_native_entries(
     }
 }
 
-fn metadata_from_package(package: &impl PackageFormat, package_path: &Path) -> PackageMetadata {
-    PackageMetadata::from_package(package_path.to_path_buf(), package).unwrap()
+fn metadata_from_package(
+    package: &impl PackageFormat,
+    package_path: &Path,
+) -> ForeignConversionInput {
+    ForeignConversionInput::from_package(package_path.to_path_buf(), package).unwrap()
 }
 
 fn write_rpm_fixture(dir: &Path) -> PathBuf {

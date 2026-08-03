@@ -4,6 +4,7 @@
 
 use crate::db::models::Trove;
 use crate::error::Result;
+use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::packages::payload::PackagePayload;
 use crate::packages::source_authority::{CcsPackageAuthority, SourcePackageAuthority};
 use crate::payload::{PayloadContentAuthority, PayloadNode};
@@ -84,21 +85,6 @@ pub struct DiagnosticScriptletEvidence {
     pub flags: Option<String>,
 }
 
-/// Configuration file information from a package
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigFileInfo {
-    /// Path to the config file
-    pub path: String,
-    /// If true, preserve user's version on upgrade (RPM %config(noreplace))
-    pub noreplace: bool,
-    /// If true, this is a ghost config (not in payload, just tracked)
-    pub ghost: bool,
-    /// Debian control declaration: remove the old conffile on the next
-    /// upgrade, preserving a locally modified copy as `.dpkg-old`.
-    pub remove_on_upgrade: bool,
-}
-
 /// Common interface for all package formats (RPM, DEB, Arch, etc.)
 pub trait PackageFormat {
     /// Parse a package file from the given path
@@ -146,6 +132,7 @@ pub trait PackageFormat {
             architecture: self.architecture().map(str::to_string),
             debian_multi_arch: self.debian_multi_arch(),
             capabilities,
+            config: Vec::new(),
         }))
     }
 
@@ -197,16 +184,9 @@ pub trait PackageFormat {
         &[]
     }
 
-    /// Get the list of configuration files declared by the package
-    ///
-    /// For RPM: files marked with %config or %config(noreplace)
-    /// For DEB: files listed in DEBIAN/conffiles
-    /// For Arch: files listed in backup array in .PKGINFO
-    ///
-    /// Default implementation returns empty slice - config files detected
-    /// automatically by path (e.g., /etc/*) during installation.
-    fn config_files(&self) -> &[ConfigFileInfo] {
-        &[]
+    /// Fallibly project exact signed/source config declarations for planning.
+    fn config_declarations(&self) -> Result<Vec<SourceConfigDeclaration>> {
+        self.source_authority()?.config_declarations()
     }
 
     /// Convert this package to a Trove representation

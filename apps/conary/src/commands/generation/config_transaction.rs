@@ -20,7 +20,7 @@ use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus, FileEntry}
 use conary_core::filesystem::CasStore;
 use conary_core::filesystem::durable::sync_parent_directory;
 use conary_core::generation::mount::current_generation;
-use conary_core::packages::traits::ConfigFileInfo;
+use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use conary_core::payload::PayloadNodeKind;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use rusqlite::Connection;
@@ -38,7 +38,7 @@ fn overlay_write(path: String, artifact: ConfigArtifact) -> OverlayMutation {
 
 pub(crate) struct ConfigInstallCapture<'a> {
     pub(crate) source: ConfigSource,
-    pub(crate) declared: &'a [ConfigFileInfo],
+    pub(crate) declared: &'a [SourceConfigDeclaration],
     pub(crate) incoming: &'a [crate::commands::LiveRootFile],
     pub(crate) replacing_trove_id: Option<i64>,
     pub(crate) replaced_trove_ids: &'a [i64],
@@ -60,12 +60,12 @@ pub(crate) fn capture_install(
     let mut declarations = HashMap::new();
     for declaration in declared {
         if declarations
-            .insert(declaration.path.as_str(), declaration)
+            .insert(declaration.path(), declaration)
             .is_some()
         {
             bail!(
                 "incoming package declares generation config path {} more than once",
-                declaration.path
+                declaration.path()
             );
         }
     }
@@ -82,8 +82,8 @@ pub(crate) fn capture_install(
     paths.extend(
         declared
             .iter()
-            .filter(|declaration| generation_config_path(&declaration.path))
-            .map(|declaration| declaration.path.clone()),
+            .filter(|declaration| generation_config_path(declaration.path()))
+            .map(|declaration| declaration.path().to_string()),
     );
     for trove_id in replaced_trove_ids {
         paths.extend(
@@ -107,17 +107,18 @@ pub(crate) fn capture_install(
         let current = read_artifact(root, cas, &path)?;
         let declaration = declarations.get(path.as_str()).copied();
         let incoming_file = incoming_files.get(path.as_str()).copied();
-        if let Some(declaration) = declaration.filter(|declaration| declaration.remove_on_upgrade) {
-            if source != ConfigSource::Deb || declaration.ghost {
+        if let Some(declaration) = declaration.filter(|declaration| declaration.remove_on_upgrade())
+        {
+            if source != ConfigSource::Deb || declaration.ghost() {
                 bail!(
                     "remove-on-upgrade declaration {} is only valid for a Debian conffile",
-                    declaration.path
+                    declaration.path()
                 );
             }
             if incoming_file.is_some() {
                 bail!(
                     "Debian remove-on-upgrade conffile {} must be absent from the incoming payload",
-                    declaration.path
+                    declaration.path()
                 );
             }
             let owner = ConfigFile::find_by_path(conn, &path)?;
@@ -131,17 +132,18 @@ pub(crate) fn capture_install(
             }
         }
         let after = match (declaration, incoming_file) {
-            (Some(declaration), _) if declaration.ghost => Some(ConfigPackageState {
+            (Some(declaration), _) if declaration.ghost() => Some(ConfigPackageState {
                 source,
-                noreplace: declaration.noreplace,
+                noreplace: declaration.noreplace(),
                 ghost: true,
+                materialized: false,
                 original_sha256: None,
                 artifact: None,
             }),
-            (Some(declaration), Some(_)) if declaration.remove_on_upgrade => {
+            (Some(declaration), Some(_)) if declaration.remove_on_upgrade() => {
                 bail!(
                     "Debian remove-on-upgrade conffile {} must be absent from the incoming payload",
-                    declaration.path
+                    declaration.path()
                 );
             }
             (declaration, Some(file)) => {
@@ -154,31 +156,48 @@ pub(crate) fn capture_install(
                 let artifact = artifact_from_live_root(file, cas)?;
                 Some(ConfigPackageState {
                     source: declaration.map_or(ConfigSource::Auto, |_| source),
-                    noreplace: declaration.is_some_and(|config| config.noreplace),
+                    noreplace: declaration.is_some_and(|config| config.noreplace()),
                     ghost: false,
+                    materialized: true,
                     original_sha256: Some(artifact.sha256().to_string()),
                     artifact: Some(artifact),
                 })
             }
-            (None, None) => None,
-            (Some(declaration), None) if declaration.remove_on_upgrade => {
-                if source != ConfigSource::Deb || declaration.ghost {
+            (Some(declaration), None) if declaration.remove_on_upgrade() => {
+                if source != ConfigSource::Deb || declaration.ghost() {
                     bail!(
                         "remove-on-upgrade declaration {} is only valid for a Debian conffile",
-                        declaration.path
+                        declaration.path()
                     );
                 }
                 None
             }
+            (Some(declaration), None)
+                if declaration.payload() == ConfigPayloadAssociation::Absent =>
+            {
+                Some(ConfigPackageState {
+                    source,
+                    noreplace: declaration.noreplace(),
+                    ghost: false,
+                    materialized: false,
+                    original_sha256: None,
+                    artifact: None,
+                })
+            }
+            (None, None) => None,
             (Some(declaration), None) => {
                 bail!(
                     "declared generation config {} is missing from the incoming payload",
-                    declaration.path
+                    declaration.path()
                 );
             }
         };
-        let operation = if declaration.is_some_and(|declaration| declaration.remove_on_upgrade) {
+        let operation = if declaration.is_some_and(|declaration| declaration.remove_on_upgrade()) {
             ConfigTransactionOperation::RemoveOnUpgrade
+        } else if before.as_ref().is_some_and(|state| state.materialized)
+            && after.as_ref().is_some_and(|state| !state.materialized)
+        {
+            ConfigTransactionOperation::Dematerialize
         } else if after.is_some() {
             ConfigTransactionOperation::Install
         } else {
@@ -259,6 +278,7 @@ fn package_state_before(conn: &Connection, path: &str) -> Result<Option<ConfigPa
             source: config.source,
             noreplace: config.noreplace,
             ghost: config.ghost,
+            materialized: config.materialized,
             original_sha256: config.original_hash,
             artifact: None,
         }));
@@ -268,6 +288,7 @@ fn package_state_before(conn: &Connection, path: &str) -> Result<Option<ConfigPa
             source: ConfigSource::Auto,
             noreplace: false,
             ghost: false,
+            materialized: true,
             original_sha256: config_hash_for_file_entry(&file),
             artifact: None,
         }),
@@ -490,7 +511,7 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                 .after
                 .as_ref()
                 .context("install config transaction has no after state")?;
-            if after.ghost {
+            if after.ghost || !after.materialized {
                 return Ok(mutations);
             }
             let new = after
@@ -557,11 +578,16 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
             }
             mutations.push(OverlayMutation::Remove(entry.path.clone()));
         }
-        ConfigTransactionOperation::Remove | ConfigTransactionOperation::Purge => {
+        ConfigTransactionOperation::Dematerialize
+        | ConfigTransactionOperation::Remove
+        | ConfigTransactionOperation::Purge => {
             let before = entry
                 .before
                 .as_ref()
                 .context("remove/purge config transaction has no exact prior package state")?;
+            if !before.materialized && !before.ghost {
+                return Ok(mutations);
+            }
             let decision = decide_config_removal(
                 before.source,
                 before.ghost,
@@ -694,6 +720,8 @@ fn project_persisted_status(conn: &Connection, entry: &ConfigPathTransaction) ->
             let after = entry.after.as_ref().context("missing after state")?;
             if after.ghost {
                 entry.current.as_ref()
+            } else if !after.materialized {
+                None
             } else {
                 let new = after.artifact.as_ref().context("missing after artifact")?;
                 match decide_config_install(
@@ -714,6 +742,7 @@ fn project_persisted_status(conn: &Connection, entry: &ConfigPathTransaction) ->
                 }
             }
         }
+        ConfigTransactionOperation::Dematerialize => None,
         ConfigTransactionOperation::Remove => entry.current.as_ref(),
         ConfigTransactionOperation::RemoveOnUpgrade => None,
         ConfigTransactionOperation::Purge => None,

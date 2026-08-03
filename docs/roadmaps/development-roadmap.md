@@ -247,12 +247,10 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** source package facts are preserved in their native ontology and
   normalized at each consumer's boundary, so the class of defect behind #98,
   #99, #104, and #105 cannot recur.
-- **Execution status:** active. #108 owns the specification and roadmap
-  transition; #104 and #105 remain ordered after that design authority. W4's
-  aggregate proof can close in parallel because its source-format
-  implementation prerequisites are already merged.
-- **Issues:** #108 (design specification under `docs/specs/`), then #104 and
-  #105 as sibling implementation slices.
+- **Execution status:** complete. #108 owns the specification; #104 and #105
+  shipped the identity/provision and configuration halves as one current-only
+  CCS v3/schema-24 hard cut.
+- **Issues:** #108, #104, and #105.
 - **Rationale:** `PackageMetadata` and the flat `ProvidedCapability` and
   `ConfigFileInfo` shapes assume that similarly named facts across ecosystems
   share one ontology. They do not. RPM hardlink sets, ALPM backup declarations,

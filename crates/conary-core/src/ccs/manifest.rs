@@ -518,7 +518,7 @@ pub struct ComponentRule {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
-    pub files: Vec<crate::packages::traits::ConfigFileInfo>,
+    pub files: Vec<crate::packages::config_authority::SourceConfigDeclaration>,
 }
 
 fn default_true() -> bool {

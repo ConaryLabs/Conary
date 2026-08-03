@@ -20,15 +20,15 @@ binaries = []
 default = ["runtime"]
 
 [[config.files]]
+source = "ccs"
 path = "/etc/passwd"
 noreplace = true
-ghost = false
-remove_on_upgrade = false
+payload = "matched"
 
 [[config.files]]
+source = "ccs"
 path = "/etc/group"
 noreplace = true
-ghost = false
-remove_on_upgrade = false
+payload = "matched"
 
 [hooks]

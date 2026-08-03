@@ -34,7 +34,7 @@ fn pinned_arch_same_name_provides_convert_verify_reopen_and_resolve() {
 
         let package = ArchPackage::parse(fixture.to_str().expect("fixture path is UTF-8"))
             .expect("parse pinned Arch artifact");
-        let metadata = PackageMetadata::from_package(fixture, &package)
+        let metadata = ForeignConversionInput::from_package(fixture, &package)
             .expect("project source-package authority");
         let payload = package.package_payload().expect("open Arch payload");
         let source_hash =
@@ -244,7 +244,8 @@ fn golden_conversion_preserves_pinned_rpm_hardlink_transaction_owner() {
 
     let package =
         RpmPackage::parse(fixture.to_str().expect("fixture path is utf-8")).expect("parse fixture");
-    let metadata = PackageMetadata::from_package(fixture, &package).expect("project metadata");
+    let metadata =
+        ForeignConversionInput::from_package(fixture, &package).expect("project metadata");
     let payload = package
         .package_payload()
         .expect("open projected fixture payload");

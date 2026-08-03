@@ -8,7 +8,7 @@ use crate::ccs::manifest::CcsManifest;
 use crate::ccs::v3::AuthorityDocumentV3;
 use crate::ccs::v3::schema::{DependencyKindV3, PackageKindV3};
 use crate::error::{Error, Result};
-use crate::packages::traits::ConfigFileInfo;
+use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
     RepositoryCapabilityKind,
@@ -28,7 +28,7 @@ pub(super) fn install_manifest_from_v3(
     manifest.relations = authority.relations.clone();
     manifest.capabilities = authority.execution_capabilities.clone();
     manifest.file_capabilities = authority.file_capabilities.clone();
-    manifest.config.files = config_files_from_v3_authority(authority)?;
+    manifest.config.files = config_declarations_from_v3_authority(authority)?;
 
     crate::ccs::v3::lifecycle::apply_authority_to_manifest(&authority.lifecycle, &mut manifest)
         .map_err(Error::ParseError)?;
@@ -61,25 +61,16 @@ pub(super) fn files_from_v3_authority(authority: &AuthorityDocumentV3) -> Result
         .collect())
 }
 
-pub(super) fn config_files_from_v3_authority(
+pub(super) fn config_declarations_from_v3_authority(
     authority: &AuthorityDocumentV3,
-) -> Result<Vec<ConfigFileInfo>> {
+) -> Result<Vec<SourceConfigDeclaration>> {
     let PackageKindV3::Package(data) = &authority.kind else {
         return Err(Error::ParseError(
             "group and redirect v3 packages do not carry config authority".to_string(),
         ));
     };
 
-    Ok(data
-        .config
-        .iter()
-        .map(|config| ConfigFileInfo {
-            path: config.path.clone(),
-            noreplace: config.semantics.noreplace,
-            ghost: config.semantics.ghost,
-            remove_on_upgrade: config.semantics.remove_on_upgrade,
-        })
-        .collect())
+    Ok(data.config.clone())
 }
 
 pub(super) fn capabilities_from_v3_authority(

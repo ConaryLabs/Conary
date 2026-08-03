@@ -19,30 +19,31 @@ use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
 use crate::packages::arch::authority::{AlpmDeclaredCapability, AlpmPackageAuthority};
-use crate::packages::archive_utils::normalize_path;
-use crate::packages::common::PackageMetadata;
 use crate::packages::payload::{PackagePayload, PayloadSpool};
 use crate::packages::source_authority::SourcePackageAuthority;
 use crate::packages::traits::{
-    ArchInstallScriptletMetadata, ArchNativeScriptletMetadata, ConfigFileInfo,
-    NativeArgumentContract, NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
-    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat,
-    NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
-    NativeTransactionOrder, NativeTransactionPosition, PackageFile, PackageFormat,
+    ArchInstallScriptletMetadata, ArchNativeScriptletMetadata, NativeArgumentContract,
+    NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation,
+    NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind,
+    NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder,
+    NativeTransactionPosition, PackageFile, PackageFormat,
 };
 use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
 use crate::repository::package_relation::{parse_arch_provide, parse_native_relation};
 use crate::repository::versioning::VersionScheme;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
 use tar::Archive;
 use tracing::debug;
 
 /// Arch Linux package representation
 pub struct ArchPackage {
-    /// Common package metadata
-    meta: PackageMetadata,
+    authority: AlpmPackageAuthority,
+    description: Option<String>,
+    files: Vec<PackageFile>,
+    requirements: Vec<RepositoryRequirementGroup>,
+    relations: Vec<RepositoryRequirementGroup>,
+    native_scriptlet_abi: Vec<NativeScriptletEntry>,
     // Arch-specific metadata
     url: Option<String>,
     licenses: Vec<String>,
@@ -553,22 +554,11 @@ impl PackageFormat for ArchPackage {
                 .map(|(path, bytes)| Self::native_abi_from_alpm_hook(path, bytes))
                 .collect::<Result<Vec<_>>>()?,
         );
-        // Convert backup files to ConfigFileInfo
-        // Repository metadata may include "path\thash"; the incoming payload
-        // and persisted installed baseline supply the other identities for the
-        // exact three-hash transaction.
-        // All Arch backup files preserve user changes (like noreplace)
-        let mut config_files = Vec::new();
-        for entry in &pkginfo.backup {
-            let path = entry.split('\t').next().unwrap_or(entry);
-            config_files.push(ConfigFileInfo {
-                path: normalize_path(path)
-                    .map_err(|e| Error::InitError(format!("Path normalization failed: {}", e)))?,
-                noreplace: true, // Arch backup files always preserve user changes
-                ghost: false,
-                remove_on_upgrade: false,
-            });
-        }
+        let payload_paths = files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let config = authority::parse_config_declarations(&pkginfo.backup, &payload_paths)?;
 
         debug!(
             "Parsed Arch package: {} version {} ({} files, {} dependencies, {} native lifecycle entries, {} config files)",
@@ -577,31 +567,27 @@ impl PackageFormat for ArchPackage {
             files.len(),
             requirements.len(),
             native_scriptlet_abi.len(),
-            config_files.len()
+            config.len()
         );
 
-        let meta = PackageMetadata {
-            package_path: PathBuf::from(path),
-            source_authority: SourcePackageAuthority::Alpm(AlpmPackageAuthority {
-                name,
-                version,
-                architecture: pkginfo.architecture.clone().ok_or_else(|| {
-                    Error::InitError("ALPM package architecture is missing".to_string())
-                })?,
-                package_type: pkginfo.package_type,
-                provides,
-            }),
+        let authority = AlpmPackageAuthority {
+            name,
+            version,
+            architecture: pkginfo.architecture.clone().ok_or_else(|| {
+                Error::InitError("ALPM package architecture is missing".to_string())
+            })?,
+            package_type: pkginfo.package_type,
+            provides,
+            config,
+        };
+
+        Ok(Self {
+            authority,
             description: pkginfo.description,
             files,
             requirements,
             relations,
-            diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi,
-            config_files,
-        };
-
-        Ok(Self {
-            meta,
             url: pkginfo.url,
             licenses: pkginfo.licenses,
             groups: pkginfo.groups,
@@ -612,45 +598,45 @@ impl PackageFormat for ArchPackage {
     }
 
     fn name(&self) -> &str {
-        self.meta.name()
+        &self.authority.name
     }
 
     fn version(&self) -> &str {
-        self.meta.version()
+        &self.authority.version
     }
 
     fn version_scheme(&self) -> VersionScheme {
-        self.meta.version_scheme()
+        VersionScheme::Arch
     }
 
     fn architecture(&self) -> Option<&str> {
-        self.meta.architecture()
+        Some(&self.authority.architecture)
     }
 
     fn description(&self) -> Option<&str> {
-        self.meta.description()
+        self.description.as_deref()
     }
 
     fn files(&self) -> &[PackageFile] {
-        self.meta.files()
+        &self.files
     }
 
     fn requirements(&self) -> &[RepositoryRequirementGroup] {
-        self.meta.requirements()
+        &self.requirements
     }
 
     fn resolution_capabilities(
         &self,
     ) -> Result<Vec<crate::repository::dependency_model::ProvidedCapability>> {
-        self.meta.resolution_capabilities()
+        SourcePackageAuthority::Alpm(self.authority.clone()).resolution_capabilities()
     }
 
     fn source_authority(&self) -> Result<SourcePackageAuthority> {
-        Ok(self.meta.source_authority.clone())
+        Ok(SourcePackageAuthority::Alpm(self.authority.clone()))
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {
-        self.meta.relations()
+        &self.relations
     }
 
     fn package_payload(&self) -> Result<PackagePayload> {
@@ -658,15 +644,11 @@ impl PackageFormat for ArchPackage {
     }
 
     fn to_trove(&self) -> Trove {
-        self.meta.to_trove()
+        SourcePackageAuthority::Alpm(self.authority.clone()).to_trove(self.description.clone())
     }
 
     fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
-        self.meta.native_scriptlet_abi()
-    }
-
-    fn config_files(&self) -> &[ConfigFileInfo] {
-        self.meta.config_files()
+        &self.native_scriptlet_abi
     }
 }
 

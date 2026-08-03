@@ -81,12 +81,15 @@ fn ccs_archive_preserves_exact_author_component_membership() {
 
     let mut manifest = CcsManifest::new_minimal("component-fixture", "1.0.0");
     manifest.components.default = vec!["runtime".to_string()];
-    manifest.config.files = vec![conary_core::packages::traits::ConfigFileInfo {
-        path: "/etc/component-fixture/app.conf".to_string(),
-        noreplace: true,
-        ghost: false,
-        remove_on_upgrade: false,
-    }];
+    manifest.config.files = vec![
+        conary_core::packages::config_authority::SourceConfigDeclaration::Ccs(
+            conary_core::packages::config_authority::CcsConfigDeclaration {
+                path: "/etc/component-fixture/app.conf".to_string(),
+                noreplace: true,
+                payload: conary_core::packages::config_authority::ConfigPayloadAssociation::Matched,
+            },
+        ),
+    ];
 
     let files = vec![
         runtime_file.clone(),

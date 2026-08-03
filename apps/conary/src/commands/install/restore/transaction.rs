@@ -23,7 +23,7 @@ use crate::commands::{SandboxMode, TroveSnapshot};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::{NativePackageIdentity, NativeTransactionOperation};
-use conary_core::config_transaction::{ConfigTransactionOperation, GenerationConfigTransaction};
+use conary_core::config_transaction::GenerationConfigTransaction;
 use conary_core::db::models::{
     ActivationRequest, Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, Trove,
 };
@@ -768,13 +768,14 @@ impl NativeGraphPayloadMutation for RestoreInstallPayload<'_, '_> {
         } else {
             old_trove_id.into_iter().collect::<Vec<_>>()
         };
+        let config_declarations = prepared.pkg.config_declarations()?;
         let mut captured = crate::commands::generation::config_transaction::capture_install(
             self.tx,
             self.selected_root.selected_root(),
             self.cas,
             crate::commands::generation::config_transaction::ConfigInstallCapture {
                 source: super::super::config_files::source_for_semantics(prepared.semantics),
-                declared: prepared.pkg.config_files(),
+                declared: &config_declarations,
                 incoming: &package_files,
                 replacing_trove_id: old_trove_id,
                 replaced_trove_ids: &immediately_replaced,
@@ -784,7 +785,7 @@ impl NativeGraphPayloadMutation for RestoreInstallPayload<'_, '_> {
             self.tx,
             self.selected_root.selected_root(),
             super::super::config_files::source_for_semantics(prepared.semantics),
-            prepared.pkg.config_files(),
+            &config_declarations,
             old_trove_id,
             package_files,
         )?;
@@ -933,11 +934,7 @@ fn merge_config_transaction(
             .iter_mut()
             .find(|entry| entry.path == next.path)
         {
-            existing.operation = if next.after.is_some() {
-                ConfigTransactionOperation::Install
-            } else {
-                next.operation
-            };
+            existing.operation = next.operation;
             existing.after = next.after;
         } else {
             transaction.entries.push(next);

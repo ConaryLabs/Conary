@@ -9,7 +9,8 @@ use conary_core::db::models::{
     Changeset, ConfigFile, ConfigSource, FileEntry, InstallSource, InstalledFileCapability,
     Repository, Trove, TroveType,
 };
-use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile, PackageFormat};
+use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
+use conary_core::packages::traits::{ExtractedFile, PackageFile, PackageFormat};
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
     ResolvedPayloadNode,
@@ -45,7 +46,7 @@ struct FakePackage {
     provides: Vec<conary_core::repository::dependency_model::ProvidedCapability>,
     files: Vec<PackageFile>,
     extracted_files: Vec<ExtractedFile>,
-    config_files: Vec<ConfigFileInfo>,
+    config_declarations: Vec<SourceConfigDeclaration>,
 }
 
 impl FakePackage {
@@ -75,7 +76,7 @@ impl FakePackage {
                 content: content.to_vec(),
                 content_authority: Some(content_authority),
             }],
-            config_files: Vec::new(),
+            config_declarations: Vec::new(),
         }
     }
 
@@ -146,8 +147,8 @@ impl PackageFormat for FakePackage {
         )
     }
 
-    fn config_files(&self) -> &[ConfigFileInfo] {
-        &self.config_files
+    fn config_declarations(&self) -> conary_core::Result<Vec<SourceConfigDeclaration>> {
+        Ok(self.config_declarations.clone())
     }
 
     fn to_trove(&self) -> Trove {
@@ -266,7 +267,7 @@ fn store_install_files_in_cas_preserves_symlink_targets() {
             content: Vec::new(),
             content_authority: None,
         }],
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
     };
     let extraction = ExtractionResult {
         extracted_files: package.payload_files(),
@@ -321,12 +322,16 @@ fn install_inner_persists_declared_config_metadata() {
         "1.0.0",
         VersionScheme::Rpm,
     )];
-    package.config_files = vec![ConfigFileInfo {
-        path: "/etc/fixture/app.conf".to_string(),
-        noreplace: true,
-        ghost: false,
-        remove_on_upgrade: false,
-    }];
+    package.config_declarations = vec![SourceConfigDeclaration::Rpm(
+        conary_core::packages::rpm::authority::RpmConfigDeclaration {
+            header_index: 0,
+            path: "/etc/fixture/app.conf".to_string(),
+            noreplace: true,
+            ghost: false,
+            missing_ok: false,
+            payload: ConfigPayloadAssociation::Matched,
+        },
+    )];
     let extraction = ExtractionResult {
         extracted_files: package.payload_files(),
         classified: HashMap::from([(
@@ -664,7 +669,7 @@ fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
             content: Vec::new(),
             content_authority: None,
         }],
-        config_files: Vec::new(),
+        config_declarations: Vec::new(),
     };
     let extraction = ExtractionResult {
         extracted_files: package.payload_files(),

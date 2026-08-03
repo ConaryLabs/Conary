@@ -334,13 +334,14 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             .cloned()
             .collect::<Vec<_>>();
         let through_symlink_files = directory_plan.through_symlink_root_files(&resolved_files);
+        let config_declarations = self.pkg.config_declarations()?;
         let config_transaction = crate::commands::generation::config_transaction::capture_install(
             self.tx,
             self.selected_root.selected_root(),
             self.cas,
             crate::commands::generation::config_transaction::ConfigInstallCapture {
                 source: super::super::config_files::source_for_semantics(self.ctx.semantics),
-                declared: self.pkg.config_files(),
+                declared: &config_declarations,
                 incoming: &package_files,
                 replacing_trove_id: self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
                 replaced_trove_ids: &[],
@@ -350,7 +351,7 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             self.tx,
             self.selected_root.selected_root(),
             super::super::config_files::source_for_semantics(self.ctx.semantics),
-            self.pkg.config_files(),
+            &config_declarations,
             self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
             package_files,
         )?;

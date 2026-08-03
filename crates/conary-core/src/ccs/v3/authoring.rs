@@ -155,13 +155,8 @@ pub fn project_build_result_authority_to_v3(
             conflict: ConflictPolicyV3::Error,
         })
         .collect::<Vec<_>>();
-    let config = config_authority
-        .iter()
-        .map(|(path, semantics)| ConfigAuthorityV3 {
-            path: path.clone(),
-            semantics: *semantics,
-        })
-        .collect::<Vec<_>>();
+    let mut config = input.build.manifest.config.files.clone();
+    config.sort_by(|left, right| left.path().cmp(right.path()));
 
     let default_component = select_default_component(input.build)?;
     let mut components = input
@@ -390,11 +385,12 @@ fn config_authority_for_manifest(
     let mut authority = BTreeMap::new();
 
     for config in &manifest.config.files {
-        let absent_from_payload = config.ghost || config.remove_on_upgrade;
-        if !config.path.starts_with('/') {
-            bail!("config path {} must be absolute", config.path);
-        }
-        if absent_from_payload == build_paths.contains(config.path.as_str()) {
+        config
+            .validate()
+            .map_err(|error| anyhow::anyhow!("config path {}: {error}", config.path()))?;
+        let absent_from_payload =
+            config.payload() == crate::packages::config_authority::ConfigPayloadAssociation::Absent;
+        if absent_from_payload == build_paths.contains(config.path()) {
             let expected = if absent_from_payload {
                 "absent from"
             } else {
@@ -402,16 +398,19 @@ fn config_authority_for_manifest(
             };
             bail!(
                 "config path {} must be {expected} build output for its exact semantics",
-                config.path
+                config.path()
             );
         }
         let semantics = ConfigSemanticsV3 {
-            noreplace: config.noreplace,
-            ghost: config.ghost,
-            remove_on_upgrade: config.remove_on_upgrade,
+            noreplace: config.noreplace(),
+            ghost: config.ghost(),
+            remove_on_upgrade: config.remove_on_upgrade(),
         };
-        if authority.insert(config.path.clone(), semantics).is_some() {
-            bail!("config path {} is declared more than once", config.path);
+        if authority
+            .insert(config.path().to_string(), semantics)
+            .is_some()
+        {
+            bail!("config path {} is declared more than once", config.path());
         }
     }
 

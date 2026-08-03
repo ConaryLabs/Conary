@@ -20,9 +20,9 @@ binaries = ["/usr/bin/phase4-runtime-fixture"]
 default = ["runtime"]
 
 [[config.files]]
+source = "ccs"
 path = "/etc/phase4-runtime-fixture/app.conf"
 noreplace = true
-ghost = false
-remove_on_upgrade = false
+payload = "matched"
 
 [hooks]

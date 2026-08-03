@@ -166,22 +166,22 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         .files
         .iter()
         .map(|config| {
-            if config.ghost {
+            if config.ghost() {
                 anyhow::bail!(
                     "Debian export cannot represent ghost config path {}",
-                    config.path
+                    config.path()
                 );
             }
-            if !config.noreplace {
+            if !config.noreplace() {
                 anyhow::bail!(
                     "Debian export cannot represent replacing config path {}",
-                    config.path
+                    config.path()
                 );
             }
-            Ok(if config.remove_on_upgrade {
-                format!("remove-on-upgrade {}", config.path)
+            Ok(if config.remove_on_upgrade() {
+                format!("remove-on-upgrade {}", config.path())
             } else {
-                config.path.clone()
+                config.path().to_string()
             })
         })
         .collect::<Result<Vec<_>>>()?;

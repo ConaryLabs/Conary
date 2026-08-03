@@ -1,12 +1,12 @@
 // conary-core/src/ccs/convert/scriptlet_bundle/types.rs
 
+use crate::ccs::convert::ForeignConversionInput;
 use crate::ccs::native_lifecycle::NativeLifecycleBundle;
-use crate::packages::common::PackageMetadata;
 use serde::{Deserialize, Serialize};
 
 pub struct ScriptletBundleInput<'a> {
-    pub source_metadata: &'a PackageMetadata,
-    pub final_metadata: &'a PackageMetadata,
+    pub source_metadata: &'a ForeignConversionInput,
+    pub final_metadata: &'a ForeignConversionInput,
     pub source_format: &'a str,
     pub source_profile: Option<&'a str>,
     pub source_release: Option<&'a str>,

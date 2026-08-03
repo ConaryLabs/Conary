@@ -383,6 +383,7 @@ mod tests {
                     source: crate::db::models::ConfigSource::Auto,
                     noreplace: false,
                     ghost: false,
+                    materialized: true,
                     original_sha256: Some(artifact.sha256().to_string()),
                     artifact: Some(artifact),
                 }),

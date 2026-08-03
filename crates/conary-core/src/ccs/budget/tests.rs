@@ -3,8 +3,8 @@
 use super::*;
 use crate::ccs::manifest::FileCapability;
 use crate::ccs::v3::schema::{
-    ComponentAuthorityV3, ConfigAuthorityV3, ConfigSemanticsV3, ConflictPolicyV3,
-    LifecycleScriptExecutionV3, LifecycleScriptV3, PackageDataV3,
+    ComponentAuthorityV3, ConfigSemanticsV3, ConflictPolicyV3, LifecycleScriptExecutionV3,
+    LifecycleScriptV3, PackageDataV3,
 };
 use crate::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadTimestamp};
 use std::collections::BTreeMap;
@@ -323,14 +323,15 @@ fn near_limit_values_on_each_dimension_stay_admissible() {
     for index in 0..CCS_BUDGET.max_xattrs_per_node {
         xattrs.insert(format!("user.x{index}"), vec![0_u8; 8]);
     }
-    package_data(&mut authority).config = vec![ConfigAuthorityV3 {
-        path: "/etc/near-limit.conf".to_string(),
-        semantics: ConfigSemanticsV3 {
-            noreplace: true,
-            ghost: false,
-            remove_on_upgrade: false,
-        },
-    }];
+    package_data(&mut authority).config = vec![
+        crate::packages::config_authority::SourceConfigDeclaration::Ccs(
+            crate::packages::config_authority::CcsConfigDeclaration {
+                path: "/etc/near-limit.conf".to_string(),
+                noreplace: true,
+                payload: crate::packages::config_authority::ConfigPayloadAssociation::Matched,
+            },
+        ),
+    ];
 
     let census = CCS_BUDGET.admit_authority(&authority).unwrap();
 

@@ -38,8 +38,8 @@ use conary_core::db::models::{
     InstalledNativeLifecycleBundle, InstalledRequirementGroup, Trove,
 };
 use conary_core::filesystem::CasStore;
+use conary_core::packages::config_authority::SourceConfigDeclaration;
 use conary_core::packages::payload::PackagePayloadFile;
-use conary_core::packages::traits::ConfigFileInfo;
 use conary_core::scriptlet::SandboxMode;
 #[cfg(test)]
 use preparation::BatchConflict;
@@ -86,7 +86,7 @@ pub struct PreparedPackage {
     /// exact incoming transaction element.
     pub relation_deconfigurations: Vec<conary_core::transaction::PackageRelationDeconfiguration>,
     /// Configuration files declared by the native package metadata
-    pub config_files: Vec<ConfigFileInfo>,
+    pub config_declarations: Vec<SourceConfigDeclaration>,
     /// Typed ownership used by dependency and autoremove planning.
     pub install_reason: InstallReason,
     /// Human-facing explanation for why this package was selected.

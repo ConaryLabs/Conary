@@ -1,8 +1,8 @@
 // apps/conary/src/commands/cook/foreign_package.rs
 
 use anyhow::{Context, Result};
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{ConversionOptions, NativePackageConverter};
-use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::registry::{detect_format, parse_package};
 use std::io::Write;
 use std::path::Path;
@@ -40,7 +40,8 @@ pub(super) fn cook_foreign_package(
             package_path.display()
         )
     })?;
-    let metadata = PackageMetadata::from_package(package_path.to_path_buf(), package.as_ref())?;
+    let metadata =
+        ForeignConversionInput::from_package(package_path.to_path_buf(), package.as_ref())?;
     let converter = NativePackageConverter::new(ConversionOptions {
         output_dir: output_dir.to_path_buf(),
     })

@@ -110,7 +110,7 @@ pub fn prepare_package_for_batch(
         relations: pkg.relations().to_vec(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: pkg.config_files().to_vec(),
+        config_declarations: pkg.config_declarations()?,
         install_reason,
         selection_reason: selection_reason.to_string(),
         is_upgrade,

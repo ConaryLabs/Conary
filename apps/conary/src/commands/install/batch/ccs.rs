@@ -112,7 +112,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         relations: package.relations().to_vec(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
-        config_files: package.config_files().to_vec(),
+        config_declarations: package.config_declarations()?,
         install_reason,
         selection_reason: selection_reason.to_string(),
         is_upgrade,
