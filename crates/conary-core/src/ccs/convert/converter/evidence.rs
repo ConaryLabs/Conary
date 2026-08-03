@@ -21,7 +21,7 @@ pub enum ConversionError {
 pub(super) fn foreign_conversion_evidence(
     format: &str,
     checksum: &str,
-    metadata: &PackageMetadata,
+    metadata: &super::super::ForeignConversionInput,
     build_risk_report: &CommandRiskReport,
 ) -> HermeticBuildEvidence {
     HermeticBuildEvidence {
@@ -97,7 +97,9 @@ pub(super) fn classify_foreign_build_body_risk(
     }))
 }
 
-pub(super) fn classify_foreign_scriptlet_risk(metadata: &PackageMetadata) -> CommandRiskReport {
+pub(super) fn classify_foreign_scriptlet_risk(
+    metadata: &super::super::ForeignConversionInput,
+) -> CommandRiskReport {
     let flattened = metadata
         .diagnostic_scriptlet_evidence
         .iter()

@@ -550,6 +550,7 @@ fn restore_config_files(
             current_hash: config.current_hash.clone(),
             noreplace: config.noreplace,
             ghost: config.ghost,
+            materialized: config.materialized,
             remove_on_upgrade: config.remove_on_upgrade,
             status: config.status,
             modified_at: config.modified_at.clone(),

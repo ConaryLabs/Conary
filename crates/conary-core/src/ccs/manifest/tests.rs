@@ -61,10 +61,10 @@ unit = "myapp.service"
 enable = false
 
 [[config.files]]
+source = "ccs"
 path = "/etc/myapp/config.toml"
 noreplace = true
-ghost = false
-remove_on_upgrade = false
+payload = "matched"
 "#;
     let manifest = CcsManifest::parse(toml).unwrap();
     assert_eq!(manifest.package.name, "myapp");

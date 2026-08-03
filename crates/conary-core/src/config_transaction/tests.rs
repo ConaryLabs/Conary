@@ -184,6 +184,7 @@ fn durable_transaction_rejects_unowned_auxiliary_paths() {
                 source: ConfigSource::Auto,
                 noreplace: false,
                 ghost: false,
+                materialized: true,
                 original_sha256: Some(artifact.sha256().to_string()),
                 artifact: Some(artifact.clone()),
             }),
@@ -196,7 +197,7 @@ fn durable_transaction_rejects_unowned_auxiliary_paths() {
 }
 
 #[test]
-fn restore_snapshot_is_a_v4_exact_prechange_contract() {
+fn restore_snapshot_is_a_v5_exact_prechange_contract() {
     let old = regular(b"local", 0o100600);
     let saved = regular(b"saved", 0o100640);
     let new = regular(b"new", 0o100644);
@@ -208,6 +209,7 @@ fn restore_snapshot_is_a_v4_exact_prechange_contract() {
                 source: ConfigSource::Arch,
                 noreplace: true,
                 ghost: false,
+                materialized: true,
                 original_sha256: Some(crate::hash::sha256(b"old")),
                 artifact: None,
             }),
@@ -216,6 +218,7 @@ fn restore_snapshot_is_a_v4_exact_prechange_contract() {
                 source: ConfigSource::Arch,
                 noreplace: true,
                 ghost: false,
+                materialized: true,
                 original_sha256: Some(new.sha256().to_string()),
                 artifact: Some(new),
             }),
@@ -226,7 +229,7 @@ fn restore_snapshot_is_a_v4_exact_prechange_contract() {
 
     let restore = forward.restore_snapshot().unwrap();
 
-    assert_eq!(restore.schema_version, 4);
+    assert_eq!(restore.schema_version, 5);
     restore.validate_restore_snapshot().unwrap();
     assert_eq!(
         restore.entries[0].operation,
@@ -300,9 +303,9 @@ fn restore_owned_paths_cover_exact_suffix_grammar_and_pacsave_rotation() {
 }
 
 #[test]
-fn schema_v4_rejects_unknown_fields_at_every_contract_layer() {
+fn schema_v5_rejects_unknown_fields_at_every_contract_layer() {
     let valid = serde_json::json!({
-        "schema_version": 4,
+        "schema_version": 5,
         "entries": [{
             "path": "/etc/demo.conf",
             "operation": "install",
@@ -312,6 +315,7 @@ fn schema_v4_rejects_unknown_fields_at_every_contract_layer() {
                 "source": "rpm",
                 "noreplace": false,
                 "ghost": true,
+                "materialized": false,
                 "original_sha256": null,
                 "artifact": null
             },
@@ -354,6 +358,7 @@ fn remove_on_upgrade_requires_exact_non_ghost_debian_prior_state() {
         source: ConfigSource::Deb,
         noreplace: true,
         ghost: false,
+        materialized: true,
         original_sha256: Some(crate::hash::sha256(b"old")),
         artifact: None,
     };
@@ -399,7 +404,7 @@ fn remove_on_upgrade_requires_exact_non_ghost_debian_prior_state() {
 fn non_ghost_prior_state_requires_canonical_sha256_after_deserialization() {
     let transaction = |original_sha256: serde_json::Value| {
         serde_json::from_value::<GenerationConfigTransaction>(serde_json::json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "entries": [{
                 "path": "/etc/demo.conf",
                 "operation": "remove",
@@ -407,6 +412,7 @@ fn non_ghost_prior_state_requires_canonical_sha256_after_deserialization() {
                     "source": "rpm",
                     "noreplace": false,
                     "ghost": false,
+                    "materialized": true,
                     "original_sha256": original_sha256,
                     "artifact": null
                 },

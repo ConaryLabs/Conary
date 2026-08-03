@@ -1,6 +1,7 @@
 // conary-core/src/ccs/v3/debug_projection.rs
 
 use super::schema::{AuthorityDocumentV3, ConfigSemanticsV3, PackageDataV3, PackageKindV3};
+use crate::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
@@ -76,9 +77,9 @@ fn validate_config_projection(
     }
 
     if let PackageKindV3::Package(package) = &authority.kind {
-        for (path, semantics) in &debug_config {
+        for (path, declaration) in &debug_config {
             let signed_file = package.files.iter().find(|file| file.path == *path);
-            if semantics.ghost || semantics.remove_on_upgrade {
+            if declaration.payload() == ConfigPayloadAssociation::Absent {
                 if signed_file.is_some() {
                     bail!(
                         "debug TOML config path {path} must be absent from signed file authority"
@@ -88,7 +89,12 @@ fn validate_config_projection(
                 let Some(file) = signed_file else {
                     bail!("debug TOML config path {path} missing from signed file authority");
                 };
-                if file.config != Some(*semantics) {
+                let semantics = ConfigSemanticsV3 {
+                    noreplace: declaration.noreplace(),
+                    ghost: declaration.ghost(),
+                    remove_on_upgrade: declaration.remove_on_upgrade(),
+                };
+                if file.config != Some(semantics) {
                     bail!(
                         "debug TOML config path {path} semantics do not match signed file authority"
                     );
@@ -110,29 +116,20 @@ fn validate_config_projection(
 
 fn debug_config_projection(
     manifest: &crate::ccs::manifest::CcsManifest,
-) -> BTreeMap<String, ConfigSemanticsV3> {
+) -> BTreeMap<String, SourceConfigDeclaration> {
     manifest
         .config
         .files
         .iter()
-        .map(|entry| {
-            (
-                entry.path.clone(),
-                ConfigSemanticsV3 {
-                    noreplace: entry.noreplace,
-                    ghost: entry.ghost,
-                    remove_on_upgrade: entry.remove_on_upgrade,
-                },
-            )
-        })
+        .map(|entry| (entry.path().to_string(), entry.clone()))
         .collect()
 }
 
-fn signed_config_projection(package: &PackageDataV3) -> BTreeMap<String, ConfigSemanticsV3> {
+fn signed_config_projection(package: &PackageDataV3) -> BTreeMap<String, SourceConfigDeclaration> {
     package
         .config
         .iter()
-        .map(|entry| (entry.path.clone(), entry.semantics))
+        .map(|entry| (entry.path().to_string(), entry.clone()))
         .collect()
 }
 
@@ -150,7 +147,7 @@ fn validate_lifecycle_projection(
     Ok(())
 }
 
-fn joined_keys(map: &BTreeMap<String, ConfigSemanticsV3>) -> String {
+fn joined_keys(map: &BTreeMap<String, SourceConfigDeclaration>) -> String {
     map.keys().cloned().collect::<Vec<_>>().join(", ")
 }
 
@@ -160,23 +157,17 @@ mod tests {
 
     #[test]
     fn rejects_debug_config_missing_from_signed_authority() {
-        let toml = r#"
-[package]
-name = "demo"
-version = "0.1.0"
-version_scheme = "conary"
-release = "1"
-kind = "package"
-description = "demo package"
-
-[[config.files]]
-path = "/etc/conary-example/config.toml"
-noreplace = true
-ghost = false
-remove_on_upgrade = false
-"#;
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("demo", "0.1.0");
+        manifest.config.files = vec![
+            crate::packages::config_authority::SourceConfigDeclaration::Ccs(
+                crate::packages::config_authority::CcsConfigDeclaration {
+                    path: "/etc/conary-example/config.toml".to_string(),
+                    noreplace: true,
+                    payload: crate::packages::config_authority::ConfigPayloadAssociation::Matched,
+                },
+            ),
+        ];
         let authority = AuthorityDocumentV3::package_for_tests("demo");
-        let manifest = crate::ccs::manifest::CcsManifest::parse(toml).unwrap();
 
         let error = super::validate_debug_toml_projection(&authority, &manifest).unwrap_err();
         assert!(error.to_string().contains("debug TOML"));

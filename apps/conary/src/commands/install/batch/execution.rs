@@ -332,7 +332,7 @@ where
                 self.cas,
                 crate::commands::generation::config_transaction::ConfigInstallCapture {
                     source: super::super::config_files::source_for_semantics(package.semantics),
-                    declared: &package.config_files,
+                    declared: &package.config_declarations,
                     incoming: &package_files,
                     replacing_trove_id: old_trove_id,
                     replaced_trove_ids: &immediately_replaced,
@@ -345,7 +345,7 @@ where
                 self.tx,
                 self.selected_root,
                 super::super::config_files::source_for_semantics(package.semantics),
-                &package.config_files,
+                &package.config_declarations,
                 old_trove_id,
                 package_files,
             )?;

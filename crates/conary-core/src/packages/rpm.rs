@@ -4,21 +4,20 @@
 
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::common::PackageMetadata;
 use crate::packages::payload::PackagePayload;
 use crate::packages::rpm::authority::{RpmDeclaredCapability, RpmPackageAuthority};
 use crate::packages::source_authority::SourcePackageAuthority;
 use crate::packages::traits::{
-    ConfigFileInfo, NativeArgumentContract, NativeArgumentValue, NativeEnvironmentFact,
-    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
-    NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
-    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
-    PackageFile, PackageFormat, RpmHeaderContextMetadata, RpmHeaderFactMetadata,
-    RpmHeaderFactSource, RpmHeaderValueMetadata, RpmMacroContextMetadata,
-    RpmMacroDefinitionMetadata, RpmMacroDefinitionSource, RpmNativeScriptletMetadata,
-    RpmScriptletCriticality, RpmScriptletFlagsMetadata, RpmScriptletProgram,
-    RpmScriptletRuntimeMetadata, RpmScriptletSlot, RpmSysusersDirective, RpmSysusersMetadata,
-    RpmTriggerAction, RpmTriggerCondition, RpmTriggerFamily, RpmTriggerMetadata,
+    NativeArgumentContract, NativeArgumentValue, NativeEnvironmentFact, NativeInvocationContract,
+    NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry,
+    NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport,
+    NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition, PackageFile,
+    PackageFormat, RpmHeaderContextMetadata, RpmHeaderFactMetadata, RpmHeaderFactSource,
+    RpmHeaderValueMetadata, RpmMacroContextMetadata, RpmMacroDefinitionMetadata,
+    RpmMacroDefinitionSource, RpmNativeScriptletMetadata, RpmScriptletCriticality,
+    RpmScriptletFlagsMetadata, RpmScriptletProgram, RpmScriptletRuntimeMetadata, RpmScriptletSlot,
+    RpmSysusersDirective, RpmSysusersMetadata, RpmTriggerAction, RpmTriggerCondition,
+    RpmTriggerFamily, RpmTriggerMetadata,
 };
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
@@ -28,7 +27,6 @@ use crate::repository::versioning::VersionScheme;
 use rpm::{DependencyFlags, Package, PackageMetadata as RpmMetadata};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
 use tracing::debug;
 
 pub mod authority;
@@ -37,8 +35,12 @@ mod payload;
 mod scriptlets;
 mod sysusers;
 pub struct RpmPackage {
-    /// Common package metadata
-    meta: PackageMetadata,
+    authority: RpmPackageAuthority,
+    description: Option<String>,
+    files: Vec<PackageFile>,
+    requirements: Vec<RepositoryRequirementGroup>,
+    relations: Vec<RepositoryRequirementGroup>,
+    native_scriptlet_abi: Vec<NativeScriptletEntry>,
     // RPM-specific provenance information
     source_rpm: Option<String>,
     build_host: Option<String>,
@@ -49,27 +51,6 @@ pub struct RpmPackage {
 }
 
 impl RpmPackage {
-    /// Extract config files from RPM package using metadata
-    fn extract_config_files(pkg: &Package) -> Result<Vec<ConfigFileInfo>> {
-        use rpm::FileFlags;
-        let mut config_files = Vec::new();
-
-        for entry in pkg.metadata.get_file_entries().map_err(|error| {
-            Error::ParseError(format!("Failed to read RPM config-file metadata: {error}"))
-        })? {
-            if entry.flags().contains(FileFlags::CONFIG) {
-                config_files.push(ConfigFileInfo {
-                    path: entry.path().to_string_lossy().to_string(),
-                    noreplace: entry.flags().contains(FileFlags::NOREPLACE),
-                    ghost: entry.flags().contains(FileFlags::GHOST),
-                    remove_on_upgrade: false,
-                });
-            }
-        }
-
-        Ok(config_files)
-    }
-
     /// Parse RPM Requires into the formal Boolean requirement grammar.
     fn extract_requirements(pkg: &Package) -> Result<Vec<RepositoryRequirementGroup>> {
         let groups = pkg
@@ -452,7 +433,7 @@ impl PackageFormat for RpmPackage {
 
         // Extract exact native lifecycle entries and config-file policy.
         let native_scriptlet_abi = Self::extract_native_scriptlet_abi(&pkg)?;
-        let config_files = Self::extract_config_files(&pkg)?;
+        let config = authority::parse_config_declarations(&pkg)?;
 
         debug!(
             "Parsed RPM: {} version {} ({} files, {} dependencies, {} native lifecycle entries, {} config files)",
@@ -461,31 +442,27 @@ impl PackageFormat for RpmPackage {
             files.len(),
             requirements.len(),
             native_scriptlet_abi.len(),
-            config_files.len()
+            config.len()
         );
 
-        let meta = PackageMetadata {
-            package_path: PathBuf::from(path),
-            source_authority: SourcePackageAuthority::Rpm(RpmPackageAuthority {
-                name,
-                epoch,
-                version,
-                release: release.to_string(),
-                evr,
-                architecture: architecture.clone().expect("RPM architecture is required"),
-                provides,
-            }),
+        let authority = RpmPackageAuthority {
+            name,
+            epoch,
+            version_component: version,
+            release: release.to_string(),
+            evr,
+            architecture: architecture.clone().expect("RPM architecture is required"),
+            provides,
+            config,
+        };
+
+        Ok(Self {
+            authority,
             description,
             files,
             requirements,
             relations,
-            diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi,
-            config_files,
-        };
-
-        Ok(Self {
-            meta,
             source_rpm,
             build_host,
             vendor,
@@ -496,45 +473,45 @@ impl PackageFormat for RpmPackage {
     }
 
     fn name(&self) -> &str {
-        self.meta.name()
+        &self.authority.name
     }
 
     fn version(&self) -> &str {
-        self.meta.version()
+        &self.authority.evr
     }
 
     fn version_scheme(&self) -> VersionScheme {
-        self.meta.version_scheme()
+        VersionScheme::Rpm
     }
 
     fn architecture(&self) -> Option<&str> {
-        self.meta.architecture()
+        Some(&self.authority.architecture)
     }
 
     fn description(&self) -> Option<&str> {
-        self.meta.description()
+        self.description.as_deref()
     }
 
     fn files(&self) -> &[PackageFile] {
-        self.meta.files()
+        &self.files
     }
 
     fn requirements(&self) -> &[RepositoryRequirementGroup] {
-        self.meta.requirements()
+        &self.requirements
     }
 
     fn resolution_capabilities(
         &self,
     ) -> Result<Vec<crate::repository::dependency_model::ProvidedCapability>> {
-        self.meta.resolution_capabilities()
+        SourcePackageAuthority::Rpm(self.authority.clone()).resolution_capabilities()
     }
 
     fn source_authority(&self) -> Result<SourcePackageAuthority> {
-        Ok(self.meta.source_authority.clone())
+        Ok(SourcePackageAuthority::Rpm(self.authority.clone()))
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {
-        self.meta.relations()
+        &self.relations
     }
 
     fn package_payload(&self) -> Result<PackagePayload> {
@@ -542,15 +519,11 @@ impl PackageFormat for RpmPackage {
     }
 
     fn to_trove(&self) -> Trove {
-        self.meta.to_trove()
+        SourcePackageAuthority::Rpm(self.authority.clone()).to_trove(self.description.clone())
     }
 
     fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
-        self.meta.native_scriptlet_abi()
-    }
-
-    fn config_files(&self) -> &[ConfigFileInfo] {
-        self.meta.config_files()
+        &self.native_scriptlet_abi
     }
 }
 

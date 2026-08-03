@@ -309,16 +309,24 @@ fn deb_native_abi_includes_config_as_native_only() {
 
 #[test]
 fn deb_conffiles_preserve_remove_on_upgrade_as_typed_metadata() {
-    let entries =
-        DebPackage::parse_conffiles("/etc/demo.conf\nremove-on-upgrade /etc/obsolete.conf\n")
-            .unwrap();
+    let entries = authority::parse_config_declarations(
+        "/etc/demo.conf\nremove-on-upgrade /etc/obsolete.conf\n",
+    )
+    .unwrap();
 
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].path, "/etc/demo.conf");
     assert!(!entries[0].remove_on_upgrade);
     assert_eq!(entries[1].path, "/etc/obsolete.conf");
     assert!(entries[1].remove_on_upgrade);
-    assert!(entries.iter().all(|entry| entry.noreplace && !entry.ghost));
+    assert_eq!(
+        entries[0].payload,
+        crate::packages::config_authority::ConfigPayloadAssociation::Matched
+    );
+    assert_eq!(
+        entries[1].payload,
+        crate::packages::config_authority::ConfigPayloadAssociation::Absent
+    );
 }
 
 #[test]
@@ -330,7 +338,10 @@ fn deb_conffiles_reject_unknown_flags_and_malformed_entries() {
         "\n",
         "/etc/missing-final-newline",
     ] {
-        assert!(DebPackage::parse_conffiles(invalid).is_err(), "{invalid:?}");
+        assert!(
+            authority::parse_config_declarations(invalid).is_err(),
+            "{invalid:?}"
+        );
     }
 }
 

@@ -10,16 +10,16 @@ use crate::server::conversion_timing::{
 };
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 use conary_core::db::models::RepositoryPackage;
-use conary_core::packages::common::PackageMetadata;
 use std::path::PathBuf;
 use std::time::Instant;
 use tempfile::TempDir;
 use tracing::info;
 
 struct ParsedConversion {
-    metadata: PackageMetadata,
+    metadata: ForeignConversionInput,
     format: &'static str,
     original_checksum: String,
     conversion_result: ConversionResult,

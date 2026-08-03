@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-03
-revision: 2
+revision: 3
 summary: Define lossless RPM, Debian, ALPM, and CCS package authority plus explicit consumer projections
 ---
 
@@ -12,17 +12,18 @@ This specification is the design authority for roadmap workstream W5 and
 [issue #108](https://github.com/ConaryLabs/Conary/issues/108). It defines the
 hard-cut target implemented by issues
 [#104](https://github.com/ConaryLabs/Conary/issues/104) and
-[#105](https://github.com/ConaryLabs/Conary/issues/105). Issue #104 has shipped
-the source-specific identity/provision records, CCS v3 capability provenance,
-resolver distinction, and provider persistence. Issue #105 still owns the
-configuration-declaration half, so no release may be cut between these slices.
+[#105](https://github.com/ConaryLabs/Conary/issues/105). Issues #104 and #105
+have shipped the source-specific identity, provision, and configuration
+records, CCS v3 provenance, resolver distinction, provider and config
+persistence, and transaction projections. W5 is one complete hard cut.
 
 RPM, Debian, and ALPM identity and declared provisions now live in their
 format-specific authority modules behind `SourcePackageAuthority`.
-`PackageFormat::resolution_capabilities()` is an explicit fallible consumer
-projection with capability provenance. The temporary `PackageMetadata` and
-`ConfigFileInfo` bridge remains only for the sibling configuration slice; new
-consumers must not extend it.
+`PackageFormat::resolution_capabilities()` and
+`PackageFormat::config_declarations()` are explicit fallible consumer
+projections. `ForeignConversionInput` is scoped to conversion; native parsers
+retain format-specific authority directly. The retired `PackageMetadata`,
+`ConfigFileInfo`, and `config_files()` adapters do not remain.
 
 This specification owns package identity, dependency/provision authority,
 payload and configuration declarations, and their consumer boundaries.
@@ -286,9 +287,9 @@ planning gate and makes each source ontology independently reviewable.
 
 ## Hard-Cut Deletion And Replacement Map
 
-The W5 implementation is incomplete until these ambiguous surfaces are gone:
+The W5 hard cut deleted these ambiguous surfaces:
 
-| Current surface | Required replacement |
+| Retired surface | Current replacement |
 |---|---|
 | `packages/common.rs::PackageMetadata` and its `packages::PackageMetadata` re-export | Format-specific authority structs plus closed `SourcePackageAuthority` dispatch |
 | `packages/traits.rs::ProvidedCapability` and `PackageFormat::provides()` | Per-format declared-provision records; resolution and CCS projection DTOs exist only at their consumer boundaries |

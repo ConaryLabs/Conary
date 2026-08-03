@@ -4,7 +4,9 @@ use anyhow::Result;
 use conary_core::ccs::CcsManifest;
 use conary_core::ccs::manifest::{Service, ServiceAction};
 use conary_core::ccs::v3::PackageKindTagV3;
-use conary_core::packages::traits::ConfigFileInfo;
+use conary_core::packages::config_authority::{
+    CcsConfigDeclaration, ConfigPayloadAssociation, SourceConfigDeclaration,
+};
 
 use super::CcsInitTemplate;
 
@@ -31,12 +33,11 @@ fn minimal_file_manifest(name: &str, version: &str) -> Result<CcsManifest> {
 
 fn config_noreplace_manifest(name: &str, version: &str) -> Result<CcsManifest> {
     let mut manifest = minimal_file_manifest(name, version)?;
-    manifest.config.files = vec![ConfigFileInfo {
+    manifest.config.files = vec![SourceConfigDeclaration::Ccs(CcsConfigDeclaration {
         path: "/etc/conary-example/config.toml".to_string(),
         noreplace: true,
-        ghost: false,
-        remove_on_upgrade: false,
-    }];
+        payload: ConfigPayloadAssociation::Matched,
+    })];
     Ok(manifest)
 }
 
@@ -82,12 +83,11 @@ mod tests {
         assert_eq!(manifest.package.kind, PackageKindTagV3::Package);
         assert_eq!(
             manifest.config.files,
-            vec![ConfigFileInfo {
+            vec![SourceConfigDeclaration::Ccs(CcsConfigDeclaration {
                 path: "/etc/conary-example/config.toml".to_string(),
                 noreplace: true,
-                ghost: false,
-                remove_on_upgrade: false,
-            }]
+                payload: ConfigPayloadAssociation::Matched,
+            })]
         );
         assert!(manifest.hooks.services.is_empty());
         assert!(manifest.hooks.systemd.is_empty());

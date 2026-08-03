@@ -361,18 +361,18 @@ enables delta-efficient distribution via the Remi server.
 
 Identity and declared provisions now use format-specific authority records and
 the closed `SourcePackageAuthority` dispatch. Resolution, signing, persistence,
-and publication consume provenance-tagged projections. The temporary
-`PackageMetadata` and `ConfigFileInfo` configuration bridge remains for issue
-#105; new conversion work must not add another consumer to it. The
-canonical target is
+and publication consume provenance-tagged projections. Configuration records
+carry their exact RPM, Debian, ALPM, or CCS declaration plus an explicit
+matched/absent payload association. `ForeignConversionInput` is the named
+conversion consumer, and the retired common metadata/config bridge is gone.
+The canonical contract is
 [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md):
 RPM, Debian, and ALPM parsers retain their native ontologies, and named
 fallible projections serve dependency resolution, CCS authoring, and native
 transaction planning. Exact identity is separate from declared capabilities,
 and source config declarations are separate from materialized payload nodes.
 
-Issue #104 implements the identity/capability half and issue #105 owns source
-configuration declarations. No release may be cut between them;
+Issues #104 and #105 complete the two W5 implementation halves;
 [`docs/specs/ccs-format-v3.md`](../specs/ccs-format-v3.md) is the current
 signed-format contract.
 
@@ -444,16 +444,16 @@ cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
 decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
 
-Configuration authority is exact per path. Each `[[config.files]]` declaration
-and its signed v3 projection carries `noreplace`, `ghost`, and
-`remove_on_upgrade`; there is no package-wide config default. Ordinary config
-paths must identify one regular-file or symlink payload and repeat the same
-semantics in `FileAuthorityV3`. RPM ghost paths and Debian
-remove-on-upgrade paths must be absent from payload and backed by the matching
-signed native source contract. `CcsPackage` projects only that verified
-authority into install, update, and remove transactions. Foreign conversion
-copies the native parser's exact config declarations rather than reconstructing
-them from paths.
+Configuration authority is exact per path. Each signed declaration retains
+its source-specific record and a `matched` or `absent` payload association;
+there is no package-wide config default. Matched declarations identify one
+regular-file or symlink payload and repeat effective semantics in
+`FileAuthorityV3`. RPM ghosts, Debian remove-on-upgrade declarations, and
+unmatched ALPM backup declarations are absent for distinct source-owned
+reasons. An unmatched ALPM declaration remains signed and persisted with
+`materialized = false`; it never creates, removes, or backs up a user-created
+path until a later version supplies a matching payload node. `CcsPackage`
+projects only verified declaration authority into transactions.
 
 Signed file conflict replacement and host-mutation policy are rejected while
 their typed transaction consumers do not exist. The reader never accepts a

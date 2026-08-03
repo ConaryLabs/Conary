@@ -8,13 +8,17 @@ use crate::repository::dependency_model::{
 };
 use std::io::Read;
 
-fn config_file(path: &str, noreplace: bool) -> crate::packages::traits::ConfigFileInfo {
-    crate::packages::traits::ConfigFileInfo {
-        path: path.to_string(),
-        noreplace,
-        ghost: false,
-        remove_on_upgrade: false,
-    }
+fn config_file(
+    path: &str,
+    noreplace: bool,
+) -> crate::packages::config_authority::SourceConfigDeclaration {
+    crate::packages::config_authority::SourceConfigDeclaration::Ccs(
+        crate::packages::config_authority::CcsConfigDeclaration {
+            path: path.to_string(),
+            noreplace,
+            payload: crate::packages::config_authority::ConfigPayloadAssociation::Matched,
+        },
+    )
 }
 
 #[test]
@@ -328,8 +332,8 @@ fn projection_marks_noreplace_config_files() {
         remove_on_upgrade: false,
     };
     assert_eq!(package.files[0].config, Some(expected));
-    assert_eq!(package.config[0].path, "/etc/conary-example/config.toml");
-    assert_eq!(package.config[0].semantics, expected);
+    assert_eq!(package.config[0].path(), "/etc/conary-example/config.toml");
+    assert_eq!(package.config[0].noreplace(), expected.noreplace);
 }
 
 #[test]
@@ -361,7 +365,7 @@ fn projection_marks_replace_config_when_noreplace_is_false() {
         remove_on_upgrade: false,
     };
     assert_eq!(package.files[0].config, Some(expected));
-    assert_eq!(package.config[0].semantics, expected);
+    assert_eq!(package.config[0].noreplace(), expected.noreplace);
 }
 
 #[test]

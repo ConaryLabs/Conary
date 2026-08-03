@@ -1,6 +1,6 @@
 // conary-core/src/ccs/convert/payload_hints.rs
 
-use crate::packages::common::PackageMetadata;
+use super::ForeignConversionInput;
 use crate::packages::traits::ExtractedFile;
 use crate::payload::PayloadNodeKind;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,13 +22,15 @@ pub struct PayloadHints {
 }
 
 impl PayloadHints {
-    pub fn from_package(metadata: &PackageMetadata, files: &[ExtractedFile]) -> Self {
+    pub fn from_package(metadata: &ForeignConversionInput, files: &[ExtractedFile]) -> Self {
         let mut hints = Self::from_files(files);
         hints.package_name = Some(metadata.name().to_string());
         hints.config_files = metadata
-            .config_files
-            .iter()
-            .map(|config| config.path.clone())
+            .source_authority
+            .config_declarations()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|config| config.path().to_string())
             .collect();
         hints
     }

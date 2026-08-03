@@ -600,10 +600,10 @@ impl CcsStructuralBudget {
                 self.max_config_entries,
             )?;
             for config in &data.config {
-                self.admit_path(&config.path, "kind.package.config.path")?;
+                self.admit_path(config.path(), "kind.package.config.path")?;
                 census.path_bytes = sum(
                     "kind.package.config.path",
-                    [census.path_bytes, config.path.len() as u64],
+                    [census.path_bytes, config.path().len() as u64],
                 )?;
             }
         }

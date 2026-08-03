@@ -3,10 +3,10 @@
 
 use super::ConversionService;
 use anyhow::{Context, Result, anyhow, ensure};
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
-use conary_core::packages::common::PackageMetadata;
 use conary_core::packages::deb::DebPackage;
 use conary_core::packages::payload::PackagePayload;
 use conary_core::packages::rpm::RpmPackage;
@@ -49,7 +49,7 @@ impl ConversionService {
     }
 
     pub(super) fn validate_repository_identity(
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         repo_pkg: &RepositoryPackage,
     ) -> Result<()> {
         ensure!(
@@ -76,7 +76,7 @@ impl ConversionService {
         &self,
         path: &Path,
         source_profile: &str,
-    ) -> Result<(PackageMetadata, PackagePayload, &'static str)> {
+    ) -> Result<(ForeignConversionInput, PackagePayload, &'static str)> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
         let profile =
             conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
@@ -140,9 +140,8 @@ impl ConversionService {
         .map_err(|error| anyhow!("repository conversion metadata task panicked: {error}"))?
     }
 
-    /// Build PackageMetadata from a parsed package
-    fn build_metadata<P: PackageFormat>(pkg: &P) -> Result<PackageMetadata> {
-        PackageMetadata::from_package(PathBuf::new(), pkg).map_err(Into::into)
+    fn build_metadata<P: PackageFormat>(pkg: &P) -> Result<ForeignConversionInput> {
+        ForeignConversionInput::from_package(PathBuf::new(), pkg).map_err(Into::into)
     }
 }
 
@@ -170,8 +169,8 @@ fn bare_sha256(value: &str) -> &str {
 mod tests {
     use super::super::test_support::{create_test_db, insert_repo};
     use super::*;
+    use conary_core::ccs::convert::ForeignConversionInput;
     use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
-    use conary_core::packages::common::PackageMetadata;
     use std::path::PathBuf;
 
     #[test]
@@ -199,7 +198,7 @@ mod tests {
 
     #[test]
     fn repository_identity_cannot_override_authenticated_artifact() {
-        let mut metadata = PackageMetadata::new(
+        let mut metadata = ForeignConversionInput::new(
             PathBuf::from("/tmp/qemu-img.rpm"),
             "qemu-img".to_string(),
             "10.1.0-7.fc44".to_string(),
@@ -292,7 +291,7 @@ mod tests {
         );
         provide.insert(&conn).unwrap();
 
-        let metadata = PackageMetadata::new(
+        let metadata = ForeignConversionInput::new(
             PathBuf::from("/tmp/kernel-modules-core.rpm"),
             "kernel-modules-core".to_string(),
             "6.17.1-300.fc44".to_string(),

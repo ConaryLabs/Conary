@@ -33,33 +33,59 @@ pub(super) fn validate_config_authority(
     let mut config_by_path = std::collections::BTreeMap::new();
 
     for config in &data.config {
-        if let Err(error) = validate_config_path(&config.path) {
+        if let Err(error) = config.validate() {
             diagnostics.push(V3Diagnostic::error(
                 V3DiagnosticCode::KindContractViolation,
-                error,
+                error.to_string(),
                 Some("kind.package.config.path".to_string()),
                 "write a canonical absolute config path into signed authority",
             ));
         }
-        if config_by_path
-            .insert(config.path.as_str(), config.semantics)
-            .is_some()
-        {
+        let semantics = super::super::schema::ConfigSemanticsV3 {
+            noreplace: config.noreplace(),
+            ghost: config.ghost(),
+            remove_on_upgrade: config.remove_on_upgrade(),
+        };
+        let source_matches = match config {
+            crate::packages::config_authority::SourceConfigDeclaration::Rpm(_) => {
+                source_format == Some(crate::ccs::native_lifecycle::SourceFormat::Rpm)
+            }
+            crate::packages::config_authority::SourceConfigDeclaration::Debian(_) => {
+                source_format == Some(crate::ccs::native_lifecycle::SourceFormat::Deb)
+            }
+            crate::packages::config_authority::SourceConfigDeclaration::Alpm(_) => {
+                source_format == Some(crate::ccs::native_lifecycle::SourceFormat::Arch)
+            }
+            crate::packages::config_authority::SourceConfigDeclaration::Ccs(_) => {
+                source_format.is_none()
+            }
+        };
+        if !source_matches {
             diagnostics.push(V3Diagnostic::error(
                 V3DiagnosticCode::KindContractViolation,
-                format!("config path {} is declared more than once", config.path),
+                format!(
+                    "config declaration {} contradicts signed package source authority",
+                    config.path()
+                ),
+                Some("kind.package.config.source".to_string()),
+                "carry the exact declaration kind owned by the signed source package",
+            ));
+        }
+        if config_by_path.insert(config.path(), semantics).is_some() {
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
+                format!("config path {} is declared more than once", config.path()),
                 Some("kind.package.config".to_string()),
                 "write exactly one signed config declaration per path",
             ));
         }
 
-        let semantics = config.semantics;
         if semantics.ghost && semantics.remove_on_upgrade {
             diagnostics.push(V3Diagnostic::error(
                 V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} cannot be both ghost and remove-on-upgrade",
-                    config.path
+                    config.path()
                 ),
                 Some("kind.package.config.semantics".to_string()),
                 "encode the one exact source-package config semantic",
@@ -71,7 +97,7 @@ pub(super) fn validate_config_authority(
                 V3DiagnosticCode::KindContractViolation,
                 format!(
                     "ghost config path {} requires signed RPM source authority",
-                    config.path
+                    config.path()
                 ),
                 Some("kind.package.config.semantics.ghost".to_string()),
                 "carry the exact RPM native lifecycle source contract",
@@ -84,7 +110,7 @@ pub(super) fn validate_config_authority(
                 V3DiagnosticCode::KindContractViolation,
                 format!(
                     "remove-on-upgrade config path {} requires signed Debian source authority",
-                    config.path
+                    config.path()
                 ),
                 Some("kind.package.config.semantics.remove_on_upgrade".to_string()),
                 "carry the exact Debian native lifecycle source contract",
@@ -94,18 +120,18 @@ pub(super) fn validate_config_authority(
         let matching_files = data
             .files
             .iter()
-            .filter(|file| file.path == config.path)
+            .filter(|file| file.path == config.path())
             .collect::<Vec<_>>();
-        if semantics.ghost || semantics.remove_on_upgrade {
+        if config.payload() == crate::packages::config_authority::ConfigPayloadAssociation::Absent {
             if !matching_files.is_empty() {
                 diagnostics.push(V3Diagnostic::error(
                     V3DiagnosticCode::KindContractViolation,
                     format!(
                         "config path {} must be absent from payload for its signed semantics",
-                        config.path
+                        config.path()
                     ),
                     Some("kind.package.config".to_string()),
-                    "remove ghost or remove-on-upgrade config paths from payload authority",
+                    "keep declaration-only config paths out of payload authority",
                 ));
             }
             continue;
@@ -116,7 +142,7 @@ pub(super) fn validate_config_authority(
                 V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} must identify exactly one signed payload file",
-                    config.path
+                    config.path()
                 ),
                 Some("kind.package.config".to_string()),
                 "attach the config declaration to exactly one payload file",
@@ -133,7 +159,7 @@ pub(super) fn validate_config_authority(
                 V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} is not a regular file or symlink",
-                    config.path
+                    config.path()
                 ),
                 Some("kind.package.config".to_string()),
                 "declare configuration only for an installable config artifact",
@@ -144,7 +170,7 @@ pub(super) fn validate_config_authority(
                 V3DiagnosticCode::KindContractViolation,
                 format!(
                     "config path {} semantics do not match signed file authority",
-                    config.path
+                    config.path()
                 ),
                 Some("kind.package.files.config".to_string()),
                 "write the same exact semantics into package and file authority",
@@ -168,19 +194,4 @@ pub(super) fn validate_config_authority(
             ));
         }
     }
-}
-
-fn validate_config_path(path: &str) -> Result<(), String> {
-    if !path.starts_with('/') {
-        return Err(format!("config path must be absolute: {path}"));
-    }
-    let normalized = crate::filesystem::path::sanitize_path(path)
-        .map_err(|error| format!("invalid config path {path}: {error}"))?;
-    let canonical = format!("/{}", normalized.display());
-    if path != canonical {
-        return Err(format!(
-            "config path must use canonical absolute spelling: {path}"
-        ));
-    }
-    Ok(())
 }

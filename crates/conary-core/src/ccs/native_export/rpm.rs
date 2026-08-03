@@ -166,15 +166,15 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     .config
                     .files
                     .iter()
-                    .find(|config| config.path == file.path)
+                    .find(|config| config.path() == file.path)
                 {
-                    if config.remove_on_upgrade || config.ghost {
+                    if config.remove_on_upgrade() || config.ghost() {
                         anyhow::bail!(
                             "RPM payload config {} carries absent-payload semantics",
-                            config.path
+                            config.path()
                         );
                     }
-                    if config.noreplace {
+                    if config.noreplace() {
                         options.config().noreplace()
                     } else {
                         options.config()
@@ -193,15 +193,15 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     .config
                     .files
                     .iter()
-                    .find(|config| config.path == file.path)
+                    .find(|config| config.path() == file.path)
                 {
-                    if config.remove_on_upgrade || config.ghost {
+                    if config.remove_on_upgrade() || config.ghost() {
                         anyhow::bail!(
                             "RPM payload config {} carries absent-payload semantics",
-                            config.path
+                            config.path()
                         );
                     }
-                    if config.noreplace {
+                    if config.noreplace() {
                         options.config().noreplace()
                     } else {
                         options.config()
@@ -222,32 +222,32 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         }
     }
 
-    for config in manifest.config.files.iter().filter(|config| config.ghost) {
-        if config.remove_on_upgrade {
+    for config in manifest.config.files.iter().filter(|config| config.ghost()) {
+        if config.remove_on_upgrade() {
             anyhow::bail!(
                 "RPM ghost config {} cannot also be remove-on-upgrade",
-                config.path
+                config.path()
             );
         }
-        let options = rpm::FileOptions::ghost(&config.path).config();
-        let options = if config.noreplace {
+        let options = rpm::FileOptions::ghost(config.path()).config();
+        let options = if config.noreplace() {
             options.noreplace()
         } else {
             options
         };
         builder
             .with_ghost(options)
-            .with_context(|| format!("Failed to add ghost config: {}", config.path))?;
+            .with_context(|| format!("Failed to add ghost config: {}", config.path()))?;
     }
     if let Some(config) = manifest
         .config
         .files
         .iter()
-        .find(|config| config.remove_on_upgrade)
+        .find(|config| config.remove_on_upgrade())
     {
         anyhow::bail!(
             "RPM export cannot represent remove-on-upgrade config path {}",
-            config.path
+            config.path()
         );
     }
 

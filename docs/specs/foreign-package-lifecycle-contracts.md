@@ -642,9 +642,12 @@ Foreign conversion copies each native parser declaration into signed CCS v3
 authority without a path heuristic or package-wide policy collapse. The
 per-path authority preserves `noreplace`, RPM ghost ownership, and Debian
 remove-on-upgrade. Verified CCS construction projects those signed values into
-the same `PackageFormat::config_files()` interface used by direct native
-installation, while the signed native source format selects the exact RPM,
-Debian, or Arch transaction table below.
+the named fallible `PackageFormat::config_declarations()` transaction
+projection used by direct native installation. Each declaration retains its
+source kind and matched/absent payload association; the signed native source
+format must agree and selects the exact RPM, Debian, or Arch transaction table
+below. An absent ALPM backup declaration is durable authority but performs no
+filesystem mutation and supplies no content identity.
 
 The shared decision engine is
 `crates/conary-core/src/config_transaction.rs`. Mutable-root journaling and

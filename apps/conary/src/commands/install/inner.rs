@@ -456,32 +456,52 @@ fn persist_config_files(
     extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
     let declared_source = config_source_for_context(ctx);
+    let config_declarations = pkg.config_declarations()?;
     let mut declarations = HashMap::new();
-    for config_info in pkg.config_files() {
+    for config_info in &config_declarations {
+        if config_info.source() != declared_source {
+            anyhow::bail!(
+                "config declaration {} has source {}, but package transaction owns {}",
+                config_info.path(),
+                config_info.source(),
+                declared_source
+            );
+        }
         if declarations
-            .insert(config_info.path.as_str(), config_info)
+            .insert(config_info.path(), config_info)
             .is_some()
         {
             anyhow::bail!(
                 "package {} declares config path {} more than once",
                 pkg.name(),
-                config_info.path
+                config_info.path()
             );
         }
-        if config_info.remove_on_upgrade {
-            if declared_source != ConfigSource::Deb || config_info.ghost {
+        if config_info.remove_on_upgrade() {
+            if declared_source != ConfigSource::Deb || config_info.ghost() {
                 anyhow::bail!(
                     "remove-on-upgrade declaration {} from {} is not a Debian conffile",
-                    config_info.path,
+                    config_info.path(),
                     pkg.name()
                 );
             }
-            super::config_files::persist_debian_remove_on_upgrade(tx, &config_info.path, trove_id)?;
+            super::config_files::persist_debian_remove_on_upgrade(
+                tx,
+                config_info.path(),
+                trove_id,
+            )?;
             continue;
         }
-        if config_info.ghost {
-            let mut config = ConfigFile::new_ghost(config_info.path.clone(), trove_id);
-            config.noreplace = config_info.noreplace;
+        if config_info.ghost() {
+            let mut config = ConfigFile::new_ghost(config_info.path().to_string(), trove_id);
+            config.noreplace = config_info.noreplace();
+            config.source = declared_source;
+            config.upsert(tx)?;
+        } else if config_info.payload()
+            == conary_core::packages::config_authority::ConfigPayloadAssociation::Absent
+        {
+            let mut config = ConfigFile::new_declaration(config_info.path().to_string(), trove_id);
+            config.noreplace = config_info.noreplace();
             config.source = declared_source;
             config.upsert(tx)?;
         }
@@ -493,14 +513,14 @@ fn persist_config_files(
         if declaration.is_none() && !is_etc_config_payload(&file.path, &file.node.source.kind) {
             continue;
         }
-        if declaration.is_some_and(|config| config.ghost) {
+        if declaration.is_some_and(|config| config.ghost()) {
             anyhow::bail!(
                 "ghost config {} from {} unexpectedly has a payload entry",
                 file.path,
                 pkg.name()
             );
         }
-        if declaration.is_some_and(|config| config.remove_on_upgrade) {
+        if declaration.is_some_and(|config| config.remove_on_upgrade()) {
             anyhow::bail!(
                 "Debian remove-on-upgrade conffile {} from {} unexpectedly has a payload entry",
                 file.path,
@@ -528,7 +548,7 @@ fn persist_config_files(
                 pkg.name()
             )
         })?;
-        let noreplace = declaration.is_some_and(|config| config.noreplace);
+        let noreplace = declaration.is_some_and(|config| config.noreplace());
         let mut config = if noreplace {
             ConfigFile::new_noreplace(file.path.clone(), trove_id, hash.clone())
         } else {
@@ -555,15 +575,14 @@ fn persist_config_files(
         persisted.insert(file.path.as_str());
     }
 
-    for config_info in pkg
-        .config_files()
-        .iter()
-        .filter(|config| !config.ghost && !config.remove_on_upgrade)
-    {
-        if !persisted.contains(config_info.path.as_str()) {
+    for config_info in config_declarations.iter().filter(|config| {
+        config.payload()
+            == conary_core::packages::config_authority::ConfigPayloadAssociation::Matched
+    }) {
+        if !persisted.contains(config_info.path()) {
             anyhow::bail!(
                 "declared config {} from {} is missing from the installed payload",
-                config_info.path,
+                config_info.path(),
                 pkg.name()
             );
         }

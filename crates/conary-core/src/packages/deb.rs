@@ -8,20 +8,19 @@ use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression::{self, CompressionFormat};
 use crate::db::models::Trove;
 use crate::error::{Error, Result};
-use crate::packages::archive_utils::normalize_path;
-use crate::packages::common::PackageMetadata;
-use crate::packages::deb::authority::{DebianDeclaredCapability, DebianPackageAuthority};
+use crate::packages::deb::authority::{
+    DebianConfigDeclaration, DebianDeclaredCapability, DebianPackageAuthority,
+};
 use crate::packages::payload::{
     PAYLOAD_IO_BUFFER_SIZE, PackagePayload, PayloadSpool, ReopenablePayload,
 };
 use crate::packages::source_authority::SourcePackageAuthority;
 use crate::packages::traits::{
-    ConfigFileInfo, DebControlMember, DebMaintainerInvocation, DebMaintainerMode,
-    DebNativeScriptletMetadata, NativeArgumentContract, NativeArgumentValue,
-    NativeInvocationContract, NativeLifecyclePath, NativeRootExpectation, NativeScriptletBody,
-    NativeScriptletEntry, NativeScriptletFormat, NativeScriptletKind, NativeScriptletMetadata,
-    NativeScriptletSupport, NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition,
-    PackageFile, PackageFormat,
+    DebControlMember, DebMaintainerInvocation, DebMaintainerMode, DebNativeScriptletMetadata,
+    NativeArgumentContract, NativeArgumentValue, NativeInvocationContract, NativeLifecyclePath,
+    NativeRootExpectation, NativeScriptletBody, NativeScriptletEntry, NativeScriptletFormat,
+    NativeScriptletKind, NativeScriptletMetadata, NativeScriptletSupport, NativeStdinContract,
+    NativeTransactionOrder, NativeTransactionPosition, PackageFile, PackageFormat,
 };
 use crate::repository::dependency_model::{
     DebianMultiArch, RepositoryRequirementGroup, RepositoryRequirementKind,
@@ -31,7 +30,6 @@ use crate::repository::versioning::VersionScheme;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::PathBuf;
 use tar::Archive;
 use tracing::debug;
 
@@ -63,7 +61,7 @@ struct ControlTarContents {
     /// Byte-preserving native scriptlet ABI entries extracted from control.tar
     native_scriptlet_abi: Vec<NativeScriptletEntry>,
     /// Config file paths extracted from conffiles
-    config_files: Vec<ConfigFileInfo>,
+    config: Vec<DebianConfigDeclaration>,
     /// Whether the package-level debconf templates member was already seen.
     templates_seen: bool,
 }
@@ -113,15 +111,18 @@ fn read_declared_entry(reader: &mut impl Read, declared: u64, label: &str) -> Re
 
 /// Debian package representation
 pub struct DebPackage {
-    /// Common package metadata
-    meta: PackageMetadata,
+    authority: DebianPackageAuthority,
+    description: Option<String>,
+    files: Vec<PackageFile>,
+    requirements: Vec<RepositoryRequirementGroup>,
+    relations: Vec<RepositoryRequirementGroup>,
+    native_scriptlet_abi: Vec<NativeScriptletEntry>,
     // Debian-specific metadata
     maintainer: Option<String>,
     section: Option<String>,
     priority: Option<String>,
     homepage: Option<String>,
     installed_size: Option<u64>,
-    multi_arch: DebianMultiArch,
     /// File-backed payload parsed from the data tar member.
     payload: PackagePayload,
 }
@@ -130,66 +131,6 @@ impl DebPackage {
     /// Parse the current `deb-conffiles(5)` grammar without treating flags as
     /// part of the pathname. `remove-on-upgrade` is a transaction operation,
     /// and the referenced path must be absent from the incoming payload.
-    fn parse_conffiles(content: &str) -> Result<Vec<ConfigFileInfo>> {
-        if !content.is_empty() && !content.ends_with('\n') {
-            return Err(Error::InitError(
-                "Invalid DEBIAN/conffiles: final entry is missing a newline".to_string(),
-            ));
-        }
-
-        content
-            .lines()
-            .enumerate()
-            .map(|(index, raw)| {
-                let line_number = index + 1;
-                let line = raw.trim_end();
-                if line.is_empty() {
-                    return Err(Error::InitError(format!(
-                        "Invalid DEBIAN/conffiles:{line_number}: empty entries are not allowed"
-                    )));
-                }
-
-                let (path, remove_on_upgrade) = if line.starts_with('/') {
-                    (line, false)
-                } else {
-                    let split = line
-                        .find(char::is_whitespace)
-                        .ok_or_else(|| {
-                            Error::InitError(format!(
-                                "Invalid DEBIAN/conffiles:{line_number}: conffile path is not absolute"
-                            ))
-                        })?;
-                    let flag = &line[..split];
-                    let path = line[split..].trim_start();
-                    if flag != "remove-on-upgrade" {
-                        return Err(Error::InitError(format!(
-                            "Invalid DEBIAN/conffiles:{line_number}: unsupported flag '{flag}'"
-                        )));
-                    }
-                    (path, true)
-                };
-
-                if !path.starts_with('/') {
-                    return Err(Error::InitError(format!(
-                        "Invalid DEBIAN/conffiles:{line_number}: conffile path '{path}' is not absolute"
-                    )));
-                }
-                let path = normalize_path(path).map_err(|error| {
-                    Error::InitError(format!(
-                        "Invalid DEBIAN/conffiles:{line_number}: unsafe conffile path '{path}': {error}"
-                    ))
-                })?;
-
-                Ok(ConfigFileInfo {
-                    path,
-                    noreplace: true,
-                    ghost: false,
-                    remove_on_upgrade,
-                })
-            })
-            .collect()
-    }
-
     /// Create a decompressor for tar data using magic byte detection
     fn create_tar_decoder<'a>(
         tar_data: &'a [u8],
@@ -430,7 +371,7 @@ impl DebPackage {
                     let text = String::from_utf8(body).map_err(|error| {
                         Error::ParseError(format!("DEBIAN/conffiles is not valid UTF-8: {error}"))
                     })?;
-                    contents.config_files = Self::parse_conffiles(&text)?;
+                    contents.config = authority::parse_config_declarations(&text)?;
                 }
                 "config" | "preinst" | "postinst" | "prerm" | "postrm" => {
                     let declared = entry.size();
@@ -633,7 +574,7 @@ impl PackageFormat for DebPackage {
         )?);
 
         let native_scriptlet_abi = control_tar.native_scriptlet_abi;
-        let config_files = control_tar.config_files;
+        let config = control_tar.config;
 
         debug!(
             "Parsed DEB package: {} version {} ({} files, {} dependencies, {} native lifecycle entries, {} config files)",
@@ -642,87 +583,82 @@ impl PackageFormat for DebPackage {
             files.len(),
             requirements.len(),
             native_scriptlet_abi.len(),
-            config_files.len()
+            config.len()
         );
 
-        let meta = PackageMetadata {
-            package_path: PathBuf::from(path),
-            source_authority: SourcePackageAuthority::Debian(DebianPackageAuthority {
-                name,
-                epoch: control.epoch,
-                source_version,
-                version,
-                architecture: control.architecture.clone().ok_or_else(|| {
-                    Error::InitError("Package architecture not found in control file".to_string())
-                })?,
-                multi_arch: control.multi_arch,
-                provides,
-            }),
+        let authority = DebianPackageAuthority {
+            name,
+            epoch: control.epoch,
+            source_version,
+            version,
+            architecture: control.architecture.clone().ok_or_else(|| {
+                Error::InitError("Package architecture not found in control file".to_string())
+            })?,
+            multi_arch: control.multi_arch,
+            provides,
+            config,
+        };
+
+        Ok(Self {
+            authority,
             description: control.description,
             files,
             requirements,
             relations,
-            diagnostic_scriptlet_evidence: Vec::new(),
             native_scriptlet_abi,
-            config_files,
-        };
-
-        Ok(Self {
-            meta,
             maintainer: control.maintainer,
             section: control.section,
             priority: control.priority,
             homepage: control.homepage,
             installed_size: control.installed_size,
-            multi_arch: control.multi_arch,
             payload,
         })
     }
 
     fn name(&self) -> &str {
-        self.meta.name()
+        &self.authority.name
     }
 
     fn version(&self) -> &str {
-        self.meta.version()
+        &self.authority.version
     }
 
     fn version_scheme(&self) -> VersionScheme {
-        self.meta.version_scheme()
+        VersionScheme::Debian
     }
 
     fn architecture(&self) -> Option<&str> {
-        self.meta.architecture()
+        Some(&self.authority.architecture)
     }
 
     fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
-        Some(self.multi_arch)
+        Some(self.authority.multi_arch)
     }
 
     fn description(&self) -> Option<&str> {
-        self.meta.description()
+        self.description.as_deref()
     }
 
     fn files(&self) -> &[PackageFile] {
-        self.meta.files()
+        &self.files
     }
 
     fn requirements(&self) -> &[RepositoryRequirementGroup] {
-        self.meta.requirements()
+        &self.requirements
     }
 
     fn resolution_capabilities(
         &self,
     ) -> Result<Vec<crate::repository::dependency_model::ProvidedCapability>> {
-        self.meta.resolution_capabilities()
+        SourcePackageAuthority::Debian(self.authority.clone()).resolution_capabilities()
     }
 
     fn source_authority(&self) -> Result<SourcePackageAuthority> {
-        Ok(self.meta.source_authority.clone())
+        Ok(SourcePackageAuthority::Debian(self.authority.clone()))
     }
 
     fn relations(&self) -> &[RepositoryRequirementGroup] {
-        self.meta.relations()
+        &self.relations
     }
 
     fn package_payload(&self) -> Result<PackagePayload> {
@@ -730,15 +666,11 @@ impl PackageFormat for DebPackage {
     }
 
     fn to_trove(&self) -> Trove {
-        self.meta.to_trove()
+        SourcePackageAuthority::Debian(self.authority.clone()).to_trove(self.description.clone())
     }
 
     fn native_scriptlet_abi(&self) -> &[NativeScriptletEntry] {
-        self.meta.native_scriptlet_abi()
-    }
-
-    fn config_files(&self) -> &[ConfigFileInfo] {
-        self.meta.config_files()
+        &self.native_scriptlet_abi
     }
 }
 
@@ -770,7 +702,7 @@ impl DebPackage {
 
     /// Exact Debian `Multi-Arch` behavior from the package control archive.
     pub fn multi_arch(&self) -> DebianMultiArch {
-        self.multi_arch
+        self.authority.multi_arch
     }
 }
 

@@ -7,7 +7,53 @@ use crate::packages::traits::{
     NativeScriptletMetadata, NativeTransactionPosition,
 };
 use crate::repository::dependency_model::RepositoryCapabilityKind;
+use flate2::{Compression, write::GzEncoder};
+use std::io::Cursor;
 use std::io::Write;
+
+#[test]
+fn parser_preserves_unmatched_backup_without_inventing_payload() {
+    let pkginfo = b"pkgname = bash-completion\npkgver = 2.18.0-1\narch = any\nbackup = etc/bash_completion.d/000_bash_completion_compat.bash\n";
+    let payload_path = "usr/share/bash-completion/startup-core/000_bash_completion_compat.bash";
+    let mut tar = tar::Builder::new(Vec::new());
+    for (path, body) in [
+        (".PKGINFO", pkginfo.as_slice()),
+        (payload_path, b"compat\n".as_slice()),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        tar.append_data(&mut header, path, Cursor::new(body))
+            .unwrap();
+    }
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&tar.into_inner().unwrap()).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let package_path = temp.path().join("bash-completion.pkg.tar.gz");
+    std::fs::write(&package_path, encoder.finish().unwrap()).unwrap();
+
+    let package = ArchPackage::parse(package_path.to_str().unwrap()).unwrap();
+    let declarations = package.config_declarations().unwrap();
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(
+        declarations[0].path(),
+        "/etc/bash_completion.d/000_bash_completion_compat.bash"
+    );
+    assert_eq!(
+        declarations[0].payload(),
+        crate::packages::config_authority::ConfigPayloadAssociation::Absent
+    );
+    assert!(
+        package
+            .files()
+            .iter()
+            .all(|file| file.path != declarations[0].path())
+    );
+}
 
 #[test]
 fn test_compression_detection() {

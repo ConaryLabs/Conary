@@ -6,23 +6,41 @@ use crate::packages::traits::{
     RpmTriggerAction,
 };
 
+fn package_for_test(name: &str, version: &str) -> RpmPackage {
+    RpmPackage {
+        authority: RpmPackageAuthority {
+            name: name.to_string(),
+            epoch: None,
+            version_component: version.to_string(),
+            release: "1".to_string(),
+            evr: version.to_string(),
+            architecture: "x86_64".to_string(),
+            provides: Vec::new(),
+            config: Vec::new(),
+        },
+        description: None,
+        files: Vec::new(),
+        requirements: Vec::new(),
+        relations: Vec::new(),
+        native_scriptlet_abi: Vec::new(),
+        source_rpm: None,
+        build_host: None,
+        vendor: None,
+        license: None,
+        url: None,
+        payload: PackagePayload::default(),
+    }
+}
+
 #[test]
 fn test_to_trove_conversion() {
     // Create a minimal RpmPackage for testing
-    let rpm = RpmPackage {
-        meta: PackageMetadata::new(
-            PathBuf::from("/fake/path.rpm"),
-            "test-package".to_string(),
-            "1.0.0".to_string(),
-            VersionScheme::Rpm,
-        ),
-        source_rpm: Some("test-package-1.0.0.src.rpm".to_string()),
-        build_host: Some("buildhost.example.com".to_string()),
-        vendor: Some("Test Vendor".to_string()),
-        license: Some("MIT".to_string()),
-        url: Some("https://example.com".to_string()),
-        payload: PackagePayload::default(),
-    };
+    let mut rpm = package_for_test("test-package", "1.0.0");
+    rpm.source_rpm = Some("test-package-1.0.0.src.rpm".to_string());
+    rpm.build_host = Some("buildhost.example.com".to_string());
+    rpm.vendor = Some("Test Vendor".to_string());
+    rpm.license = Some("MIT".to_string());
+    rpm.url = Some("https://example.com".to_string());
 
     let trove = rpm.to_trove();
 
@@ -32,20 +50,12 @@ fn test_to_trove_conversion() {
 
 #[test]
 fn test_provenance_accessors() {
-    let rpm = RpmPackage {
-        meta: PackageMetadata::new(
-            PathBuf::from("/fake/test.rpm"),
-            "test".to_string(),
-            "1.0".to_string(),
-            VersionScheme::Rpm,
-        ),
-        source_rpm: Some("test-1.0.src.rpm".to_string()),
-        build_host: Some("builder".to_string()),
-        vendor: Some("Vendor".to_string()),
-        license: Some("GPL".to_string()),
-        url: Some("https://test.com".to_string()),
-        payload: PackagePayload::default(),
-    };
+    let mut rpm = package_for_test("test", "1.0");
+    rpm.source_rpm = Some("test-1.0.src.rpm".to_string());
+    rpm.build_host = Some("builder".to_string());
+    rpm.vendor = Some("Vendor".to_string());
+    rpm.license = Some("GPL".to_string());
+    rpm.url = Some("https://test.com".to_string());
 
     assert_eq!(rpm.source_rpm(), Some("test-1.0.src.rpm"));
     assert_eq!(rpm.build_host(), Some("builder"));

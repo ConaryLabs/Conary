@@ -219,7 +219,7 @@ mod tests {
     use super::*;
     use conary_core::db::models::{InstallSource, Trove, TroveType};
     use conary_core::db::schema;
-    use conary_core::packages::traits::{ConfigFileInfo, PackageFile};
+    use conary_core::packages::traits::PackageFile;
 
     struct TestPackage {
         name: String,
@@ -275,10 +275,6 @@ mod tests {
 
         fn package_payload(&self) -> conary_core::Result<conary_core::packages::PackagePayload> {
             Ok(conary_core::packages::PackagePayload::default())
-        }
-
-        fn config_files(&self) -> &[ConfigFileInfo] {
-            &[]
         }
 
         fn to_trove(&self) -> Trove {

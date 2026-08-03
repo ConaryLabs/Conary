@@ -4,6 +4,7 @@
 
 use crate::error::{Error, Result};
 use crate::packages::arch::authority::AlpmPackageAuthority;
+use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::packages::deb::authority::DebianPackageAuthority;
 use crate::packages::rpm::authority::RpmPackageAuthority;
 use crate::repository::dependency_model::{
@@ -20,6 +21,7 @@ pub struct CcsPackageAuthority {
     pub architecture: Option<String>,
     pub debian_multi_arch: Option<DebianMultiArch>,
     pub capabilities: Vec<ProvidedCapability>,
+    pub config: Vec<SourceConfigDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +33,20 @@ pub enum SourcePackageAuthority {
 }
 
 impl SourcePackageAuthority {
+    #[must_use]
+    pub fn to_trove(&self, description: Option<String>) -> crate::db::models::Trove {
+        let mut trove = crate::db::models::Trove::new(
+            self.name().to_string(),
+            self.version().to_string(),
+            crate::db::models::TroveType::Package,
+            self.version_scheme(),
+        );
+        trove.architecture = self.architecture().map(str::to_string);
+        trove.debian_multi_arch = self.debian_multi_arch();
+        trove.description = description;
+        trove
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
@@ -193,6 +209,44 @@ impl SourcePackageAuthority {
         capabilities.extend(self.declared_capabilities()?);
         Ok(capabilities)
     }
+
+    /// Project native declaration authority into the closed transaction input.
+    pub fn config_declarations(&self) -> Result<Vec<SourceConfigDeclaration>> {
+        let declarations = match self {
+            Self::Rpm(value) => value
+                .config
+                .iter()
+                .cloned()
+                .map(SourceConfigDeclaration::Rpm)
+                .collect(),
+            Self::Debian(value) => value
+                .config
+                .iter()
+                .cloned()
+                .map(SourceConfigDeclaration::Debian)
+                .collect(),
+            Self::Alpm(value) => value
+                .config
+                .iter()
+                .cloned()
+                .map(SourceConfigDeclaration::Alpm)
+                .collect(),
+            Self::Ccs(value) => value.config.clone(),
+        };
+        for declaration in &declarations {
+            declaration.validate()?;
+        }
+        let mut paths = std::collections::BTreeSet::new();
+        for declaration in &declarations {
+            if !paths.insert(declaration.path()) {
+                return Err(Error::ConfigError(format!(
+                    "config path {} is declared more than once",
+                    declaration.path()
+                )));
+            }
+        }
+        Ok(declarations)
+    }
 }
 
 #[cfg(test)]
@@ -214,6 +268,7 @@ mod tests {
                 version_relation: Some(ProvideVersionRelation::Equal),
                 architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             }],
+            config: Vec::new(),
         });
 
         let projected = authority.resolution_capabilities().unwrap();
@@ -236,7 +291,7 @@ mod tests {
             SourcePackageAuthority::Rpm(RpmPackageAuthority {
                 name: "runtime".to_string(),
                 epoch: Some(1),
-                version: "10.0.10".to_string(),
+                version_component: "10.0.10".to_string(),
                 release: "2.fc44".to_string(),
                 evr: "1:10.0.10-2.fc44".to_string(),
                 architecture: "x86_64".to_string(),
@@ -250,6 +305,7 @@ mod tests {
                         "x86_64".to_string(),
                     ),
                 }],
+                config: Vec::new(),
             }),
             SourcePackageAuthority::Debian(DebianPackageAuthority {
                 name: "runtime".to_string(),
@@ -268,6 +324,7 @@ mod tests {
                         "amd64".to_string(),
                     ),
                 }],
+                config: Vec::new(),
             }),
             SourcePackageAuthority::Alpm(AlpmPackageAuthority {
                 name: "runtime".to_string(),
@@ -282,6 +339,7 @@ mod tests {
                     version_relation: None,
                     architecture_qualifier: ProvideArchitectureQualifier::Implicit,
                 }],
+                config: Vec::new(),
             }),
         ];
 

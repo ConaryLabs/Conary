@@ -4,11 +4,11 @@ use super::digest::evidence_digest;
 use super::entries::build_entries;
 use super::summary::summary_from_bundle;
 use super::types::{ScriptletBundleBuild, ScriptletBundleInput};
+use crate::ccs::convert::ForeignConversionInput;
 use crate::ccs::native_lifecycle::{
     NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
     ScriptletFidelity, SourceFormat, VersionScheme,
 };
-use crate::packages::common::PackageMetadata;
 use crate::packages::traits::PackageFormat;
 use std::path::PathBuf;
 
@@ -85,7 +85,7 @@ pub fn build_direct_native_lifecycle_bundle(
                 != crate::repository::dependency_model::CapabilityProvenance::ExactIdentity
         })
         .collect();
-    let mut metadata = PackageMetadata::new(
+    let mut metadata = ForeignConversionInput::new(
         PathBuf::new(),
         package.name().to_string(),
         package.version().to_string(),
@@ -97,13 +97,13 @@ pub fn build_direct_native_lifecycle_bundle(
         authority.architecture = package.architecture().map(str::to_string);
         authority.debian_multi_arch = package.debian_multi_arch();
         authority.capabilities = capabilities;
+        authority.config = package.config_declarations()?;
     }
     metadata.description = package.description().map(str::to_string);
     metadata.files = package.files().to_vec();
     metadata.requirements = package.requirements().to_vec();
     metadata.relations = package.relations().to_vec();
     metadata.native_scriptlet_abi = native_entries.to_vec();
-    metadata.config_files = package.config_files().to_vec();
     let build = build_native_lifecycle_bundle(ScriptletBundleInput {
         source_metadata: &metadata,
         final_metadata: &metadata,

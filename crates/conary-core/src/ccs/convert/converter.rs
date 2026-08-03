@@ -9,6 +9,7 @@ mod evidence;
 pub use evidence::ConversionError;
 use evidence::*;
 
+use super::ForeignConversionInput;
 use crate::ccs::attestation::{
     FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary, canonical_json_hash,
     compute_build_output_identity_from_v3,
@@ -28,7 +29,6 @@ use crate::ccs::policy::BuildPolicyConfig;
 use crate::ccs::signing::SigningKeyPair;
 use crate::ccs::v3::PackageKindTagV3;
 use crate::hash::{Hash, HashAlgorithm};
-use crate::packages::common::PackageMetadata;
 use crate::packages::payload::PackagePayloadFile;
 use crate::recipe::hermetic::{
     BuildCommandRiskEntry, BuildCommandRiskReport, BuildInputIdentity, BuilderEnvironmentIdentity,
@@ -133,7 +133,7 @@ impl NativePackageConverter {
     /// buffering in the conversion or CCS object-writing path.
     pub fn convert_payload(
         &self,
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         files: &[PackagePayloadFile],
         format: &str,
         checksum: &Hash,
@@ -376,7 +376,7 @@ impl NativePackageConverter {
     /// Build a CCS manifest from native package metadata
     fn build_manifest(
         &self,
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         hooks: &Hooks,
     ) -> Result<CcsManifest, ConversionError> {
         // Build platform info
@@ -413,7 +413,10 @@ impl NativePackageConverter {
             scriptlets: Default::default(),
             native_lifecycle: None,
             config: Config {
-                files: metadata.config_files.clone(),
+                files: metadata
+                    .source_authority
+                    .config_declarations()
+                    .map_err(|error| ConversionError::ManifestError(error.to_string()))?,
             },
             build: None,
             native_export: None,
@@ -481,7 +484,7 @@ fn build_streaming_result(
 }
 
 fn project_source_capabilities(
-    metadata: &PackageMetadata,
+    metadata: &ForeignConversionInput,
 ) -> Result<Vec<crate::ccs::v3::ProvidedCapabilityV3>, ConversionError> {
     use crate::ccs::v3::schema::DependencyKindV3;
     use crate::repository::dependency_model::RepositoryCapabilityKind;

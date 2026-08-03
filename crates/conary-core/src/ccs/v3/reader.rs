@@ -163,21 +163,17 @@ mod tests {
 
     #[test]
     fn reader_accepts_debug_toml_config_when_signed_projection_matches() {
-        let toml = r#"
-[package]
-name = "demo"
-version = "0.1.0"
-version_scheme = "conary"
-release = "1"
-kind = "package"
-description = "demo package"
-
-[[config.files]]
-path = "/etc/conary-example/config.toml"
-noreplace = true
-ghost = false
-remove_on_upgrade = false
-"#;
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("demo", "0.1.0");
+        manifest.config.files = vec![
+            crate::packages::config_authority::SourceConfigDeclaration::Ccs(
+                crate::packages::config_authority::CcsConfigDeclaration {
+                    path: "/etc/conary-example/config.toml".to_string(),
+                    noreplace: true,
+                    payload: crate::packages::config_authority::ConfigPayloadAssociation::Matched,
+                },
+            ),
+        ];
+        let toml = manifest.to_toml().unwrap();
         let mut authority = crate::ccs::v3::schema::AuthorityDocumentV3::package_for_tests("demo");
         authority.debug_toml_sha256 = Some(crate::hash::sha256(toml.as_bytes()));
         if let crate::ccs::v3::schema::PackageKindV3::Package(package) = &mut authority.kind {
@@ -190,12 +186,7 @@ remove_on_upgrade = false
                 remove_on_upgrade: false,
             };
             file.config = Some(semantics);
-            package
-                .config
-                .push(crate::ccs::v3::schema::ConfigAuthorityV3 {
-                    path: "/etc/conary-example/config.toml".to_string(),
-                    semantics,
-                });
+            package.config = manifest.config.files.clone();
         }
         let raw = authority.to_cbor().unwrap();
         let key = SigningKeyPair::generate();

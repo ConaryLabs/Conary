@@ -257,13 +257,13 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             .files
             .iter()
             .map(|config| {
-                if !config.noreplace || config.ghost || config.remove_on_upgrade {
+                if !config.noreplace() || config.ghost() || config.remove_on_upgrade() {
                     anyhow::bail!(
                         "Arch export cannot represent config semantics for {}",
-                        config.path
+                        config.path()
                     );
                 }
-                Ok(config.path.trim_start_matches('/'))
+                Ok(config.path().trim_start_matches('/'))
             })
             .collect::<Result<Vec<_>>>()?;
 

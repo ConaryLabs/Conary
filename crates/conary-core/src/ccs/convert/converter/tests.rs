@@ -2,9 +2,10 @@
 
 use super::*;
 use crate::ccs::v3::PackageKindV3;
+use crate::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use crate::packages::native_abi::*;
 use crate::packages::traits::{
-    ConfigFileInfo, DiagnosticScriptletPhase, ExtractedFile, PackageFile, PackageFormat,
+    DiagnosticScriptletPhase, ExtractedFile, PackageFile, PackageFormat,
 };
 use crate::payload::{PayloadContentAuthority, PayloadNode};
 
@@ -13,7 +14,7 @@ const TEST_PAYLOAD: &[u8] = b"#!/bin/sh\necho test";
 trait InMemoryConversionForTest {
     fn convert_in_memory_for_test(
         &self,
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
@@ -23,7 +24,7 @@ trait InMemoryConversionForTest {
 impl InMemoryConversionForTest for NativePackageConverter {
     fn convert_in_memory_for_test(
         &self,
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
@@ -89,8 +90,8 @@ fn scriptlet_bundle_types_are_publicly_exported() {
     > = crate::ccs::convert::scriptlet_bundle::build_native_lifecycle_bundle;
 }
 
-fn make_test_metadata() -> PackageMetadata {
-    let mut metadata = PackageMetadata::new(
+fn make_test_metadata() -> ForeignConversionInput {
+    let mut metadata = ForeignConversionInput::new(
         PathBuf::from("/tmp/test-1.0.0.rpm"),
         "test-package".to_string(),
         "1.0.0".to_string(),
@@ -123,7 +124,7 @@ fn make_test_metadata() -> PackageMetadata {
 }
 
 fn set_test_identity(
-    metadata: &mut PackageMetadata,
+    metadata: &mut ForeignConversionInput,
     name: &str,
     version: &str,
     version_scheme: crate::repository::versioning::VersionScheme,
@@ -138,6 +139,7 @@ fn set_test_identity(
             architecture: architecture.map(str::to_string),
             debian_multi_arch,
             capabilities: Vec::new(),
+            config: Vec::new(),
         },
     );
 }
@@ -193,7 +195,7 @@ fn rpm_native_entry(
 }
 
 fn set_test_scriptlet(
-    metadata: &mut PackageMetadata,
+    metadata: &mut ForeignConversionInput,
     phase: DiagnosticScriptletPhase,
     content: impl Into<String>,
 ) {
@@ -588,20 +590,30 @@ fn converted_rpm_preserves_exact_config_and_ghost_authority() {
         node: PayloadNode::regular(0o644),
         content: Some(content_authority(config_content)),
     });
-    metadata.config_files = vec![
-        ConfigFileInfo {
+    let config = vec![
+        SourceConfigDeclaration::Rpm(crate::packages::rpm::authority::RpmConfigDeclaration {
+            header_index: 0,
             path: "/etc/test-package.conf".to_string(),
             noreplace: false,
             ghost: false,
-            remove_on_upgrade: false,
-        },
-        ConfigFileInfo {
+            missing_ok: false,
+            payload: ConfigPayloadAssociation::Matched,
+        }),
+        SourceConfigDeclaration::Rpm(crate::packages::rpm::authority::RpmConfigDeclaration {
+            header_index: 1,
             path: "/var/lib/test-package/runtime.conf".to_string(),
             noreplace: true,
             ghost: true,
-            remove_on_upgrade: false,
-        },
+            missing_ok: false,
+            payload: ConfigPayloadAssociation::Absent,
+        }),
     ];
+    let crate::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    else {
+        unreachable!()
+    };
+    authority.config = config.clone();
     let mut files = make_test_files();
     files.push(extracted_file(
         "/etc/test-package.conf",
@@ -619,8 +631,8 @@ fn converted_rpm_preserves_exact_config_and_ghost_authority() {
         .unwrap();
     let package = verified_converted_package(&result);
 
-    assert_eq!(package.config_files(), metadata.config_files);
-    assert_eq!(package.manifest().config.files, metadata.config_files);
+    assert_eq!(package.config_declarations().unwrap(), config);
+    assert_eq!(package.manifest().config.files, config);
     let authority = package.v3_authority().unwrap();
     let PackageKindV3::Package(data) = &authority.kind else {
         panic!("converted package did not carry package authority");
@@ -654,12 +666,20 @@ fn converted_deb_preserves_remove_on_upgrade_without_inventing_payload() {
         Some(crate::repository::dependency_model::DebianMultiArch::No),
     );
     metadata.native_scriptlet_abi.clear();
-    metadata.config_files = vec![ConfigFileInfo {
-        path: "/etc/test-package.retired".to_string(),
-        noreplace: true,
-        ghost: false,
-        remove_on_upgrade: true,
-    }];
+    let config = vec![SourceConfigDeclaration::Debian(
+        crate::packages::deb::authority::DebianConfigDeclaration {
+            control_index: 0,
+            path: "/etc/test-package.retired".to_string(),
+            remove_on_upgrade: true,
+            payload: ConfigPayloadAssociation::Absent,
+        },
+    )];
+    let crate::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    else {
+        unreachable!()
+    };
+    authority.config = config.clone();
 
     let result = passive_test_converter(temp_dir.path())
         .convert_in_memory_for_test(
@@ -671,14 +691,62 @@ fn converted_deb_preserves_remove_on_upgrade_without_inventing_payload() {
         .unwrap();
     let package = verified_converted_package(&result);
 
-    assert_eq!(package.config_files(), metadata.config_files);
-    assert_eq!(package.manifest().config.files, metadata.config_files);
+    assert_eq!(package.config_declarations().unwrap(), config);
+    assert_eq!(package.manifest().config.files, config);
     assert!(
         package
             .files()
             .iter()
             .all(|file| file.path != "/etc/test-package.retired")
     );
+}
+
+#[test]
+fn converted_alpm_preserves_unmatched_backup_without_inventing_payload() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut metadata = make_test_metadata();
+    set_test_identity(
+        &mut metadata,
+        "bash-completion",
+        "2.18.0-1",
+        crate::repository::versioning::VersionScheme::Arch,
+        Some("any"),
+        None,
+    );
+    metadata.native_scriptlet_abi.clear();
+    let path = "/etc/bash_completion.d/000_bash_completion_compat.bash";
+    let config = vec![SourceConfigDeclaration::Alpm(
+        crate::packages::arch::authority::AlpmConfigDeclaration {
+            pkginfo_index: 0,
+            source_path: path.trim_start_matches('/').to_string(),
+            path: path.to_string(),
+            installed_hash: None,
+            payload: ConfigPayloadAssociation::Absent,
+        },
+    )];
+    let crate::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    else {
+        unreachable!()
+    };
+    authority.config = config.clone();
+
+    let result = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &make_test_files(),
+            "arch",
+            "sha256:5656565656565656565656565656565656565656565656565656565656565656",
+        )
+        .unwrap();
+    let package = verified_converted_package(&result);
+
+    assert_eq!(package.config_declarations().unwrap(), config);
+    let PackageKindV3::Package(data) = &package.v3_authority().unwrap().kind else {
+        panic!("converted package did not carry package authority");
+    };
+    assert_eq!(data.config, config);
+    assert!(data.files.iter().all(|file| file.path != path));
 }
 
 #[test]

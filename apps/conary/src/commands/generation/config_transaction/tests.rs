@@ -67,9 +67,221 @@ fn state(source: ConfigSource, noreplace: bool, content: &[u8]) -> ConfigPackage
         source,
         noreplace,
         ghost: false,
+        materialized: true,
         original_sha256: Some(artifact.sha256().to_string()),
         artifact: Some(artifact),
     }
+}
+
+fn source_config(source: ConfigSource, path: &str) -> SourceConfigDeclaration {
+    match source {
+        ConfigSource::Arch => SourceConfigDeclaration::Alpm(
+            conary_core::packages::arch::authority::AlpmConfigDeclaration {
+                pkginfo_index: 0,
+                source_path: path.trim_start_matches('/').to_string(),
+                path: path.to_string(),
+                installed_hash: None,
+                payload: ConfigPayloadAssociation::Matched,
+            },
+        ),
+        ConfigSource::Deb => SourceConfigDeclaration::Debian(
+            conary_core::packages::deb::authority::DebianConfigDeclaration {
+                control_index: 0,
+                path: path.to_string(),
+                remove_on_upgrade: false,
+                payload: ConfigPayloadAssociation::Matched,
+            },
+        ),
+        ConfigSource::Rpm => SourceConfigDeclaration::Rpm(
+            conary_core::packages::rpm::authority::RpmConfigDeclaration {
+                header_index: 0,
+                path: path.to_string(),
+                noreplace: true,
+                ghost: false,
+                missing_ok: false,
+                payload: ConfigPayloadAssociation::Matched,
+            },
+        ),
+        ConfigSource::Auto => SourceConfigDeclaration::Ccs(
+            conary_core::packages::config_authority::CcsConfigDeclaration {
+                path: path.to_string(),
+                noreplace: true,
+                payload: ConfigPayloadAssociation::Matched,
+            },
+        ),
+    }
+}
+
+fn deb_remove(path: &str) -> SourceConfigDeclaration {
+    SourceConfigDeclaration::Debian(
+        conary_core::packages::deb::authority::DebianConfigDeclaration {
+            control_index: 0,
+            path: path.to_string(),
+            remove_on_upgrade: true,
+            payload: ConfigPayloadAssociation::Absent,
+        },
+    )
+}
+
+fn alpm_absent(path: &str) -> SourceConfigDeclaration {
+    SourceConfigDeclaration::Alpm(
+        conary_core::packages::arch::authority::AlpmConfigDeclaration {
+            pkginfo_index: 0,
+            source_path: path.trim_start_matches('/').to_string(),
+            path: path.to_string(),
+            installed_hash: None,
+            payload: ConfigPayloadAssociation::Absent,
+        },
+    )
+}
+
+#[test]
+fn unmatched_alpm_declaration_then_matching_payload_preserves_native_sequence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir_all(root.join("etc/demo")).unwrap();
+    fs::write(root.join("etc/demo/declared.conf"), b"user-created").unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+
+    let transaction = capture_install(
+        &conn,
+        &root,
+        &cas,
+        ConfigInstallCapture {
+            source: ConfigSource::Arch,
+            declared: &[alpm_absent("/etc/demo/declared.conf")],
+            incoming: &[],
+            replacing_trove_id: None,
+            replaced_trove_ids: &[],
+        },
+    )
+    .unwrap();
+
+    assert_eq!(transaction.entries.len(), 1);
+    let entry = &transaction.entries[0];
+    assert_eq!(
+        entry.current.as_ref().unwrap().sha256(),
+        conary_core::hash::sha256(b"user-created")
+    );
+    let after = entry.after.as_ref().unwrap();
+    assert_eq!(after.source, ConfigSource::Arch);
+    assert!(!after.materialized);
+    assert!(after.artifact.is_none());
+    assert!(plan_entry(entry).unwrap().is_empty());
+
+    let mut trove = conary_core::db::models::Trove::new(
+        "demo".to_string(),
+        "1".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Arch,
+    );
+    let trove_id = trove.insert(&conn).unwrap();
+    let mut config = ConfigFile::new_declaration("/etc/demo/declared.conf".to_string(), trove_id);
+    config.source = ConfigSource::Arch;
+    config.insert(&conn).unwrap();
+    project_persisted_statuses(&conn, &[transaction]).unwrap();
+    let projected = ConfigFile::find_by_path(&conn, "/etc/demo/declared.conf")
+        .unwrap()
+        .unwrap();
+    assert_eq!(projected.status, ConfigStatus::Missing);
+    assert!(projected.current_hash.is_none());
+
+    let incoming = crate::commands::LiveRootFile {
+        path: "/etc/demo/declared.conf".to_string(),
+        content: crate::commands::LiveRootContent::from_in_memory_bytes(b"packaged-v2"),
+        node: resolved_node(
+            PayloadNodeKind::Regular {
+                hardlink_identity: None,
+            },
+            0o100644,
+        ),
+    };
+    let materialized = capture_install(
+        &conn,
+        &root,
+        &cas,
+        ConfigInstallCapture {
+            source: ConfigSource::Arch,
+            declared: &[source_config(ConfigSource::Arch, "/etc/demo/declared.conf")],
+            incoming: &[incoming],
+            replacing_trove_id: Some(trove_id),
+            replaced_trove_ids: &[trove_id],
+        },
+    )
+    .unwrap();
+    let entry = &materialized.entries[0];
+    assert!(!entry.before.as_ref().unwrap().materialized);
+    let packaged = entry.after.as_ref().unwrap().artifact.as_ref().unwrap();
+    assert_eq!(
+        plan_entry(entry).unwrap(),
+        vec![
+            overlay_write(
+                "/etc/demo/declared.conf".to_string(),
+                entry.current.clone().unwrap(),
+            ),
+            overlay_write(
+                "/etc/demo/declared.conf.pacnew".to_string(),
+                packaged.clone(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn alpm_materialized_to_absent_preserves_modified_content_and_rolls_back_exactly() {
+    let before = state(ConfigSource::Arch, true, b"packaged-v1");
+    let current = regular(b"locally-modified", 0o100600);
+    let transaction = GenerationConfigTransaction {
+        entries: vec![ConfigPathTransaction {
+            path: "/etc/demo/declared.conf".to_string(),
+            operation: ConfigTransactionOperation::Dematerialize,
+            before: Some(before),
+            current: Some(current.clone()),
+            after: Some(ConfigPackageState {
+                source: ConfigSource::Arch,
+                noreplace: true,
+                ghost: false,
+                materialized: false,
+                original_sha256: None,
+                artifact: None,
+            }),
+            auxiliaries: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    transaction.validate().unwrap();
+    assert_eq!(
+        plan_entry(&transaction.entries[0]).unwrap(),
+        vec![
+            overlay_write(
+                "/etc/demo/declared.conf.pacsave".to_string(),
+                current.clone(),
+            ),
+            OverlayMutation::Remove("/etc/demo/declared.conf".to_string()),
+        ]
+    );
+
+    let rollback = transaction.restore_snapshot().unwrap();
+    assert_eq!(
+        plan_entry(&rollback.entries[0]).unwrap(),
+        vec![
+            OverlayMutation::Remove("/etc/demo/declared.conf".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.conary-new".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.conary-save".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.dpkg-dist".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.dpkg-old".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.pacnew".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.pacsave".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.rpmnew".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.rpmorig".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.rpmsave".to_string()),
+            overlay_write("/etc/demo/declared.conf".to_string(), current),
+        ]
+    );
 }
 
 fn update_entry(source: ConfigSource, noreplace: bool) -> ConfigPathTransaction {
@@ -138,12 +350,7 @@ fn capture_update_records_exact_old_current_and_new_artifacts() {
         &cas,
         ConfigInstallCapture {
             source: ConfigSource::Rpm,
-            declared: &[ConfigFileInfo {
-                path: "/etc/demo.conf".to_string(),
-                noreplace: true,
-                ghost: false,
-                remove_on_upgrade: false,
-            }],
+            declared: &[source_config(ConfigSource::Rpm, "/etc/demo.conf")],
             incoming: &[incoming],
             replacing_trove_id: Some(trove_id),
             replaced_trove_ids: &[trove_id],
@@ -228,12 +435,7 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
         &cas,
         ConfigInstallCapture {
             source: ConfigSource::Deb,
-            declared: &[ConfigFileInfo {
-                path: "/etc/obsolete.conf".to_string(),
-                noreplace: true,
-                ghost: false,
-                remove_on_upgrade: true,
-            }],
+            declared: &[deb_remove("/etc/obsolete.conf")],
             incoming: &[],
             replacing_trove_id: Some(trove_id),
             replaced_trove_ids: &[trove_id],
@@ -260,12 +462,7 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
         &cas,
         ConfigInstallCapture {
             source: ConfigSource::Deb,
-            declared: &[ConfigFileInfo {
-                path: "/etc/obsolete.conf".to_string(),
-                noreplace: true,
-                ghost: false,
-                remove_on_upgrade: true,
-            }],
+            declared: &[deb_remove("/etc/obsolete.conf")],
             incoming: &[],
             replacing_trove_id: Some(trove_id + 1),
             replaced_trove_ids: &[trove_id],
@@ -316,6 +513,13 @@ fn rpm_ghost_install_has_no_overlay_mutation() {
     after.original_sha256 = None;
     after.artifact = None;
     assert!(plan_entry(&entry).unwrap().is_empty());
+
+    entry.operation = ConfigTransactionOperation::Remove;
+    entry.before = entry.after.take();
+    assert_eq!(
+        plan_entry(&entry).unwrap(),
+        vec![OverlayMutation::Remove("/etc/demo.conf".to_string())]
+    );
 }
 
 #[test]
@@ -449,6 +653,7 @@ fn atomic_materialization_clones_unaffected_upper() {
                 source: ConfigSource::Auto,
                 noreplace: false,
                 ghost: false,
+                materialized: true,
                 original_sha256: Some(conary_core::hash::sha256(b"target")),
                 artifact: Some(symlink("target", 0o120777)),
             }),
@@ -555,6 +760,7 @@ fn materialization_preserves_regular_modes_and_symlink_targets() {
             source: ConfigSource::Arch,
             noreplace: true,
             ghost: false,
+            materialized: true,
             original_sha256: Some(conary_core::hash::sha256(b"old-target")),
             artifact: Some(symlink("old-target", 0o120777)),
         }),
@@ -563,6 +769,7 @@ fn materialization_preserves_regular_modes_and_symlink_targets() {
             source: ConfigSource::Arch,
             noreplace: true,
             ghost: false,
+            materialized: true,
             original_sha256: Some(conary_core::hash::sha256(b"new-target")),
             artifact: Some(symlink("new-target", 0o120777)),
         }),

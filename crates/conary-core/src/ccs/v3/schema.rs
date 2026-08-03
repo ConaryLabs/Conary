@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::capability::CapabilityDeclaration;
 use crate::ccs::manifest::FileCapability;
+use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::payload::{PayloadContentAuthority, PayloadNode};
 use crate::repository::dependency_model::{
     CapabilityProvenance, DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
@@ -81,7 +82,7 @@ pub struct PackageDataV3 {
     #[serde(default)]
     pub files: Vec<FileAuthorityV3>,
     #[serde(default)]
-    pub config: Vec<ConfigAuthorityV3>,
+    pub config: Vec<SourceConfigDeclaration>,
     #[serde(default)]
     pub policy: PackagePolicyV3,
 }
@@ -188,13 +189,6 @@ pub struct ConfigSemanticsV3 {
     pub noreplace: bool,
     pub ghost: bool,
     pub remove_on_upgrade: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigAuthorityV3 {
-    pub path: String,
-    pub semantics: ConfigSemanticsV3,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

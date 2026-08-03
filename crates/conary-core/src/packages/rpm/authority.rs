@@ -2,9 +2,22 @@
 
 //! Exact RPM identity and declared-provision authority.
 
+use crate::packages::config_authority::ConfigPayloadAssociation;
 use crate::repository::dependency_model::{
     ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryCapabilityKind,
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpmConfigDeclaration {
+    pub header_index: u32,
+    pub path: String,
+    pub noreplace: bool,
+    pub ghost: bool,
+    pub missing_ok: bool,
+    pub payload: ConfigPayloadAssociation,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpmDeclaredCapability {
@@ -20,9 +33,44 @@ pub struct RpmDeclaredCapability {
 pub struct RpmPackageAuthority {
     pub name: String,
     pub epoch: Option<u32>,
-    pub version: String,
+    pub version_component: String,
     pub release: String,
     pub evr: String,
     pub architecture: String,
     pub provides: Vec<RpmDeclaredCapability>,
+    pub config: Vec<RpmConfigDeclaration>,
+}
+
+pub(super) fn parse_config_declarations(
+    package: &rpm::Package,
+) -> crate::Result<Vec<RpmConfigDeclaration>> {
+    use rpm::FileFlags;
+
+    package
+        .metadata
+        .get_file_entries()
+        .map_err(|error| {
+            crate::Error::ParseError(format!("Failed to read RPM config-file metadata: {error}"))
+        })?
+        .into_iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.flags().contains(FileFlags::CONFIG))
+        .map(|(header_index, entry)| {
+            let ghost = entry.flags().contains(FileFlags::GHOST);
+            Ok(RpmConfigDeclaration {
+                header_index: u32::try_from(header_index).map_err(|_| {
+                    crate::Error::ParseError("RPM config record index exceeds u32".to_string())
+                })?,
+                path: entry.path().to_string_lossy().to_string(),
+                noreplace: entry.flags().contains(FileFlags::NOREPLACE),
+                ghost,
+                missing_ok: entry.flags().contains(FileFlags::MISSINGOK),
+                payload: if ghost {
+                    ConfigPayloadAssociation::Absent
+                } else {
+                    ConfigPayloadAssociation::Matched
+                },
+            })
+        })
+        .collect()
 }

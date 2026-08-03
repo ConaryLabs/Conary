@@ -676,12 +676,14 @@ metadata fail closed.
 exact identity and declared provisions in format-specific authority records.
 The closed `SourcePackageAuthority` dispatch exposes named, fallible
 projections for dependency resolution and CCS v3 signing; exact identity is
-never recovered from or inserted into the declared-capability list. The
-temporary `PackageMetadata` bridge now carries only configuration, lifecycle,
-and payload facts while issue #105 completes the configuration hard cut. The
+never recovered from or inserted into the declared-capability list. Source
+configuration declarations likewise remain format-specific and carry an
+explicit matched/absent payload association. Signed CCS, installed config
+state, and generation transactions preserve that distinction without
+synthesizing content. The retired common package/config adapters are gone. The
 W5 contract in
 [`docs/specs/source-package-authority.md`](specs/source-package-authority.md)
-owns the remaining lossless format-specific authority and consumer boundaries.
+owns the lossless format-specific authority and consumer boundaries.
 Conversion remains transparent to the caller, but normalization is owned by
 the named consumer rather than initial parsing.
 

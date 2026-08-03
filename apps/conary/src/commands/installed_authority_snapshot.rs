@@ -282,6 +282,32 @@ impl TroveSnapshot {
             }
         }
         for config in &self.config_files {
+            if config.file_backed && !config.materialized {
+                bail!(
+                    "rollback snapshot config '{}' has a payload row but is declaration-only",
+                    config.path
+                );
+            }
+            if config.ghost && (config.materialized || config.source != ConfigSource::Rpm) {
+                bail!(
+                    "rollback snapshot config '{}' has impossible RPM ghost authority",
+                    config.path
+                );
+            }
+            if config.remove_on_upgrade
+                && (config.materialized || config.source != ConfigSource::Deb)
+            {
+                bail!(
+                    "rollback snapshot config '{}' has impossible Debian remove-on-upgrade authority",
+                    config.path
+                );
+            }
+            if config.ghost && config.remove_on_upgrade {
+                bail!(
+                    "rollback snapshot config '{}' combines distinct source-only states",
+                    config.path
+                );
+            }
             if config.file_backed && !package_paths.contains(config.path.as_str()) {
                 bail!(
                     "rollback snapshot config '{}' references a missing payload file",
@@ -568,6 +594,7 @@ pub(crate) struct ConfigFileSnapshot {
     pub current_hash: Option<String>,
     pub noreplace: bool,
     pub ghost: bool,
+    pub materialized: bool,
     pub remove_on_upgrade: bool,
     pub status: ConfigStatus,
     pub modified_at: Option<String>,

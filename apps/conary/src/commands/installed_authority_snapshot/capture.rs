@@ -511,6 +511,7 @@ fn capture_config_files(conn: &Connection, trove_id: i64) -> Result<Vec<ConfigFi
                 current_hash: config.current_hash,
                 noreplace: config.noreplace,
                 ghost: config.ghost,
+                materialized: config.materialized,
                 remove_on_upgrade: config.remove_on_upgrade,
                 status: config.status,
                 modified_at: config.modified_at,

@@ -835,10 +835,15 @@ mod tests {
             remove_on_upgrade: false,
         };
         data.files[0].config = Some(semantics);
-        data.config.push(ConfigAuthorityV3 {
-            path: data.files[0].path.clone(),
-            semantics,
-        });
+        data.config.push(
+            crate::packages::config_authority::SourceConfigDeclaration::Ccs(
+                crate::packages::config_authority::CcsConfigDeclaration {
+                    path: data.files[0].path.clone(),
+                    noreplace: true,
+                    payload: crate::packages::config_authority::ConfigPayloadAssociation::Matched,
+                },
+            ),
+        );
         validate_authority(&authority).unwrap();
 
         let PackageKindV3::Package(data) = &mut authority.kind else {
@@ -865,10 +870,15 @@ mod tests {
         };
         data.files[0].path = "/usr//bin/hello".to_string();
         data.files[0].config = Some(semantics);
-        data.config.push(ConfigAuthorityV3 {
-            path: data.files[0].path.clone(),
-            semantics,
-        });
+        data.config.push(
+            crate::packages::config_authority::SourceConfigDeclaration::Ccs(
+                crate::packages::config_authority::CcsConfigDeclaration {
+                    path: data.files[0].path.clone(),
+                    noreplace: true,
+                    payload: crate::packages::config_authority::ConfigPayloadAssociation::Matched,
+                },
+            ),
+        );
 
         let error = validate_authority(&authority).unwrap_err();
 

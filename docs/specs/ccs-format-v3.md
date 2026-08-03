@@ -105,12 +105,14 @@ Requirements, relations, complete capability authority, package execution
 capability declarations, and file-capability declarations all participate in
 CCS content identity.
 
-An ordinary config declaration identifies exactly one signed regular-file or
-symlink payload whose `FileAuthorityV3.config` repeats the same semantics.
-RPM ghost config and Debian remove-on-upgrade declarations are package
-authority without incoming payload and require the corresponding signed native
-source contract. Verified package construction projects these exact
-declarations into the package transaction interface.
+A config declaration retains its exact RPM, Debian, ALPM, or CCS record and an
+explicit `matched` or `absent` payload association. A matched declaration
+identifies exactly one signed regular-file or symlink payload whose
+`FileAuthorityV3.config` repeats its effective semantics. RPM ghost, Debian
+remove-on-upgrade, and unmatched ALPM backup declarations are package
+authority without incoming payload for distinct source-owned reasons. Verified
+package construction projects exact declarations into transactions and never
+synthesizes a file from declaration evidence.
 
 Each file-capability declaration names exactly one signed regular payload file
 and carries a non-empty, canonical list of Linux capability names plus the
@@ -256,15 +258,13 @@ test uses small hand-authored v1 and v2 headers so the repository does not need
 a retired writer, schema, projection, fixture factory, or format specification.
 Git history is the only source for the removed pre-alpha implementation.
 
-## W5 Sibling Completion
+## W5 Completion
 
-This document describes the current v3 identity/capability contract delivered
-by issue #104. The approved W5 target in
-[`source-package-authority.md`](source-package-authority.md) also separates
-source config declarations from materialized payload nodes; issue #105 owns
-that sibling completion. No release may be cut between the two slices. Retired
-v2 readers, writers, fixtures, and adapters do not remain as compatibility
-paths.
+Issues #104 and #105 deliver the complete approved W5 target in
+[`source-package-authority.md`](source-package-authority.md): identity and
+capabilities are independent, and source config declarations are independent
+from materialized payload nodes. Retired v2 readers, writers, fixtures, common
+metadata/config adapters, and compatibility paths do not remain.
 
 ## Proof
 

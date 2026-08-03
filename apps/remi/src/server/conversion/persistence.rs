@@ -5,15 +5,15 @@ use super::metadata::repository_package_conversion_inputs_match;
 use super::{ConversionService, ScriptletPackageMetadata, ServerConversionResult};
 use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::ccs::convert::ConversionResult;
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
-use conary_core::packages::common::PackageMetadata;
 use rusqlite::{Connection, TransactionBehavior};
 use std::path::PathBuf;
 use tracing::info;
 
 pub(super) struct PersistConversionInput {
     pub(super) source_profile: String,
-    pub(super) metadata: PackageMetadata,
+    pub(super) metadata: ForeignConversionInput,
     pub(super) format: &'static str,
     pub(super) original_checksum: String,
     pub(super) conversion_result: ConversionResult,

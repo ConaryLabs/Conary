@@ -17,7 +17,7 @@ use conary_core::config_transaction::{
     decide_config_removal, decide_deb_remove_on_upgrade, is_etc_config_payload,
 };
 use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus};
-use conary_core::packages::traits::ConfigFileInfo;
+use conary_core::packages::config_authority::SourceConfigDeclaration;
 use rusqlite::Connection;
 
 use crate::commands::{LiveRootContent, LiveRootFile, live_root};
@@ -135,6 +135,7 @@ pub(crate) fn persist_debian_remove_on_upgrade(
         );
     }
     config.file_id = None;
+    config.materialized = false;
     config.trove_id = Some(trove_id);
     config.current_hash = None;
     config.status = ConfigStatus::Missing;
@@ -157,14 +158,14 @@ pub(crate) fn prepare_config_install(
     conn: &Connection,
     root: &Path,
     source: ConfigSource,
-    declared: &[ConfigFileInfo],
+    declared: &[SourceConfigDeclaration],
     replacing_trove_id: Option<i64>,
     files: Vec<LiveRootFile>,
 ) -> Result<ConfigInstallPlan> {
     let declarations = declared
         .iter()
-        .filter(|config| !config.ghost)
-        .map(|config| (config.path.as_str(), config))
+        .filter(|config| !config.ghost())
+        .map(|config| (config.path(), config))
         .collect::<HashMap<_, _>>();
     let incoming_paths = files
         .iter()
@@ -175,22 +176,22 @@ pub(crate) fn prepare_config_install(
 
     for declaration in declared
         .iter()
-        .filter(|declaration| declaration.remove_on_upgrade)
+        .filter(|declaration| declaration.remove_on_upgrade())
     {
-        if source != ConfigSource::Deb || declaration.ghost {
+        if source != ConfigSource::Deb || declaration.ghost() {
             bail!(
                 "remove-on-upgrade declaration {} is only valid for a Debian conffile",
-                declaration.path
+                declaration.path()
             );
         }
-        if incoming_paths.contains(declaration.path.as_str()) {
+        if incoming_paths.contains(declaration.path()) {
             bail!(
                 "Debian remove-on-upgrade conffile {} must be absent from the incoming payload",
-                declaration.path
+                declaration.path()
             );
         }
 
-        let old = ConfigFile::find_by_path(conn, &declaration.path)?;
+        let old = ConfigFile::find_by_path(conn, declaration.path())?;
         if old
             .as_ref()
             .is_some_and(|config| config.trove_id != replacing_trove_id)
@@ -199,10 +200,10 @@ pub(crate) fn prepare_config_install(
             // same path.
             continue;
         }
-        let current = read_existing(root, &declaration.path)?;
+        let current = read_existing(root, declaration.path())?;
         remove_paths.insert(format!(
             "{}{}",
-            declaration.path,
+            declaration.path(),
             ConfigSuffix::DpkgDist.as_str()
         ));
         if let ConfigRemovalDecision::SaveCurrent(ConfigSuffix::DpkgOld) =
@@ -215,7 +216,7 @@ pub(crate) fn prepare_config_install(
         {
             planned.push(with_suffix(existing.file, ConfigSuffix::DpkgOld.as_str()));
         }
-        remove_paths.insert(declaration.path.clone());
+        remove_paths.insert(declaration.path().to_string());
     }
 
     for file in files {
@@ -232,7 +233,7 @@ pub(crate) fn prepare_config_install(
         let current = read_existing(root, &file.path)?;
         let new_hash = live_file_hash(&file)?;
         let incoming_source = declaration.map_or(ConfigSource::Auto, |_| source);
-        let noreplace = declaration.is_some_and(|config| config.noreplace);
+        let noreplace = declaration.is_some_and(|config| config.noreplace());
         let decision = decide_config_install(
             incoming_source,
             noreplace,
@@ -296,6 +297,9 @@ pub(crate) fn prepare_config_removal(
             remove_paths.push(path);
             continue;
         };
+        if !config.materialized && !config.ghost {
+            continue;
+        }
         let existing = read_existing(root, &config.path)?;
         let decision = decide_config_removal(
             config.source,
@@ -338,6 +342,9 @@ pub(crate) fn prepare_config_removal(
     // RPM ghosts have no package payload entry. rpm never creates or backs
     // them up, but erases an existing path with the package.
     for (_, mut config) in configs {
+        if !config.materialized && !config.ghost {
+            continue;
+        }
         let existing = read_existing(root, &config.path)?;
         let decision = decide_config_removal(
             config.source,

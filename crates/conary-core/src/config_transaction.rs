@@ -12,7 +12,7 @@ use std::path::{Component, Path};
 use crate::db::models::ConfigSource;
 use crate::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 
-pub const GENERATION_CONFIG_TRANSACTION_SCHEMA_VERSION: u32 = 4;
+pub const GENERATION_CONFIG_TRANSACTION_SCHEMA_VERSION: u32 = 5;
 
 /// Return whether a package payload entry participates in the exact `/etc`
 /// configuration transaction contract.
@@ -341,6 +341,8 @@ pub struct ConfigPackageState {
     pub source: ConfigSource,
     pub noreplace: bool,
     pub ghost: bool,
+    /// Whether the declaration identifies an installed payload artifact.
+    pub materialized: bool,
     /// Exact package-owned baseline identity. It remains available for
     /// Debian residual conffiles after their payload row has been removed.
     pub original_sha256: Option<String>,
@@ -351,6 +353,9 @@ pub struct ConfigPackageState {
 #[serde(rename_all = "kebab-case")]
 pub enum ConfigTransactionOperation {
     Install,
+    /// Remove the prior package artifact while retaining an exact incoming
+    /// declaration that has no matching payload entry.
+    Dematerialize,
     RemoveOnUpgrade,
     Remove,
     Purge,
@@ -471,13 +476,21 @@ impl GenerationConfigTransaction {
                     entry.path
                 )));
             }
-            if entry.operation == ConfigTransactionOperation::Install && entry.after.is_none() {
+            if matches!(
+                entry.operation,
+                ConfigTransactionOperation::Install | ConfigTransactionOperation::Dematerialize
+            ) && entry.after.is_none()
+            {
                 return Err(crate::Error::ConfigError(format!(
-                    "install config transaction for {} has no after state",
-                    entry.path
+                    "generation config {:?} for {} has no after state",
+                    entry.operation, entry.path
                 )));
             }
-            if entry.operation != ConfigTransactionOperation::Install && entry.after.is_some() {
+            if !matches!(
+                entry.operation,
+                ConfigTransactionOperation::Install | ConfigTransactionOperation::Dematerialize
+            ) && entry.after.is_some()
+            {
                 return Err(crate::Error::ConfigError(format!(
                     "generation config removal for {} has an after state",
                     entry.path
@@ -485,13 +498,31 @@ impl GenerationConfigTransaction {
             }
             if matches!(
                 entry.operation,
-                ConfigTransactionOperation::Remove | ConfigTransactionOperation::Purge
+                ConfigTransactionOperation::Dematerialize
+                    | ConfigTransactionOperation::Remove
+                    | ConfigTransactionOperation::Purge
             ) && entry.before.is_none()
             {
                 return Err(crate::Error::ConfigError(format!(
                     "generation config {:?} for {} has no exact prior package state",
                     entry.operation, entry.path
                 )));
+            }
+            if entry.operation == ConfigTransactionOperation::Dematerialize {
+                let before = entry.before.as_ref().expect("checked above");
+                let after = entry.after.as_ref().expect("checked above");
+                if !before.materialized || after.materialized || after.ghost {
+                    return Err(crate::Error::ConfigError(format!(
+                        "generation config dematerialization for {} must replace a materialized artifact with a non-ghost declaration-only state",
+                        entry.path
+                    )));
+                }
+                if before.source != after.source {
+                    return Err(crate::Error::ConfigError(format!(
+                        "generation config dematerialization for {} changes source authority from {} to {}",
+                        entry.path, before.source, after.source
+                    )));
+                }
             }
             if entry.operation == ConfigTransactionOperation::RemoveOnUpgrade {
                 let Some(before) = entry.before.as_ref() else {
@@ -535,6 +566,13 @@ impl GenerationConfigTransaction {
                     if state.original_sha256.is_some() || state.artifact.is_some() {
                         return Err(crate::Error::ConfigError(format!(
                             "ghost config transaction {position} state for {} carries a payload identity",
+                            entry.path,
+                        )));
+                    }
+                } else if !state.materialized {
+                    if state.original_sha256.is_some() || state.artifact.is_some() {
+                        return Err(crate::Error::ConfigError(format!(
+                            "non-materialized config transaction {position} state for {} carries a payload identity",
                             entry.path,
                         )));
                     }

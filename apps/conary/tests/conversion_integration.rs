@@ -9,11 +9,12 @@
 //! - Typed lifecycle evidence
 
 use conary_core::ccs::CcsPackage;
+use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{ConversionOptions, NativePackageConverter};
 use conary_core::ccs::native_lifecycle::ScriptletFidelity;
-use conary_core::packages::common::PackageMetadata;
+use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use conary_core::packages::native_abi::*;
-use conary_core::packages::traits::{ConfigFileInfo, ExtractedFile, PackageFile, PackageFormat};
+use conary_core::packages::traits::{ExtractedFile, PackageFile, PackageFormat};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use conary_core::repository::dependency_model::{
     RepositoryRequirementGroup, RepositoryRequirementKind,
@@ -75,7 +76,7 @@ fn signed_test_converter(options: ConversionOptions) -> NativePackageConverter {
 trait InMemoryConversionForTest {
     fn convert_in_memory_for_test(
         &self,
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
@@ -85,7 +86,7 @@ trait InMemoryConversionForTest {
 impl InMemoryConversionForTest for NativePackageConverter {
     fn convert_in_memory_for_test(
         &self,
-        metadata: &PackageMetadata,
+        metadata: &ForeignConversionInput,
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
@@ -143,7 +144,7 @@ fn rpm_lifecycle_entry(
 }
 
 /// Create a minimal test package metadata
-fn create_test_metadata(name: &str) -> PackageMetadata {
+fn create_test_metadata(name: &str) -> ForeignConversionInput {
     let content = format!("#!/bin/sh\necho {name}");
     test_metadata(
         PathBuf::from(format!("/tmp/{}-1.0.0.rpm", name)),
@@ -164,8 +165,8 @@ fn test_metadata(
     architecture: &str,
     description: Option<String>,
     files: Vec<PackageFile>,
-) -> PackageMetadata {
-    let mut metadata = PackageMetadata::new(
+) -> ForeignConversionInput {
+    let mut metadata = ForeignConversionInput::new(
         path,
         name.to_string(),
         "1.0.0".to_string(),
@@ -183,7 +184,7 @@ fn test_metadata(
 }
 
 fn set_test_source_scheme(
-    metadata: &mut PackageMetadata,
+    metadata: &mut ForeignConversionInput,
     version_scheme: VersionScheme,
     debian_multi_arch: Option<conary_core::repository::dependency_model::DebianMultiArch>,
 ) {
@@ -265,7 +266,7 @@ fn golden_payload_files(name: &str) -> Vec<ExtractedFile> {
 }
 
 /// Create a network server package (nginx-like)
-fn create_server_package() -> (PackageMetadata, Vec<ExtractedFile>) {
+fn create_server_package() -> (ForeignConversionInput, Vec<ExtractedFile>) {
     let binary_content = b"\x7fELF binary placeholder";
     let config_content = b"# Configuration file\nport = 8080\n";
     let systemd_service = br#"[Unit]
@@ -325,12 +326,22 @@ WantedBy=multi-user.target
             "systemctl daemon-reload\nsystemctl enable myserver",
         ),
     ];
-    metadata.config_files = vec![ConfigFileInfo {
-        path: "/etc/myserver/myserver.conf".to_string(),
-        noreplace: true,
-        ghost: false,
-        remove_on_upgrade: false,
-    }];
+    let config = SourceConfigDeclaration::Rpm(
+        conary_core::packages::rpm::authority::RpmConfigDeclaration {
+            header_index: 0,
+            path: "/etc/myserver/myserver.conf".to_string(),
+            noreplace: true,
+            ghost: false,
+            missing_ok: false,
+            payload: ConfigPayloadAssociation::Matched,
+        },
+    );
+    let conary_core::packages::source_authority::SourcePackageAuthority::Ccs(authority) =
+        &mut metadata.source_authority
+    else {
+        unreachable!()
+    };
+    authority.config = vec![config];
 
     let files = vec![
         extracted_regular("/usr/sbin/myserver", binary_content, 0o755),
@@ -448,10 +459,10 @@ fn test_server_package_conversion() {
             .config
             .files
             .iter()
-            .any(|config| config.path == "/etc/myserver/myserver.conf"
-                && config.noreplace
-                && !config.ghost
-                && !config.remove_on_upgrade),
+            .any(|config| config.path() == "/etc/myserver/myserver.conf"
+                && config.noreplace()
+                && !config.ghost()
+                && !config.remove_on_upgrade()),
         "Should include myserver.conf"
     );
 }
