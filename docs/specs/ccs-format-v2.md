@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-29
-revision: 8
-summary: Canonical signed CCS v2 authority, archive, payload, and trust contract
+last_updated: 2026-08-03
+revision: 9
+summary: Canonical current signed CCS v2 authority, archive, payload, and trust contract pending the W5 hard cut
 ---
 
 # CCS Package Format v2
@@ -251,6 +251,16 @@ Readers reject every `format_version` other than `2`. The format-1 rejection
 test uses a small hand-authored retired header so the repository does not need
 a v1 writer, schema, projection, fixture factory, or format specification.
 Git history is the only source for the removed pre-alpha implementation.
+
+## Planned W5 Hard Cut
+
+This document describes current shipped behavior. The approved W5 target in
+[`source-package-authority.md`](source-package-authority.md) replaces v2 with
+one current-only v3 authority that separates exact identity from capability
+provenance and source config declarations from materialized payload nodes.
+Issues #104 and #105 implement that sibling sequence. Until both land, no v3
+behavior is claimed here; after they land, v2 readers, writers, fixtures, and
+adapters are deleted rather than retained as compatibility paths.
 
 ## Proof
 

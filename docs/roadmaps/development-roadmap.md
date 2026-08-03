@@ -1,11 +1,11 @@
 ---
-last_updated: 2026-07-31
-revision: 10
+last_updated: 2026-08-03
+revision: 11
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
-active_workstream: W4 Source Fidelity Hard Cut
-next_workstream: W5 Source Authority Model
+active_workstream: W5 Source Authority Model
+next_workstream: W6 Authority Audit Closure
 ---
 
 # Codebase Development Roadmap
@@ -208,7 +208,10 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** ordinary Fedora and Arch repository packages stop failing
   conversion on Conary-invented invariants, and hosted Remi health becomes
   evidence bearing.
-- **Execution status:** active. This is the current workstream.
+- **Execution status:** implementation issues complete; aggregate gate
+  closeout remains active. The owned #98, #99, #102, #103, and #107 slices are
+  closed, while #110 still owns the typed corpus vocabulary required to report
+  the aggregate prewarm gate without message-text authority.
 - **Issues:** #102 (P0), #103 (P0), #98 (P0), #99 (P0, split into three
   slices), plus #107 for the Remi readiness probe.
 - **Ordering:** #102, #103, and #107 run in parallel with #98
@@ -244,7 +247,10 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** source package facts are preserved in their native ontology and
   normalized at each consumer's boundary, so the class of defect behind #98,
   #99, #104, and #105 cannot recur.
-- **Execution status:** blocked on W4.
+- **Execution status:** active. #108 owns the specification and roadmap
+  transition; #104 and #105 remain ordered after that design authority. W4's
+  aggregate proof can close in parallel because its source-format
+  implementation prerequisites are already merged.
 - **Issues:** #108 (design specification under `docs/specs/`), then #104 and
   #105 as sibling implementation slices.
 - **Rationale:** `PackageMetadata` and the flat `ProvidedCapability` and
