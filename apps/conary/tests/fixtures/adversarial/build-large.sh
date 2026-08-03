@@ -12,7 +12,9 @@ fixture_ccs_require_authority
 LARGE_PACKAGE_MB="${LARGE_PACKAGE_MB:-128}"
 LARGE_PACKAGE_FILE_COUNT="${LARGE_PACKAGE_FILE_COUNT:-64}"
 TEN_K_FILE_COUNT="${TEN_K_FILE_COUNT:-10000}"
-DEEP_TREE_DEPTH="${DEEP_TREE_DEPTH:-128}"
+# Each level carries a node.txt leaf, so 127 directories exercise the exact
+# signed CCS v3 path-depth limit of 128 components.
+DEEP_TREE_DEPTH="${DEEP_TREE_DEPTH:-127}"
 TRACKED_FIXTURE_MAX_BYTES=$((90 * 1024 * 1024))
 TEMP_ROOT=""
 

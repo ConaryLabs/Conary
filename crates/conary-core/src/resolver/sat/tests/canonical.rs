@@ -2,7 +2,9 @@
 
 use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;
-use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
+use crate::db::models::{
+    CanonicalMappingAuthority, CanonicalPackage, PackageImplementation, RepositoryProvide,
+};
 
 /// Helper: insert a canonical package with distro-specific implementations.
 fn insert_canonical(
@@ -299,13 +301,15 @@ fn test_provides_index_cross_source() {
         )
         .unwrap();
     let pkg_id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO repository_provides
-             (repository_package_id, capability, version, version_relation, kind, version_scheme,
-              architecture_qualifier_kind)
-             VALUES (?1, 'libssl.so.3', '3.2', 'eq', 'soname', 'rpm', 'implicit')",
-        [pkg_id],
+    RepositoryProvide::new(
+        pkg_id,
+        "libssl.so.3".to_string(),
+        Some("3.2".to_string()),
+        "soname".to_string(),
+        None,
+        VersionScheme::Rpm,
     )
+    .insert(&conn)
     .unwrap();
 
     // AppStream provide (cross-distro)

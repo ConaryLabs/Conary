@@ -33,17 +33,19 @@ mutate_ccs() {
 
 mutate_bad_checksum() {
     local root="$1"
-    python3 - "$root/components/runtime.json" <<'PY'
-import json
+    python3 - "$root/MANIFEST" <<'PY'
+from pathlib import Path
 import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-entry = next(item for item in data["files"] if "content" in item)
-entry["content"]["sha256"] = "0" * 64
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+marker = b"\x66sha256\x78\x40"
+offset = data.find(marker)
+if offset < 0:
+    raise SystemExit("CCS v3 MANIFEST has no sha256 content authority")
+digest = offset + len(marker)
+data = data[:digest] + (b"0" * 64) + data[digest + 64:]
+path.write_bytes(data)
 PY
 }
 
@@ -63,18 +65,27 @@ PY
 
 mutate_size_lie() {
     local root="$1"
-    python3 - "$root/components/runtime.json" <<'PY'
-import json
+    python3 - "$root/MANIFEST" <<'PY'
+from pathlib import Path
 import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-entry = next(item for item in data["files"] if "content" in item)
-entry["content"]["size"] = 1073741824
-data["size"] = 1073741824
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+
+def uint_width(initial):
+    additional = initial & 0x1f
+    if additional < 24:
+        return 1
+    return {24: 2, 25: 3, 26: 5, 27: 9}[additional]
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+replacement = b"\x1a\x40\x00\x00\x00"
+for marker in (b"\x64size", b"\x6atotal_size"):
+    offset = data.find(marker)
+    if offset < 0:
+        raise SystemExit(f"CCS v3 MANIFEST has no {marker[1:].decode()} authority")
+    value = offset + len(marker)
+    width = uint_width(data[value])
+    data = data[:value] + replacement + data[value + width:]
+path.write_bytes(data)
 PY
 }
 

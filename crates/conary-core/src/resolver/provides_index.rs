@@ -220,7 +220,11 @@ fn provider_relation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::{ProvideEntry, RepositoryProvide};
     use crate::db::testing::create_test_db;
+    use crate::repository::dependency_model::{
+        ProvideArchitectureQualifier, RepositoryCapabilityKind,
+    };
 
     #[test]
     fn test_provides_index_finds_repo_providers() {
@@ -242,13 +246,15 @@ mod tests {
         .unwrap();
         let pkg_id = conn.last_insert_rowid();
 
-        conn.execute(
-            "INSERT INTO repository_provides
-             (repository_package_id, capability, version, version_relation, kind, version_scheme,
-              architecture_qualifier_kind)
-             VALUES (?1, 'libssl.so.3', '3.2.0', 'eq', 'soname', 'rpm', 'implicit')",
-            [pkg_id],
+        RepositoryProvide::new(
+            pkg_id,
+            "libssl.so.3".to_string(),
+            Some("3.2.0".to_string()),
+            "soname".to_string(),
+            None,
+            VersionScheme::Rpm,
         )
+        .insert(&conn)
         .unwrap();
 
         let index = ProvidesIndex::build(&conn).unwrap();
@@ -271,12 +277,15 @@ mod tests {
         .unwrap();
         let trove_id = conn.last_insert_rowid();
 
-        conn.execute(
-            "INSERT INTO provides (
-                 trove_id, capability, kind, version_scheme, architecture_qualifier_kind
-             ) VALUES (?1, 'libssl.so.3', 'soname', 'rpm', 'implicit')",
-            [trove_id],
+        ProvideEntry::new_typed(
+            trove_id,
+            RepositoryCapabilityKind::Soname,
+            "libssl.so.3".to_string(),
+            None,
+            VersionScheme::Rpm,
+            ProvideArchitectureQualifier::Implicit,
         )
+        .insert(&conn)
         .unwrap();
 
         let index = ProvidesIndex::build(&conn).unwrap();
@@ -339,13 +348,15 @@ mod tests {
             )
             .unwrap();
             let pkg_id = conn.last_insert_rowid();
-            conn.execute(
-                "INSERT INTO repository_provides
-                 (repository_package_id, capability, version, version_relation, kind, version_scheme,
-                  architecture_qualifier_kind)
-                 VALUES (?1, 'libfoo.so', ?2, 'eq', 'soname', 'rpm', 'implicit')",
-                rusqlite::params![pkg_id, version],
+            RepositoryProvide::new(
+                pkg_id,
+                "libfoo.so".to_string(),
+                Some(version.to_string()),
+                "soname".to_string(),
+                None,
+                VersionScheme::Rpm,
             )
+            .insert(&conn)
             .unwrap();
         }
 
@@ -386,13 +397,15 @@ mod tests {
         .unwrap();
         let pkg_id = conn.last_insert_rowid();
 
-        conn.execute(
-            "INSERT INTO repository_provides
-             (repository_package_id, capability, version, version_relation, kind, version_scheme,
-              architecture_qualifier_kind)
-             VALUES (?1, 'libfoo.so', '1.0', 'eq', 'soname', 'rpm', 'implicit')",
-            [pkg_id],
+        RepositoryProvide::new(
+            pkg_id,
+            "libfoo.so".to_string(),
+            Some("1.0".to_string()),
+            "soname".to_string(),
+            None,
+            VersionScheme::Rpm,
         )
+        .insert(&conn)
         .unwrap();
 
         let index = ProvidesIndex::build(&conn).unwrap();
