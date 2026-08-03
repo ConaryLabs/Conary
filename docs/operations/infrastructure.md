@@ -142,6 +142,13 @@ not cover the task or when you are debugging the underlying service path itself.
   and exact-tag repository manifest on the host, atomically self-updates the
   helper by SHA-256, then calls
   `/usr/local/sbin/conary-remi-deploy deploy-remi`.
+- A bounded pre-release hard-cut sequence that explicitly forbids an
+  intermediate release uses `deploy-remi-candidate` instead. Its required
+  full commit SHA must already be an ancestor of `origin/main`; the protected
+  production environment builds that exact tree, records the binary digest,
+  and uses the same recoverable helper, source manifest, repopulation proof,
+  and public readiness checks. It creates no tag or release and is not a path
+  for deploying an unmerged pull-request head.
 - The candidate Remi binary owns config/schema preparation. It type-checks the
   current config and source manifest, installs exact parser authority,
   snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into
