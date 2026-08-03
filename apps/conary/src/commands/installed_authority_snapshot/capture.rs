@@ -400,6 +400,7 @@ fn capture_provides(conn: &Connection, trove_id: i64) -> Result<Vec<ProvideSnaps
             kind: provide.kind,
             version_scheme: provide.version_scheme,
             architecture_qualifier: provide.architecture_qualifier,
+            provenance: provide.provenance,
         })
         .collect::<Vec<_>>();
     provides.sort_by(|left, right| {
@@ -410,6 +411,7 @@ fn capture_provides(conn: &Connection, trove_id: i64) -> Result<Vec<ProvideSnaps
             left.version_relation,
             left.version_scheme.as_str(),
             format!("{:?}", left.architecture_qualifier),
+            &left.provenance,
         )
             .cmp(&(
                 &right.capability,
@@ -418,6 +420,7 @@ fn capture_provides(conn: &Connection, trove_id: i64) -> Result<Vec<ProvideSnaps
                 right.version_relation,
                 right.version_scheme.as_str(),
                 format!("{:?}", right.architecture_qualifier),
+                &right.provenance,
             ))
     });
     Ok(provides)

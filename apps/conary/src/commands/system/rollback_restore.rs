@@ -388,7 +388,7 @@ fn restore_provides(
     snapshot: &TroveSnapshot,
 ) -> conary_core::Result<()> {
     for provide in &snapshot.provides {
-        ProvideEntry::new_typed(
+        let mut restored = ProvideEntry::new_typed(
             trove_id,
             provide.kind,
             provide.capability.clone(),
@@ -396,8 +396,9 @@ fn restore_provides(
             provide.version_scheme,
             provide.architecture_qualifier.clone(),
         )
-        .with_version_relation(provide.version_relation)
-        .insert(tx)?;
+        .with_version_relation(provide.version_relation);
+        restored.provenance = provide.provenance.clone();
+        restored.insert(tx)?;
     }
     Ok(())
 }
