@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-03
-revision: 59
+last_updated: 2026-08-04
+revision: 60
 summary: Route lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
@@ -32,6 +32,8 @@ bash scripts/agent-context.sh --path <file>
 commands.
 
 - `dispatch`: CLI command routing, namespace dispatch, and command risk labels
+- `database-state`: current-schema revision, constrained persisted states, and
+  fail-closed row decoding
 - `install`: install, update, remove, restore, scriptlet, and live-root mutation
 - `adopt`: adoption, unadoption, takeover, and native-authority handoff
 - `model`: declarative system model diff/apply/check/snapshot/publish/lock
@@ -49,6 +51,11 @@ commands.
 
 ## Canonical Detail Pointers
 
+- Current-schema revision and persisted model-state authority:
+  `docs/modules/feature-ownership.md` slug `database-state`, plus
+  `crates/conary-core/src/db/schema.rs`,
+  `crates/conary-core/src/db/current_schema/`, and
+  `crates/conary-core/src/db/models/persisted_value.rs`.
 - CLI dispatch and command routing: `docs/modules/feature-ownership.md` slug
   `dispatch`, plus `docs/ARCHITECTURE.md`.
 - Install, update, remove, native lifecycle execution, and selected-root

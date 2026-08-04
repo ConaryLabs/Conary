@@ -1,11 +1,11 @@
 ---
-last_updated: 2026-08-03
-revision: 11
+last_updated: 2026-08-04
+revision: 12
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
-active_workstream: W5 Source Authority Model
-next_workstream: W6 Authority Audit Closure
+active_workstream: W6 Authority Audit Closure
+next_workstream: W7 Just-Works Corpus Gate
 ---
 
 # Codebase Development Roadmap
@@ -272,19 +272,21 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** the finite authority defects in #67 are closed as narrow owned
   slices with proof, and #67 becomes an audit epic rather than an
   implementation issue spanning twelve subsystems.
-- **Execution status:** blocked on W4; overlaps W5.
-- **Issues:** #67 as epic, #109 for the trigger-status gap, plus one narrow issue per remaining ledger item.
+- **Execution status:** active. #109 closes the trigger-status slice; remaining
+  ledger items proceed as narrow issues while the W4 aggregate gate remains
+  active.
+- **Issues:** #67 as epic, #109 complete, plus one narrow issue per remaining ledger item.
+- **Closed ledger items:**
+  - #109 replaces trigger and derived-package status defaults with typed row
+    corruption, validates every candidate row before mutation planning, and
+    constrains the current schema. Schema revision 25 requires rebuilding
+    earlier disposable databases from authoritative inputs.
 - **Ledger gaps found on audit that #67 does not currently own:**
-  - `TriggerStatus::parse` in `db/models/trigger.rs` resolves unknown or
-    corrupt persisted status to `Pending` through `unwrap_or`. #67 covers
-    trigger *patterns*, not trigger *status*. A corrupt persisted status
-    therefore becomes executable pending work, which is a mutation-authority
-    defect rather than a display fallback. Add a ledger entry or a narrow issue.
   - The `sanitize_path` ASCII heuristic is a #67-class invented authority but is
     owned only by #99, and only for ALPM. Cross-reference both.
 - **Priority split within the ledger:** the publish-destination parser, Remi
-  typed transport failures and retry disposition, trigger status, and required
-  source-pin strength are P1 and belong here. The `ccs/policy.rs`
+  typed transport failures and retry disposition, and required source-pin
+  strength are P1 and belong here. The `ccs/policy.rs`
   transformations are P2 and move to W9, because every `BuildPolicyConfig`
   toggle defaults to `false` and `ccs/convert/converter.rs` constructs the
   default, so stripping, shebang rewriting, and man-page compression never run

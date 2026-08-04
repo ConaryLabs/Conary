@@ -405,7 +405,8 @@ CREATE TABLE changeset_triggers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             changeset_id INTEGER NOT NULL REFERENCES changesets(id) ON DELETE CASCADE,
             trigger_id INTEGER NOT NULL REFERENCES triggers(id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending',
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
             matched_files INTEGER NOT NULL DEFAULT 0,
             started_at TEXT,
             completed_at TEXT,

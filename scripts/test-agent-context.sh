@@ -400,7 +400,8 @@ grep -q $'^profiles\t' <<<"$real_list" || fail "real map --list missing profiles
 grep -q $'^resolution\t' <<<"$real_list" || fail "real map --list missing resolution slug"
 grep -q $'^canonical-map\t' <<<"$real_list" || fail "real map --list missing canonical-map slug"
 grep -q $'^release\t' <<<"$real_list" || fail "real map --list missing release slug"
-[[ "$(wc -l <<<"$real_list")" -eq 16 ]] || fail "real map --list did not print 16 cards"
+grep -q $'^database-state\t' <<<"$real_list" || fail "real map --list missing database-state slug"
+[[ "$(wc -l <<<"$real_list")" -eq 17 ]] || fail "real map --list did not print 17 cards"
 
 "$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
 grep -q '^slug: install$' "$tmp/real-install.out" \

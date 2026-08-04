@@ -313,7 +313,9 @@ The signed CCS contract and installed database both change intentionally.
 
 - CCS v3 replaces v2; every local, cached, static-repository, and Remi v2
   artifact must be rebuilt or reconverted from authenticated source.
-- SQLite schema revision 24 replaces the current schema in place.
+- SQLite schema revision 25 retains revision 24's source-authority hard cut and
+  replaces the current schema in place with fail-closed trigger and
+  derived-package state constraints.
   Installed and repository provider rows must distinguish identity-derived
   matches from declared/derived capabilities, and config persistence must
   distinguish source declarations from materialized node and transaction
@@ -324,8 +326,8 @@ The signed CCS contract and installed database both change intentionally.
 - Remi conversion records and indexes tied to v2 authority are rebuilt before
   public serving. A mixed v2/v3 serving state is invalid.
 
-The rebuild property is intentional: revision 24 has no migration or dual-read
-path from the retired provider representation.
+The rebuild property is intentional: revision 25 has no migration or dual-read
+path from revision 24 or the retired provider representation.
 
 ## Conformance And Closeout
 
