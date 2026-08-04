@@ -264,9 +264,10 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 24 is a
-pre-alpha hard cut: prior databases are rebuilt and re-ingested from configured
-repository authority rather than migrated. Local conversion tracking is
+schema rejects missing, empty, or malformed values. Schema revision 25 retains
+revision 24's source-authority representation and is a pre-alpha hard cut:
+prior databases are rebuilt and re-ingested from configured repository
+authority rather than migrated. Local conversion tracking is
 written only after the CCS install transaction commits.
 
 Ready conversion means the artifact carries a source-independent Conary

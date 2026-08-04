@@ -50,6 +50,7 @@ mod native_lifecycle_residual_state;
 mod native_publication;
 mod package_payload_ownership;
 mod payload_claim;
+mod persisted_value;
 mod provenance;
 mod provide_entry;
 mod redirect;
@@ -111,6 +112,7 @@ pub use native_publication::{
 };
 pub use package_payload_ownership::{PackagePayloadEntry, PackagePayloadOwnership};
 pub use payload_claim::{PayloadClaim, PayloadClaimAnchorPolicy};
+pub use persisted_value::{InvalidPersistedValue, PersistedValueCorruption};
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};

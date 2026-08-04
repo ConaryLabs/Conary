@@ -12,13 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 24 of the current-only schema epoch.
+/// Revision 25 of the current-only schema epoch.
 ///
-/// Revision 24 retains revision 23's exact payload claims and selected-root
-/// materialization anchors, and adds exact capability provenance to installed
-/// and repository provider rows. Earlier pre-alpha databases must be rebuilt;
-/// no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 24;
+/// Revision 25 retains revision 24's exact source authority and adds fail-closed
+/// constraints for trigger and derived-package persisted states. Earlier
+/// pre-alpha databases must be rebuilt; no compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 25;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -292,6 +291,59 @@ mod tests {
             .unwrap();
         assert_eq!(retired_repo_id, 0);
         assert!(!table_exists(&conn, "package_overrides").unwrap());
+    }
+
+    #[test]
+    fn current_schema_rejects_invalid_trigger_and_derived_states() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO changesets (description, status) VALUES ('status checks', 'pending')",
+            [],
+        )
+        .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO triggers (name, pattern, handler) VALUES ('fixture', '/usr/*', '/bin/true')",
+            [],
+        )
+        .unwrap();
+        let trigger_id = conn.last_insert_rowid();
+
+        for (sql, params) in [
+            (
+                "INSERT INTO changeset_triggers (changeset_id, trigger_id, status)
+                 VALUES (?1, ?2, 'unknown')",
+                [changeset_id, trigger_id],
+            ),
+            (
+                "INSERT INTO changeset_triggers (changeset_id, trigger_id, status)
+                 VALUES (?1, ?2, 'already-ran-maybe')",
+                [changeset_id, trigger_id],
+            ),
+        ] {
+            let error = conn.execute(sql, params).unwrap_err();
+            assert!(
+                error.to_string().contains("CHECK constraint failed"),
+                "{error}"
+            );
+        }
+
+        for sql in [
+            "INSERT INTO derived_packages (name, parent_name, status)
+             VALUES ('invalid-status', 'parent', 'maybe-built')",
+            "INSERT INTO derived_packages (name, parent_name, version_policy)
+             VALUES ('invalid-policy', 'parent', 'invented')",
+            "INSERT INTO derived_packages (name, parent_name, version_policy)
+             VALUES ('missing-suffix', 'parent', 'suffix')",
+        ] {
+            let error = conn.execute(sql, []).unwrap_err();
+            assert!(
+                error.to_string().contains("CHECK constraint failed"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

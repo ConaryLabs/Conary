@@ -11,7 +11,9 @@
 
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use strum_macros::{AsRefStr, EnumString};
+use strum_macros::AsRefStr;
+
+use super::persisted_value::{InvalidPersistedValue, persisted_value_corruption};
 
 /// Version policy for derived packages
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +28,25 @@ pub enum VersionPolicy {
 
 impl VersionPolicy {
     /// Parse version policy from database strings
-    pub fn from_db(policy: &str, suffix: Option<&str>, specific: Option<&str>) -> Self {
-        match policy {
-            "suffix" => VersionPolicy::Suffix(suffix.unwrap_or("+derived").to_string()),
-            "specific" => VersionPolicy::Specific(specific.unwrap_or("1.0.0").to_string()),
-            _ => VersionPolicy::Inherit,
+    pub fn from_db(
+        policy: &str,
+        suffix: Option<&str>,
+        specific: Option<&str>,
+    ) -> std::result::Result<Self, InvalidPersistedValue> {
+        match (policy, suffix, specific) {
+            ("inherit", None, None) => Ok(Self::Inherit),
+            ("suffix", Some(suffix), None) => Ok(Self::Suffix(suffix.to_string())),
+            ("specific", None, Some(specific)) => Ok(Self::Specific(specific.to_string())),
+            ("inherit" | "suffix" | "specific", _, _) => Err(InvalidPersistedValue::new(
+                "derived version policy",
+                policy,
+                "a policy with exactly its required value column",
+            )),
+            (other, _, _) => Err(InvalidPersistedValue::new(
+                "derived version policy",
+                other,
+                "inherit, suffix, or specific",
+            )),
         }
     }
 
@@ -63,7 +79,7 @@ impl VersionPolicy {
 }
 
 /// Build status of a derived package
-#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, EnumString)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr)]
 #[strum(serialize_all = "lowercase")]
 pub enum DerivedStatus {
     /// Not yet built
@@ -80,9 +96,23 @@ impl DerivedStatus {
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
+}
 
-    pub fn parse(s: &str) -> Self {
-        s.parse().unwrap_or(DerivedStatus::Pending)
+impl TryFrom<&str> for DerivedStatus {
+    type Error = InvalidPersistedValue;
+
+    fn try_from(value: &str) -> std::result::Result<Self, InvalidPersistedValue> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "built" => Ok(Self::Built),
+            "stale" => Ok(Self::Stale),
+            "error" => Ok(Self::Error),
+            other => Err(InvalidPersistedValue::new(
+                "derived package status",
+                other,
+                "pending, built, stale, or error",
+            )),
+        }
     }
 }
 
@@ -276,14 +306,17 @@ impl DerivedPackage {
     /// Find all derived packages by status
     pub fn find_by_status(conn: &Connection, status: DerivedStatus) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM derived_packages WHERE status = ?1 ORDER BY name",
+            "SELECT {} FROM derived_packages ORDER BY name",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let packages = stmt
-            .query_map([status.as_str()], Self::from_row)?
+            .query_map([], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(packages)
+        Ok(packages
+            .into_iter()
+            .filter(|package| package.status == status)
+            .collect())
     }
 
     /// List all derived packages
@@ -447,24 +480,30 @@ impl DerivedPackage {
 
     /// Convert a database row to a DerivedPackage
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        let id: i64 = row.get(0)?;
         let policy_str: String = row.get(5)?;
         let suffix: Option<String> = row.get(6)?;
         let specific: Option<String> = row.get(7)?;
         let status_str: String = row.get(9)?;
+        let version_policy =
+            VersionPolicy::from_db(&policy_str, suffix.as_deref(), specific.as_deref()).map_err(
+                |error| {
+                    persisted_value_corruption("derived_packages", id, "version_policy", 5, error)
+                },
+            )?;
+        let status = DerivedStatus::try_from(status_str.as_str()).map_err(|error| {
+            persisted_value_corruption("derived_packages", id, "status", 9, error)
+        })?;
 
         Ok(Self {
-            id: Some(row.get(0)?),
+            id: Some(id),
             name: row.get(1)?,
             parent_trove_id: row.get(2)?,
             parent_name: row.get(3)?,
             parent_version: row.get(4)?,
-            version_policy: VersionPolicy::from_db(
-                &policy_str,
-                suffix.as_deref(),
-                specific.as_deref(),
-            ),
+            version_policy,
             description: row.get(8)?,
-            status: DerivedStatus::parse(&status_str),
+            status,
             built_trove_id: row.get(10)?,
             last_built_version: row.get(11)?,
             last_built_parent_version: row.get(12)?,
@@ -681,8 +720,34 @@ impl DerivedOverride {
 
 #[cfg(test)]
 mod tests {
+    use super::super::persisted_value::PersistedValueCorruption;
     use super::*;
     use crate::db::testing::create_test_db;
+
+    fn assert_persisted_corruption(
+        error: crate::error::Error,
+        row_id: i64,
+        column_index: usize,
+        column: &str,
+        value: &str,
+    ) {
+        let crate::error::Error::Database(rusqlite::Error::FromSqlConversionFailure(
+            actual_column_index,
+            rusqlite::types::Type::Text,
+            source,
+        )) = error
+        else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(actual_column_index, column_index);
+        let corruption = source
+            .downcast_ref::<PersistedValueCorruption>()
+            .expect("model error must retain typed row corruption");
+        assert_eq!(corruption.table(), "derived_packages");
+        assert_eq!(corruption.row_id(), row_id);
+        assert_eq!(corruption.column(), column);
+        assert_eq!(corruption.value(), value);
+    }
 
     #[test]
     fn test_derived_package_crud() {
@@ -748,6 +813,48 @@ mod tests {
 
         let specific = VersionPolicy::Specific("2.0.0".to_string());
         assert_eq!(specific.compute_version("1.0.0"), "2.0.0");
+    }
+
+    #[test]
+    fn corrupt_status_is_not_hidden_by_status_queries() {
+        let (_temp, conn) = create_test_db();
+        let mut derived = DerivedPackage::new("corrupt-status".into(), "parent".into());
+        let row_id = derived.insert(&conn).unwrap();
+
+        conn.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        conn.execute(
+            "UPDATE derived_packages SET status = 'maybe-built' WHERE id = ?1",
+            [row_id],
+        )
+        .unwrap();
+        conn.pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
+
+        let error = DerivedPackage::find_by_status(&conn, DerivedStatus::Pending).unwrap_err();
+        assert_persisted_corruption(error, row_id, 9, "status", "maybe-built");
+    }
+
+    #[test]
+    fn corrupt_version_policy_shape_fails_closed() {
+        let (_temp, conn) = create_test_db();
+        let mut derived = DerivedPackage::new("corrupt-policy".into(), "parent".into());
+        let row_id = derived.insert(&conn).unwrap();
+
+        conn.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        conn.execute(
+            "UPDATE derived_packages
+             SET version_policy = 'suffix', version_suffix = NULL, specific_version = NULL
+             WHERE id = ?1",
+            [row_id],
+        )
+        .unwrap();
+        conn.pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
+
+        let error = DerivedPackage::find_by_id(&conn, row_id).unwrap_err();
+        assert_persisted_corruption(error, row_id, 5, "version_policy", "suffix");
     }
 
     #[test]

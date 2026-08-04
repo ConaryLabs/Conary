@@ -131,14 +131,25 @@ CREATE TABLE derived_packages (
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             -- Status: pending (not built), built, stale (parent updated), error
-            status TEXT NOT NULL DEFAULT 'pending',
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending', 'built', 'stale', 'error')),
             -- Built trove ID (when status = built)
             built_trove_id INTEGER REFERENCES troves(id) ON DELETE SET NULL,
             -- Model file this came from (NULL if created via CLI)
             model_source TEXT,
             -- Error message if status = error
-            error_message TEXT
-        , last_built_version TEXT, last_built_parent_version TEXT, build_artifact_hash TEXT, build_artifact_path TEXT, build_artifact_size INTEGER);
+            error_message TEXT,
+            last_built_version TEXT,
+            last_built_parent_version TEXT,
+            build_artifact_hash TEXT,
+            build_artifact_path TEXT,
+            build_artifact_size INTEGER,
+            CHECK (
+                (version_policy = 'inherit' AND version_suffix IS NULL AND specific_version IS NULL)
+                OR (version_policy = 'suffix' AND version_suffix IS NOT NULL AND specific_version IS NULL)
+                OR (version_policy = 'specific' AND version_suffix IS NULL AND specific_version IS NOT NULL)
+            )
+        );
 CREATE INDEX idx_derived_packages_parent ON derived_packages(parent_name);
 CREATE INDEX idx_derived_packages_status ON derived_packages(status);
 CREATE INDEX idx_derived_packages_built ON derived_packages(built_trove_id);

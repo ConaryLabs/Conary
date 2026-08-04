@@ -16,7 +16,9 @@ use crate::error::Result;
 use glob::Pattern;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::HashMap;
-use strum_macros::{AsRefStr, EnumString};
+use strum_macros::AsRefStr;
+
+use super::persisted_value::{InvalidPersistedValue, persisted_value_corruption};
 
 /// A trigger defines a handler that runs when files matching a pattern are modified
 #[derive(Debug, Clone)]
@@ -317,7 +319,7 @@ impl TriggerDependency {
 }
 
 /// Status of a trigger in a changeset
-#[derive(Debug, Clone, PartialEq, Eq, AsRefStr, EnumString)]
+#[derive(Debug, Clone, PartialEq, Eq, AsRefStr)]
 #[strum(serialize_all = "lowercase")]
 pub enum TriggerStatus {
     Pending,
@@ -331,9 +333,24 @@ impl TriggerStatus {
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
+}
 
-    pub fn parse(s: &str) -> Self {
-        s.parse().unwrap_or(TriggerStatus::Pending)
+impl TryFrom<&str> for TriggerStatus {
+    type Error = InvalidPersistedValue;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "skipped" => Ok(Self::Skipped),
+            other => Err(InvalidPersistedValue::new(
+                "trigger status",
+                other,
+                "pending, running, completed, failed, or skipped",
+            )),
+        }
     }
 }
 
@@ -461,23 +478,30 @@ impl ChangesetTrigger {
     /// Get pending triggers for a changeset
     pub fn find_pending(conn: &Connection, changeset_id: i64) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM changeset_triggers WHERE changeset_id = ?1 AND status = 'pending'",
+            "SELECT {} FROM changeset_triggers WHERE changeset_id = ?1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let triggers = stmt
             .query_map([changeset_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(triggers)
+        Ok(triggers
+            .into_iter()
+            .filter(|trigger| trigger.status == TriggerStatus::Pending)
+            .collect())
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
+        let id: i64 = row.get(0)?;
         let status_str: String = row.get(3)?;
+        let status = TriggerStatus::try_from(status_str.as_str()).map_err(|error| {
+            persisted_value_corruption("changeset_triggers", id, "status", 3, error)
+        })?;
         Ok(Self {
-            id: Some(row.get(0)?),
+            id: Some(id),
             changeset_id: row.get(1)?,
             trigger_id: row.get(2)?,
-            status: TriggerStatus::parse(&status_str),
+            status,
             matched_files: row.get(4)?,
             started_at: row.get(5)?,
             completed_at: row.get(6)?,
@@ -488,8 +512,10 @@ impl ChangesetTrigger {
 
 #[cfg(test)]
 mod tests {
+    use super::super::persisted_value::PersistedValueCorruption;
     use super::super::trigger_engine::TriggerEngine;
     use super::*;
+    use crate::trigger::TriggerExecutor;
     use tempfile::NamedTempFile;
 
     fn create_test_db() -> (NamedTempFile, Connection) {
@@ -526,7 +552,8 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 changeset_id INTEGER NOT NULL,
                 trigger_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
                 matched_files INTEGER NOT NULL DEFAULT 0,
                 started_at TEXT,
                 completed_at TEXT,
@@ -644,6 +671,65 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("corrupt"), "{message}");
         assert!(message.contains("invalid path pattern"), "{message}");
+    }
+
+    #[test]
+    fn corrupt_persisted_status_stops_execution_before_the_handler_loop() {
+        let (_temp, conn) = create_test_db();
+        let mut trigger = Trigger::new(
+            "must-not-run".to_string(),
+            "/usr/lib/*".to_string(),
+            "/bin/true".to_string(),
+        )
+        .unwrap();
+        let trigger_id = trigger.insert(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO changesets (description) VALUES ('corrupt status')",
+            [],
+        )
+        .unwrap();
+        let changeset_id = conn.last_insert_rowid();
+        let mut changeset_trigger = ChangesetTrigger::new(changeset_id, trigger_id);
+        let row_id = changeset_trigger.upsert(&conn).unwrap();
+
+        conn.pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        conn.execute(
+            "UPDATE changeset_triggers SET status = 'already-ran-maybe' WHERE id = ?1",
+            [row_id],
+        )
+        .unwrap();
+        conn.pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let error = TriggerExecutor::new(&conn, root.path())
+            .execute_pending(changeset_id)
+            .unwrap_err();
+        let crate::error::Error::Database(rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            source,
+        )) = error
+        else {
+            panic!("unexpected error: {error}");
+        };
+        let corruption = source
+            .downcast_ref::<PersistedValueCorruption>()
+            .expect("status error must retain typed row corruption");
+        assert_eq!(corruption.table(), "changeset_triggers");
+        assert_eq!(corruption.row_id(), row_id);
+        assert_eq!(corruption.column(), "status");
+        assert_eq!(corruption.value(), "already-ran-maybe");
+
+        let stored_status: String = conn
+            .query_row(
+                "SELECT status FROM changeset_triggers WHERE id = ?1",
+                [row_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_status, "already-ran-maybe");
     }
 
     #[test]

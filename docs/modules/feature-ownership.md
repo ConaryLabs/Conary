@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-30
-revision: 62
+last_updated: 2026-08-04
+revision: 63
 summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -43,6 +43,49 @@ Each ownership card uses these fields:
 - **Docs to update:** docs that should move with the feature.
 - **Safety notes:** persisted-state, trust, host mutation, fixture,
   private-path, or distro-scope boundaries.
+
+## Persisted Database Model Authority
+
+**Slug:** database-state
+
+**Capability:** keep current-schema model enums and tagged values exact,
+fallible on read, constrained on write, and bound to the row that supplied
+them.
+
+**Start here:** `crates/conary-core/src/db/schema.rs`;
+`crates/conary-core/src/db/current_schema/`;
+`crates/conary-core/src/db/models/persisted_value.rs`;
+`crates/conary-core/src/db/models/trigger.rs`;
+`crates/conary-core/src/db/models/trigger_engine.rs`;
+`crates/conary-core/src/db/models/derived.rs`;
+`docs/ARCHITECTURE.md`.
+
+**Neighbor systems:** install trigger execution, derived-package CLI and model
+application, database backup/restore, Remi deployment/readiness, and every
+current-schema SQL owner that persists a typed state.
+
+**Paths:** `crates/conary-core/src/db/schema.rs`;
+`crates/conary-core/src/db/models/mod.rs`;
+`crates/conary-core/src/db/models/persisted_value.rs`;
+`crates/conary-core/src/db/models/trigger.rs`;
+`crates/conary-core/src/db/models/trigger_engine.rs`;
+`crates/conary-core/src/db/models/derived.rs`.
+
+**Focused proof:** `cargo test -p conary-core --lib db::schema`;
+`cargo test -p conary-core --lib db::models::trigger`;
+`cargo test -p conary-core --lib db::models::derived`.
+
+**Interaction gate:** `cargo test -p conary-core`;
+`cargo test -p conary --test features` when derived-package behavior changes.
+
+**Docs to update:** `docs/ARCHITECTURE.md` when the database contract changes;
+the owning specification when a persisted product contract changes;
+`docs/modules/feature-ownership.md` when model ownership or proof moves.
+
+**Safety notes:** persisted values never select a semantic default after a
+parse failure. Current-schema shape changes increment `SCHEMA_VERSION`, reject
+older databases, and state the authoritative rebuild path; do not add a
+migration, fallback reader, or compatibility alias.
 
 ## CLI Dispatch And Command Routing
 
@@ -645,6 +688,7 @@ packages, install CCS packages, and preserve their exact lifecycle ABIs.
 `packaging/ccs/`;
 `docs/modules/ccs.md`;
 `docs/modules/test-fixtures.md`;
+`docs/specs/source-package-authority.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`;
 `docs/specs/static-repo-format-v1.md`.
 
@@ -683,6 +727,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `apps/conary/tests/rpm_named_ownership.rs`;
 `packaging/ccs/*`;
 `docs/specs/ccs-format-v3.md`;
+`docs/specs/source-package-authority.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
 **Focused proof:** `cargo test -p conary-core ccs::budget`;
@@ -709,6 +754,7 @@ crosses Remi publication;
 `cargo test -p remi conversion` when conversion output affects public serving.
 
 **Docs to update:** `docs/modules/ccs.md`; `docs/modules/test-fixtures.md`;
+`docs/specs/source-package-authority.md`;
 `docs/specs/foreign-package-lifecycle-contracts.md`;
 `docs/specs/static-repo-format-v1.md`; `docs/llms/subsystem-map.md`; the primary
 issue and draft pull request while the change is still in flight.
