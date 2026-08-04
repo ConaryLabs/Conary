@@ -2,12 +2,14 @@
 //! System management commands (init, verify, rollback)
 
 mod init;
+mod rebuild_database;
 mod rollback_command;
 mod rollback_restore;
 
 pub use init::cmd_init;
 #[cfg(test)]
 use init::{NATIVE_REPOSITORY_SEEDS, paths_refer_to_same_location, validate_init_privileges};
+pub use rebuild_database::cmd_rebuild_database;
 pub use rollback_command::cmd_rollback;
 #[cfg(test)]
 use rollback_command::cmd_rollback_with_forced_precommit_failure;

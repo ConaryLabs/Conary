@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-04
-revision: 63
-summary: Route feature ownership through exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+revision: 64
+summary: Route feature ownership through typed database rebuilds, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -48,11 +48,13 @@ Each ownership card uses these fields:
 
 **Slug:** database-state
 
-**Capability:** keep current-schema model enums and tagged values exact,
-fallible on read, constrained on write, and bound to the row that supplied
-them.
+**Capability:** keep current-schema identity, rebuilds, model enums, and tagged
+values exact, fallible on read, constrained on write, and bound to the row that
+supplied them.
 
 **Start here:** `crates/conary-core/src/db/schema.rs`;
+`crates/conary-core/src/db/rebuild.rs`;
+`apps/conary/src/commands/system/rebuild_database.rs`;
 `crates/conary-core/src/db/current_schema/`;
 `crates/conary-core/src/db/models/persisted_value.rs`;
 `crates/conary-core/src/db/models/trigger.rs`;
@@ -60,11 +62,14 @@ them.
 `crates/conary-core/src/db/models/derived.rs`;
 `docs/ARCHITECTURE.md`.
 
-**Neighbor systems:** install trigger execution, derived-package CLI and model
-application, database backup/restore, Remi deployment/readiness, and every
-current-schema SQL owner that persists a typed state.
+**Neighbor systems:** CLI dispatch and destructive-mutation confirmation,
+install trigger execution, derived-package CLI and model application, database
+backup/restore, Remi deployment/readiness, and every current-schema SQL owner
+that persists a typed state.
 
 **Paths:** `crates/conary-core/src/db/schema.rs`;
+`crates/conary-core/src/db/rebuild.rs`;
+`apps/conary/src/commands/system/rebuild_database.rs`;
 `crates/conary-core/src/db/models/mod.rs`;
 `crates/conary-core/src/db/models/persisted_value.rs`;
 `crates/conary-core/src/db/models/trigger.rs`;
@@ -72,8 +77,11 @@ current-schema SQL owner that persists a typed state.
 `crates/conary-core/src/db/models/derived.rs`.
 
 **Focused proof:** `cargo test -p conary-core --lib db::schema`;
+`cargo test -p conary-core --lib db::rebuild`;
 `cargo test -p conary-core --lib db::models::trigger`;
-`cargo test -p conary-core --lib db::models::derived`.
+`cargo test -p conary-core --lib db::models::derived`;
+`cargo test -p conary --lib commands::system`;
+`cargo test -p conary --test live_host_mutation_safety`.
 
 **Interaction gate:** `cargo test -p conary-core`;
 `cargo test -p conary --test features` when derived-package behavior changes.
@@ -85,7 +93,9 @@ the owning specification when a persisted product contract changes;
 **Safety notes:** persisted values never select a semantic default after a
 parse failure. Current-schema shape changes increment `SCHEMA_VERSION`, reject
 older databases, and state the authoritative rebuild path; do not add a
-migration, fallback reader, or compatibility alias.
+migration, fallback reader, or compatibility alias. A destructive rebuild
+requires explicit discard intent and confirmation, preserves a durable retired
+snapshot first, and never infers installed state from generation artifacts.
 
 ## CLI Dispatch And Command Routing
 

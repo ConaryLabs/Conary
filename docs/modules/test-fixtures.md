@@ -556,7 +556,9 @@ Each fixture family should record:
   second, independent reason: those images ship a bootstrap-built
   `/var/lib/conary/conary.db` at migration-chain schema version 66, and the
   schema epoch hard cut in df607ee8 (#61, 2026-07-26) retired it, so
-  `conary system init` refuses inside them. #157 owns that product gap.
+  `conary system init` refuses inside them. When the fixture state is
+  disposable, `conary system rebuild-db --discard-state --yes` snapshots that
+  database and initializes current repository/host-capability authority.
 - **Current evidence:** the 2026-07-16 Fedora 44 Group O local KVM run passed
   all five cases against `minimal-boot-v4`, the version the suites targeted at
   the time; a focused recompiled-harness TGE01 rerun also passed with the

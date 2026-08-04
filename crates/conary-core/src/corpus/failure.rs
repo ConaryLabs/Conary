@@ -203,6 +203,7 @@ fn core_variant_name(error: &Error) -> &'static str {
         Error::Io(_) => "Io",
         Error::IoError(_) => "IoError",
         Error::InitError(_) => "InitError",
+        Error::SchemaRebuildRequired { .. } => "SchemaRebuildRequired",
         Error::MissingId(_) => "MissingId",
         Error::VersionParse(_) => "VersionParse",
         Error::VersionComparison(_) => "VersionComparison",

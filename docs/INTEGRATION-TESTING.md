@@ -106,8 +106,10 @@ two independent reasons found on 2026-07-28:
 - They ship a bootstrap-built `/var/lib/conary/conary.db` at migration-chain
   schema version 66. The schema epoch hard cut in df607ee8 (#61, 2026-07-26)
   retired it, so `conary system init` refuses inside them with
-  `database uses retired migration-chain schema version 66`. #157 owns the
-  product gap that the refusal names a rebuild no command performs.
+  `database uses retired migration-chain schema version 66`. Use the explicit
+  `conary system rebuild-db --discard-state --yes` path only when that fixture's
+  active Conary state is disposable; it preserves the retired database as a
+  snapshot and initializes current repository/host-capability authority.
 
 The Fedora image ships no `/var/lib/conary` at all, so `system init` creates a
 fresh database at the current schema.

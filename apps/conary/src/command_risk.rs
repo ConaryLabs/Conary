@@ -15,6 +15,7 @@ pub enum CommandRisk {
     DryRunOnly,
     HookRefreshDbMutation,
     DbMutation,
+    DestructiveDbMutation,
     /// Internal boot continuation authorized by an exact generation artifact
     /// and kernel command-line contract rather than an interactive `--yes`.
     GenerationBootActivation,
@@ -38,7 +39,9 @@ impl CommandRiskPolicy {
     pub fn requires_apply_intent(&self) -> bool {
         matches!(
             self.risk,
-            CommandRisk::ActiveHostMutation | CommandRisk::AlwaysLive
+            CommandRisk::DestructiveDbMutation
+                | CommandRisk::ActiveHostMutation
+                | CommandRisk::AlwaysLive
         ) && !self.dry_run
     }
 
@@ -49,7 +52,9 @@ impl CommandRiskPolicy {
             | CommandRisk::DryRunOnly
             | CommandRisk::HookRefreshDbMutation
             | CommandRisk::GenerationBootActivation => None,
-            CommandRisk::DbMutation => Some(LiveMutationClass::LiveConaryState),
+            CommandRisk::DbMutation | CommandRisk::DestructiveDbMutation => {
+                Some(LiveMutationClass::LiveConaryState)
+            }
             CommandRisk::ActiveHostMutation => {
                 Some(LiveMutationClass::CurrentlyLiveEvenWithRootArguments)
             }
@@ -262,6 +267,12 @@ fn classify_try(
 fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
     match command {
         cli::SystemCommands::Init { .. } => Some(local_state("conary system init")),
+        cli::SystemCommands::RebuildDatabase { yes, .. } => Some(policy_with_intent(
+            "conary system rebuild-db",
+            CommandRisk::DestructiveDbMutation,
+            false,
+            *yes,
+        )),
         cli::SystemCommands::Completions { .. }
         | cli::SystemCommands::History { .. }
         | cli::SystemCommands::Verify { .. }

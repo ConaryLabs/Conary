@@ -126,6 +126,10 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
         .map_err(|err| init_failure_context(db_path_ref, &runtime_root, err))?;
     crate::ui::status("Initialized", &format!("database at {db_path}"));
 
+    configure_current_database(db_path).await
+}
+
+pub(super) async fn configure_current_database(db_path: &str) -> Result<()> {
     let mut conn = open_db(db_path)?;
     info!("Adding default repositories...");
     let host_capabilities = conary_core::ccs::HostCapabilityInventory::discover()
@@ -167,7 +171,7 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn require_init_privileges(db_path: &Path) -> Result<()> {
+pub(super) fn require_init_privileges(db_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         validate_init_privileges(db_path, nix::unistd::Uid::effective().is_root())?;
@@ -462,16 +466,20 @@ fn init_failure_context(
     source: conary_core::Error,
 ) -> anyhow::Error {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let safe_next_step = if matches!(&source, conary_core::Error::SchemaRebuildRequired { .. }) {
+        "run `conary system rebuild-db --discard-state --yes` with the same --db-path to preserve a retired snapshot and replace the active database; do not run it unless the active Conary state is disposable"
+    } else {
+        "verify the database parent is a writable directory, or pass --db-path to a writable test location; do not remove existing Conary runtime state unless you have confirmed it is disposable"
+    };
     anyhow!(
         "could not initialize Conary database at {}: {}\n\
          database parent: {}\n\
          runtime root: {}\n\
-         safe next step: verify the database parent is a writable directory, \
-         or pass --db-path to a writable test location; do not remove existing \
-         Conary runtime state unless you have confirmed it is disposable",
+         safe next step: {}",
         db_path.display(),
         source,
         parent.display(),
-        runtime_root.root().display()
+        runtime_root.root().display(),
+        safe_next_step
     )
 }

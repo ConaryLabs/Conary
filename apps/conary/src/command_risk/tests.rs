@@ -255,6 +255,24 @@ fn classify_system_init_and_repo_sync_as_local_state_mutations() {
 }
 
 #[test]
+fn retired_schema_rebuild_requires_explicit_discard_and_confirmation() {
+    assert!(
+        parse_cli(&["conary", "system", "rebuild-db", "--yes"]).is_err(),
+        "the destructive semantic must be explicit"
+    );
+
+    let unconfirmed = policy(&["conary", "system", "rebuild-db", "--discard-state"]);
+    assert_eq!(unconfirmed.risk, CommandRisk::DestructiveDbMutation);
+    assert!(unconfirmed.requires_ack());
+    assert!(!unconfirmed.apply_intent);
+
+    let confirmed = policy(&["conary", "system", "rebuild-db", "--discard-state", "--yes"]);
+    assert_eq!(confirmed.risk, CommandRisk::DestructiveDbMutation);
+    assert!(confirmed.requires_ack());
+    assert!(confirmed.apply_intent);
+}
+
+#[test]
 fn classify_adoption_dry_runs_with_precise_labels() {
     let package = policy(&["conary", "system", "adopt", "curl", "--dry-run"]);
     assert_eq!(

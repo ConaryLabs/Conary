@@ -94,6 +94,7 @@ crates/conary-core/      Core library crate
     +-- operations.rs    Shared operation vocabulary across CLI and daemon boundaries
     +-- db/              Database layer
     |   +-- schema.rs    Current pre-alpha schema epoch initializer and rebuild gate
+    |   +-- rebuild.rs   Explicit retired-schema snapshot and active-state replacement
     |   +-- current_schema/ One schema split into package-manager, repository, and Remi ownership files
     |   +-- models/      ORM-style model structs
     |   |   +-- try_session.rs M1b package try session state
@@ -581,11 +582,14 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Databases from retired schema revisions are rejected with an explicit rebuild
-requirement. Conary does not carry a schema compatibility chain or attempt to
-preserve derived queue and workflow history while there are no external users.
-Rebuilds must come from authoritative package, repository, and conversion
-inputs.
+Databases from retired schema revisions are rejected with an exact recovery
+command. `conary system rebuild-db --discard-state --yes` consolidates the
+retired SQLite state into a durable snapshot under the Conary backup directory,
+then creates the one current schema and current repository/host-capability
+authority. It does not infer installed state from generation artifacts: the
+operator must resync repository metadata and explicitly re-adopt native packages
+that Conary should track. `conary system init` remains non-destructive and does
+not carry a compatibility chain or silently reset an existing database.
 
 The stable table families are:
 

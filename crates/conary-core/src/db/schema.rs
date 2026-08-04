@@ -167,10 +167,11 @@ fn database_is_fresh(conn: &Connection) -> Result<bool> {
 }
 
 fn rebuild_required(observed: &str) -> Error {
-    Error::InitError(format!(
-        "database uses {observed}; this pre-alpha build supports only schema epoch \
-         {SCHEMA_EPOCH} revision {SCHEMA_VERSION}. Rebuild the database from authoritative inputs"
-    ))
+    Error::SchemaRebuildRequired {
+        observed: observed.to_string(),
+        supported_epoch: SCHEMA_EPOCH.to_string(),
+        supported_revision: SCHEMA_VERSION,
+    }
 }
 
 #[cfg(test)]
@@ -211,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_inspection_names_exact_deployment_action() {
+    fn read_only_inspection_reports_schema_compatibility_without_mutation() {
         let missing_dir = tempfile::tempdir().unwrap();
         let missing = missing_dir.path().join("missing.db");
         assert_eq!(inspect(&missing).unwrap(), SchemaCompatibility::Fresh);
@@ -683,7 +684,7 @@ mod tests {
                 error.contains(&format!("migration-chain schema version {version}")),
                 "{error}"
             );
-            assert!(error.contains("Rebuild the database"));
+            assert!(error.contains("schema rebuild required"), "{error}");
         }
     }
 
@@ -706,7 +707,7 @@ mod tests {
 
         let error = ensure_current(&conn).unwrap_err().to_string();
         assert!(error.contains("unversioned non-empty"));
-        assert!(error.contains("Rebuild the database"));
+        assert!(error.contains("schema rebuild required"), "{error}");
         assert!(!table_exists(&conn, "troves").unwrap());
     }
 
@@ -726,7 +727,7 @@ mod tests {
 
             let error = ensure_current(&conn).unwrap_err().to_string();
             assert!(error.contains("unversioned non-empty"), "{error}");
-            assert!(error.contains("Rebuild the database"), "{error}");
+            assert!(error.contains("schema rebuild required"), "{error}");
             assert!(!table_exists(&conn, "troves").unwrap());
         }
     }

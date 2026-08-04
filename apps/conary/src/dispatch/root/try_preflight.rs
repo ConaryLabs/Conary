@@ -141,7 +141,9 @@ pub(super) fn command_uses_try_session_preflight_db(command: &Commands) -> bool 
             cli::BootstrapCommands::VerifyConvergence { .. }
             | cli::BootstrapCommands::DiffSeeds { .. },
         )
-        | Commands::System(cli::SystemCommands::Completions { .. })
+        | Commands::System(
+            cli::SystemCommands::Completions { .. } | cli::SystemCommands::RebuildDatabase { .. },
+        )
         | Commands::Ccs(
             cli::CcsCommands::Init { .. }
             | cli::CcsCommands::Build { .. }
@@ -508,6 +510,7 @@ fn selected_verify_db_path(command: &cli::VerifyCommands) -> &str {
 fn selected_system_db_path(command: &cli::SystemCommands) -> &str {
     match command {
         cli::SystemCommands::Init { db, .. }
+        | cli::SystemCommands::RebuildDatabase { db, .. }
         | cli::SystemCommands::History { db, .. }
         | cli::SystemCommands::Adopt { db, .. }
         | cli::SystemCommands::Unadopt { db, .. }
