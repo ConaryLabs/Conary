@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-04
-revision: 60
-summary: Route lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
+revision: 61
+summary: Route typed database rebuilds, lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -54,6 +54,8 @@ commands.
 - Current-schema revision and persisted model-state authority:
   `docs/modules/feature-ownership.md` slug `database-state`, plus
   `crates/conary-core/src/db/schema.rs`,
+  `crates/conary-core/src/db/rebuild.rs`,
+  `apps/conary/src/commands/system/rebuild_database.rs`,
   `crates/conary-core/src/db/current_schema/`, and
   `crates/conary-core/src/db/models/persisted_value.rs`.
 - CLI dispatch and command routing: `docs/modules/feature-ownership.md` slug

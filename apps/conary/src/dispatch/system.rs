@@ -21,6 +21,20 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
     match sys_cmd {
         cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path).await,
 
+        cli::SystemCommands::RebuildDatabase {
+            db,
+            discard_state: _,
+            yes,
+        } => {
+            require_live_mutation(
+                MutationIntent::from_apply_intent(yes),
+                Cow::Borrowed("conary system rebuild-db"),
+                LiveMutationClass::LiveConaryState,
+                false,
+            )?;
+            commands::cmd_rebuild_database(&db.db_path).await
+        }
+
         cli::SystemCommands::Completions { shell } => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "conary", &mut io::stdout());

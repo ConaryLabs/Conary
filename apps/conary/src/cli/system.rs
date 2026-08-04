@@ -48,6 +48,21 @@ pub enum SystemCommands {
         db: DbArgs,
     },
 
+    /// Snapshot and replace a retired pre-alpha database
+    #[command(name = "rebuild-db")]
+    RebuildDatabase {
+        #[command(flatten)]
+        db: DbArgs,
+
+        /// Explicitly discard active repository and installed-package state
+        #[arg(long, required = true)]
+        discard_state: bool,
+
+        /// Confirm replacing the active database after preserving a snapshot
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

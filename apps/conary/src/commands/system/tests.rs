@@ -1,9 +1,9 @@
 // apps/conary/src/commands/system/tests.rs
 
 use super::{
-    NATIVE_REPOSITORY_SEEDS, cmd_init, cmd_rollback, cmd_rollback_with_forced_precommit_failure,
-    paths_refer_to_same_location, restore_snapshot, restore_snapshots_to_live_root,
-    validate_init_privileges,
+    NATIVE_REPOSITORY_SEEDS, cmd_init, cmd_rebuild_database, cmd_rollback,
+    cmd_rollback_with_forced_precommit_failure, paths_refer_to_same_location, restore_snapshot,
+    restore_snapshots_to_live_root, validate_init_privileges,
 };
 use crate::commands::{
     FileSnapshot, NativeLifecycleSnapshot, RollbackSystemAuthority, TroveSnapshot,
@@ -39,6 +39,73 @@ use std::path::{Path, PathBuf};
 
 #[path = "tests/rollback.rs"]
 mod rollback;
+
+#[tokio::test]
+async fn init_retired_schema_refusal_names_exact_rebuild_command_without_mutating() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO schema_version (version) VALUES (66);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let error = cmd_init(db_path_str).await.unwrap_err().to_string();
+
+    assert!(
+        error.contains("conary system rebuild-db --discard-state --yes"),
+        "{error}"
+    );
+    assert_eq!(
+        conary_core::db::schema::inspect(&db_path).unwrap(),
+        conary_core::db::schema::SchemaCompatibility::RebuildRequired {
+            observed: "retired migration-chain schema version 66".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn rebuild_database_resolves_retired_schema_and_seeds_current_authority() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO schema_version (version) VALUES (66);",
+    )
+    .unwrap();
+    drop(conn);
+
+    cmd_rebuild_database(db_path_str).await.unwrap();
+
+    assert_eq!(
+        conary_core::db::schema::inspect(&db_path).unwrap(),
+        conary_core::db::schema::SchemaCompatibility::Current
+    );
+    let current = conary_core::db::open(&db_path).unwrap();
+    conary_core::ccs::HostCapabilityInventory::load_required(&current).unwrap();
+    assert!(
+        Repository::find_by_name(&current, "remi-fedora-44")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        std::fs::read_dir(temp_dir.path().join("backups"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
 
 #[tokio::test]
 async fn init_seeds_every_builtin_source_feed_without_a_host_distro() {

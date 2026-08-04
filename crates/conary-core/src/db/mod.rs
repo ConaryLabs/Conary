@@ -12,6 +12,7 @@ pub mod backup;
 pub mod current_schema;
 pub mod models;
 pub mod paths;
+pub mod rebuild;
 pub mod schema;
 
 use crate::error::{Error, Result};

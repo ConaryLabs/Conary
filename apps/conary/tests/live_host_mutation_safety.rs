@@ -373,6 +373,38 @@ fn removed_system_gc_surface_is_rejected() {
 }
 
 #[test]
+fn retired_schema_rebuild_refuses_without_confirmation_before_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO schema_version (version) VALUES (66);",
+    )
+    .unwrap();
+    drop(conn);
+    let before = fs::read(&db_path).unwrap();
+
+    let output = run_conary(&[
+        "system",
+        "rebuild-db",
+        "--discard-state",
+        "--db-path",
+        db_path.to_str().unwrap(),
+    ]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("conary system rebuild-db"), "{stderr}");
+    assert!(stderr.contains("--yes"), "{stderr}");
+    assert_eq!(fs::read(&db_path).unwrap(), before);
+    assert!(!temp.path().join("backups").exists());
+}
+
+#[test]
 fn system_adopt_package_refuses_without_live_mutation_flag() {
     let (_tmp, db_path) = common::setup_command_test_db();
 

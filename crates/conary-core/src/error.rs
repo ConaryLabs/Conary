@@ -58,6 +58,16 @@ pub enum Error {
     #[error("Failed to initialize database: {0}")]
     InitError(String),
 
+    /// An existing database belongs to a retired pre-alpha schema.
+    #[error(
+        "Database schema rebuild required: database uses {observed}; this pre-alpha build supports only schema epoch {supported_epoch} revision {supported_revision}"
+    )]
+    SchemaRebuildRequired {
+        observed: String,
+        supported_epoch: String,
+        supported_revision: i32,
+    },
+
     /// Missing ID on model object (required for update/query operations)
     #[error("Missing ID: {0}")]
     MissingId(String),

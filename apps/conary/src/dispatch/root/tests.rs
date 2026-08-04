@@ -592,6 +592,7 @@ fn commands_without_db_args_do_not_use_try_session_preflight_scope() {
         ]
         .as_slice(),
         ["conary", "system", "completions", "bash"].as_slice(),
+        ["conary", "system", "rebuild-db", "--discard-state", "--yes"].as_slice(),
         [
             "conary",
             "ccs",
