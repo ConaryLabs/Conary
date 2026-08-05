@@ -126,6 +126,16 @@ fn watched_sources_missing_ignores_recipe_and_auxiliary_files() {
 }
 
 #[test]
+fn refresh_failure_termination_uses_typed_divergence_not_prose() {
+    let divergence = anyhow::Error::new(TryRefreshSessionDiverged::new("try-1"))
+        .context("diagnostic wording can change independently");
+    assert!(refresh_failure_stops_watch(&divergence));
+
+    let diagnostic_prose = anyhow::anyhow!("try watch session changed outside the watcher");
+    assert!(!refresh_failure_stops_watch(&diagnostic_prose));
+}
+
+#[test]
 fn debounce_step_resets_deadline_when_identity_changes_before_ready() {
     let start = Instant::now();
     let mut debounce = DebounceState::new(Duration::from_millis(750));

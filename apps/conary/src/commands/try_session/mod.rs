@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use conary_core::ccs::verify::TrustPolicy;
 use conary_core::db::models::TrySession;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 mod executor;
 mod install;
@@ -44,6 +45,20 @@ pub(crate) struct TryRefreshRequest<'a> {
     pub(crate) expected_try_generation_id: i64,
     pub(crate) package_path: &'a Path,
     pub(crate) trust_policy: &'a TrustPolicy,
+}
+
+#[derive(Debug, Error)]
+#[error("try watch session {session_id} diverged from watcher-owned state")]
+pub(crate) struct TryRefreshSessionDiverged {
+    session_id: String,
+}
+
+impl TryRefreshSessionDiverged {
+    pub(crate) fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
