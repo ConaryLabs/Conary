@@ -12,12 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 25 of the current-only schema epoch.
+/// Revision 26 of the current-only schema epoch.
 ///
-/// Revision 25 retains revision 24's exact source authority and adds fail-closed
-/// constraints for trigger and derived-package persisted states. Earlier
+/// Revision 26 retains revision 25's fail-closed persisted states and requires
+/// every source pin to persist an explicit dependency-mixing policy. Earlier
 /// pre-alpha databases must be rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 25;
+pub const SCHEMA_VERSION: i32 = 26;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -209,6 +209,31 @@ mod tests {
         ensure_current(&conn).unwrap();
         ensure_current(&conn).unwrap();
         assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn revision_25_requires_rebuild_for_revision_26() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_identity (
+                epoch TEXT NOT NULL,
+                revision INTEGER NOT NULL
+            );
+            INSERT INTO schema_identity (epoch, revision)
+                VALUES ('conary-current-v1', 25);
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO schema_version (version) VALUES (25);",
+        )
+        .unwrap();
+
+        let error = ensure_current(&conn).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 25; this pre-alpha build supports only schema epoch conary-current-v1 revision 26"
+        );
     }
 
     #[test]

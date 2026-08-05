@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-04
-revision: 12
+last_updated: 2026-08-06
+revision: 13
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
@@ -275,13 +275,23 @@ the stated scope, not whether a workstream happens to be active.
 - **Execution status:** active. #109 closes the trigger-status slice; remaining
   ledger items proceed as narrow issues while the W4 aggregate gate remains
   active.
-- **Issues:** #67 as epic, #109 complete, #261 for exact publish-destination
-  routing, plus one narrow issue per remaining ledger item.
+- **Issues:** #67 as epic; #109 for persisted status; #257 and #259 for Remi
+  acquisition integrity; #261 for exact publish-destination routing; #263 for
+  required source-pin strength; plus one narrow issue per remaining P1 item.
 - **Closed ledger items:**
+  - PR #61 rejects missing package architecture, separates typed
+    `InstallReason` from diagnostic selection prose, and validates trigger
+    patterns before persistence and again on read.
   - #109 replaces trigger and derived-package status defaults with typed row
     corruption, validates every candidate row before mutation planning, and
-    constrains the current schema. Schema revision 25 requires rebuilding
-    earlier disposable databases from authoritative inputs.
+    constrains the current schema. The current revision retains those
+    revision-25 constraints.
+  - #257 carries Remi retry disposition through typed acquisition failures;
+    #259 stages, validates, and atomically publishes downloaded CCS files.
+  - #261 parses CLI and packaging-MCP publish destinations through one exact
+    route contract.
+  - #263 requires an explicit typed dependency-mixing strength in every source
+    pin and advances the current-only schema to revision 26.
 - **Ledger gaps found on audit that #67 does not currently own:**
   - The `sanitize_path` ASCII heuristic is a #67-class invented authority but is
     owned only by #99, and only for ALPM. Cross-reference both.

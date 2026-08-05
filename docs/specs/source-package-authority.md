@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-03
-revision: 3
+last_updated: 2026-08-06
+revision: 4
 summary: Define lossless RPM, Debian, ALPM, and CCS package authority plus explicit consumer projections
 ---
 
@@ -313,21 +313,21 @@ The signed CCS contract and installed database both change intentionally.
 
 - CCS v3 replaces v2; every local, cached, static-repository, and Remi v2
   artifact must be rebuilt or reconverted from authenticated source.
-- SQLite schema revision 25 retains revision 24's source-authority hard cut and
-  replaces the current schema in place with fail-closed trigger and
-  derived-package state constraints.
+- SQLite schema revision 26 retains revision 25's source-authority and
+  fail-closed persisted-state constraints, and requires an explicit mixing
+  policy for every source pin.
   Installed and repository provider rows must distinguish identity-derived
   matches from declared/derived capabilities, and config persistence must
   distinguish source declarations from materialized node and transaction
   state.
-- Existing pre-W5 databases are disposable and must be recreated with
+- Existing pre-revision-26 databases are disposable and must be recreated with
   `conary system init` plus repository resync/reinstallation. No migration,
   compatibility decoder, dual write, or fallback reader is added.
 - Remi conversion records and indexes tied to v2 authority are rebuilt before
   public serving. A mixed v2/v3 serving state is invalid.
 
-The rebuild property is intentional: revision 25 has no migration or dual-read
-path from revision 24 or the retired provider representation.
+The rebuild property is intentional: revision 26 has no migration or dual-read
+path from revision 25 or the retired provider representation.
 
 ## Conformance And Closeout
 

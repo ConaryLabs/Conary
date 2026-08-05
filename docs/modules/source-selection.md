@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-31
-revision: 24
+last_updated: 2026-08-06
+revision: 25
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -68,11 +68,15 @@ Important fields:
 - `convergence`: how aggressively package ownership should move during source
   transitions.
 
-The only mixing values are `strict`, `guarded`, and `permissive`. Model parsing
-rejects unknown profile IDs, profile route aliases, unknown mixing values, and
-unknown source-pin fields. The CLI parses the same typed mixing enum before
-changing state, and the current schema independently constrains both persisted
-profile IDs and mixing values. No invalid value silently becomes a default.
+The only mixing values are `strict`, `guarded`, and `permissive`. A configured
+`[system.pin]` must name both its exact profile and its strength; omission is a
+parse error rather than an implicit `guarded` choice. Model parsing rejects
+unknown profile IDs, profile route aliases, unknown mixing values, and unknown
+source-pin fields. The CLI parses the same typed mixing enum before changing
+state, and the current schema independently requires and constrains both
+persisted profile IDs and mixing values. No omitted or invalid value silently
+becomes a default. Absence of the entire pin remains the distinct supported
+unpinned state.
 
 The removed flat `[system].distro` and `[system].mixing` aliases are rejected;
 write `[system.pin]` directly. The former `profile` and `selection_mode`
