@@ -230,6 +230,26 @@ mod tests {
     }
 
     #[test]
+    fn schema_rejects_omitted_mixing_policy() {
+        let (_temp, conn) = create_test_db();
+
+        let error = conn
+            .execute(
+                "INSERT INTO distro_pin (distro, created_at)
+                 VALUES ('arch', datetime('now'))",
+                [],
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("NOT NULL constraint failed: distro_pin.mixing_policy"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn schema_rejects_non_catalog_profile_identity() {
         let (_temp, conn) = create_test_db();
 
@@ -286,11 +306,11 @@ mod tests {
     }
 
     #[test]
-    fn test_set_from_source_pin_uses_default_strength() {
+    fn test_set_from_source_pin_preserves_explicit_strength() {
         let (_temp, conn) = create_test_db();
         let pin = SourcePinConfig {
             distro: "arch".to_string(),
-            ..SourcePinConfig::default()
+            strength: DependencyMixingPolicy::Guarded,
         };
 
         DistroPin::set_from_source_pin(&conn, &pin).unwrap();

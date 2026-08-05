@@ -14,7 +14,6 @@ pub struct SourcePinConfig {
     pub distro: String,
 
     /// Typed dependency mixing behavior.
-    #[serde(default = "default_pin_strength")]
     pub strength: DependencyMixingPolicy,
 }
 
@@ -22,7 +21,6 @@ pub struct SourcePinConfig {
 #[serde(deny_unknown_fields)]
 struct SourcePinConfigSerde {
     distro: String,
-    #[serde(default = "default_pin_strength")]
     strength: DependencyMixingPolicy,
 }
 
@@ -41,19 +39,6 @@ impl TryFrom<SourcePinConfigSerde> for SourcePinConfig {
             strength: raw.strength,
         })
     }
-}
-
-impl Default for SourcePinConfig {
-    fn default() -> Self {
-        Self {
-            distro: String::new(),
-            strength: default_pin_strength(),
-        }
-    }
-}
-
-const fn default_pin_strength() -> DependencyMixingPolicy {
-    DependencyMixingPolicy::Guarded
 }
 
 /// Convergence intent controls how aggressively the system should migrate

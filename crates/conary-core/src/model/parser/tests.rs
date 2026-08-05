@@ -652,6 +652,21 @@ strength = "hard"
 }
 
 #[test]
+fn source_pin_requires_explicit_strength() {
+    let input = r#"
+[model]
+version = 1
+
+[system.pin]
+distro = "arch"
+"#;
+    let error = toml::from_str::<SystemModel>(input)
+        .expect_err("a source pin without typed strength must fail")
+        .to_string();
+    assert!(error.contains("missing field `strength`"), "{error}");
+}
+
+#[test]
 fn unsupported_source_pin_profile_is_rejected() {
     let input = r#"
 [model]

@@ -401,7 +401,7 @@ CREATE TABLE distro_pin (
             id INTEGER PRIMARY KEY,
             distro TEXT NOT NULL
                 CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
-            mixing_policy TEXT NOT NULL DEFAULT 'guarded'
+            mixing_policy TEXT NOT NULL
                 CHECK(mixing_policy IN ('strict', 'guarded', 'permissive')),
             created_at TEXT NOT NULL
         );

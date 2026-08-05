@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-03
-revision: 39
+last_updated: 2026-08-06
+revision: 40
 summary: Describe workspace architecture, source-authority projections, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -581,6 +581,11 @@ current schema epoch initialized by `crates/conary-core/src/db/schema.rs`.
 The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
+
+Schema revision 26 retains revision 25's fail-closed persisted-state
+constraints and requires every persisted source pin to carry an explicit
+`strict`, `guarded`, or `permissive` dependency-mixing policy. Omitting the
+policy never selects one on the operator's behalf.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the
