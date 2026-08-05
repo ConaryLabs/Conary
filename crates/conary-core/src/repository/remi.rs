@@ -28,6 +28,8 @@ use tracing::{debug, info, warn};
 use crate::repository::chunk_fetcher::{ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher};
 use std::sync::Arc;
 
+mod acquisition_error;
+use acquisition_error::ReadyPackageAcquisitionError;
 mod async_client;
 pub use async_client::AsyncRemiClient;
 mod protocol;
@@ -72,22 +74,6 @@ fn check_total_chunk_bytes(current: u64, next: u64) -> Result<u64> {
 
 fn identity_get(client: &Client, url: &str) -> reqwest::RequestBuilder {
     client.get(url).header(header::ACCEPT_ENCODING, "identity")
-}
-
-fn is_transient_package_status(status: u16) -> bool {
-    status == 408 || status == 429 || (500..=599).contains(&status)
-}
-
-fn retryable_ready_download_error(error: &Error) -> bool {
-    match error {
-        Error::DownloadError(message) => {
-            message.starts_with("Failed to download ")
-                || message.starts_with("response stream:")
-                || message.starts_with("Remi returned transient HTTP ")
-        }
-        Error::TimeoutError(_) => true,
-        _ => false,
-    }
 }
 
 #[cfg(not(test))]
@@ -186,12 +172,12 @@ impl RemiClient {
         url: &str,
         name: &str,
         distro: &str,
-    ) -> Result<reqwest::Response> {
+    ) -> std::result::Result<reqwest::Response, ReadyPackageAcquisitionError> {
         for attempt in 0..=QUEUE_FULL_MAX_RETRIES {
             let response = identity_get(&self.client, url)
                 .send()
                 .await
-                .download_context(url)?;
+                .map_err(|source| ReadyPackageAcquisitionError::transport(url, source))?;
             let status = response.status().as_u16();
             if status != 503 {
                 return Ok(response);
@@ -199,7 +185,7 @@ impl RemiClient {
 
             let body = response.text().await.unwrap_or_default();
             if attempt == QUEUE_FULL_MAX_RETRIES {
-                return Err(self.core.map_http_error(status, body, name, distro));
+                return Err(self.core.map_http_error(status, body, name, distro).into());
             }
 
             let retry_after = queue_full_retry_delay(attempt + 1);
@@ -527,7 +513,7 @@ impl RemiClient {
         name: &str,
         distro: &str,
         output_dir: &Path,
-    ) -> Result<ReadyPackageDownload> {
+    ) -> std::result::Result<ReadyPackageDownload, ReadyPackageAcquisitionError> {
         let response = self
             .send_download_request_with_queue_retry(url, name, distro)
             .await?;
@@ -542,16 +528,10 @@ impl RemiClient {
                     response.json().await.parse_context("202 response")?;
                 Ok(ReadyPackageDownload::Accepted(accepted))
             }
-            status if is_transient_package_status(status) => {
-                let body = response.text().await.unwrap_or_default();
-                Err(Error::DownloadError(format!(
-                    "Remi returned transient HTTP {}: {}",
-                    status, body
-                )))
-            }
             status => {
                 let body = response.text().await.unwrap_or_default();
-                Err(self.core.map_http_error(status, body, name, distro))
+                let error = self.core.map_http_error(status, body, name, distro);
+                Err(ReadyPackageAcquisitionError::http_response(status, error))
             }
         }
     }
@@ -573,7 +553,7 @@ impl RemiClient {
                 .await
             {
                 Ok(download) => return Ok(download),
-                Err(error) if attempt < max_attempts && retryable_ready_download_error(&error) => {
+                Err(error) if attempt < max_attempts && error.is_retryable() => {
                     let delay = retry_config.delay_for_attempt(attempt);
                     warn!(
                         "Remi download attempt {}/{} for {} failed: {}; retrying in {:?}",
@@ -582,11 +562,13 @@ impl RemiClient {
                     last_error = Some(error);
                     tokio::time::sleep(delay).await;
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into_repository_error()),
             }
         }
 
-        Err(last_error.expect("max_attempts is clamped to >= 1, so at least one iteration ran"))
+        Err(last_error
+            .expect("max_attempts is clamped to >= 1, so at least one iteration ran")
+            .into_repository_error())
     }
 
     /// High-level: Fetch a package from Remi and save to disk
@@ -663,7 +645,7 @@ impl RemiClient {
         response: reqwest::Response,
         name: &str,
         output_dir: &Path,
-    ) -> Result<PathBuf> {
+    ) -> std::result::Result<PathBuf, ReadyPackageAcquisitionError> {
         // Get content length for progress bar
         let content_length = response.content_length().unwrap_or(0);
 
@@ -704,7 +686,7 @@ impl RemiClient {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| Error::DownloadError(format!("response stream: {e}")))?
+            .map_err(ReadyPackageAcquisitionError::response_stream)?
         {
             file.write_all(&chunk).io_context("write to output file")?;
 
@@ -730,7 +712,8 @@ impl RemiClient {
             let _ = std::fs::remove_file(&output_path);
             return Err(Error::DownloadError(
                 "Downloaded file is not a valid CCS package (expected gzip)".to_string(),
-            ));
+            )
+            .into());
         }
 
         Ok(output_path)
