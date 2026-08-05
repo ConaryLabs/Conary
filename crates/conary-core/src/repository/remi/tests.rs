@@ -345,6 +345,25 @@ fn download_response(status: &str, body: &[u8]) -> Vec<u8> {
     response
 }
 
+fn truncated_download_response(body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Disposition: attachment; filename=\"qemu-img.ccs\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len() + 2
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
+fn output_filenames(output_dir: &Path) -> Vec<String> {
+    let mut filenames = std::fs::read_dir(output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    filenames.sort();
+    filenames
+}
+
 async fn fetch_test_package(base_url: &str, output_dir: &Path) -> Result<PathBuf> {
     RemiClient::new(base_url)?
         .fetch_package(
@@ -444,7 +463,10 @@ async fn fetch_package_does_not_retry_local_output_failure() {
         .unwrap_err();
 
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    assert!(error.to_string().contains("create output file"), "{error}");
+    assert!(
+        error.to_string().contains("create staged output file"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -528,6 +550,89 @@ async fn fetch_package_retries_transient_body_stream_failure() {
 
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
+    assert_eq!(output_filenames(output.path()), ["qemu-img.ccs"]);
+}
+
+#[tokio::test]
+async fn exhausted_stream_retries_leave_no_partial_artifact() {
+    use std::sync::atomic::Ordering;
+
+    let truncated = truncated_download_response(&[0x1f, 0x8b]);
+    let (base_url, attempts) = spawn_download_server(vec![
+        Some(truncated.clone()),
+        Some(truncated.clone()),
+        Some(truncated),
+    ])
+    .await;
+    let output = tempfile::tempdir().unwrap();
+
+    let error = fetch_test_package(&base_url, output.path())
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(error.to_string().contains("response stream"), "{error}");
+    assert!(output_filenames(output.path()).is_empty());
+}
+
+#[tokio::test]
+async fn exhausted_stream_retries_preserve_existing_destination() {
+    let truncated = truncated_download_response(&[0x1f, 0x8b]);
+    let (base_url, _) = spawn_download_server(vec![
+        Some(truncated.clone()),
+        Some(truncated.clone()),
+        Some(truncated),
+    ])
+    .await;
+    let output = tempfile::tempdir().unwrap();
+    let destination = output.path().join("qemu-img.ccs");
+    std::fs::write(&destination, b"existing verified package").unwrap();
+
+    fetch_test_package(&base_url, output.path())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        b"existing verified package"
+    );
+    assert_eq!(output_filenames(output.path()), ["qemu-img.ccs"]);
+}
+
+#[tokio::test]
+async fn invalid_body_preserves_existing_destination_and_removes_stage() {
+    let (base_url, _) =
+        spawn_download_server(vec![Some(download_response("200 OK", b"not-gzip"))]).await;
+    let output = tempfile::tempdir().unwrap();
+    let destination = output.path().join("qemu-img.ccs");
+    std::fs::write(&destination, b"existing verified package").unwrap();
+
+    fetch_test_package(&base_url, output.path())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        b"existing verified package"
+    );
+    assert_eq!(output_filenames(output.path()), ["qemu-img.ccs"]);
+}
+
+#[tokio::test]
+async fn valid_body_atomically_replaces_existing_destination() {
+    let (base_url, _) =
+        spawn_download_server(vec![Some(download_response("200 OK", &[0x1f, 0x8b]))]).await;
+    let output = tempfile::tempdir().unwrap();
+    let destination = output.path().join("qemu-img.ccs");
+    std::fs::write(&destination, b"existing verified package").unwrap();
+
+    let path = fetch_test_package(&base_url, output.path())
+        .await
+        .expect("valid staged package should replace the destination");
+
+    assert_eq!(path, destination);
+    assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
+    assert_eq!(output_filenames(output.path()), ["qemu-img.ccs"]);
 }
 
 mod async_tests {
