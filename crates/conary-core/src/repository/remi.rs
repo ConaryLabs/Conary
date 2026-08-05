@@ -677,8 +677,13 @@ impl RemiClient {
         );
         pb.set_message(format!("Downloading {}", filename));
 
-        // Download to file with progress
-        let mut file = std::fs::File::create(&output_path).io_context("create output file")?;
+        // Keep every attempt private until its complete body has been flushed and
+        // validated. The same-directory stage makes the final rename atomic and
+        // lets NamedTempFile clean up stream, local I/O, and validation failures.
+        let mut staged = tempfile::Builder::new()
+            .prefix(".conary-remi-download-")
+            .tempfile_in(output_dir)
+            .io_context("create staged output file")?;
 
         let mut downloaded: u64 = 0;
         let mut response = response;
@@ -688,33 +693,48 @@ impl RemiClient {
             .await
             .map_err(ReadyPackageAcquisitionError::response_stream)?
         {
-            file.write_all(&chunk).io_context("write to output file")?;
+            staged
+                .as_file_mut()
+                .write_all(&chunk)
+                .io_context("write staged output file")?;
 
             downloaded += chunk.len() as u64;
             pb.set_position(downloaded);
         }
 
-        pb.finish_with_message(format!("Downloaded {} ({} bytes)", filename, downloaded));
-        info!("CCS package downloaded: {}", output_path.display());
+        staged
+            .as_file_mut()
+            .flush()
+            .io_context("flush staged output file")?;
 
         // Verify the file is a valid CCS package (gzip-compressed tar)
         // CCS packages are gzipped tar archives, so check for gzip magic bytes
         let mut magic = [0u8; 2];
         {
             use std::io::Read;
-            let mut file = std::fs::File::open(&output_path).io_context("read downloaded file")?;
+            let mut file =
+                std::fs::File::open(staged.path()).io_context("read staged output file")?;
             file.read_exact(&mut magic).io_context("read magic bytes")?;
         }
 
         // Gzip magic: 0x1f 0x8b
         if magic != [0x1f, 0x8b] {
-            // Clean up invalid file
-            let _ = std::fs::remove_file(&output_path);
             return Err(Error::DownloadError(
                 "Downloaded file is not a valid CCS package (expected gzip)".to_string(),
             )
             .into());
         }
+
+        staged.persist(&output_path).map_err(|error| {
+            Error::IoError(format!(
+                "Failed to publish downloaded package at {}: {}",
+                output_path.display(),
+                error.error
+            ))
+        })?;
+
+        pb.finish_with_message(format!("Downloaded {} ({} bytes)", filename, downloaded));
+        info!("CCS package downloaded: {}", output_path.display());
 
         Ok(output_path)
     }
