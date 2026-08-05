@@ -929,7 +929,8 @@ Artifact-form `conary publish <pkg.ccs> <target>` must pass
 `publish_gate.rs` checks for package signatures, TOML integrity, attestation
 authority, output identity, command-risk evidence, and foreign-boundary hashes
 before static publication or Remi release upload. The artifact-form CLI and
-service boundary lives in `apps/conary/src/commands/publish/artifact.rs`.
+service boundary lives in `apps/conary/src/commands/publish/artifact.rs`; exact
+CLI/MCP destination parsing lives in `apps/conary/src/commands/publish/target.rs`.
 Destination inspection and attestation preparation live in
 `publish_context.rs`; key staging, recovery, promotion, and package-key
 projection live in `publish_context/key_management.rs`. Never parse static `index.json` or

@@ -10,11 +10,11 @@ pub(super) async fn publish_artifact_form(
     writer: &mut impl Write,
 ) -> Result<()> {
     let operation_id = publish_operation_id();
-    match classify_publish_target(target)? {
-        PublishTargetRoute::StaticLocal => {
-            publish_static_artifact_form(options, target, writer, operation_id).await
+    match PublishDestination::parse(target)? {
+        PublishDestination::StaticLocal(destination) => {
+            publish_static_artifact_form(options, target, destination, writer, operation_id).await
         }
-        PublishTargetRoute::RemiRelease if options.json => {
+        PublishDestination::RemiRelease(_) if options.json => {
             let message = "Remi publish JSON output is not supported in M3a";
             let output = publish_failure_output(
                 &operation_id,
@@ -25,20 +25,28 @@ pub(super) async fn publish_artifact_form(
             super::super::diagnostics::write_packaging_record_if_possible(&output);
             bail!("{message}")
         }
-        PublishTargetRoute::RemiRelease => publish_remi_artifact_form(options, target).await,
+        PublishDestination::RemiRelease(destination) => {
+            publish_remi_artifact_form(options, &destination).await
+        }
+        PublishDestination::UnsupportedHttp(destination) => bail!(
+            "HTTP(S) publish target '{}' must use the exact Remi release endpoint /v1/admin/releases/{{route}}",
+            destination
+        ),
     }
 }
 
 async fn publish_static_artifact_form(
     options: PublishOptions,
     target: &str,
+    destination: RepoLocation,
     writer: &mut impl Write,
     operation_id: String,
 ) -> Result<()> {
     let json = options.json;
+    let repo_name = derive_repo_name(&destination, target)?;
     let input = StaticArtifactPublishServiceInput {
         artifact_path: PathBuf::from(&options.what),
-        target: target.to_string(),
+        destination,
         key_dir: options.key_dir.as_deref().map(PathBuf::from),
         state_file: options.state_file.as_deref().map(PathBuf::from),
         refresh: options.refresh,
@@ -57,7 +65,6 @@ async fn publish_static_artifact_form(
     if json {
         super::super::diagnostics::write_packaging_output(&output, true, writer)?;
     } else {
-        let repo_name = derive_repo_name(target)?;
         writeln!(
             writer,
             "Published attested artifact to static repo: {repo_name}"
@@ -75,10 +82,13 @@ pub(crate) async fn publish_static_artifact_form_service(
     input: StaticArtifactPublishServiceInput,
 ) -> Result<PackagingCommandOutput> {
     let artifact_path = input.artifact_path;
-    let destination = RepoLocation::parse(&input.target)
-        .with_context(|| format!("parse publish target {}", input.target))?;
+    let destination = input.destination;
     ensure_static_local_publish_destination(&destination)?;
-    let repo_name = derive_repo_name(&input.target)?;
+    let display_target = match &destination {
+        RepoLocation::File { root } => root.display().to_string(),
+        RepoLocation::Http { base } => base.clone(),
+    };
+    let repo_name = derive_repo_name(&destination, &display_target)?;
     let key_dir = match input.key_dir {
         Some(key_dir) => key_dir,
         None => resolve_key_dir(None, &repo_name)?,
@@ -146,7 +156,10 @@ fn publish_key_id_from_output(output: &PackagingCommandOutput) -> Option<&str> {
         .find_map(|message| message.strip_prefix("Publish key ID: "))
 }
 
-async fn publish_remi_artifact_form(options: PublishOptions, target: &str) -> Result<()> {
+async fn publish_remi_artifact_form(
+    options: PublishOptions,
+    destination: &RemiReleaseDestination,
+) -> Result<()> {
     let artifact_path = PathBuf::from(&options.what);
     let key_dir = options.key_dir.as_deref().context(
         "Remi artifact publication requires --key-dir so the artifact signer can be authenticated before upload",
@@ -160,12 +173,15 @@ async fn publish_remi_artifact_form(options: PublishOptions, target: &str) -> Re
     let bearer_token = resolve_remi_publish_bearer_token()?;
     publish_to_remi(RemiPublishOptions {
         artifact_path: &artifact_path,
-        target_url: target,
+        target_url: destination.endpoint(),
         bearer_token: &bearer_token,
         trust_policy: &trust_policy,
     })
     .await?;
 
-    println!("Published attested artifact to Remi release endpoint: {target}");
+    println!(
+        "Published attested artifact to Remi release endpoint: {}",
+        destination.endpoint()
+    );
     Ok(())
 }

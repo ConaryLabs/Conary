@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 6
+last_updated: 2026-08-05
+revision: 7
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -131,10 +131,17 @@ rejects the removed generated-recipe/inference identity instead of migrating
 it. Discard and rebuild any local artifacts carrying that superseded shape.
 
 Project-form `conary publish <target>` uses the same hermetic Kitchen path and
-then publishes the cooked CCS package to a static repository. It remains
-pre-M2b: the CCS manifest can carry unsigned M2a hermetic evidence, but there
-is no signed build-attestation envelope yet and artifact-form
-`conary publish <pkg.ccs> <target>` still rejects.
+then attaches the signed build-attestation envelope before publishing the
+cooked CCS package to a static repository. Artifact-form
+`conary publish <pkg.ccs> <target>` accepts only a current signed artifact that
+passes the shared release publish gate and the destination's trust policy.
+
+Artifact-form destination routing is owned once by
+`apps/conary/src/commands/publish/target.rs`. The CLI and packaging agent
+service consume the same parsed type: local paths and `file://` select static
+publication, while only the exact HTTP(S) route
+`/v1/admin/releases/{route}` selects Remi release upload. URL substrings and
+diagnostic text are not publication authority.
 
 ## Architecture Context
 

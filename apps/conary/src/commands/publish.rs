@@ -3,6 +3,7 @@
 //! Publish command - build a recipe project and publish it to a static repo.
 
 mod artifact;
+mod target;
 
 use artifact::publish_artifact_form;
 pub(crate) use artifact::publish_static_artifact_form_service;
@@ -10,6 +11,7 @@ use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+pub(crate) use target::{PublishDestination, RemiReleaseDestination};
 
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::manifest::ManifestProvenance;
@@ -56,7 +58,7 @@ pub struct PublishOptions {
 
 pub(crate) struct StaticArtifactPublishServiceInput {
     pub artifact_path: PathBuf,
-    pub target: String,
+    pub destination: RepoLocation,
     pub key_dir: Option<PathBuf>,
     pub state_file: Option<PathBuf>,
     pub refresh: bool,
@@ -166,7 +168,7 @@ async fn run_project_form_publish(
     let destination = RepoLocation::parse(&options.what)
         .with_context(|| format!("parse static repo destination {}", options.what))?;
     ensure_static_local_publish_destination(&destination)?;
-    let repo_name = derive_repo_name(&options.what)?;
+    let repo_name = derive_repo_name(&destination, &options.what)?;
     let key_dir = resolve_key_dir(options.key_dir.as_deref(), &repo_name)?;
     let state_file = options
         .state_file
@@ -359,33 +361,8 @@ fn ensure_static_local_publish_destination(destination: &RepoLocation) -> Result
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PublishTargetRoute {
-    StaticLocal,
-    RemiRelease,
-}
-
-fn classify_publish_target(target: &str) -> Result<PublishTargetRoute> {
-    if target.starts_with("http://") || target.starts_with("https://") {
-        if target.contains("/v1/admin/releases/") {
-            return Ok(PublishTargetRoute::RemiRelease);
-        }
-        bail!(
-            "HTTP(S) publish targets must use the Remi release endpoint /v1/admin/releases/{{distro}}"
-        );
-    }
-    Ok(PublishTargetRoute::StaticLocal)
-}
-
-#[cfg(test)]
-fn classify_publish_target_for_tests(target: &str) -> Result<PublishTargetRoute> {
-    classify_publish_target(target)
-}
-
-fn derive_repo_name(destination: &str) -> Result<String> {
-    let location = RepoLocation::parse(destination)
-        .with_context(|| format!("parse static repo destination {}", destination))?;
-    let repo_name = match location {
+fn derive_repo_name(destination: &RepoLocation, display: &str) -> Result<String> {
+    let repo_name = match destination {
         RepoLocation::File { root } => root.file_name().map(|name| name.to_owned()),
         RepoLocation::Http { base } => base
             .rsplit('/')
@@ -396,7 +373,7 @@ fn derive_repo_name(destination: &str) -> Result<String> {
     let repo_name = repo_name
         .and_then(|name| name.into_string().ok())
         .filter(|name| !name.trim().is_empty())
-        .with_context(|| format!("derive static repo name from destination {destination}"))?;
+        .with_context(|| format!("derive static repo name from destination {display}"))?;
 
     Ok(repo_name)
 }
@@ -474,7 +451,9 @@ mod tests {
         let fixture = ArtifactPublishFixture::without_attestation();
         let output = publish_static_artifact_form_service(StaticArtifactPublishServiceInput {
             artifact_path: fixture.package_path.clone(),
-            target: fixture.repo_dir.display().to_string(),
+            destination: RepoLocation::File {
+                root: fixture.repo_dir.clone(),
+            },
             key_dir: Some(fixture.key_dir.clone()),
             state_file: Some(fixture.state_file.clone()),
             refresh: false,
@@ -581,6 +560,42 @@ install = "mkdir -p %(destdir)s/usr/share/publish-json"
             serde_json::from_slice(&output).expect("valid remi unsupported json");
         assert_eq!(value["status"], "failed");
         assert_eq!(value["diagnostics"][0]["code"], "publish-json-unsupported");
+    }
+
+    #[tokio::test]
+    async fn unrelated_release_path_substring_fails_before_publish_side_effects() {
+        let temp = tempfile::tempdir().unwrap();
+        let key_dir = temp.path().join("keys");
+        let mut output = Vec::new();
+
+        let error = cmd_publish_with_output(
+            PublishOptions {
+                what: temp.path().join("missing.ccs").display().to_string(),
+                target: Some(
+                    "https://remi.example.invalid/prefix/v1/admin/releases/fedora".to_string(),
+                ),
+                recipe: None,
+                key_dir: Some(key_dir.display().to_string()),
+                state_file: None,
+                refresh: false,
+                rotate_publish_key: false,
+                rotate_root_key: false,
+                yes: true,
+                json: false,
+            },
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must use the exact Remi release endpoint"),
+            "{error:#}"
+        );
+        assert!(!key_dir.exists());
+        assert!(output.is_empty());
     }
 
     #[test]
@@ -705,26 +720,6 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
     }
 
     #[test]
-    fn http_publish_target_routes_to_remi_release_path() {
-        let route = classify_publish_target_for_tests(
-            "https://remi.example.invalid/v1/admin/releases/test",
-        )
-        .unwrap();
-
-        assert_eq!(route, PublishTargetRoute::RemiRelease);
-    }
-
-    #[test]
-    fn remi_release_publish_target_routes_to_release_endpoint() {
-        let route = classify_publish_target_for_tests(
-            "https://remi.example.invalid/v1/admin/releases/test",
-        )
-        .unwrap();
-
-        assert_eq!(route, PublishTargetRoute::RemiRelease);
-    }
-
-    #[test]
     fn static_local_guard_still_rejects_http_static_path() {
         let destination = RepoLocation::parse("https://repo.example.invalid/static").unwrap();
         let error = ensure_static_local_publish_destination(&destination).unwrap_err();
@@ -738,9 +733,11 @@ install = "mkdir -p %(destdir)s/usr/share/publish-local && printf hi > %(destdir
 
     #[test]
     fn repo_name_is_derived_from_destination_tail() {
-        assert_eq!(derive_repo_name("./repo").unwrap(), "repo");
+        let local = RepoLocation::parse("./repo").unwrap();
+        assert_eq!(derive_repo_name(&local, "./repo").unwrap(), "repo");
+        let http = RepoLocation::parse("https://example.invalid/static/acme").unwrap();
         assert_eq!(
-            derive_repo_name("https://example.invalid/static/acme").unwrap(),
+            derive_repo_name(&http, "https://example.invalid/static/acme").unwrap(),
             "acme"
         );
     }
