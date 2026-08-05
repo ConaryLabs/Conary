@@ -23,8 +23,8 @@ use super::watch_source::{
     DebounceState, WatchIdentity, WatchSourceSet, compute_watch_identity, resolve_watch_source_set,
 };
 use super::{
-    TryRefreshRequest, TryStartRequest, TryWatchMarkerRequest, begin_try_session,
-    refresh_try_session,
+    TryRefreshRequest, TryRefreshSessionDiverged, TryStartRequest, TryWatchMarkerRequest,
+    begin_try_session, refresh_try_session,
 };
 
 mod reporting;
@@ -852,7 +852,7 @@ async fn run_refresh_loop(
                     output,
                 )?;
                 write_optional_file(&config.failure_file, &message)?;
-                if message.contains("changed outside the watcher") {
+                if refresh_failure_stops_watch(&error) {
                     finish_current_events(
                         events,
                         PackagingCommandStatus::Failed,
@@ -920,6 +920,10 @@ async fn run_refresh_loop(
             );
         }
     }
+}
+
+fn refresh_failure_stops_watch(error: &anyhow::Error) -> bool {
+    error.is::<TryRefreshSessionDiverged>()
 }
 
 async fn run_watch_cook_cancellable(

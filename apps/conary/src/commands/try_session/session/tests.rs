@@ -399,6 +399,24 @@ fn refresh_try_session_updates_generation_after_staging_succeeds() -> anyhow::Re
 }
 
 #[test]
+fn refresh_missing_session_is_typed_divergence_before_package_access() {
+    let fixture = TryRuntimeFixture::new();
+    let unused_package = fixture.root.join("unused.ccs");
+
+    let err = refresh_try_session(TryRefreshRequest {
+        db_path: &fixture.db_path_string,
+        session_id: "missing-watch-session",
+        expected_try_generation_id: 41,
+        package_path: &unused_package,
+        trust_policy: &fixture.trust_policy,
+    })
+    .unwrap_err();
+
+    assert!(err.is::<TryRefreshSessionDiverged>(), "{err:#}");
+    assert!(!unused_package.exists());
+}
+
+#[test]
 fn refresh_try_session_cas_miss_preserves_previous_generation() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -435,10 +453,7 @@ fn refresh_try_session_cas_miss_preserves_previous_generation() -> anyhow::Resul
     })
     .unwrap_err();
 
-    assert!(
-        err.to_string().contains("changed outside the watcher"),
-        "{err:#}"
-    );
+    assert!(err.is::<TryRefreshSessionDiverged>(), "{err:#}");
     let conn = fixture.open();
     let session = TrySession::find_by_id(&conn, &started.session_id)?.unwrap();
     assert_eq!(session.try_generation_id, Some(started.try_generation_id));

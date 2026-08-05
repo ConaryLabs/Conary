@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-06
-revision: 13
+revision: 14
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and post-milestone horizons
 proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
@@ -277,7 +277,8 @@ the stated scope, not whether a workstream happens to be active.
   active.
 - **Issues:** #67 as epic; #109 for persisted status; #257 and #259 for Remi
   acquisition integrity; #261 for exact publish-destination routing; #263 for
-  required source-pin strength; plus one narrow issue per remaining P1 item.
+  required source-pin strength; #265 for typed try-session divergence; plus one
+  narrow issue per remaining P1 item.
 - **Closed ledger items:**
   - PR #61 rejects missing package architecture, separates typed
     `InstallReason` from diagnostic selection prose, and validates trigger

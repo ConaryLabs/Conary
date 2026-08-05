@@ -22,7 +22,10 @@ use super::namespace::{
 use super::package_verification::load_verified_try_package;
 use super::util::{remove_dir_if_exists, remove_path_if_exists};
 use super::validation::{TryExecutionRoot, validate_try_package_policy};
-use super::{TryRefreshOutcome, TryRefreshRequest, TryStartOutcome, TryStartRequest};
+use super::{
+    TryRefreshOutcome, TryRefreshRequest, TryRefreshSessionDiverged, TryStartOutcome,
+    TryStartRequest,
+};
 use watch_marker::{is_watch_created_try_session, write_try_watch_marker};
 
 pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStartOutcome> {
@@ -161,25 +164,32 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
     let result = (|| -> Result<TryRefreshOutcome> {
         let live_conn = conary_core::db::open(request.db_path)
             .with_context(|| format!("failed to open Conary DB {}", request.db_path))?;
-        let session = TrySession::find_by_id(&live_conn, request.session_id)?
-            .ok_or_else(|| anyhow::anyhow!("try watch session {} missing", request.session_id))?;
+        let session = TrySession::find_by_id(&live_conn, request.session_id)?.ok_or_else(|| {
+            refresh_session_diverged(request.session_id, "try watch session is missing")
+        })?;
         if session.status != conary_core::db::models::TrySessionStatus::Active {
-            bail!(
-                "try watch session {} changed outside the watcher",
-                request.session_id
-            );
+            return Err(refresh_session_diverged(
+                request.session_id,
+                "try watch session is no longer active",
+            ));
         }
         if session.try_generation_id != Some(request.expected_try_generation_id) {
-            bail!(
-                "try watch session {} changed outside the watcher",
-                request.session_id
-            );
+            return Err(refresh_session_diverged(
+                request.session_id,
+                "try watch session generation no longer matches the watcher",
+            ));
         }
         if session.mode != TrySessionMode::Namespace {
-            bail!("try watch refresh requires a namespace try session");
+            return Err(refresh_session_diverged(
+                request.session_id,
+                "try watch session is no longer a namespace session",
+            ));
         }
         if !is_watch_created_try_session(&session) {
-            bail!("try watch refresh requires a watch-created try session");
+            return Err(refresh_session_diverged(
+                request.session_id,
+                "try watch session no longer has watcher-owned identity",
+            ));
         }
 
         let runtime_root = ConaryRuntimeRoot::from_db_path(PathBuf::from(request.db_path));
@@ -236,8 +246,10 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
         let stable_package_path = work_dir.join("package.ccs");
         let stable_db_path = work_dir.join("conary.db");
         let stable_package_path_string = stable_package_path.to_string_lossy().into_owned();
-        let copied_session = TrySession::find_by_id(&copied_conn, request.session_id)?
-            .ok_or_else(|| anyhow::anyhow!("copied try session {} missing", request.session_id))?;
+        let copied_session =
+            TrySession::find_by_id(&copied_conn, request.session_id)?.ok_or_else(|| {
+                refresh_session_diverged(request.session_id, "copied try watch session is missing")
+            })?;
         if !copied_session.replace_active_try_generation(
             &copied_conn,
             request.expected_try_generation_id,
@@ -245,10 +257,10 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
             &verified.signing_key,
             built.generation_number,
         )? {
-            bail!(
-                "copied try watch session {} changed outside the watcher",
-                request.session_id
-            );
+            return Err(refresh_session_diverged(
+                request.session_id,
+                "copied try watch session generation no longer matches the watcher",
+            ));
         }
 
         let prepared_files = prepare_stable_try_files(
@@ -281,10 +293,10 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
         if !replaced {
             let _ = namespace_switch.restore();
             let _ = file_switch.restore();
-            bail!(
-                "try watch session {} changed outside the watcher",
-                request.session_id
-            );
+            return Err(refresh_session_diverged(
+                request.session_id,
+                "live try watch session generation no longer matches the watcher",
+            ));
         }
 
         refresh_committed = true;
@@ -323,6 +335,10 @@ pub(crate) fn refresh_try_session(request: TryRefreshRequest<'_>) -> Result<TryR
         }
     }
     result
+}
+
+fn refresh_session_diverged(session_id: &str, diagnostic: &'static str) -> anyhow::Error {
+    anyhow::Error::new(TryRefreshSessionDiverged::new(session_id)).context(diagnostic)
 }
 
 fn ensure_staging_db_generation_floor(
