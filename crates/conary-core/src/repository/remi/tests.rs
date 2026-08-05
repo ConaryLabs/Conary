@@ -305,6 +305,167 @@ async fn write_json_response(listener: &tokio::net::TcpListener, status: &str, b
     socket.write_all(response.as_bytes()).await.unwrap();
 }
 
+async fn spawn_download_server(
+    responses: Vec<Option<Vec<u8>>>,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = attempts.clone();
+
+    tokio::spawn(async move {
+        for response in responses {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            server_attempts.fetch_add(1, Ordering::SeqCst);
+            if let Some(response) = response {
+                socket.write_all(&response).await.unwrap();
+            }
+        }
+    });
+
+    (base_url, attempts)
+}
+
+fn download_response(status: &str, body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 {status}\r\nContent-Disposition: attachment; filename=\"qemu-img.ccs\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
+async fn fetch_test_package(base_url: &str, output_dir: &Path) -> Result<PathBuf> {
+    RemiClient::new(base_url)?
+        .fetch_package(
+            "fedora",
+            "qemu-img",
+            Some("2:10.1.0-7.fc44"),
+            None,
+            output_dir,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn fetch_package_retries_typed_request_transport_failure() {
+    use std::sync::atomic::Ordering;
+
+    let (base_url, attempts) =
+        spawn_download_server(vec![None, Some(download_response("200 OK", &[0x1f, 0x8b]))]).await;
+    let output = tempfile::tempdir().unwrap();
+
+    let path = fetch_test_package(&base_url, output.path())
+        .await
+        .expect("request transport failure should be retried");
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
+}
+
+#[tokio::test]
+async fn fetch_package_retries_exact_transient_http_status() {
+    use std::sync::atomic::Ordering;
+
+    let (base_url, attempts) = spawn_download_server(vec![
+        Some(download_response(
+            "500 Internal Server Error",
+            b"first failure",
+        )),
+        Some(download_response("200 OK", &[0x1f, 0x8b])),
+    ])
+    .await;
+    let output = tempfile::tempdir().unwrap();
+
+    let path = fetch_test_package(&base_url, output.path())
+        .await
+        .expect("transient HTTP status should be retried");
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(std::fs::read(path).unwrap(), [0x1f, 0x8b]);
+}
+
+#[tokio::test]
+async fn fetch_package_does_not_retry_permanent_http_status() {
+    use std::sync::atomic::Ordering;
+
+    let (base_url, attempts) =
+        spawn_download_server(vec![Some(download_response("403 Forbidden", b"denied"))]).await;
+    let output = tempfile::tempdir().unwrap();
+
+    let error = fetch_test_package(&base_url, output.path())
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(error.to_string().contains("HTTP 403"), "{error}");
+}
+
+#[tokio::test]
+async fn fetch_package_does_not_retry_invalid_ccs_body() {
+    use std::sync::atomic::Ordering;
+
+    let (base_url, attempts) =
+        spawn_download_server(vec![Some(download_response("200 OK", b"not-gzip"))]).await;
+    let output = tempfile::tempdir().unwrap();
+
+    let error = fetch_test_package(&base_url, output.path())
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(
+        error.to_string().contains("not a valid CCS package"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_package_does_not_retry_local_output_failure() {
+    use std::sync::atomic::Ordering;
+
+    let (base_url, attempts) =
+        spawn_download_server(vec![Some(download_response("200 OK", &[0x1f, 0x8b]))]).await;
+    let output = tempfile::tempdir().unwrap();
+    let missing_output_dir = output.path().join("missing");
+
+    let error = fetch_test_package(&base_url, &missing_output_dir)
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(error.to_string().contains("create output file"), "{error}");
+}
+
+#[tokio::test]
+async fn fetch_package_does_not_retry_malformed_accepted_response() {
+    use std::sync::atomic::Ordering;
+
+    let (base_url, attempts) = spawn_download_server(vec![Some(download_response(
+        "202 Accepted",
+        br#"{"status":"queued"}"#,
+    ))])
+    .await;
+    let output = tempfile::tempdir().unwrap();
+
+    let error = fetch_test_package(&base_url, output.path())
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(error.to_string().contains("202 response"), "{error}");
+}
+
 #[tokio::test]
 async fn fetch_package_retries_transient_body_stream_failure() {
     use std::sync::{
