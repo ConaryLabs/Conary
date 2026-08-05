@@ -21,7 +21,7 @@ use conary_core::repository::static_repo::publish_context::{
 };
 
 use super::super::publish::{
-    StaticArtifactPublishServiceInput, publish_static_artifact_form_service,
+    PublishDestination, StaticArtifactPublishServiceInput, publish_static_artifact_form_service,
 };
 use super::projection::{AgentProjectionMode, project_packaging_output};
 use super::publish_plan::{PublishPlanMaterial, PublishPlanRegistry, stage_artifact_private};
@@ -167,27 +167,46 @@ impl PackagingAgentService {
 
     pub(crate) fn plan_publish(&self, input: PublishPlanInput) -> Result<PlanResult> {
         let operation = "conary.packaging.publish.plan";
-        let target_route = classify_publish_target(&input.target);
-        if matches!(target_route, PublishTargetRoute::RemiRelease) {
-            return Ok(failed_plan_result(
-                operation,
-                OperationStatus::Unavailable,
-                "Remi publish apply is not available through M3b packaging MCP",
-                AgentErrorKind::RemoteUnavailable,
-                "M3b does not resolve bearer tokens or apply Remi publishes",
-            )
-            .with_data(route_data(&input, "remi_release", "remi")));
-        }
-        if matches!(target_route, PublishTargetRoute::UnsupportedHttp) {
-            return Ok(failed_plan_result(
-                operation,
-                OperationStatus::Failed,
-                "HTTP static publish targets are not supported by M3b packaging MCP",
-                AgentErrorKind::NotSupported,
-                "M3b only plans local static artifact-form publish targets",
-            )
-            .with_data(route_data(&input, "unsupported_http", "artifact_static")));
-        }
+        let destination = match PublishDestination::parse(&input.target) {
+            Ok(PublishDestination::RemiRelease(destination)) => {
+                return Ok(failed_plan_result(
+                    operation,
+                    OperationStatus::Unavailable,
+                    "Remi publish apply is not available through M3b packaging MCP",
+                    AgentErrorKind::RemoteUnavailable,
+                    format!(
+                        "M3b does not resolve bearer tokens or apply Remi publishes for route '{}'",
+                        destination.route_slug()
+                    ),
+                )
+                .with_data(route_data(&input, "remi_release", "remi")));
+            }
+            Ok(PublishDestination::UnsupportedHttp(_)) => {
+                return Ok(failed_plan_result(
+                    operation,
+                    OperationStatus::Failed,
+                    "HTTP static publish targets are not supported by M3b packaging MCP",
+                    AgentErrorKind::NotSupported,
+                    "M3b only plans local static artifact-form publish targets",
+                )
+                .with_data(route_data(
+                    &input,
+                    "unsupported_http",
+                    "artifact_static",
+                )));
+            }
+            Ok(PublishDestination::StaticLocal(destination)) => destination,
+            Err(error) => {
+                return Ok(failed_plan_result(
+                    operation,
+                    OperationStatus::Failed,
+                    "Publish target could not be parsed",
+                    AgentErrorKind::ValidationFailed,
+                    error.to_string(),
+                )
+                .with_data(route_data(&input, "invalid", "artifact_static")));
+            }
+        };
 
         let source = Path::new(&input.artifact_or_project_path);
         let mode = match input.mode {
@@ -221,19 +240,6 @@ impl PackagingAgentService {
                     operation,
                     OperationStatus::Failed,
                     "Artifact publish planning needs a regular local CCS artifact",
-                    AgentErrorKind::ValidationFailed,
-                    error.to_string(),
-                )
-                .with_data(route_data(&input, "static_local", mode)));
-            }
-        };
-        let destination = match RepoLocation::parse(&input.target) {
-            Ok(destination) => destination,
-            Err(error) => {
-                return Ok(failed_plan_result(
-                    operation,
-                    OperationStatus::Failed,
-                    "Static publish target could not be parsed",
                     AgentErrorKind::ValidationFailed,
                     error.to_string(),
                 )
@@ -417,8 +423,16 @@ impl PackagingAgentService {
             ));
         }
 
-        let destination = match RepoLocation::parse(&material.normalized_static_target) {
-            Ok(destination) => destination,
+        let destination = match PublishDestination::parse(&material.normalized_static_target) {
+            Ok(PublishDestination::StaticLocal(destination)) => destination,
+            Ok(_) => {
+                return Ok(failed_apply_result(
+                    operation,
+                    "Static publish target changed route during apply",
+                    AgentErrorKind::UnsafeWithoutConfirmation,
+                    "confirmed local static target no longer parses as a local static destination",
+                ));
+            }
             Err(error) => {
                 return Ok(failed_apply_result(
                     operation,
@@ -496,7 +510,7 @@ impl PackagingAgentService {
         let operation_id = super::super::operation_records::new_operation_id("publish");
         let output = match publish_static_artifact_form_service(StaticArtifactPublishServiceInput {
             artifact_path: staged.path().to_path_buf(),
-            target: material.normalized_static_target.clone(),
+            destination,
             key_dir: material
                 .key_dir_path_when_supplied
                 .as_deref()
@@ -701,25 +715,6 @@ fn read_regular_file_identity(path: &Path) -> Result<FileIdentity> {
         digest,
         size: metadata.len(),
     })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PublishTargetRoute {
-    StaticLocal,
-    RemiRelease,
-    UnsupportedHttp,
-}
-
-fn classify_publish_target(target: &str) -> PublishTargetRoute {
-    if target.starts_with("http://") || target.starts_with("https://") {
-        if target.contains("/v1/admin/releases/") {
-            PublishTargetRoute::RemiRelease
-        } else {
-            PublishTargetRoute::UnsupportedHttp
-        }
-    } else {
-        PublishTargetRoute::StaticLocal
-    }
 }
 
 fn route_data(

@@ -219,6 +219,61 @@ fn publish_plan_remi_target_is_explicitly_unavailable_without_token_resolution()
 }
 
 #[test]
+fn publish_plan_does_not_route_unrelated_release_substring_to_remi() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let artifact = temp.path().join("pkg.ccs");
+    let key_dir = temp.path().join("keys");
+    std::fs::write(&artifact, b"not-a-real-package").unwrap();
+    let service = PackagingAgentService::with_operations_dir(temp.path().join("ops"));
+
+    let plan = service
+        .plan_publish(PublishPlanInput {
+            artifact_or_project_path: artifact.display().to_string(),
+            target: "https://remi.example.invalid/prefix/v1/admin/releases/fedora".to_string(),
+            recipe: None,
+            key_dir: Some(key_dir.display().to_string()),
+            state_file: None,
+            mode: PublishModeInput::ArtifactStatic,
+        })
+        .unwrap();
+
+    assert_eq!(plan.envelope.status, OperationStatus::Failed);
+    assert_eq!(
+        plan.envelope.error.unwrap().kind,
+        AgentErrorKind::NotSupported
+    );
+    assert_eq!(plan.data["route"], "unsupported_http");
+    assert!(!key_dir.exists());
+}
+
+#[test]
+fn publish_plan_rejects_non_path_url_authority_before_artifact_reads() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let key_dir = temp.path().join("keys");
+    let service = PackagingAgentService::with_operations_dir(temp.path().join("ops"));
+
+    let plan = service
+        .plan_publish(PublishPlanInput {
+            artifact_or_project_path: temp.path().join("missing.ccs").display().to_string(),
+            target: "https://remi.example.invalid/v1/admin/releases/fedora?dry-run=true"
+                .to_string(),
+            recipe: None,
+            key_dir: Some(key_dir.display().to_string()),
+            state_file: None,
+            mode: PublishModeInput::ArtifactStatic,
+        })
+        .unwrap();
+
+    assert_eq!(plan.envelope.status, OperationStatus::Failed);
+    assert_eq!(
+        plan.envelope.error.unwrap().kind,
+        AgentErrorKind::ValidationFailed
+    );
+    assert_eq!(plan.data["route"], "invalid");
+    assert!(!key_dir.exists());
+}
+
+#[test]
 fn publish_plan_rejects_symlink_and_non_regular_artifacts() {
     let temp = tempfile::TempDir::new().unwrap();
     let dir_artifact = temp.path().join("dir-artifact");

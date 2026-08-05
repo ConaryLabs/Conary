@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-30
-revision: 14
+last_updated: 2026-08-05
+revision: 15
 summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -231,6 +231,13 @@ structurally. The route selects a repository feed, never a destination
 compatibility policy. Unsupported route slugs fail before storage or artifact
 verification. Package rows, native rows, chunks, and TUF targets are published
 only after the gate, structural lifecycle validation, and metadata commit pass.
+
+Client-side publication routing is parsed once by
+`apps/conary/src/commands/publish/target.rs` and shared by the CLI and
+packaging agent service. Only an exact hierarchical HTTP(S)
+`/v1/admin/releases/{route}` path, without user information, a query, or a
+fragment, selects this authenticated mutation path. A matching substring in
+another URL is not route authority.
 
 The route/staging wrapper lives in `apps/remi/src/server/release_publish.rs`.
 Native CCS verification, artifact promotion, metadata persistence, supersede

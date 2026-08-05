@@ -275,7 +275,8 @@ the stated scope, not whether a workstream happens to be active.
 - **Execution status:** active. #109 closes the trigger-status slice; remaining
   ledger items proceed as narrow issues while the W4 aggregate gate remains
   active.
-- **Issues:** #67 as epic, #109 complete, plus one narrow issue per remaining ledger item.
+- **Issues:** #67 as epic, #109 complete, #261 for exact publish-destination
+  routing, plus one narrow issue per remaining ledger item.
 - **Closed ledger items:**
   - #109 replaces trigger and derived-package status defaults with typed row
     corruption, validates every candidate row before mutation planning, and
