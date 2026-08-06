@@ -251,7 +251,7 @@ pub async fn execute_step(
             Ok(StepResult::from_exec(&result, start.elapsed()))
         }
         StepAction::QemuBoot(config) => {
-            let result = run_qemu_boot(config).await?;
+            let result = run_qemu_boot(config, timeout).await?;
             Ok(StepResult::from_exec(&result, start.elapsed()))
         }
     }

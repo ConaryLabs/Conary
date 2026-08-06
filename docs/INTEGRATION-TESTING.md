@@ -805,6 +805,14 @@ release gate while separately requiring boot/export markers in the logs. Keep
 that wrapper pointed only at published or generated fixtures that must be
 reproducible on a KVM-capable development host.
 
+The enclosing test `timeout`, or a `[[test.step]] timeout` override, is one
+monotonic deadline for the complete `qemu_boot` step. Boot readiness, system
+readiness, Conary staging, every guest copy and command, and shutdown consume
+that same budget. `qemu_boot.timeout_seconds` remains a per-operation cap; it
+can shorten one operation but never resets or extends the enclosing step
+deadline. Deadline expiry kills the QEMU child and any owned host-helper
+process group, then records exit code 124 as a failed test result.
+
 Generated-image suites can attach a scratch disk, copy files into or out of a
 guest, and then boot a host-local qcow2 or ISO produced by an earlier step:
 

@@ -494,9 +494,11 @@ Each fixture family should record:
 - **Owner:** image construction: `scripts/build-qemu-guest-image.sh`;
   unprivileged identity/size rotation:
   `scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; QEMU orchestration and
-  download cache: `apps/conary-test/src/engine/qemu.rs`; bounded live console
-  capture: `apps/conary-test/src/engine/qemu/console.rs`; cross-guest static
-  client staging: `scripts/build-static-conary.sh`.
+  download cache: `apps/conary-test/src/engine/qemu.rs`; complete-step deadline
+  and owned-helper termination authority:
+  `apps/conary-test/src/engine/qemu/deadline.rs`; bounded live
+  console capture: `apps/conary-test/src/engine/qemu/console.rs`; cross-guest
+  static client staging: `scripts/build-static-conary.sh`.
 - **Purpose:** Keep a versioned, generation-builder-ready qcow2 source image
   paired with a disposable SSH identity and enough root-filesystem headroom
   for full live-root adoption into CAS.

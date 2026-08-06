@@ -27,7 +27,7 @@ phase = 3
 id = "T150"
 name = "kernel_file_deployment"
 description = "Install a kernel package and verify kernel, initramfs, and modules are deployed"
-timeout = 2400
+timeout = 3600
 group = "N"
 fatal = true
 
@@ -68,7 +68,7 @@ exit_code = 0
 id = "T151"
 name = "bls_entry_created"
 description = "Installing a kernel and switching the selected generation should produce a BLS entry"
-timeout = 2400
+timeout = 3600
 group = "N"
 depends_on = ["T150"]
 
@@ -108,7 +108,7 @@ exit_code = 0
 id = "T153"
 name = "kernel_generation_rollback"
 description = "Rolling back a generation should leave boot entries in a consistent prior state"
-timeout = 2400
+timeout = 3600
 group = "N"
 depends_on = ["T150"]
 
@@ -151,7 +151,7 @@ exit_code = 0
 id = "T154"
 name = "bootloader_config_deployed"
 description = "Install the bootloader package and verify expected config paths exist"
-timeout = 2400
+timeout = 3600
 group = "N"
 depends_on = ["T150"]
 
