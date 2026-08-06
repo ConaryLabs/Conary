@@ -171,7 +171,7 @@ commands = [
     "conary repo sync ${REPO_NAME} --force",
     "conary system adopt --system --full",
     "conary install kernel --repo ${REPO_NAME} --yes --sandbox always",
-    "conary install grub2 --repo ${REPO_NAME} --yes --sandbox always",
+    "conary install grub2-tools --repo ${REPO_NAME} --yes --sandbox always",
     "conary system generation build --yes --summary \"T154 bootloader generation\"",
     "GEN=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -n | tail -1); test -n \"$GEN\"; conary system generation switch \"$GEN\" --yes",
     "GEN=$(basename \"$(readlink /conary/current)\"); test -n \"$GEN\"; test -f /conary/generations/$GEN/.conary-artifact.json",
