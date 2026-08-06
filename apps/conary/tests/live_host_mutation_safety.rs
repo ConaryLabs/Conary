@@ -497,7 +497,7 @@ case \"$3\" in
         printf '\\036libc6 (>= 2.0)\\037'
         ;;
     *Provides*)
-        printf 'fixture\\036fixture\\036fixture-capability\\037'
+        printf 'fixture\\036fixture\\0361.2.3\\036fixture-capability\\037'
         ;;
     *)
         exit 1
