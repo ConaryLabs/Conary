@@ -4,9 +4,6 @@ use super::{ExtractionResult, InstallSemantics, RepositoryInstallProvenance};
 use anyhow::{Context, Result};
 use conary_core::db::models::{ConfigFile, ConfigSource, ProvideEntry};
 use conary_core::packages::PackageFormat;
-use conary_core::repository::dependency_model::{
-    ProvideArchitectureQualifier, RepositoryCapabilityKind,
-};
 use conary_core::transaction::{PackageRelationDeconfiguration, PackageRelationRemoval};
 
 #[path = "transaction/selected_root.rs"]
@@ -178,32 +175,13 @@ pub(super) fn persist_declared_provides(
     package_scheme: conary_core::repository::versioning::VersionScheme,
     provides: &[conary_core::repository::dependency_model::ProvidedCapability],
 ) -> Result<()> {
-    let exact_self = provides
-        .iter()
-        .filter(|provide| {
-            provide.kind == RepositoryCapabilityKind::PackageName
-                && provide.name == package_name
-                && provide.version.as_deref() == Some(package_version)
-                && provide.version_relation
-                    == Some(
-                        conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
-                    )
-                && provide.version_scheme == package_scheme
-                && provide.architecture_qualifier == ProvideArchitectureQualifier::Implicit
-                && provide.provenance
-                    == conary_core::repository::dependency_model::CapabilityProvenance::ExactIdentity
-        })
-        .count();
-    if exact_self != 1 {
-        anyhow::bail!(
-            "package '{}-{}' must declare exactly one exact package self-provider; found {exact_self}",
-            package_name,
-            package_version
-        );
-    }
-    for declared in provides {
-        declared.validate()?;
-        ProvideEntry::from_declared(trove_id, declared).insert_or_ignore(tx)?;
-    }
+    ProvideEntry::insert_package_capabilities(
+        tx,
+        trove_id,
+        package_name,
+        package_version,
+        package_scheme,
+        provides,
+    )?;
     Ok(())
 }

@@ -1,0 +1,7 @@
+---
+source: tests/solver.rs
+expression: error
+---
+a >=0, <1000 cannot be installed because there are no viable options:
+└─ a 41 would require
+   └─ B >=0, <20, for which no candidates were found.

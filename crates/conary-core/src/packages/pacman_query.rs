@@ -12,7 +12,12 @@ use crate::packages::install_reason::{InstallReasonAuthorityError, query_package
 use crate::packages::query_common::{
     InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord,
 };
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::dependency_model::{
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
+    RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
+    SourcePackageFormat,
+};
+use crate::repository::package_relation::parse_arch_provide;
 use crate::repository::requirement::parse_native_requirement;
 use crate::repository::versioning::VersionScheme;
 use std::collections::HashSet;
@@ -219,16 +224,19 @@ pub fn query_package_requirement_groups(name: &str) -> Result<Vec<RepositoryRequ
         .collect()
 }
 
-/// Query what a package provides (capabilities it offers)
-///
-/// Returns a list of capability strings from the Provides field,
-/// plus the package name itself as a provide.
-pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
-    debug!("Querying provides for pacman package: {}", name);
+/// Query one installed ALPM package's exact identity and declared provides.
+pub fn query_package_provides(
+    identity: &InstalledPackageIdentity,
+) -> Result<Vec<ProvidedCapability>> {
+    let InstalledPackageIdentity::Pacman { selector, .. } = identity else {
+        return Err(Error::ConfigError(
+            "pacman provides query requires a pacman installed identity".to_string(),
+        ));
+    };
+    debug!("Querying provides for pacman package: {selector}");
 
-    // Use pacman -Qi and extract the Provides line
     let output = Command::new("pacman")
-        .args(["-Qi", name])
+        .args(["-Qi", selector])
         .env("LC_ALL", "C")
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run pacman: {}", e)))?;
@@ -236,20 +244,74 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     if !output.status.success() {
         return Err(Error::InitError(format!(
             "pacman -Qi {} failed: {}",
-            name,
+            selector,
             String::from_utf8_lossy(&output.stderr)
         )));
     }
 
     let stdout = String::from_utf8(output.stdout)
         .map_err(|error| Error::ParseError(format!("pacman -Qi output is not UTF-8: {error}")))?;
-    let values = parse_pacman_info_field(&stdout, "Provides")?;
-    let mut provides = vec![name.to_string()];
-    if values != "None" {
-        provides.extend(values.split_whitespace().map(str::to_string));
-    }
+    parse_pacman_provides(identity, &stdout)
+}
 
-    debug!("Package {} provides {} capabilities", name, provides.len());
+fn parse_pacman_provides(
+    identity: &InstalledPackageIdentity,
+    info: &str,
+) -> Result<Vec<ProvidedCapability>> {
+    let InstalledPackageIdentity::Pacman {
+        selector,
+        name,
+        version,
+        architecture,
+    } = identity
+    else {
+        return Err(Error::ConfigError(
+            "pacman provides parser requires a pacman installed identity".to_string(),
+        ));
+    };
+    if parse_pacman_info_field(info, "Name")? != *name
+        || parse_pacman_info_field(info, "Version")? != *version
+        || parse_pacman_info_field(info, "Architecture")? != *architecture
+    {
+        return Err(Error::ParseError(format!(
+            "pacman provides record for '{selector}' disagrees with its exact installed identity"
+        )));
+    }
+    let values = parse_pacman_info_field(info, "Provides")?;
+    let mut provides = vec![ProvidedCapability {
+        kind: RepositoryCapabilityKind::PackageName,
+        name: name.clone(),
+        version: Some(version.clone()),
+        version_relation: Some(ProvideVersionRelation::Equal),
+        version_scheme: VersionScheme::Arch,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: CapabilityProvenance::ExactIdentity,
+    }];
+    if values != "None" {
+        for (record_index, native) in values.split_whitespace().enumerate() {
+            let parsed = parse_arch_provide(native, name).map_err(Error::ParseError)?;
+            provides.push(ProvidedCapability {
+                kind: parsed.kind,
+                name: parsed.name,
+                version_relation: parsed
+                    .version
+                    .as_ref()
+                    .map(|_| ProvideVersionRelation::Equal),
+                version: parsed.version,
+                version_scheme: VersionScheme::Arch,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                provenance: CapabilityProvenance::SourceDeclared {
+                    format: SourcePackageFormat::Alpm,
+                    record_index: u32::try_from(record_index).map_err(|_| {
+                        Error::ParseError("ALPM provide record index exceeds u32".to_string())
+                    })?,
+                },
+            });
+        }
+    }
+    for provide in &provides {
+        provide.validate()?;
+    }
     Ok(provides)
 }
 
@@ -632,5 +694,40 @@ Provides        : fixture-abi
             "glibc>=2.41  openssl zlib"
         );
         assert!(parse_pacman_info_field(output, "Missing").is_err());
+    }
+
+    #[test]
+    fn installed_provides_preserve_alpm_versions_and_sonames() {
+        let identity =
+            InstalledPackageIdentity::pacman("fixture", "fixture", "2.4-1", "x86_64").unwrap();
+        let output = "\
+Name            : fixture
+Version         : 2.4-1
+Architecture    : x86_64
+Provides        : fixture-abi=2  libfixture.so=3-64
+";
+
+        let provides = parse_pacman_provides(&identity, output).unwrap();
+
+        assert_eq!(provides.len(), 3);
+        assert_eq!(provides[0].provenance, CapabilityProvenance::ExactIdentity);
+        assert_eq!(provides[1].name, "fixture-abi");
+        assert_eq!(provides[1].version.as_deref(), Some("2"));
+        assert_eq!(provides[1].kind, RepositoryCapabilityKind::Virtual);
+        assert_eq!(provides[2].kind, RepositoryCapabilityKind::Soname);
+    }
+
+    #[test]
+    fn installed_provides_reject_identity_drift() {
+        let identity =
+            InstalledPackageIdentity::pacman("fixture", "fixture", "1", "x86_64").unwrap();
+        let output = "\
+Name            : fixture
+Version         : 2
+Architecture    : x86_64
+Provides        : None
+";
+
+        assert!(parse_pacman_provides(&identity, output).is_err());
     }
 }

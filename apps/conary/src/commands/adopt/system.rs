@@ -14,13 +14,13 @@ use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
     Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallReason,
-    InstallSource, PayloadClaim, ProvideEntry, Trove, TroveType,
+    InstallSource, PayloadClaim, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledFileAbsencePolicy, InstalledPackageIdentity, SystemPackageManager, dpkg_query,
     pacman_query, rpm_query,
 };
-use conary_core::repository::dependency_model::RepositoryRequirementGroup;
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use std::collections::HashMap;
 use tracing::warn;
 
@@ -65,7 +65,7 @@ struct PackageData {
     description: Option<String>,
     files: Vec<CapturedAdoptionFile>,
     requirements: Vec<RepositoryRequirementGroup>,
-    provides: Vec<String>,
+    provides: Vec<ProvidedCapability>,
     is_dependency: bool,
     promote_trove_id: Option<i64>,
 }
@@ -398,7 +398,8 @@ pub async fn cmd_adopt_system(
                         continue;
                     }
                 };
-            let provides: Vec<String> = match query_pm_provides(pkg_mgr, selector) {
+            let provides = match super::provides::query_package_provides(pkg_mgr, &package.identity)
+            {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(
@@ -544,19 +545,16 @@ pub async fn cmd_adopt_system(
                     message: format!("requirements: {error}"),
                 })?;
 
-                for provide in &pkg.provides {
-                    if provide.is_empty() {
-                        continue;
-                    }
-                    let mut provide_entry =
-                        ProvideEntry::new(trove_id, provide.clone(), None, version_scheme);
-                    provide_entry.insert_or_ignore(tx).map_err(|error| {
-                        PackagePersistenceFailure {
-                            stage: BulkAdoptionFailureStage::MetadataInsert,
-                            message: format!("provide {provide}: {error}"),
-                        }
-                    })?;
-                }
+                super::provides::insert_package_provides(
+                    tx,
+                    trove_id,
+                    &pkg.identity,
+                    &pkg.provides,
+                )
+                .map_err(|error| PackagePersistenceFailure {
+                    stage: BulkAdoptionFailureStage::MetadataInsert,
+                    message: format!("provides: {error}"),
+                })?;
                 Ok::<bool, PackagePersistenceFailure>(false)
             })?;
 
@@ -740,19 +738,6 @@ fn query_pm_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileI
             )
         })
         .collect())
-}
-
-/// Query provides for a package from the active PM, propagating errors.
-fn query_pm_provides(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<String>> {
-    Ok(match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_provides(name)
-            .map_err(|e| anyhow::anyhow!("RPM provides query failed for '{name}': {e}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_provides(name)
-            .map_err(|e| anyhow::anyhow!("DPKG provides query failed for '{name}': {e}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_provides(name)
-            .map_err(|e| anyhow::anyhow!("Pacman provides query failed for '{name}': {e}"))?,
-        _ => Vec::new(),
-    })
 }
 
 #[cfg(test)]

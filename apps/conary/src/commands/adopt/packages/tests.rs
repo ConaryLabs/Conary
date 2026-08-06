@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use conary_core::db;
-use conary_core::db::models::{FileEntry, InstallSource, Trove, TroveType};
+use conary_core::db::models::{FileEntry, InstallSource, ProvideEntry, Trove, TroveType};
 use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind};
 use walkdir::WalkDir;
 
@@ -15,7 +15,7 @@ struct FixtureSource {
     lookups: HashMap<String, PackageLookup>,
     files: HashMap<String, Vec<FileInfoTuple>>,
     requirements: HashMap<String, Vec<RepositoryRequirementGroup>>,
-    provides: HashMap<String, Vec<String>>,
+    provides: HashMap<String, Vec<ProvidedCapability>>,
 }
 
 impl FixtureSource {
@@ -59,7 +59,36 @@ impl FixtureSource {
                 .unwrap(),
             ],
         );
-        self.provides.insert(selector, vec![name.to_string()]);
+        self.provides.insert(
+            selector,
+            vec![
+                ProvidedCapability {
+                kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::PackageName,
+                name: name.to_string(),
+                version: Some("1.2.3-4".to_string()),
+                version_relation: Some(
+                    conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+                ),
+                version_scheme: VersionScheme::Rpm,
+                architecture_qualifier: conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+                provenance: conary_core::repository::dependency_model::CapabilityProvenance::ExactIdentity,
+                },
+                ProvidedCapability {
+                    kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::Generic,
+                    name: format!("config({name})"),
+                    version: Some("1.2.3-4".to_string()),
+                    version_relation: Some(
+                        conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+                    ),
+                    version_scheme: VersionScheme::Rpm,
+                    architecture_qualifier: conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+                    provenance: conary_core::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                        format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+                        record_index: 0,
+                    },
+                },
+            ],
+        );
         self
     }
 
@@ -95,8 +124,15 @@ impl NativePackageSource for FixtureSource {
             .unwrap_or_default())
     }
 
-    fn query_provides(&self, query_name: &str) -> Result<Vec<String>> {
-        Ok(self.provides.get(query_name).cloned().unwrap_or_default())
+    fn query_provides(
+        &self,
+        identity: &InstalledPackageIdentity,
+    ) -> Result<Vec<ProvidedCapability>> {
+        Ok(self
+            .provides
+            .get(identity.selector())
+            .cloned()
+            .unwrap_or_default())
     }
 }
 
@@ -402,10 +438,28 @@ fn preview_and_apply_share_identity_mode_and_record_plan() {
             .len(),
         1
     );
+    let provides = ProvideEntry::find_by_trove(&conn, trove_id).unwrap();
+    assert_eq!(provides.len(), 2);
+    let config = provides
+        .iter()
+        .find(|provide| provide.capability == "config(fixture)")
+        .expect("source-declared config capability must be persisted");
+    assert_eq!(config.version.as_deref(), Some("1.2.3-4"));
     assert_eq!(
-        ProvideEntry::find_by_trove(&conn, trove_id).unwrap().len(),
-        1
+        config.version_relation,
+        Some(conary_core::repository::dependency_model::ProvideVersionRelation::Equal)
     );
+    assert_eq!(
+        config.kind,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::Generic
+    );
+    assert!(matches!(
+        config.provenance,
+        conary_core::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+            format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+            record_index: 0,
+        }
+    ));
 }
 
 #[test]

@@ -39,6 +39,9 @@ const DNF4_USER_INSTALLED_ARGS: &[&str] = &[
     r"%{name}.%{arch}\n",
 ];
 
+mod provides;
+pub use provides::query_package_provides;
+
 /// RPM's reserved name for imported public keys.
 ///
 /// `rpmkeys --import` stores each trusted key as a header in the same database
@@ -438,27 +441,6 @@ fn parse_rpm_requirement_records(output: &str) -> Result<Vec<RepositoryRequireme
         })
         .filter_map(|result| result.transpose())
         .collect()
-}
-
-/// Query what a package provides (capabilities it offers)
-///
-/// Returns a list of capability strings like:
-/// - "perl(Text::CharWidth)" (virtual provide)
-/// - "libc.so.6(GLIBC_2.17)(64bit)" (library)
-/// - "/usr/bin/perl" (file path)
-/// - "perl-Text-CharWidth = 0.04-58.fc44" (package name = version)
-pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
-    debug!("Querying provides for RPM package: {}", name);
-
-    let stdout = run_query_command("rpm", &["-q", "--provides", name])?;
-    let provides: Vec<String> = stdout
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
-
-    debug!("Package {} provides {} capabilities", name, provides.len());
-    Ok(provides)
 }
 
 /// Query every installed RPM database record without collapsing variants.

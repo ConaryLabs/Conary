@@ -12,13 +12,13 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallSource,
-    ProvideEntry, Trove, TroveType,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallSource, Trove,
+    TroveType,
 };
 use conary_core::packages::{
     InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
-use conary_core::repository::dependency_model::RepositoryRequirementGroup;
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use conary_core::repository::versioning::VersionScheme;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
@@ -78,7 +78,10 @@ trait NativePackageSource {
     fn lookup(&self, requested: &str) -> PackageLookup;
     fn query_files(&self, query_name: &str) -> Result<Vec<FileInfoTuple>>;
     fn query_requirements(&self, query_name: &str) -> Result<Vec<RepositoryRequirementGroup>>;
-    fn query_provides(&self, query_name: &str) -> Result<Vec<String>>;
+    fn query_provides(
+        &self,
+        identity: &InstalledPackageIdentity,
+    ) -> Result<Vec<ProvidedCapability>>;
 }
 
 struct DetectedNativePackageSource {
@@ -175,16 +178,11 @@ impl NativePackageSource for DetectedNativePackageSource {
         super::requirements::query_package_requirements(self.manager, query_name)
     }
 
-    fn query_provides(&self, query_name: &str) -> Result<Vec<String>> {
-        match self.manager {
-            SystemPackageManager::Rpm => rpm_query::query_package_provides(query_name)
-                .with_context(|| format!("RPM provides query failed for '{query_name}'")),
-            SystemPackageManager::Dpkg => dpkg_query::query_package_provides(query_name)
-                .with_context(|| format!("dpkg provides query failed for '{query_name}'")),
-            SystemPackageManager::Pacman => pacman_query::query_package_provides(query_name)
-                .with_context(|| format!("pacman provides query failed for '{query_name}'")),
-            SystemPackageManager::Unknown => Ok(Vec::new()),
-        }
+    fn query_provides(
+        &self,
+        identity: &InstalledPackageIdentity,
+    ) -> Result<Vec<ProvidedCapability>> {
+        super::provides::query_package_provides(self.manager, identity)
     }
 }
 
@@ -206,7 +204,7 @@ struct PlannedPackage {
     identity: ResolvedNativePackage,
     files: Vec<FileInfoTuple>,
     requirements: Vec<RepositoryRequirementGroup>,
-    provides: Vec<String>,
+    provides: Vec<ProvidedCapability>,
     duplicate_file_entries_skipped: usize,
 }
 
@@ -216,10 +214,7 @@ impl PlannedPackage {
             "records: 1 package, {} files, {} dependencies, {} provides, 1 changeset, 1 state snapshot",
             self.files.len(),
             self.requirements.len(),
-            self.provides
-                .iter()
-                .filter(|provide| !provide.is_empty())
-                .count()
+            self.provides.len()
         )
     }
 }
@@ -509,7 +504,7 @@ fn collect_planned_package(
         .query_requirements(query_name)
         .with_context(|| format!("could not inspect dependencies for '{query_name}'"))?;
     let provides = source
-        .query_provides(query_name)
+        .query_provides(&identity.native)
         .with_context(|| format!("could not inspect provides for '{query_name}'"))?;
 
     let mut files = Vec::with_capacity(raw_files.len());
@@ -887,14 +882,12 @@ fn execute_adoption_plan(
                 ))
             })?;
 
-            for provide in &package.provides {
-                if provide.is_empty() {
-                    continue;
-                }
-                let mut entry =
-                    ProvideEntry::new(trove_id, provide.clone(), None, plan.version_scheme);
-                entry.insert_or_ignore(tx)?;
-            }
+            super::provides::insert_package_provides(
+                tx,
+                trove_id,
+                &identity.native,
+                &package.provides,
+            )?;
 
             changeset.update_status(tx, ChangesetStatus::Applied)?;
             Ok(changeset_id)
