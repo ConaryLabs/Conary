@@ -1,0 +1,48 @@
+on:
+  push:
+    branches:
+    - "main"
+  pull_request:
+
+name: C++
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Format and Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: format-cpp
+
+      - name: Ensure code is properly formatted
+        run: |
+          pixi run format-cpp
+          git diff --exit-code
+
+  test:
+    name: Test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macOS-latest, macOS-14, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    needs: [ format ]
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: test-cpp
+
+      - name: Run the tests
+        run: |
+          pixi run test-cpp

@@ -9,11 +9,14 @@ members = [
     "crates/conary-mcp",
     "crates/conary-core",
 ]
+exclude = ["third_party/resolvo-0.12.0-patched"]
 resolver = "3"
 
 [patch.crates-io]
 aws-creds = { path = "third_party/aws-creds-0.39.1-patched" }
 rust-s3 = { path = "third_party/rust-s3-0.37.2-patched" }
+# See third_party/resolvo-0.12.0-patched/CONARY_PATCH.md.
+resolvo = { path = "third_party/resolvo-0.12.0-patched" }
 
 [workspace.dependencies]
 # Database

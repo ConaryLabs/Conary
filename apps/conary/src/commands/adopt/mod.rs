@@ -12,6 +12,7 @@ mod hooks;
 mod native_handoff;
 mod outcome;
 mod packages;
+mod provides;
 mod refresh;
 mod requirements;
 mod status;

@@ -80,38 +80,13 @@ impl RpmPackage {
             .into_iter()
             .enumerate()
         {
-            // rpmlib provides are synthesized by the package-manager runtime,
-            // not supplied by an installable package:
-            // https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L1039-L1063
-            let reserved_runtime =
-                crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(&entry.name)
-                    .map_err(|error| Error::ParseError(error.to_string()))?;
-            if entry.flags.intersects(DependencyFlags::RPMLIB) || reserved_runtime.is_some() {
-                return Err(Error::ParseError(format!(
-                    "RPM package header cannot provide package-manager runtime capability '{}'; Conary's typed runtime ledger is the sole authority",
-                    entry.name
-                )));
-            }
-            validate_rpm_config_sense(&entry.name, entry.flags)?;
-
-            let version_relation = rpm_provide_relation(&entry.name, &entry.version, entry.flags)?;
-            let version = version_relation.map(|_| entry.version.to_string());
-
-            let provide = RpmDeclaredCapability {
-                header_index: u32::try_from(record_index).map_err(|_| {
-                    Error::ParseError("RPM provide record index exceeds u32".to_string())
-                })?,
-                kind: if entry.name == package_name {
-                    RepositoryCapabilityKind::PackageName
-                } else {
-                    RepositoryCapabilityKind::Generic
-                },
-                name: entry.name.to_string(),
-                version,
-                version_relation,
-                architecture_qualifier: Default::default(),
-            };
-            provides.push(provide);
+            provides.push(decode_rpm_declared_capability(
+                package_name,
+                record_index,
+                &entry.name,
+                &entry.version,
+                entry.flags,
+            )?);
         }
 
         Ok(provides)
@@ -156,6 +131,47 @@ impl RpmPackage {
         }
         Ok(relations)
     }
+}
+
+/// Decode one aligned RPM `Provides` header record into source authority.
+///
+/// Artifact parsing and installed-rpmdb adoption share this boundary so both
+/// paths preserve the same capability name, relation, version, and kind.
+pub(crate) fn decode_rpm_declared_capability(
+    package_name: &str,
+    record_index: usize,
+    name: &str,
+    version: &str,
+    flags: DependencyFlags,
+) -> Result<RpmDeclaredCapability> {
+    // rpmlib provides are synthesized by the package-manager runtime, not
+    // supplied by an installable package:
+    // https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmds.cc#L1039-L1063
+    let reserved_runtime =
+        crate::repository::rpm_runtime::RpmRuntimeFeature::parse_capability(name)
+            .map_err(|error| Error::ParseError(error.to_string()))?;
+    if flags.intersects(DependencyFlags::RPMLIB) || reserved_runtime.is_some() {
+        return Err(Error::ParseError(format!(
+            "RPM package header cannot provide package-manager runtime capability '{name}'; Conary's typed runtime ledger is the sole authority"
+        )));
+    }
+    validate_rpm_config_sense(name, flags)?;
+
+    let canonical_version = canonicalize_rpm_evr(version);
+    let version_relation = rpm_provide_relation(name, canonical_version, flags)?;
+    Ok(RpmDeclaredCapability {
+        header_index: u32::try_from(record_index)
+            .map_err(|_| Error::ParseError("RPM provide record index exceeds u32".to_string()))?,
+        kind: if name == package_name {
+            RepositoryCapabilityKind::PackageName
+        } else {
+            RepositoryCapabilityKind::Generic
+        },
+        name: name.to_string(),
+        version: version_relation.map(|_| canonical_version.to_string()),
+        version_relation,
+        architecture_qualifier: Default::default(),
+    })
 }
 
 /// Decode one aligned RPM Requires header record into Conary's typed model.

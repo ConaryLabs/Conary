@@ -108,6 +108,45 @@ impl ProvideEntry {
         entry
     }
 
+    /// Persist one package's complete typed resolution capability set.
+    ///
+    /// Every installed package must contribute exactly one exact-identity
+    /// self provider. Source-declared capabilities may additionally name the
+    /// package, but cannot replace that identity authority.
+    pub fn insert_package_capabilities(
+        conn: &Connection,
+        trove_id: i64,
+        package_name: &str,
+        package_version: &str,
+        package_scheme: VersionScheme,
+        provides: &[crate::repository::dependency_model::ProvidedCapability],
+    ) -> Result<()> {
+        let exact_self = provides
+            .iter()
+            .filter(|provide| {
+                provide.kind == RepositoryCapabilityKind::PackageName
+                    && provide.name == package_name
+                    && provide.version.as_deref() == Some(package_version)
+                    && provide.version_relation == Some(ProvideVersionRelation::Equal)
+                    && provide.version_scheme == package_scheme
+                    && provide.architecture_qualifier == ProvideArchitectureQualifier::Implicit
+                    && provide.provenance == CapabilityProvenance::ExactIdentity
+            })
+            .count();
+        if exact_self != 1 {
+            return Err(crate::error::Error::ConfigError(format!(
+                "package '{package_name}-{package_version}' must declare exactly one exact package self-provider; found {exact_self}"
+            )));
+        }
+        for provide in provides {
+            provide.validate()?;
+        }
+        for provide in provides {
+            Self::from_declared(trove_id, provide).insert_or_ignore(conn)?;
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn with_version_relation(
         mut self,

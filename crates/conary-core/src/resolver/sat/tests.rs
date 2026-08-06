@@ -212,6 +212,161 @@ fn test_missing_dependency() {
 }
 
 #[test]
+fn adopted_malformed_self_provides_return_conflict_without_diagnostic_panic() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let kernel_core_id = formal_dependencies::insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "kernel-core",
+        "6.19.10-300.fc44",
+        "https://example.invalid/kernel-core.rpm",
+        "rpm",
+        &[("dracut", Some(">= 027"))],
+    );
+    let kernel_capability = "kernel-core-uname-r";
+    let kernel_capability_version = "6.19.10-300.fc44.x86_64";
+    let mut kernel_provide = RepositoryProvide::new(
+        kernel_core_id,
+        kernel_capability.to_string(),
+        Some(kernel_capability_version.to_string()),
+        "generic".to_string(),
+        Some(format!("{kernel_capability} = {kernel_capability_version}")),
+        VersionScheme::Rpm,
+    );
+    kernel_provide.insert(&conn).unwrap();
+
+    for (name, version, requirements, config_capability) in [
+        (
+            "dracut",
+            "108-6.fc44",
+            vec![("util-linux", Some(">= 2.21"))],
+            "config(dracut)",
+        ),
+        (
+            "util-linux",
+            "2.41.3-12.fc44",
+            vec![("condition-runtime", None)],
+            "config(util-linux)",
+        ),
+    ] {
+        let package_id = formal_dependencies::insert_repo_pkg_with_reqs(
+            &conn,
+            repository_id,
+            name,
+            version,
+            &format!("https://example.invalid/{name}.rpm"),
+            "rpm",
+            &requirements,
+        );
+        insert_repo_requirement_group(
+            &conn,
+            package_id,
+            config_capability,
+            Some(&format!("= {version}")),
+            Some(&format!("{config_capability} = {version}")),
+        );
+        let mut provide = RepositoryProvide::new(
+            package_id,
+            config_capability.to_string(),
+            Some(version.to_string()),
+            "generic".to_string(),
+            Some(format!("{config_capability} = {version}")),
+            VersionScheme::Rpm,
+        );
+        provide.insert(&conn).unwrap();
+        if name == "util-linux" {
+            let conditional = crate::repository::requirement::parse_native_requirement(
+                RepositoryRequirementKind::Depends,
+                VersionScheme::Rpm,
+                "(missing-runtime if condition-runtime)",
+            )
+            .unwrap();
+            insert_typed_repo_requirement_group(&conn, package_id, &conditional);
+            let mut i686 = RepositoryPackage::new(
+                repository_id,
+                name.to_string(),
+                version.to_string(),
+                VersionScheme::Rpm,
+                "sha256:util-linux-i686".to_string(),
+                1,
+                "https://example.invalid/util-linux.i686.rpm".to_string(),
+            );
+            i686.architecture = Some("i686".to_string());
+            let i686_id = i686.insert(&conn).unwrap();
+            insert_repo_requirement_group(&conn, i686_id, "/bin/sh", None, Some("/bin/sh"));
+            insert_repo_requirement_group(
+                &conn,
+                i686_id,
+                config_capability,
+                Some(&format!("= {version}")),
+                Some(&format!("{config_capability} = {version}")),
+            );
+            let mut i686_provide = RepositoryProvide::new(
+                i686_id,
+                config_capability.to_string(),
+                Some(version.to_string()),
+                "generic".to_string(),
+                Some(format!("{config_capability} = {version}")),
+                VersionScheme::Rpm,
+            );
+            i686_provide.insert(&conn).unwrap();
+        }
+
+        let exact_config_version = format!("= {version}");
+        let installed_id = if name == "dracut" {
+            insert_rpm_trove(
+                &conn,
+                name,
+                version,
+                &[
+                    ("util-linux", Some(">= 2.21")),
+                    (config_capability, Some(exact_config_version.as_str())),
+                ],
+            )
+        } else {
+            insert_rpm_trove(
+                &conn,
+                name,
+                version,
+                &[(config_capability, Some(exact_config_version.as_str()))],
+            )
+        };
+        let mut malformed = crate::db::models::ProvideEntry::new(
+            installed_id,
+            format!("{config_capability} = {version}"),
+            None,
+            VersionScheme::Rpm,
+        );
+        malformed.insert(&conn).unwrap();
+    }
+    insert_rpm_trove(&conn, "condition-runtime", "1", &[]);
+
+    let requirement = crate::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        &format!("{kernel_capability} = {kernel_capability_version}"),
+    )
+    .unwrap();
+    let result = solve_requirement_groups_with_policy(
+        &conn,
+        &[requirement],
+        VersionScheme::Rpm,
+        &ResolutionPolicy::new()
+            .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
+    )
+    .expect("an unsatisfiable request must return a typed conflict");
+
+    assert!(result.conflict_message.is_some(), "{result:?}");
+}
+
+#[test]
 fn test_version_conflict() {
     // A needs B >= 2.0, only B 1.0 is installed
     let (_dir, conn) = setup_test_db();

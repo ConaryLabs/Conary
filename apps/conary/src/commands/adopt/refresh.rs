@@ -15,13 +15,12 @@ use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, ProvideEntry,
-    Trove,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, Trove,
 };
 use conary_core::packages::{
     InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
-use conary_core::repository::dependency_model::RepositoryRequirementGroup;
+use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use conary_core::repository::versioning::VersionScheme;
 use tracing::warn;
 
@@ -85,7 +84,7 @@ fn classify_current_package(
 struct RefreshReplacement {
     files: Vec<CapturedAdoptionFile>,
     requirements: Vec<RepositoryRequirementGroup>,
-    provides: Vec<String>,
+    provides: Vec<ProvidedCapability>,
 }
 
 impl RefreshReplacement {
@@ -306,7 +305,7 @@ pub async fn cmd_adopt_refresh(
                         continue;
                     }
                 };
-            let provides = match query_package_provides(pkg_mgr, identity.selector()) {
+            let mut provides = match super::provides::query_package_provides(pkg_mgr, identity) {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(
@@ -336,6 +335,11 @@ pub async fn cmd_adopt_refresh(
                     continue;
                 }
             };
+            super::provides::extend_materialized_file_provides(
+                &mut provides,
+                identity,
+                captured_files.iter().map(|file| file.source.0.as_str()),
+            )?;
 
             update_data.push(UpdateData {
                 trove,
@@ -555,15 +559,15 @@ fn replace_refresh_children_for_package(
             anyhow::anyhow!("failed to replace exact requirements for {trove_name}: {error}")
         })?;
 
-        for provide in &replacement.provides {
-            if provide.is_empty() {
-                continue;
-            }
-            let mut pe = ProvideEntry::new(trove_id, provide.clone(), None, version_scheme);
-            pe.insert_or_ignore(tx).map_err(|e| {
-                anyhow::anyhow!("failed to insert refreshed provide for {trove_name}: {e}")
-            })?;
-        }
+        super::provides::insert_package_provides(
+            tx,
+            trove_id,
+            native_identity,
+            &replacement.provides,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("failed to insert refreshed provides for {trove_name}: {error}")
+        })?;
 
         Ok(())
     })
@@ -657,21 +661,6 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<
             )
         })
         .collect())
-}
-
-/// Query provides for a package from the active package manager.
-///
-/// Returns an error on PM query failure so callers can handle it explicitly.
-fn query_package_provides(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<String>> {
-    Ok(match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_provides(name)
-            .map_err(|e| anyhow::anyhow!("RPM provides query failed for '{name}': {e}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_provides(name)
-            .map_err(|e| anyhow::anyhow!("DPKG provides query failed for '{name}': {e}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_provides(name)
-            .map_err(|e| anyhow::anyhow!("Pacman provides query failed for '{name}': {e}"))?,
-        _ => Vec::new(),
-    })
 }
 
 #[cfg(test)]

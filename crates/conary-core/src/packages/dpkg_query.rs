@@ -12,7 +12,11 @@ use crate::packages::install_reason::{InstallReasonAuthorityError, query_package
 use crate::packages::query_common::{
     InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord, run_query_command,
 };
-use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
+use crate::repository::dependency_model::{
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
+    RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
+    SourcePackageFormat,
+};
 use crate::repository::requirement::parse_native_requirement;
 use crate::repository::versioning::VersionScheme;
 use std::collections::{HashMap, HashSet};
@@ -383,19 +387,23 @@ fn split_debian_requirement_field(field: &str) -> Result<Vec<&str>> {
     Ok(entries)
 }
 
-/// Query what a package provides (capabilities it offers)
-///
-/// Returns a list of capability strings from the Provides field,
-/// plus the package name itself as a provide.
-pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
-    debug!("Querying provides for dpkg package: {}", name);
+/// Query one installed Debian package's exact identity and declared provides.
+pub fn query_package_provides(
+    identity: &InstalledPackageIdentity,
+) -> Result<Vec<ProvidedCapability>> {
+    let InstalledPackageIdentity::Dpkg { selector, .. } = identity else {
+        return Err(Error::ConfigError(
+            "dpkg provides query requires a dpkg installed identity".to_string(),
+        ));
+    };
+    debug!("Querying provides for dpkg package: {selector}");
 
     let output = Command::new("dpkg-query")
         .args([
             "-W",
             "-f",
-            "${binary:Package}\x1e${Package}\x1e${Provides}\x1f",
-            name,
+            "${binary:Package}\x1e${Package}\x1e${Version}\x1e${Provides}\x1f",
+            selector,
         ])
         .env("LC_ALL", "C")
         .output()
@@ -404,7 +412,7 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
     if !output.status.success() {
         return Err(Error::InitError(format!(
             "dpkg-query for provides {} failed: {}",
-            name,
+            selector,
             String::from_utf8_lossy(&output.stderr)
         )));
     }
@@ -417,28 +425,73 @@ pub fn query_package_provides(name: &str) -> Result<Vec<String>> {
         .collect::<Vec<_>>();
     if records.len() != 1 {
         return Err(Error::ParseError(format!(
-            "dpkg-query returned {} provides records for exact selector '{name}'",
+            "dpkg-query returned {} provides records for exact selector '{selector}'",
             records.len()
         )));
     }
-    let fields = records[0].split('\x1e').collect::<Vec<_>>();
-    if fields.len() != 3 || fields[0].is_empty() || fields[1].is_empty() {
+    let provides = parse_dpkg_provide_record(identity, records[0])?;
+
+    debug!(
+        "Package {selector} provides {} typed capabilities",
+        provides.len()
+    );
+    Ok(provides)
+}
+
+fn parse_dpkg_provide_record(
+    identity: &InstalledPackageIdentity,
+    record: &str,
+) -> Result<Vec<ProvidedCapability>> {
+    let InstalledPackageIdentity::Dpkg {
+        selector,
+        name,
+        version,
+        ..
+    } = identity
+    else {
+        return Err(Error::ConfigError(
+            "dpkg provides parser requires a dpkg installed identity".to_string(),
+        ));
+    };
+    let fields = record.split('\x1e').collect::<Vec<_>>();
+    if fields.len() != 4 || fields[0] != selector || fields[1] != name || fields[2] != version {
         return Err(Error::ParseError(format!(
-            "dpkg-query provides record for '{name}' is malformed"
+            "dpkg-query provides record for '{selector}' disagrees with its exact installed identity"
         )));
     }
-    let mut provides = vec![fields[1].to_string()];
-    if fields[0] != fields[1] {
-        provides.push(fields[0].to_string());
-    }
-    for part in fields[2].split(',') {
+    let mut provides = vec![ProvidedCapability {
+        kind: RepositoryCapabilityKind::PackageName,
+        name: name.clone(),
+        version: Some(version.clone()),
+        version_relation: Some(ProvideVersionRelation::Equal),
+        version_scheme: VersionScheme::Debian,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: CapabilityProvenance::ExactIdentity,
+    }];
+    for (record_index, part) in fields[3].split(',').enumerate() {
         let provide = part.trim();
         if !provide.is_empty() {
-            provides.push(provide.to_string());
+            let parsed = crate::repository::package_relation::parse_debian_provide(provide)
+                .map_err(Error::ParseError)?;
+            provides.push(ProvidedCapability {
+                kind: parsed.kind,
+                name: parsed.name,
+                version: parsed.version,
+                version_relation: parsed.version_relation,
+                version_scheme: VersionScheme::Debian,
+                architecture_qualifier: parsed.architecture_qualifier,
+                provenance: CapabilityProvenance::SourceDeclared {
+                    format: SourcePackageFormat::Debian,
+                    record_index: u32::try_from(record_index).map_err(|_| {
+                        Error::ParseError("Debian provide record index exceeds u32".to_string())
+                    })?,
+                },
+            });
         }
     }
-
-    debug!("Package {} provides {} capabilities", name, provides.len());
+    for provide in &provides {
+        provide.validate()?;
+    }
     Ok(provides)
 }
 
@@ -710,6 +763,41 @@ mod tests {
 
         let record = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f";
         assert!(parse_package_query_records(&format!("{record}{record}")).is_err());
+    }
+
+    #[test]
+    fn installed_provides_preserve_debian_versions_and_architecture_qualifiers() {
+        let identity =
+            InstalledPackageIdentity::dpkg("fixture:amd64", "fixture", "2:1.4-3", "amd64").unwrap();
+        let provides = parse_dpkg_provide_record(
+            &identity,
+            "fixture:amd64\x1efixture\x1e2:1.4-3\x1email-api:any (= 2), helper:arm64",
+        )
+        .unwrap();
+
+        assert_eq!(provides.len(), 3);
+        assert_eq!(provides[0].provenance, CapabilityProvenance::ExactIdentity);
+        assert_eq!(provides[1].name, "mail-api");
+        assert_eq!(provides[1].version.as_deref(), Some("2"));
+        assert_eq!(
+            provides[1].architecture_qualifier,
+            ProvideArchitectureQualifier::Any
+        );
+        assert_eq!(provides[2].name, "helper");
+        assert_eq!(
+            provides[2].architecture_qualifier,
+            ProvideArchitectureQualifier::Exact("arm64".to_string())
+        );
+    }
+
+    #[test]
+    fn installed_provides_reject_identity_drift() {
+        let identity =
+            InstalledPackageIdentity::dpkg("fixture:amd64", "fixture", "1", "amd64").unwrap();
+        assert!(
+            parse_dpkg_provide_record(&identity, "fixture:amd64\x1efixture\x1e2\x1email-api")
+                .is_err()
+        );
     }
 
     #[test]
