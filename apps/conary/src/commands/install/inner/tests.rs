@@ -172,7 +172,7 @@ fn install_inner_replaces_live_root_owned_overlapping_path() {
 
     let mut live_root = Trove::new_with_source(
         "conary-live-root".to_string(),
-        "2026.05.14".to_string(),
+        "0.0.0-captured-root".to_string(),
         TroveType::Package,
         InstallSource::CapturedRoot,
         conary_core::repository::versioning::VersionScheme::Conary,

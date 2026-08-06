@@ -199,7 +199,7 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
             .unwrap();
         let mut anchor_trove = Trove::new(
             format!("{}-anchor", format.as_str()),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             VersionScheme::Conary,
         );

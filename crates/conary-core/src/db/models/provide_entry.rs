@@ -11,7 +11,7 @@ use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
     RepositoryCapabilityKind,
 };
-use crate::repository::versioning::VersionScheme;
+use crate::repository::versioning::{VersionScheme, validate_repo_version};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::repository::version_scheme_from_row;
@@ -119,6 +119,7 @@ impl ProvideEntry {
 
     /// Insert this provide into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
+        self.validate_version()?;
         conn.execute(
             "INSERT INTO provides (
                 trove_id, capability, version, version_relation, kind, version_scheme,
@@ -144,6 +145,7 @@ impl ProvideEntry {
 
     /// Insert or ignore if already exists (for idempotent imports)
     pub fn insert_or_ignore(&mut self, conn: &Connection) -> Result<i64> {
+        self.validate_version()?;
         conn.execute(
             "INSERT OR IGNORE INTO provides (
                 trove_id, capability, version, version_relation, kind, version_scheme,
@@ -185,6 +187,18 @@ impl ProvideEntry {
 
         self.id = Some(id);
         Ok(id)
+    }
+
+    fn validate_version(&self) -> Result<()> {
+        let Some(version) = self.version.as_deref() else {
+            return Ok(());
+        };
+        validate_repo_version(self.version_scheme, version).map_err(|error| {
+            crate::error::Error::ConfigError(format!(
+                "provide {} has a version outside its declared grammar: {error}",
+                self.capability
+            ))
+        })
     }
 
     /// Find a provide by capability name
@@ -654,6 +668,36 @@ mod tests {
         assert_eq!(found.kind, RepositoryCapabilityKind::Generic);
         assert_eq!(found.version, Some("0.04".to_string()));
         assert_eq!(found.provenance, CapabilityProvenance::AuthorDeclared);
+    }
+
+    #[test]
+    fn writes_reject_versions_outside_declared_scheme() {
+        for insert_or_ignore in [false, true] {
+            let conn = setup_test_db();
+            let mut provide = ProvideEntry::new(
+                1,
+                "captured-root".to_string(),
+                Some("snapshot".to_string()),
+                VersionScheme::Conary,
+            );
+
+            let error = if insert_or_ignore {
+                provide.insert_or_ignore(&conn).unwrap_err()
+            } else {
+                provide.insert(&conn).unwrap_err()
+            };
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("invalid conary version 'snapshot'"),
+                "{error}"
+            );
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM provides", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 0);
+        }
     }
 
     #[test]

@@ -727,7 +727,7 @@ mod tests {
 
         let mut trove = crate::db::models::Trove::new(
             "pkg-a".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             crate::db::models::TroveType::Package,
             crate::repository::versioning::VersionScheme::Conary,
         );

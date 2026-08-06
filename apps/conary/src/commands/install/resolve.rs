@@ -355,7 +355,7 @@ mod tests {
         let conn = test_db();
         let mut trove = Trove::new(
             "glibc".to_string(),
-            "2.42".to_string(),
+            "2.42.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -363,7 +363,7 @@ mod tests {
         ProvideEntry::new(
             trove_id,
             "glibc".to_string(),
-            Some("2.42".to_string()),
+            Some("2.42.0".to_string()),
             conary_core::repository::versioning::VersionScheme::Conary,
         )
         .insert(&conn)

@@ -12,7 +12,7 @@ use std::os::unix::fs::symlink;
 fn insert_trove(conn: &rusqlite::Connection, name: &str) -> i64 {
     Trove::new(
         name.to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     )
@@ -818,7 +818,7 @@ fn captured_root_authority_is_typed_and_cannot_be_spoofed_by_package_name() {
 
     let mut captured = Trove::new_with_source(
         "captured-root-authority".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::CapturedRoot,
         VersionScheme::Conary,

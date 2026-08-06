@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 fn insert_trove(conn: &Connection, name: &str) -> i64 {
     Trove::new(
         name.to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     )

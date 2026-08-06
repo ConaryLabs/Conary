@@ -21,7 +21,9 @@ use rusqlite::Transaction;
 
 use super::{CapturedAdoptionFile, LIVE_ROOT_PACKAGE_NAME};
 
-const CAPTURED_ROOT_VERSION: &str = "snapshot";
+// This is a synthetic identity, not a changing snapshot serial. It still uses
+// Conary's SemVer-owned version scheme and must obey that grammar.
+const CAPTURED_ROOT_VERSION: &str = "0.0.0-captured-root";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CapturedRootSync {
@@ -531,6 +533,23 @@ mod tests {
             .find(|trove| trove.install_source == InstallSource::CapturedRoot)
             .unwrap();
         let captured_id = captured_trove.id.unwrap();
+        assert_eq!(captured_trove.version, CAPTURED_ROOT_VERSION);
+        conary_core::repository::versioning::validate_repo_version(
+            captured_trove.version_scheme,
+            &captured_trove.version,
+        )
+        .unwrap();
+        let captured_provides = ProvideEntry::find_by_trove(&tx, captured_id).unwrap();
+        assert_eq!(captured_provides.len(), 1);
+        assert_eq!(
+            captured_provides[0].version.as_deref(),
+            Some(CAPTURED_ROOT_VERSION)
+        );
+        conary_core::repository::versioning::validate_repo_version(
+            captured_provides[0].version_scheme,
+            captured_provides[0].version.as_deref().unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             FileEntry::find_by_path(&tx, "/etc/owned-primary")
                 .unwrap()

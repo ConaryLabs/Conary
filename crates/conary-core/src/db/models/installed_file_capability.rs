@@ -191,7 +191,7 @@ mod tests {
     fn fixture_trove(conn: &rusqlite::Connection) -> i64 {
         let mut trove = Trove::new(
             "capability-fixture".to_string(),
-            "1.0-1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             crate::repository::versioning::VersionScheme::Conary,
         );

@@ -142,14 +142,14 @@ fn remove_on_upgrade_requires_and_preserves_prior_debian_identity() {
     let conn = conary_core::db::open(&database_path).unwrap();
     let mut old_trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
     let old_trove_id = old_trove.insert(&conn).unwrap();
     let mut new_trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "2".to_string(),
+        "2.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -197,7 +197,7 @@ fn prepared_arch_conflict_keeps_local_and_writes_pacnew() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -262,7 +262,7 @@ fn deb_remove_on_upgrade_removes_pristine_and_saves_modified_conffiles() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -337,7 +337,7 @@ fn deb_remove_retains_conffile_state_until_purge() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -389,7 +389,7 @@ fn deb_purge_removes_conffile_and_package_manager_backups() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -427,7 +427,7 @@ fn deb_purge_plan_deletes_the_exact_rows_captured_before_trove_removal() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -467,7 +467,7 @@ fn rpm_ghost_config_is_owned_without_payload_and_erased_without_backup() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -495,7 +495,7 @@ fn arch_remove_rotates_existing_pacsaves_before_saving_local_file() {
     let conn = conary_core::db::open(&db).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );

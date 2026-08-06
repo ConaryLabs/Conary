@@ -307,7 +307,7 @@ fn capture_update_records_exact_old_current_and_new_artifacts() {
     let cas = CasStore::new(temp.path().join("objects")).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -416,7 +416,7 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
     let cas = CasStore::new(temp.path().join("objects")).unwrap();
     let mut trove = conary_core::db::models::Trove::new(
         "demo".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );

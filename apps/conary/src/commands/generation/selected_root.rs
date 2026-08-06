@@ -532,7 +532,7 @@ mod tests {
         let hash = cas.store(b"package-a").unwrap();
         let mut trove = Trove::new(
             "package-a".to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -780,7 +780,7 @@ mod tests {
         let tx = conn.unchecked_transaction().unwrap();
         let mut trove = Trove::new(
             "serialized-fixture".to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );

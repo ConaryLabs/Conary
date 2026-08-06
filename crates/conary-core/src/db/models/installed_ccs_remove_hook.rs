@@ -72,7 +72,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
         let trove_id = Trove::new(
             "fixture".to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             crate::repository::versioning::VersionScheme::Conary,
         )

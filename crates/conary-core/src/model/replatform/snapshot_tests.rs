@@ -76,7 +76,7 @@ fn test_visible_realignment_candidates_counts_same_name_target_impls() {
 
     let mut trove = Trove::new_with_source(
         "vim".to_string(),
-        "1.0".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
         crate::repository::versioning::VersionScheme::Conary,
@@ -154,7 +154,7 @@ fn test_source_policy_replatform_snapshot_combines_estimate_and_candidates() {
 
     let mut trove = Trove::new_with_source(
         "vim".to_string(),
-        "1.0".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
         crate::repository::versioning::VersionScheme::Conary,
@@ -235,7 +235,7 @@ fn test_source_policy_replatform_snapshot_uses_native_repo_version_ordering() {
 
     let mut installed = Trove::new_with_source(
         "demo".to_string(),
-        "0.9".to_string(),
+        "0.9.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
         crate::repository::versioning::VersionScheme::Conary,
@@ -306,7 +306,7 @@ fn test_source_policy_replatform_snapshot_uses_shared_selector_priority_ordering
 
     let mut installed = Trove::new_with_source(
         "demo".to_string(),
-        "0.9".to_string(),
+        "0.9.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
         crate::repository::versioning::VersionScheme::Conary,

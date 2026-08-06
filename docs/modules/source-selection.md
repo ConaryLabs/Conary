@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-06
-revision: 25
+revision: 26
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -480,6 +480,13 @@ partition without accumulating another captured-root owner. Track-only native
 troves are privately CAS-backed and promoted to `AdoptedFull` in the same
 full-adoption transaction.
 
+The synthetic trove uses the fixed Conary-authored identity
+`conary-live-root=0.0.0-captured-root`; both its trove version and exact package
+provide are validated under Conary's SemVer grammar before persistence.
+Pre-alpha databases containing the retired invalid `snapshot` version are
+disposable authority: rebuild the database and repeat full adoption. There is
+no compatibility adapter for that contradictory typed state.
+
 Package filters and `--explicit-only` deliberately do not assert whole-root
 continuity: they adopt only their requested native package scope. If any exact
 native query, payload capture, or package persistence fails, full-system
@@ -600,6 +607,9 @@ state requires an explicit scoped install, update, or replatform operation.
 - `apps/conary/src/commands/adopt/system.rs` and
   `adopt/system/captured_root.rs` for complete system adoption, track-to-full
   promotion, and exact package-versus-captured-root partitioning
+- `crates/conary-core/src/db/models/trove/identity.rs` for version, release,
+  Debian Multi-Arch, and exact native-identity validation at trove persistence
+  and decode boundaries
 - `crates/conary-core/src/generation/root_manifest/scan.rs` for finite
   selected-root capture and normalized runtime exclusions
 - `crates/conary-core/src/generation/builder/runtime_inputs.rs` for installed

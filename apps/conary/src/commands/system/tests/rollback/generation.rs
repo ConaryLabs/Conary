@@ -165,7 +165,7 @@ async fn rollback_generation_excludes_forward_activation_request() {
             .unwrap(),
         1
     );
-    insert_test_trove(&conn, changeset_id, "activation-fixture", "1.0", &[]);
+    insert_test_trove(&conn, changeset_id, "activation-fixture", "1.0.0", &[]);
     drop(conn);
 
     cmd_rollback(changeset_id, &db_path_str).await.unwrap();

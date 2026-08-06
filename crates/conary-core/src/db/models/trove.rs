@@ -13,6 +13,8 @@ use strum_macros::{AsRefStr, Display, EnumString};
 
 use super::repository::version_scheme_from_row;
 
+mod identity;
+
 /// Type of trove (package, component, or collection)
 #[derive(Debug, Clone, PartialEq, Eq, AsRefStr, Display, EnumString, Serialize, Deserialize)]
 #[strum(serialize_all = "lowercase")]
@@ -231,87 +233,7 @@ impl Trove {
     }
 
     fn validated_native_identity_json(&self) -> Result<Option<String>> {
-        if let Some(release) = self.package_release.as_deref() {
-            crate::repository::versioning::validate_package_release(release).map_err(|error| {
-                Error::ConfigError(format!(
-                    "{} {} has invalid signed CCS release: {error}",
-                    self.name, self.version
-                ))
-            })?;
-        }
-        match (self.version_scheme, self.debian_multi_arch) {
-            (VersionScheme::Debian, Some(_))
-            | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
-            (VersionScheme::Debian, None) => {
-                return Err(Error::ConfigError(format!(
-                    "{} {} has Debian version authority without exact Multi-Arch metadata",
-                    self.name, self.version
-                )));
-            }
-            (_, Some(_)) => {
-                return Err(Error::ConfigError(format!(
-                    "{} {} carries Debian Multi-Arch metadata under the {} version scheme",
-                    self.name,
-                    self.version,
-                    self.version_scheme.as_str()
-                )));
-            }
-        }
-        let native_source = matches!(
-            self.install_source,
-            InstallSource::AdoptedTrack | InstallSource::AdoptedFull | InstallSource::Taken
-        );
-        match (&self.native_package_identity, native_source) {
-            (Some(identity), true) => {
-                identity.validate()?;
-                if identity.version_scheme() != self.version_scheme {
-                    return Err(Error::ConfigError(format!(
-                        "{} {} native package identity uses {} versioning, not the trove's {} scheme",
-                        self.name,
-                        self.version,
-                        identity.version_scheme().as_str(),
-                        self.version_scheme.as_str()
-                    )));
-                }
-                if identity.name() != self.name {
-                    return Err(Error::ConfigError(format!(
-                        "{} {} native package identity names {}, not the owning trove",
-                        self.name,
-                        self.version,
-                        identity.name()
-                    )));
-                }
-                if identity.version() != self.version {
-                    return Err(Error::ConfigError(format!(
-                        "{} {} native package identity has canonical version {}",
-                        self.name,
-                        self.version,
-                        identity.version()
-                    )));
-                }
-                if Some(identity.architecture()) != self.architecture.as_deref() {
-                    return Err(Error::ConfigError(format!(
-                        "{} {} native package identity architecture {} does not match trove architecture {:?}",
-                        self.name,
-                        self.version,
-                        identity.architecture(),
-                        self.architecture
-                    )));
-                }
-                serde_json::to_string(identity)
-                    .map(Some)
-                    .map_err(Into::into)
-            }
-            (None, false) => Ok(None),
-            (None, true) => Err(Error::ConfigError(format!(
-                "{} {} uses install source {} without an exact native package identity",
-                self.name, self.version, self.install_source
-            ))),
-            (Some(_), false) => Err(Error::ConfigError(format!(
-                "{} {} uses install source {} but carries a native package identity",
-                self.name, self.version, self.install_source
-            ))),
-        }
+        identity::validated_native_identity_json(self)
     }
 
     /// Find a trove by ID
@@ -864,11 +786,30 @@ mod tests {
     }
 
     #[test]
+    fn insert_rejects_version_outside_declared_scheme() {
+        let (_dir, conn) = setup_test_db();
+        let mut trove = Trove::new(
+            "captured-root".to_string(),
+            "snapshot".to_string(),
+            TroveType::Package,
+            VersionScheme::Conary,
+        );
+
+        let error = trove.insert(&conn).unwrap_err().to_string();
+
+        assert!(
+            error.contains("invalid conary version 'snapshot'"),
+            "{error}"
+        );
+        assert!(Trove::list_all(&conn).unwrap().is_empty());
+    }
+
+    #[test]
     fn database_decode_rejects_unknown_installed_version_scheme() {
         let (_dir, conn) = setup_test_db();
         let mut trove = Trove::new(
             "bash".to_string(),
-            "5.2.37-1".to_string(),
+            "5.2.37".to_string(),
             TroveType::Package,
             VersionScheme::Conary,
         );

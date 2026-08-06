@@ -277,8 +277,9 @@ the stated scope, not whether a workstream happens to be active.
   active.
 - **Issues:** #67 as epic; #109 for persisted status; #257 and #259 for Remi
   acquisition integrity; #261 for exact publish-destination routing; #263 for
-  required source-pin strength; #265 for typed try-session divergence; plus one
-  narrow issue per remaining P1 item.
+  required source-pin strength; #265 for typed try-session divergence; #267 for
+  exact GRUB executable/output identity; and #269 for captured-root version
+  authority.
 - **Closed ledger items:**
   - PR #61 rejects missing package architecture, separates typed
     `InstallReason` from diagnostic selection prose, and validates trigger
@@ -293,6 +294,8 @@ the stated scope, not whether a workstream happens to be active.
     route contract.
   - #263 requires an explicit typed dependency-mixing strength in every source
     pin and advances the current-only schema to revision 26.
+  - #265 carries try-session divergence as a typed error through watch-mode
+    context instead of classifying diagnostic prose.
 - **Ledger gaps found on audit that #67 does not currently own:**
   - The `sanitize_path` ASCII heuristic is a #67-class invented authority but is
     owned only by #99, and only for ALPM. Cross-reference both.
