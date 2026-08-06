@@ -544,8 +544,12 @@ fn run_single_distro(
             let suite = runner
                 .run(&manifest, &backend, &container_id, Some(&container_config))
                 .await?;
+            aggregate_suite.expect_corpus_cases(suite.corpus_expected());
             for result in suite.results {
                 aggregate_suite.record(result);
+            }
+            for case in suite.corpus_cases {
+                aggregate_suite.record_corpus(case);
             }
         }
         aggregate_suite.finish();
@@ -561,7 +565,8 @@ fn run_single_distro(
 
         let has_blocking_results = aggregate_suite.failed() > 0
             || aggregate_suite.skipped() > 0
-            || aggregate_suite.cancelled() > 0;
+            || aggregate_suite.cancelled() > 0
+            || !aggregate_suite.corpus_all_completed();
 
         // Cleanup container.
         let keep_container = std::env::var("CONARY_TEST_KEEP_CONTAINER")
@@ -625,8 +630,12 @@ async fn run_qemu_only_suite(
                 Some(&dummy_config),
             )
             .await?;
+        aggregate_suite.expect_corpus_cases(suite.corpus_expected());
         for result in suite.results {
             aggregate_suite.record(result);
+        }
+        for case in suite.corpus_cases {
+            aggregate_suite.record_corpus(case);
         }
     }
     aggregate_suite.finish();
@@ -640,7 +649,8 @@ async fn run_qemu_only_suite(
 
     Ok(aggregate_suite.failed() == 0
         && aggregate_suite.skipped() == 0
-        && aggregate_suite.cancelled() == 0)
+        && aggregate_suite.cancelled() == 0
+        && aggregate_suite.corpus_all_completed())
 }
 
 // ---------------------------------------------------------------------------

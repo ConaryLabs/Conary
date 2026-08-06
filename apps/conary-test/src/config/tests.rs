@@ -54,6 +54,7 @@ fn minimal_manifest_with_id(id: &str) -> TestManifest {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         }],
         distro_overrides: Default::default(),
     }
@@ -754,22 +755,42 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
 
     let manifest = load_manifest(&path).expect("load focused native lifecycle manifest");
     assert_eq!(manifest.suite.phase, 4);
-    assert_eq!(manifest.test.len(), 1);
-    let test = &manifest.test[0];
-    assert_eq!(test.id, "TNPMX01");
-    assert_eq!(test.fatal, Some(true));
-    assert_eq!(test.skip, None);
-    assert_eq!(test.flaky, None);
+    assert_eq!(manifest.test.len(), 3);
+    for (test, expected_id, expected_profile, expected_format) in [
+        (&manifest.test[0], "TNPMX01R", "fedora-44", "rpm"),
+        (&manifest.test[1], "TNPMX01D", "ubuntu-26.04", "deb"),
+        (&manifest.test[2], "TNPMX01A", "arch", "alpm"),
+    ] {
+        assert_eq!(test.id, expected_id);
+        assert_eq!(test.fatal, Some(false));
+        assert_eq!(test.skip, None);
+        assert_eq!(test.flaky, None);
 
-    let rendered = format!("{test:?}");
-    assert!(
-        rendered.contains("run-cross-source-lifecycle-matrix.sh"),
-        "focused manifest must execute the shared lifecycle contract"
-    );
-    assert!(
-        rendered.contains("${native_lifecycle_oracle_format}"),
-        "focused manifest must pass an explicit typed native-oracle format"
-    );
+        let corpus = test.corpus.as_ref().expect("typed corpus declaration");
+        assert_eq!(corpus.source_profile, expected_profile);
+        assert_eq!(corpus.source_format.as_str(), expected_format);
+        assert_eq!(
+            corpus.digest_source,
+            conary_core::corpus::SourceArtifactDigestSource::FixtureBuildManifest
+        );
+        assert_eq!(corpus.stages.len(), 4);
+
+        let rendered = format!("{test:?}");
+        assert!(
+            rendered.contains("run-cross-source-lifecycle-matrix.sh"),
+            "focused manifest must execute the shared lifecycle contract"
+        );
+        assert!(
+            rendered.contains("${native_lifecycle_oracle_format}"),
+            "focused manifest must pass an explicit typed native-oracle format"
+        );
+        for operation in ["install", "update", "rollback", "remove"] {
+            assert!(
+                test.description.contains(operation),
+                "focused manifest should name {operation} in its contract"
+            );
+        }
+    }
     for (distro, expected_format) in [
         ("fedora44", "rpm"),
         ("ubuntu-26.04", "deb"),
@@ -785,12 +806,6 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
                 .map(String::as_str),
             Some(expected_format),
             "{distro} must select its native lifecycle oracle explicitly"
-        );
-    }
-    for operation in ["install", "update", "rollback", "remove"] {
-        assert!(
-            test.description.contains(operation),
-            "focused manifest should name {operation} in its contract"
         );
     }
 }

@@ -18,7 +18,7 @@
 mod aggregate;
 mod failure;
 
-pub use aggregate::{FailureTally, StageTally, aggregate_cases};
+pub use aggregate::{CorpusAggregate, FailureTally, StageTally, aggregate_cases};
 pub use failure::{ConversionFailure, FailureKind};
 
 use serde::{Deserialize, Serialize};
@@ -42,8 +42,8 @@ pub enum ConversionStage {
     TransactionPreflight,
     Installation,
     Update,
-    Removal,
     Rollback,
+    Removal,
 }
 
 impl ConversionStage {
@@ -61,8 +61,8 @@ impl ConversionStage {
             ConversionStage::TransactionPreflight => "transaction_preflight",
             ConversionStage::Installation => "installation",
             ConversionStage::Update => "update",
-            ConversionStage::Removal => "removal",
             ConversionStage::Rollback => "rollback",
+            ConversionStage::Removal => "removal",
         }
     }
 
@@ -80,8 +80,8 @@ impl ConversionStage {
         ConversionStage::TransactionPreflight,
         ConversionStage::Installation,
         ConversionStage::Update,
-        ConversionStage::Removal,
         ConversionStage::Rollback,
+        ConversionStage::Removal,
     ];
 }
 
@@ -96,12 +96,40 @@ pub struct SourceProfileIdentity {
 
 /// The exact artifact under test, pinned by digest.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceArtifactIdentity {
+    /// How this artifact participates in the declared journey.
+    pub role: SourceArtifactRole,
+    /// Typed authority from which the exact artifact digest was obtained.
+    pub digest_source: SourceArtifactDigestSource,
     pub name: String,
     pub version: String,
     pub architecture: Option<String>,
     /// SHA-256 of the source artifact. A result without this is not evidence.
     pub digest: String,
+}
+
+/// The lifecycle role of one exact source artifact.
+///
+/// A case may consume more than one artifact: an install followed by an update
+/// must identify both inputs rather than attributing the complete journey to
+/// the first package digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceArtifactRole {
+    InstallRequest,
+    InstallDependency,
+    UpdateRequest,
+    UpdateDependency,
+}
+
+/// Authority that produced an artifact's pinned digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceArtifactDigestSource {
+    /// The fixture builder's versioned output manifest, computed from the
+    /// completed native package bytes.
+    FixtureBuildManifest,
 }
 
 /// Typed host capabilities the case ran against.
@@ -192,8 +220,10 @@ pub enum CorpusOutcome {
 /// One corpus case: an exact artifact against an exact target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorpusCaseResult {
+    /// Stable manifest-owned identity for this case.
+    pub case_id: String,
     pub source_profile: SourceProfileIdentity,
-    pub source_artifact: SourceArtifactIdentity,
+    pub source_artifacts: Vec<SourceArtifactIdentity>,
     pub target_profile: TargetCapabilitySnapshot,
     pub stage_results: Vec<StageResult>,
     pub final_outcome: CorpusOutcome,
@@ -206,8 +236,9 @@ impl CorpusCaseResult {
     /// in separately, so a result cannot claim success while carrying a failed
     /// stage.
     pub fn from_stages(
+        case_id: impl Into<String>,
         source_profile: SourceProfileIdentity,
-        source_artifact: SourceArtifactIdentity,
+        source_artifacts: Vec<SourceArtifactIdentity>,
         target_profile: TargetCapabilitySnapshot,
         stage_results: Vec<StageResult>,
     ) -> Self {
@@ -222,8 +253,9 @@ impl CorpusCaseResult {
             .unwrap_or(CorpusOutcome::Completed);
 
         Self {
+            case_id: case_id.into(),
             source_profile,
-            source_artifact,
+            source_artifacts,
             target_profile,
             stage_results,
             final_outcome,
@@ -256,6 +288,8 @@ mod tests {
 
     fn artifact() -> SourceArtifactIdentity {
         SourceArtifactIdentity {
+            role: SourceArtifactRole::InstallRequest,
+            digest_source: SourceArtifactDigestSource::FixtureBuildManifest,
             name: "2ping".into(),
             version: "4.5.1-24.fc44".into(),
             architecture: Some("noarch".into()),
@@ -280,7 +314,13 @@ mod tests {
             StageResult::passed(ConversionStage::Installation),
         ];
 
-        let case = CorpusCaseResult::from_stages(profile(), artifact(), target(), stages);
+        let case = CorpusCaseResult::from_stages(
+            "rpm-on-fedora",
+            profile(),
+            vec![artifact()],
+            target(),
+            stages,
+        );
 
         assert!(case.completed());
         assert_eq!(case.failure_key(), None);
@@ -301,7 +341,13 @@ mod tests {
             StageResult::not_reached(ConversionStage::Installation),
         ];
 
-        let case = CorpusCaseResult::from_stages(profile(), artifact(), target(), stages);
+        let case = CorpusCaseResult::from_stages(
+            "rpm-on-fedora",
+            profile(),
+            vec![artifact()],
+            target(),
+            stages,
+        );
 
         assert!(!case.completed());
         assert_eq!(
@@ -327,7 +373,13 @@ mod tests {
             ),
         ];
 
-        let case = CorpusCaseResult::from_stages(profile(), artifact(), target(), stages);
+        let case = CorpusCaseResult::from_stages(
+            "rpm-on-fedora",
+            profile(),
+            vec![artifact()],
+            target(),
+            stages,
+        );
 
         assert_eq!(
             case.failure_key(),
@@ -357,13 +409,15 @@ mod tests {
     fn stages_order_by_execution_sequence() {
         assert!(ConversionStage::RepositoryAuthentication < ConversionStage::NativeParse);
         assert!(ConversionStage::Installation < ConversionStage::Rollback);
+        assert!(ConversionStage::Rollback < ConversionStage::Removal);
     }
 
     #[test]
     fn a_case_round_trips_through_serde() {
         let case = CorpusCaseResult::from_stages(
+            "rpm-on-fedora",
             profile(),
-            artifact(),
+            vec![artifact()],
             target(),
             vec![StageResult::failed(
                 ConversionStage::NativeParse,

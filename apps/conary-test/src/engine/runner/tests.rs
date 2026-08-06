@@ -137,6 +137,7 @@ async fn test_runner_passes_on_success() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -194,6 +195,7 @@ async fn suite_setup_executes_before_tests() {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         }],
         distro_overrides: HashMap::new(),
     };
@@ -234,6 +236,7 @@ async fn test_runner_fails_on_bad_exit_code() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -282,6 +285,7 @@ async fn test_runner_skips_on_dep_failure() {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         },
         TestDef {
             id: "T02".to_string(),
@@ -298,6 +302,7 @@ async fn test_runner_skips_on_dep_failure() {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         },
     ]);
 
@@ -339,6 +344,7 @@ async fn test_runner_skips_when_composefs_runtime_requirement_is_missing() {
         group: None,
         skip: None,
         requires: vec!["composefs_runtime".to_string()],
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -397,6 +403,7 @@ async fn test_runner_kill_after_log() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -465,6 +472,7 @@ async fn test_runner_flaky_majority_pass() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -522,6 +530,7 @@ async fn test_runner_flaky_majority_fail() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -600,6 +609,7 @@ async fn test_resource_scoped_flaky_retries_use_fresh_container() {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         }],
         distro_overrides: HashMap::new(),
     };

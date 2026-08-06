@@ -1353,7 +1353,11 @@ need parser proof and migration or defaulting decisions. Suite names in
 `--suite` arguments use the manifest filename stem, such as
 `phase4-native-pm-parity`, not the human-readable title shown by
 `cargo run -p conary-test -- list`. Distro image source staging is selected by
-the typed `build_context` field, never by matching the distro key.
+the typed `build_context` field, never by matching the distro key. Corpus cases
+must carry versioned runtime evidence with exact role-tagged artifact digests,
+typed digest authority, target capabilities, and canonically ordered stage
+checkpoints; report aggregation uses typed stage/failure discriminants and
+never diagnostic text. The declared and emitted case counts must agree.
 
 ## Agent/MCP Operation Surfaces
 
