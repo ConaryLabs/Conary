@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-06
-revision: 26
+revision: 27
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -129,6 +129,11 @@ source-identity aliases. Native repository sync writes the repository's exact
 profile into every package row and rejects a missing or conflicting profile.
 The superseded
 `data/distros.toml` catalog was deleted in M4d.
+
+An accepted Remi conversion remains server-owned work until the typed job
+status reaches `ready` or `failed`. The client continues to observe `pending`
+and `converting` jobs; it does not turn elapsed wall time into conversion
+failure. Cancellation and complete-operation deadlines belong to the caller.
 
 ## Remi CCS Package Authority
 

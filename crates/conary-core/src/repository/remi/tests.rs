@@ -26,8 +26,36 @@ fn test_conversion_accepted_parsing() {
 fn test_job_status_parsing() {
     let json = r#"{"job_id":"1","status":"ready","distro":"arch","package":"gzip","version":null,"progress":null,"error":null,"manifest":null}"#;
     let status: JobStatus = serde_json::from_str(json).unwrap();
-    assert_eq!(status.status, "ready");
+    assert_eq!(status.status, ConversionJobState::Ready);
     assert_eq!(status.package, "gzip");
+}
+
+#[test]
+fn every_remi_job_state_has_one_shared_poll_decision() {
+    let cases = [
+        ("pending", protocol::JobPollDecision::Wait),
+        ("converting", protocol::JobPollDecision::Wait),
+        ("ready", protocol::JobPollDecision::Ready),
+        (
+            "failed",
+            protocol::JobPollDecision::Failed("conversion failed"),
+        ),
+    ];
+
+    for (wire_state, expected) in cases {
+        let json = format!(
+            r#"{{"job_id":"1","status":"{wire_state}","distro":"fedora","package":"kernel-core","version":null,"architecture":"x86_64","progress":null,"error":"conversion failed","manifest":null}}"#
+        );
+        let status: JobStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status.poll_decision(), expected);
+    }
+
+    let unsupported = r#"{"job_id":"1","status":"blocked","distro":"fedora","package":"kernel-core","version":null,"architecture":"x86_64","progress":null,"error":null,"manifest":null}"#;
+    let error = serde_json::from_str::<JobStatus>(unsupported).unwrap_err();
+    assert!(
+        error.to_string().contains("unknown variant `blocked`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -288,7 +316,79 @@ async fn get_package_rejects_retired_job_status() {
         .unwrap_err();
     let message = err.to_string();
 
-    assert!(message.contains("unsupported conversion status blocked"));
+    assert!(message.contains("unknown variant `blocked`"), "{message}");
+}
+
+const POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF: usize = 152;
+
+async fn spawn_active_job_server(active_polls: usize) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let accepted =
+            r#"{"status":"queued","job_id":"55","poll_url":"/v1/jobs/55","eta_seconds":null}"#;
+        write_json_response(&listener, "202 Accepted", accepted).await;
+
+        for poll in 0..active_polls {
+            let state = if poll % 2 == 0 {
+                "pending"
+            } else {
+                "converting"
+            };
+            let active = format!(
+                r#"{{"job_id":"55","status":"{state}","distro":"fedora","package":"kernel-modules-core","version":"6.19.10-300.fc44","architecture":"x86_64","progress":null,"error":null,"manifest":null}}"#
+            );
+            write_json_response(&listener, "200 OK", &active).await;
+        }
+
+        let ready = r#"{
+            "job_id":"55",
+            "status":"ready",
+            "distro":"fedora",
+            "package":"kernel-modules-core",
+            "version":"6.19.10-300.fc44",
+            "architecture":"x86_64",
+            "progress":100,
+            "error":null,
+            "manifest":{
+                "name":"kernel-modules-core",
+                "version":"6.19.10-300.fc44",
+                "distro":"fedora",
+                "chunks":[],
+                "total_size":0,
+                "content_hash":"sha256:test"
+            }
+        }"#;
+        write_json_response(&listener, "200 OK", ready).await;
+    });
+
+    (base_url, server)
+}
+
+#[tokio::test]
+async fn both_clients_wait_past_the_former_five_minute_poll_cycle_count() {
+    let (base_url, server) = spawn_active_job_server(POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF).await;
+    let mut client = RemiClient::new(&base_url).unwrap();
+    client.core.poll_interval = Duration::from_millis(1);
+    let manifest = client
+        .get_package("fedora", "kernel-modules-core", None, Some("x86_64"))
+        .await
+        .unwrap();
+    assert_eq!(manifest.name, "kernel-modules-core");
+    server.await.unwrap();
+
+    let (base_url, server) = spawn_active_job_server(POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF).await;
+    let cache = tempfile::tempdir().unwrap();
+    let mut client = AsyncRemiClient::new(&base_url, cache.path()).unwrap();
+    client.core.poll_interval = Duration::from_millis(1);
+    let manifest = client
+        .get_package("fedora", "kernel-modules-core", None, Some("x86_64"))
+        .await
+        .unwrap();
+    assert_eq!(manifest.name, "kernel-modules-core");
+    server.await.unwrap();
 }
 
 async fn write_json_response(listener: &tokio::net::TcpListener, status: &str, body: &str) {

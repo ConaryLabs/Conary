@@ -68,7 +68,7 @@ impl AsyncRemiClient {
     /// Request a package manifest from the Remi
     ///
     /// Returns the manifest when the package is ready. If conversion is needed,
-    /// this will poll automatically until complete or timeout.
+    /// this polls until Remi reports a terminal job state or the caller cancels.
     pub async fn get_package(
         &self,
         distro: &str,
@@ -119,16 +119,7 @@ impl AsyncRemiClient {
     /// Poll for job completion (async version)
     async fn poll_for_completion_async(&self, job_id: &str) -> Result<PackageManifest> {
         let url = self.core.job_url(job_id);
-        let start = std::time::Instant::now();
-
         loop {
-            if start.elapsed() > POLL_TIMEOUT {
-                return Err(Error::TimeoutError(format!(
-                    "Conversion job {} timed out after {:?}",
-                    job_id, POLL_TIMEOUT
-                )));
-            }
-
             let response = self
                 .http_client
                 .get(&url)
@@ -143,10 +134,11 @@ impl AsyncRemiClient {
                 )));
             }
 
-            let status: JobStatus = response.json().await.parse_context("job status")?;
+            let body = response.text().await.download_context(&url)?;
+            let status: JobStatus = serde_json::from_str(&body).parse_context("job status")?;
 
-            match status.status.as_str() {
-                "ready" => {
+            match status.poll_decision() {
+                protocol::JobPollDecision::Ready => {
                     info!("Conversion complete for job {}", job_id);
                     if let Some(manifest) = status.manifest {
                         return Ok(manifest);
@@ -160,24 +152,17 @@ impl AsyncRemiClient {
                     ))
                     .await;
                 }
-                "failed" => {
-                    let error_msg = status.error.unwrap_or_else(|| "Unknown error".to_string());
+                protocol::JobPollDecision::Failed(error_msg) => {
                     return Err(Error::DownloadError(format!(
                         "Conversion failed: {}",
                         error_msg
                     )));
                 }
-                "converting" | "queued" => {
+                protocol::JobPollDecision::Wait => {
                     if let Some(progress) = status.progress {
                         debug!("Converting {} ({}%)...", status.package, progress);
                     }
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                }
-                other => {
-                    return Err(Error::DownloadError(format!(
-                        "Remi returned unsupported conversion status {other} for {}/{}",
-                        status.distro, status.package
-                    )));
+                    self.core.wait_for_next_poll().await;
                 }
             }
         }
