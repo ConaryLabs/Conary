@@ -406,7 +406,7 @@ mod tests {
     fn trove(id: i64, name: &str, source: InstallSource) -> Trove {
         let mut trove = Trove::new_with_source(
             name.to_string(),
-            "1.0-1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             source,
             crate::repository::versioning::VersionScheme::Conary,
@@ -869,7 +869,7 @@ mod tests {
         let anchor_trove_id = anchor_trove.insert(&conn).unwrap();
         let mut claimant_trove = Trove::new_with_source(
             "repository-claimant".to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::Repository,
             crate::repository::versioning::VersionScheme::Conary,

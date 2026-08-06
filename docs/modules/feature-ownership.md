@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-04
-revision: 64
+last_updated: 2026-08-06
+revision: 65
 summary: Route feature ownership through typed database rebuilds, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -57,6 +57,8 @@ supplied them.
 `apps/conary/src/commands/system/rebuild_database.rs`;
 `crates/conary-core/src/db/current_schema/`;
 `crates/conary-core/src/db/models/persisted_value.rs`;
+`crates/conary-core/src/db/models/trove/identity.rs`;
+`crates/conary-core/src/db/models/provide_entry.rs`;
 `crates/conary-core/src/db/models/trigger.rs`;
 `crates/conary-core/src/db/models/trigger_engine.rs`;
 `crates/conary-core/src/db/models/derived.rs`;
@@ -72,12 +74,15 @@ that persists a typed state.
 `apps/conary/src/commands/system/rebuild_database.rs`;
 `crates/conary-core/src/db/models/mod.rs`;
 `crates/conary-core/src/db/models/persisted_value.rs`;
+`crates/conary-core/src/db/models/trove/identity.rs`;
 `crates/conary-core/src/db/models/trigger.rs`;
 `crates/conary-core/src/db/models/trigger_engine.rs`;
 `crates/conary-core/src/db/models/derived.rs`.
 
 **Focused proof:** `cargo test -p conary-core --lib db::schema`;
 `cargo test -p conary-core --lib db::rebuild`;
+`cargo test -p conary-core --lib db::models::trove::tests`;
+`cargo test -p conary-core --lib db::models::provide_entry::tests`;
 `cargo test -p conary-core --lib db::models::trigger`;
 `cargo test -p conary-core --lib db::models::derived`;
 `cargo test -p conary --lib commands::system`;

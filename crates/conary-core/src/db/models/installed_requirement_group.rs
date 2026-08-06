@@ -191,7 +191,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
         let mut trove = Trove::new(
             "new-libssl".to_string(),
-            "3.0-1".to_string(),
+            "3.0.1".to_string(),
             TroveType::Package,
             crate::repository::versioning::VersionScheme::Conary,
         );

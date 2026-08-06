@@ -139,7 +139,7 @@ fn verified_symlink_directory_anchor_policy_round_trips_exactly() {
     .unwrap();
     let mut snapshot = TroveSnapshot::test_package(
         "symlink-anchor",
-        "1",
+        "1.0.0",
         vec![crate::commands::FileSnapshot {
             path: "/lib".to_string(),
             node: symlink_node.clone(),
@@ -213,14 +213,14 @@ fn rollback_reclaims_an_exact_peer_reanchored_symlink_without_unique_path_failur
     let mut conn = conary_core::db::open(&db_path).unwrap();
     let mut symlink_owner = Trove::new(
         "symlink-owner".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     );
     let symlink_owner_id = symlink_owner.insert(&conn).unwrap();
     let mut claimant = Trove::new(
         "directory-claimant".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     );
@@ -304,21 +304,21 @@ fn rollback_restores_a_target_owned_only_by_an_rpm_through_symlink_edge() {
     let mut conn = conary_core::db::open(&db_path).unwrap();
     let mut target_owner = Trove::new(
         "target-owner".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     );
     let target_owner_id = target_owner.insert(&conn).unwrap();
     let mut symlink_owner = Trove::new(
         "symlink-owner".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     );
     let symlink_owner_id = symlink_owner.insert(&conn).unwrap();
     let mut rpm_claimant = Trove::new(
         "rpm-claimant".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     );
@@ -443,12 +443,12 @@ fn cyclic_cross_payload_claims_restore_through_global_anchor_phase() {
             component: None,
         }),
     };
-    let mut package_a = TroveSnapshot::test_package("cycle-a", "1", Vec::new());
+    let mut package_a = TroveSnapshot::test_package("cycle-a", "1.0.0", Vec::new());
     package_a.payload_claims = vec![
         claim("/opt", 0o700, None),
         claim("/usr", 0o755, Some(0o711)),
     ];
-    let mut package_b = TroveSnapshot::test_package("cycle-b", "1", Vec::new());
+    let mut package_b = TroveSnapshot::test_package("cycle-b", "1.0.0", Vec::new());
     package_b.payload_claims = vec![
         claim("/opt", 0o750, Some(0o775)),
         claim("/usr", 0o700, None),
@@ -706,7 +706,7 @@ fn exact_installed_authority_round_trips_and_rejects_broken_relations() {
 
     let mut collection = Trove::new(
         "authority-collection".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Collection,
         VersionScheme::Conary,
     );
@@ -720,7 +720,7 @@ fn exact_installed_authority_round_trips_and_rejects_broken_relations() {
 
     let mut peer = Trove::new(
         "shared-directory-peer".to_string(),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         VersionScheme::Conary,
     );

@@ -45,7 +45,7 @@ fn installed_package(
 ) -> ConvertedPackage {
     let mut trove = Trove::new(
         format!("installed-{}", conn.last_insert_rowid()),
-        "1".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         crate::repository::versioning::VersionScheme::Conary,
     );

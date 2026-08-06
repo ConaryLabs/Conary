@@ -350,7 +350,7 @@ mod tests {
         let (_temp, conn) = create_test_db();
         let mut trove = Trove::new(
             "catalog-match".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             crate::repository::versioning::VersionScheme::Conary,
         );

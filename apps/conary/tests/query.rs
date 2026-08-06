@@ -33,7 +33,7 @@ fn test_query_packages() {
     for (name, version) in [
         ("nginx", "1.21.0"),
         ("redis", "6.2.0"),
-        ("postgres", "14.0"),
+        ("postgres", "14.0.0"),
     ] {
         db::transaction(&mut conn, |tx| {
             let mut changeset = Changeset::new(format!("Install {}-{}", name, version));

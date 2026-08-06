@@ -526,7 +526,7 @@ fn test_replatform_execution_plan_accepts_tracked_capability_provider_for_target
 
     let mut provider_trove = Trove::new_with_source(
         "file-libs".to_string(),
-        "5.45".to_string(),
+        "5.45.0".to_string(),
         TroveType::Package,
         InstallSource::Repository,
         crate::repository::versioning::VersionScheme::Conary,

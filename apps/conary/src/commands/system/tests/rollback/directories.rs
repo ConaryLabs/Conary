@@ -107,7 +107,7 @@ async fn assert_additive_shared_directory_rollback(
 
     let mut anchor = Trove::new(
         format!("{fixture}-anchor"),
-        "1.0".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -118,7 +118,7 @@ async fn assert_additive_shared_directory_rollback(
     let claim_owner_id = if symlink_anchor {
         let mut claim_owner = Trove::new(
             format!("{fixture}-claim-owner"),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -218,7 +218,7 @@ async fn assert_additive_shared_directory_rollback(
 
     let mut added_ids = Vec::new();
     for (name, mode) in additions {
-        let trove_id = insert_test_trove(&conn, changeset_id, name, "1.0", &[]);
+        let trove_id = insert_test_trove(&conn, changeset_id, name, "1.0.0", &[]);
         added_ids.push(trove_id);
         let mut incoming = FileEntry::new(
             path.to_string(),

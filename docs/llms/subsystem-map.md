@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-04
-revision: 61
+last_updated: 2026-08-06
+revision: 62
 summary: Route typed database rebuilds, lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
@@ -218,6 +218,10 @@ commands.
   `crates/conary-core/src/generation/builder/runtime_inputs.rs`. `CapturedRoot`
   preserves continuity state only; package anchors and claims remain the
   install/update/remove ownership authority.
+- Trove version, release, Debian Multi-Arch, and exact native-identity
+  persistence validation is owned by
+  `crates/conary-core/src/db/models/trove/identity.rs`; `trove.rs` remains the
+  public model and CRUD hub.
 - Single-package adoption preview and apply share the planner in
   `apps/conary/src/commands/adopt/packages.rs`; preview stops before every
   SQLite, checkpoint, CAS, native-PM, hook, generation, and live-root write.

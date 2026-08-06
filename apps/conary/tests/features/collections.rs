@@ -17,7 +17,7 @@ fn test_collection_management() {
         // Create a collection
         let mut collection = Trove::new(
             "dev-tools".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Collection,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -85,7 +85,7 @@ fn test_collection_operations() {
     db::transaction(&mut conn, |tx| {
         let mut collection = Trove::new(
             "webstack".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Collection,
             conary_core::repository::versioning::VersionScheme::Conary,
         );

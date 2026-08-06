@@ -128,7 +128,7 @@ mod tests {
     fn installed_ccs(conn: &Connection, name: &str, script: &str) -> (Trove, i64) {
         let mut trove = Trove::new_with_source(
             name.to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             InstallSource::File,
             conary_core::repository::versioning::VersionScheme::Conary,

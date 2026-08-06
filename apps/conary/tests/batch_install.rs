@@ -178,7 +178,7 @@ fn test_batch_install_file_tracking() {
         // Package 1 with 2 files
         let mut pkg1 = Trove::new(
             "lib-a".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -192,7 +192,7 @@ fn test_batch_install_file_tracking() {
         // Package 2 with 3 files
         let mut pkg2 = Trove::new(
             "lib-b".to_string(),
-            "2.0".to_string(),
+            "2.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -240,7 +240,7 @@ fn test_batch_preserves_dependency_reasons() {
         // Dependency with "Required by" reason
         let mut dep = Trove::new(
             "libfoo".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -252,7 +252,7 @@ fn test_batch_preserves_dependency_reasons() {
         // Main package with explicit reason
         let mut app = Trove::new(
             "myapp".to_string(),
-            "2.0".to_string(),
+            "2.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );

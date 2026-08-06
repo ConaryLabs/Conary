@@ -526,7 +526,7 @@ mod tests {
 
         let mut trove = Trove::new(
             "pkg".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );

@@ -267,7 +267,7 @@ fn record_additive_changeset_with_system_authority(
     changeset
         .update_status(conn, ChangesetStatus::Applied)
         .unwrap();
-    insert_test_trove(conn, changeset_id, fixture, "1.0", &[]);
+    insert_test_trove(conn, changeset_id, fixture, "1.0.0", &[]);
     changeset_id
 }
 
@@ -340,7 +340,7 @@ async fn additive_rollback_restores_unaffected_config_runtime_projection() {
 
     let mut peer = Trove::new(
         "config-runtime-peer".to_string(),
-        "1.0".to_string(),
+        "1.0.0".to_string(),
         TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
@@ -450,7 +450,7 @@ async fn rollback_without_v5_authority_fails_closed_and_remains_retryable() {
     changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
-    let trove_id = insert_test_trove(&conn, changeset_id, "rollback-rpm-fixture", "1.0-1", &[]);
+    let trove_id = insert_test_trove(&conn, changeset_id, "rollback-rpm-fixture", "1.0.1", &[]);
     set_trove_rpm_provenance(&conn, trove_id);
     drop(conn);
 
@@ -500,7 +500,13 @@ async fn rollback_with_retired_metadata_schema_fails_closed_and_remains_retryabl
     changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
-    let trove_id = insert_test_trove(&conn, changeset_id, "retired-metadata-fixture", "1.0", &[]);
+    let trove_id = insert_test_trove(
+        &conn,
+        changeset_id,
+        "retired-metadata-fixture",
+        "1.0.0",
+        &[],
+    );
     drop(conn);
 
     for _ in 0..2 {
@@ -579,7 +585,7 @@ async fn rollback_snapshot_restores_exact_prior_typed_rpm_authority() {
     changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
-    let trove_id = insert_test_trove(&conn, changeset_id, "rollback-rpm-fixture", "1.0-1", &[]);
+    let trove_id = insert_test_trove(&conn, changeset_id, "rollback-rpm-fixture", "1.0.1", &[]);
     set_trove_rpm_provenance(&conn, trove_id);
     let bundle = rollback_typed_rpm_bundle();
     let mut installed =
@@ -894,7 +900,7 @@ fn rollback_snapshot_restores_exact_ccs_remove_hook() {
     let mut conn = conary_core::db::open(&db_path).unwrap();
     let mut changeset = Changeset::new("Restore CCS hook fixture".to_string());
     let changeset_id = changeset.insert(&conn).unwrap();
-    let mut snapshot = TroveSnapshot::test_package("ccs-hook-fixture", "1", Vec::new());
+    let mut snapshot = TroveSnapshot::test_package("ccs-hook-fixture", "1.0.0", Vec::new());
     snapshot.ccs_remove_hook = Some(crate::commands::CcsRemoveHookSnapshot {
         script: "echo removing\n".to_string(),
         reversible: Some(true),

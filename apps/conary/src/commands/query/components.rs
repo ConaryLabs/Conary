@@ -192,7 +192,7 @@ mod tests {
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut trove = Trove::new(
             "broken-components".to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -231,7 +231,7 @@ mod tests {
         let conn = conary_core::db::open(&db_path).unwrap();
         Trove::new(
             "metadata-only".to_string(),
-            "1".to_string(),
+            "1.0.0".to_string(),
             TroveType::Package,
             conary_core::repository::versioning::VersionScheme::Conary,
         )
