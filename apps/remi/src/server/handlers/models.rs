@@ -820,7 +820,7 @@ mod tests {
         // Create two collections
         let mut t1 = Trove::new(
             "group-base".to_string(),
-            "1.0".to_string(),
+            "1.0.0".to_string(),
             TroveType::Collection,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
@@ -831,7 +831,7 @@ mod tests {
 
         let mut t2 = Trove::new(
             "group-dev".to_string(),
-            "2.0".to_string(),
+            "2.0.0".to_string(),
             TroveType::Collection,
             conary_core::repository::versioning::VersionScheme::Conary,
         );
