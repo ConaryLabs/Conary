@@ -439,7 +439,7 @@ fn preview_and_apply_share_identity_mode_and_record_plan() {
         1
     );
     let provides = ProvideEntry::find_by_trove(&conn, trove_id).unwrap();
-    assert_eq!(provides.len(), 2);
+    assert_eq!(provides.len(), 3);
     let config = provides
         .iter()
         .find(|provide| provide.capability == "config(fixture)")
@@ -459,6 +459,21 @@ fn preview_and_apply_share_identity_mode_and_record_plan() {
             format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
             record_index: 0,
         }
+    ));
+    let file = provides
+        .iter()
+        .find(|provide| provide.capability == live_file.to_string_lossy())
+        .expect("materialized package path must be persisted as a file provider");
+    assert_eq!(
+        file.kind,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::File
+    );
+    assert!(matches!(
+        &file.provenance,
+        conary_core::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
+            format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+            source_path,
+        } if source_path == live_file.to_string_lossy().as_ref()
     ));
 }
 

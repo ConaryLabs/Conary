@@ -305,7 +305,7 @@ pub async fn cmd_adopt_refresh(
                         continue;
                     }
                 };
-            let provides = match super::provides::query_package_provides(pkg_mgr, identity) {
+            let mut provides = match super::provides::query_package_provides(pkg_mgr, identity) {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(
@@ -335,6 +335,11 @@ pub async fn cmd_adopt_refresh(
                     continue;
                 }
             };
+            super::provides::extend_materialized_file_provides(
+                &mut provides,
+                identity,
+                captured_files.iter().map(|file| file.source.0.as_str()),
+            )?;
 
             update_data.push(UpdateData {
                 trove,

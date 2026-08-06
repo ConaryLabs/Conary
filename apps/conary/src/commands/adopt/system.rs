@@ -377,7 +377,7 @@ pub async fn cmd_adopt_system(
                 continue;
             }
         };
-        let (requirements, provides) = if promote_trove_id.is_some() {
+        let (requirements, mut provides) = if promote_trove_id.is_some() {
             // Track adoption already persisted the native metadata. Promotion
             // changes only its payload authority from discovery hashes to
             // privately captured CAS content.
@@ -442,6 +442,11 @@ pub async fn cmd_adopt_system(
                     continue;
                 }
             };
+        super::provides::extend_materialized_file_provides(
+            &mut provides,
+            &package.identity,
+            captured_files.iter().map(|file| file.source.0.as_str()),
+        )?;
 
         let is_dependency = !user_installed.contains(&package.identity.install_reason_selector());
 

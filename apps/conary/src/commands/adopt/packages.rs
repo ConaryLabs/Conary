@@ -503,7 +503,7 @@ fn collect_planned_package(
     let requirements = source
         .query_requirements(query_name)
         .with_context(|| format!("could not inspect dependencies for '{query_name}'"))?;
-    let provides = source
+    let mut provides = source
         .query_provides(&identity.native)
         .with_context(|| format!("could not inspect provides for '{query_name}'"))?;
 
@@ -550,6 +550,15 @@ fn collect_planned_package(
 
     if conflicts.is_empty() {
         validate_package_files(identity.native.name(), &files)?;
+        super::provides::extend_materialized_file_provides(
+            &mut provides,
+            &identity.native,
+            files.iter().filter_map(|file| {
+                std::fs::symlink_metadata(&file.0)
+                    .ok()
+                    .map(|_| file.0.as_str())
+            }),
+        )?;
     }
 
     Ok((

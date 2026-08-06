@@ -552,7 +552,7 @@ exit 1
     assert!(stdout.contains("Package adoption preview"));
     assert!(stdout.contains("fixture 1.2.3 [amd64]"));
     assert!(stdout.contains("track (metadata only)"));
-    assert!(stdout.contains("1 package, 1 files, 1 dependencies, 2 provides"));
+    assert!(stdout.contains("1 package, 1 files, 1 dependencies, 3 provides"));
     assert!(stderr.contains("Preview only:"));
     assert!(!stderr.contains("--allow-live-system-mutation"));
     assert!(!stderr.contains("--yes"));
