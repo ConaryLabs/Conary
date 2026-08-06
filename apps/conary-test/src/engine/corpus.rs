@@ -438,4 +438,19 @@ mod tests {
         };
         assert_eq!(first_id, second_id);
     }
+
+    #[test]
+    fn an_unrun_declared_case_remains_visible_as_skipped() {
+        let case = case_did_not_run(&definition(), "TC01", "fedora44", "suite timeout");
+
+        assert!(matches!(
+            case.final_outcome,
+            CorpusOutcome::Skipped { ref reason } if reason == "suite timeout"
+        ));
+        assert_eq!(case.stage_results.len(), definition().stages.len());
+        assert!(case.stage_results.iter().all(|stage| matches!(
+            &stage.outcome,
+            conary_core::corpus::StageOutcome::NotReached
+        )));
+    }
 }

@@ -242,15 +242,24 @@ impl CorpusCaseResult {
         target_profile: TargetCapabilitySnapshot,
         stage_results: Vec<StageResult>,
     ) -> Self {
-        let final_outcome = stage_results
-            .iter()
-            .find_map(|result| {
-                result.failure().map(|failure| CorpusOutcome::Failed {
-                    stage: result.stage,
-                    failure: failure.clone(),
-                })
+        let first_failure = stage_results.iter().find_map(|result| {
+            result.failure().map(|failure| CorpusOutcome::Failed {
+                stage: result.stage,
+                failure: failure.clone(),
             })
-            .unwrap_or(CorpusOutcome::Completed);
+        });
+        let final_outcome = first_failure.unwrap_or_else(|| {
+            if stage_results
+                .iter()
+                .any(|result| matches!(&result.outcome, StageOutcome::NotReached))
+            {
+                CorpusOutcome::Skipped {
+                    reason: "one or more declared stages were not reached".into(),
+                }
+            } else {
+                CorpusOutcome::Completed
+            }
+        });
 
         Self {
             case_id: case_id.into(),
@@ -324,6 +333,20 @@ mod tests {
 
         assert!(case.completed());
         assert_eq!(case.failure_key(), None);
+    }
+
+    #[test]
+    fn a_case_with_unreached_stages_cannot_complete() {
+        let case = CorpusCaseResult::from_stages(
+            "rpm-on-fedora",
+            profile(),
+            vec![artifact()],
+            target(),
+            vec![StageResult::not_reached(ConversionStage::Installation)],
+        );
+
+        assert!(!case.completed());
+        assert!(matches!(case.final_outcome, CorpusOutcome::Skipped { .. }));
     }
 
     /// A result must not be able to claim success while carrying a failed
