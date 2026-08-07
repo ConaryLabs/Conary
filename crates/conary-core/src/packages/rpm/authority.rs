@@ -29,6 +29,17 @@ pub struct RpmDeclaredCapability {
     pub architecture_qualifier: ProvideArchitectureQualifier,
 }
 
+/// A header path the package owns without shipping content for it (`%ghost`).
+///
+/// RPM keeps these in the file table and satisfies file dependencies from them,
+/// but excludes them from the payload, so they are the package's promise that
+/// its own lifecycle will create the path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpmPromisedPath {
+    pub header_index: u32,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpmPackageAuthority {
     pub name: String,
@@ -39,6 +50,30 @@ pub struct RpmPackageAuthority {
     pub architecture: String,
     pub provides: Vec<RpmDeclaredCapability>,
     pub config: Vec<RpmConfigDeclaration>,
+    pub promised_paths: Vec<RpmPromisedPath>,
+}
+
+pub(super) fn parse_promised_paths(package: &rpm::Package) -> crate::Result<Vec<RpmPromisedPath>> {
+    use rpm::FileFlags;
+
+    package
+        .metadata
+        .get_file_entries()
+        .map_err(|error| {
+            crate::Error::ParseError(format!("Failed to read RPM file metadata: {error}"))
+        })?
+        .into_iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.flags().contains(FileFlags::GHOST))
+        .map(|(header_index, entry)| {
+            Ok(RpmPromisedPath {
+                header_index: u32::try_from(header_index).map_err(|_| {
+                    crate::Error::ParseError("RPM file record index exceeds u32".to_string())
+                })?,
+                path: entry.path().to_string_lossy().to_string(),
+            })
+        })
+        .collect()
 }
 
 pub(super) fn parse_config_declarations(
