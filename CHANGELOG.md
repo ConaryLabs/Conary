@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.10.0] - 2026-08-07
+
+### Added
+- emit typed corpus evidence (#276)
+- supported-host bootable generation fixture (#137) (#151)
+
+### Fixed
+- bump conversion version for promised-path authority (#298)
+- publish promised paths as signed provider authority (#296)
+- materialize payload file providers for transaction authority (#286)
+- wait for terminal Remi jobs (#279)
+- preserve adopted provider authority (#273)
+- validate captured-root version authority (#270)
+- require explicit pin strength (#264)
+- publish downloaded packages atomically (#260)
+- type acquisition retry failures (#258)
+- add retired schema rebuild path (#256)
+- reject corrupt persisted statuses (#255)
+- preserve source declaration authority (#254)
+- separate package identity from source capabilities (#253)
+- project selected-root /dev/null (#250)
+- require composefs initramfs helper (#251)
+- remove dead metadata signature route (#249)
+
 ## [remi-v0.9.5] - 2026-07-30
 
 ### Fixed
