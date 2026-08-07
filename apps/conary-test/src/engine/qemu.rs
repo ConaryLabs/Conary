@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tempfile::TempDir;
@@ -15,8 +15,12 @@ use crate::config::manifest::{QemuBoot, QemuGuestCopy, QemuImageFormat};
 use crate::container::backend::ExecResult;
 
 mod console;
+mod deadline;
 
 use console::{CapturedConsole, ConsoleCapture};
+use deadline::{
+    QemuStepDeadline, QemuTimeoutError, enforce_qemu_step_timeout, run_command_with_timeout,
+};
 
 const DEFAULT_ARTIFACT_BASE_URL: &str = "https://remi.conary.io/test-artifacts";
 const GUEST_CONARY_STAGING_PATH: &str = "/tmp/conary-host";
@@ -49,9 +53,24 @@ struct ScratchDisk {
     _temp_dir: TempDir,
 }
 
-pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
+pub async fn run_qemu_boot(config: &QemuBoot, step_timeout: Duration) -> Result<ExecResult> {
+    let deadline = QemuStepDeadline::new(step_timeout);
+    let run = run_qemu_boot_with_deadline(config, &deadline);
+    match enforce_qemu_step_timeout(&deadline, run).await {
+        Err(error) if error.downcast_ref::<QemuTimeoutError>().is_some() => {
+            Ok(deadline_failure_result(error.to_string()))
+        }
+        result => result,
+    }
+}
+
+async fn run_qemu_boot_with_deadline(
+    config: &QemuBoot,
+    deadline: &QemuStepDeadline,
+) -> Result<ExecResult> {
+    let operation_cap = Duration::from_secs(config.timeout_seconds);
     let required_tools = required_qemu_tools(config);
-    let missing_tools = missing_tools(&required_tools).await?;
+    let missing_tools = missing_tools(&required_tools, deadline, operation_cap).await?;
     if !missing_tools.is_empty() {
         return Ok(skipped_result(format!(
             "qemu boot skipped: missing required tool(s): {}",
@@ -71,10 +90,20 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     };
     if config.local_image_path.is_none() && !image_path.exists() {
         let url = image_download_url(&config.image, config.image_format);
-        if let Err(err) = download_image(&url, &image_path).await {
-            return Ok(skipped_result(format!(
-                "qemu boot skipped: failed to download {url}: {err:#}"
-            )));
+        match download_image(
+            &url,
+            &image_path,
+            deadline.remaining("QEMU image download", operation_cap)?,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(err) if err.downcast_ref::<QemuTimeoutError>().is_some() => return Err(err),
+            Err(err) => {
+                return Ok(skipped_result(format!(
+                    "qemu boot skipped: failed to download {url}: {err:#}"
+                )));
+            }
         }
     }
     let scratch_disk = match config.scratch_disk_mb {
@@ -102,8 +131,9 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
             ),
         });
     };
-    let key_path = match test_ssh_key_path().await {
+    let key_path = match test_ssh_key_path(deadline, operation_cap).await {
         Ok(path) => path,
+        Err(err) if err.downcast_ref::<QemuTimeoutError>().is_some() => return Err(err),
         Err(err) => {
             return Ok(ExecResult {
                 exit_code: 1,
@@ -152,12 +182,17 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     if let Err(message) = wait_for_ssh(
         &mut child,
         config.ssh_port,
-        config.timeout_seconds,
+        deadline.remaining("QEMU SSH readiness", operation_cap)?,
         &key_path,
     )
     .await?
     {
-        let output = stop_qemu(child, console).await?;
+        let output = stop_qemu(
+            child,
+            console,
+            deadline.remaining("QEMU shutdown after SSH failure", operation_cap)?,
+        )
+        .await?;
         return Ok(ExecResult {
             exit_code: 1,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -174,8 +209,10 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     // services are still mutating the root filesystem. Wait for systemd to
     // finish the boot transaction before staging binaries or running tests so
     // full-root adoption sees a stable filesystem snapshot.
-    let readiness_timeout =
-        Duration::from_secs(config.timeout_seconds.min(SYSTEM_READY_TIMEOUT_SECONDS));
+    let readiness_timeout = deadline.remaining(
+        "QEMU guest system readiness",
+        operation_cap.min(Duration::from_secs(SYSTEM_READY_TIMEOUT_SECONDS)),
+    )?;
     let readiness = run_ssh_command(
         config.ssh_port,
         SYSTEM_READY_COMMAND,
@@ -184,7 +221,12 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     )
     .await?;
     if readiness.exit_code != 0 {
-        let output = stop_qemu(child, console).await?;
+        let output = stop_qemu(
+            child,
+            console,
+            deadline.remaining("QEMU shutdown after readiness failure", operation_cap)?,
+        )
+        .await?;
         return Ok(ExecResult {
             exit_code: readiness.exit_code,
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -201,13 +243,12 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     let mut stdout = String::new();
     let mut stderr = String::new();
     let mut exit_code = 0;
-    let command_timeout = Duration::from_secs(config.timeout_seconds);
-
     if config.stage_conary {
         match stage_conary_binary(
             config.ssh_port,
             Some(&key_path),
-            command_timeout,
+            deadline,
+            operation_cap,
             &mut stdout,
             &mut stderr,
         )
@@ -225,12 +266,15 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     }
 
     if exit_code == 0 {
-        for copy in &config.copy_to_guest {
+        for (index, copy) in config.copy_to_guest.iter().enumerate() {
             let prepare = prepare_guest_copy_target(
                 config.ssh_port,
                 &copy.dest,
                 Some(&key_path),
-                command_timeout,
+                deadline.remaining(
+                    format!("QEMU guest copy target preparation #{}", index + 1),
+                    operation_cap,
+                )?,
             )
             .await?;
             if let Some(result) = prepare {
@@ -247,7 +291,10 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
                 source,
                 &copy.dest,
                 Some(&key_path),
-                command_timeout,
+                deadline.remaining(
+                    format!("QEMU host-to-guest copy #{}", index + 1),
+                    operation_cap,
+                )?,
             )
             .await?;
             append_host_copy_output(&mut stdout, &mut stderr, source, &copy.dest, &result);
@@ -259,9 +306,14 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     }
 
     if exit_code == 0 {
-        for command in &config.commands {
-            let result =
-                run_ssh_command(config.ssh_port, command, Some(&key_path), command_timeout).await?;
+        for (index, command) in config.commands.iter().enumerate() {
+            let result = run_ssh_command(
+                config.ssh_port,
+                command,
+                Some(&key_path),
+                deadline.remaining(format!("QEMU guest command #{}", index + 1), operation_cap)?,
+            )
+            .await?;
             append_command_output(&mut stdout, &mut stderr, command, &result);
             if result.exit_code != 0 {
                 exit_code = result.exit_code;
@@ -271,10 +323,17 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
     }
 
     if exit_code == 0 {
-        for copy in &config.copy_from_guest {
-            let result =
-                copy_file_from_guest(config.ssh_port, copy, Some(&key_path), command_timeout)
-                    .await?;
+        for (index, copy) in config.copy_from_guest.iter().enumerate() {
+            let result = copy_file_from_guest(
+                config.ssh_port,
+                copy,
+                Some(&key_path),
+                deadline.remaining(
+                    format!("QEMU guest-to-host copy #{}", index + 1),
+                    operation_cap,
+                )?,
+            )
+            .await?;
             append_guest_copy_output(&mut stdout, &mut stderr, copy, &result);
             if result.exit_code != 0 {
                 exit_code = result.exit_code;
@@ -283,7 +342,12 @@ pub async fn run_qemu_boot(config: &QemuBoot) -> Result<ExecResult> {
         }
     }
 
-    let qemu_output = stop_qemu(child, console).await?;
+    let qemu_output = stop_qemu(
+        child,
+        console,
+        deadline.remaining("QEMU shutdown", operation_cap)?,
+    )
+    .await?;
     let qemu_stdout = String::from_utf8_lossy(&qemu_output.stdout)
         .trim()
         .to_string();
@@ -439,6 +503,14 @@ fn skipped_result(message: String) -> ExecResult {
     }
 }
 
+fn deadline_failure_result(message: String) -> ExecResult {
+    ExecResult {
+        exit_code: 124,
+        stdout: String::new(),
+        stderr: message,
+    }
+}
+
 pub fn is_skip_exit_code(exit_code: i32) -> bool {
     exit_code == QEMU_SKIP_EXIT_CODE
 }
@@ -491,7 +563,11 @@ fn append_host_copy_output(
     append_command_output(stdout, stderr, &command, result);
 }
 
-async fn missing_tools(tools: &[&str]) -> Result<Vec<String>> {
+async fn missing_tools(
+    tools: &[&str],
+    deadline: &QemuStepDeadline,
+    operation_cap: Duration,
+) -> Result<Vec<String>> {
     #[cfg(test)]
     if let Some(override_tools) = test_missing_tools_override().lock().unwrap().clone() {
         return Ok(override_tools);
@@ -499,12 +575,15 @@ async fn missing_tools(tools: &[&str]) -> Result<Vec<String>> {
 
     let mut missing = Vec::new();
     for tool in tools {
-        let status = Command::new("sh")
-            .args(["-lc", &format!("command -v {tool} >/dev/null 2>&1")])
-            .status()
-            .await
-            .with_context(|| format!("failed to probe for required tool {tool}"))?;
-        if !status.success() {
+        let operation = format!("required QEMU tool probe for {tool}");
+        let timeout = deadline.remaining(operation.clone(), operation_cap)?;
+        let mut command = Command::new("sh");
+        command.args(["-lc", &format!("command -v {tool} >/dev/null 2>&1")]);
+        let result = run_command_with_timeout(command, timeout, &operation).await?;
+        if result.exit_code == 124 {
+            return Err(QemuTimeoutError::operation(operation, timeout).into());
+        }
+        if result.exit_code != 0 {
             missing.push(tool.to_string());
         }
     }
@@ -558,34 +637,50 @@ fn image_download_url(image: &str, image_format: QemuImageFormat) -> String {
     }
 }
 
-async fn download_image(url: &str, path: &Path) -> Result<()> {
+async fn download_image(url: &str, path: &Path, timeout: Duration) -> Result<()> {
     let file_name = path
         .file_name()
         .and_then(OsStr::to_str)
         .unwrap_or("image.qcow2");
-    let partial = path.with_file_name(format!("{file_name}.partial"));
-    let status = Command::new("curl")
-        .args(["-fsSL", url, "-o"])
-        .arg(&partial)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+    let parent = path
+        .parent()
+        .context("QEMU download destination has no parent directory")?;
+    let staged = tempfile::Builder::new()
+        .prefix(&format!(".{file_name}."))
+        .tempfile_in(parent)
+        .with_context(|| format!("failed to stage QEMU download in {}", parent.display()))?;
+    let mut curl = Command::new("curl");
+    curl.args(["-fsSL", url, "-o"]).arg(staged.path());
+    let result = run_command_with_timeout(curl, timeout, &format!("QEMU image download {url}"))
         .await
         .with_context(|| format!("failed to invoke curl for {url}"))?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("curl exited with status {status}"));
+    if result.exit_code == 124 {
+        return Err(
+            QemuTimeoutError::operation(format!("QEMU image download {url}"), timeout).into(),
+        );
     }
-    fs::rename(&partial, path).with_context(|| {
-        format!(
-            "failed to move downloaded image from {} to {}",
-            partial.display(),
-            path.display()
+    if result.exit_code != 0 {
+        return Err(anyhow::anyhow!(
+            "curl exited with code {}: {}",
+            result.exit_code,
+            result.stderr.trim()
+        ));
+    }
+    staged.persist(path).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to publish downloaded image from {} to {}: {}",
+            error.file.path().display(),
+            path.display(),
+            error.error
         )
     })?;
     Ok(())
 }
 
-async fn test_ssh_key_path() -> Result<PathBuf> {
+async fn test_ssh_key_path(
+    deadline: &QemuStepDeadline,
+    operation_cap: Duration,
+) -> Result<PathBuf> {
     let dir = cache_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create cache dir {}", dir.display()))?;
@@ -594,9 +689,13 @@ async fn test_ssh_key_path() -> Result<PathBuf> {
         return Ok(key_path);
     }
     let url = format!("{DEFAULT_ARTIFACT_BASE_URL}/{TEST_SSH_KEY_NAME}");
-    download_image(&url, &key_path)
-        .await
-        .with_context(|| format!("failed to download test SSH key from {url}"))?;
+    download_image(
+        &url,
+        &key_path,
+        deadline.remaining("QEMU SSH key download", operation_cap)?,
+    )
+    .await
+    .with_context(|| format!("failed to download test SSH key from {url}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -609,10 +708,10 @@ async fn test_ssh_key_path() -> Result<PathBuf> {
 async fn wait_for_ssh(
     child: &mut Child,
     ssh_port: u16,
-    timeout_seconds: u64,
+    timeout: Duration,
     key_path: &Path,
 ) -> Result<std::result::Result<(), String>> {
-    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    let deadline = Instant::now() + timeout;
     let mut last_error = "ssh not ready".to_string();
 
     while Instant::now() < deadline {
@@ -622,8 +721,14 @@ async fn wait_for_ssh(
             )));
         }
 
-        let probe =
-            run_ssh_command(ssh_port, "true", Some(key_path), Duration::from_secs(5)).await?;
+        let probe_timeout = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default()
+            .min(Duration::from_secs(5));
+        if probe_timeout.is_zero() {
+            break;
+        }
+        let probe = run_ssh_command(ssh_port, "true", Some(key_path), probe_timeout).await?;
         if probe.exit_code == 0 {
             return Ok(Ok(()));
         }
@@ -633,7 +738,14 @@ async fn wait_for_ssh(
         } else {
             probe.stderr.trim().to_string()
         };
-        sleep(Duration::from_secs(1)).await;
+        let retry_delay = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default()
+            .min(Duration::from_secs(1));
+        if retry_delay.is_zero() {
+            break;
+        }
+        sleep(retry_delay).await;
     }
 
     Ok(Err(format!(
@@ -783,66 +895,42 @@ fn guest_copy_parent(dest: &str) -> Option<String> {
     }
 }
 
-async fn run_command_with_timeout(
-    mut command: Command,
-    timeout: Duration,
-    description: &str,
-) -> Result<ExecResult> {
-    command.kill_on_drop(true);
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    let child = command
-        .spawn()
-        .with_context(|| format!("failed to start {description}"))?;
-
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(output) => {
-            let output = output.with_context(|| format!("failed to wait for {description}"))?;
-            Ok(ExecResult {
-                exit_code: output.status.code().unwrap_or(1),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            })
-        }
-        Err(_) => Ok(ExecResult {
-            exit_code: 124,
-            stdout: String::new(),
-            stderr: format!("{description} timed out after {}s", timeout.as_secs()),
-        }),
-    }
-}
-
 struct PreparedHostConary {
     path: PathBuf,
-    temp_dir: PathBuf,
+    _temp_dir: TempDir,
 }
 
-impl Drop for PreparedHostConary {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.temp_dir);
-    }
-}
-
-fn prepare_host_conary_for_guest() -> Result<PreparedHostConary> {
-    let source = resolve_staged_conary_binary()?;
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system time before unix epoch")?
-        .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!(
-        "conary-test-qemu-conary-{}-{unique}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&temp_dir)
-        .with_context(|| format!("failed to create {}", temp_dir.display()))?;
-    let path = temp_dir.join("conary");
-    fs::copy(&source, &path)
+async fn prepare_host_conary_for_guest(
+    deadline: &QemuStepDeadline,
+    operation_cap: Duration,
+) -> Result<PreparedHostConary> {
+    let source = resolve_staged_conary_binary(
+        deadline.remaining("QEMU staged Conary build", operation_cap)?,
+    )
+    .await?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("conary-test-qemu-conary-")
+        .tempdir()
+        .context("failed to create staged Conary temporary directory")?;
+    let path = temp_dir.path().join("conary");
+    tokio::fs::copy(&source, &path)
+        .await
         .with_context(|| format!("failed to stage host conary binary {}", source.display()))?;
 
     // Debug builds are large; strip a temporary copy before sending it over SSH.
-    let _ = std::process::Command::new("strip").arg(&path).status();
+    let mut strip = Command::new("strip");
+    strip.arg(&path);
+    let strip_timeout = deadline.remaining("QEMU staged Conary strip", operation_cap)?;
+    let strip_result =
+        run_command_with_timeout(strip, strip_timeout, "strip staged Conary binary").await;
+    if strip_result.is_ok_and(|result| result.exit_code == 124) {
+        return Err(QemuTimeoutError::operation("QEMU staged Conary strip", strip_timeout).into());
+    }
 
-    Ok(PreparedHostConary { path, temp_dir })
+    Ok(PreparedHostConary {
+        path,
+        _temp_dir: temp_dir,
+    })
 }
 
 /// Builder for the `conary` the harness stages into a guest.
@@ -866,33 +954,38 @@ const STATIC_CONARY_BUILD_SCRIPT: &str = "scripts/build-static-conary.sh";
 ///
 /// `CONARY_HOST_BIN` and `CONARY_BIN` still select a binary explicitly, for
 /// staging something the harness did not build.
-fn resolve_staged_conary_binary() -> Result<PathBuf> {
+async fn resolve_staged_conary_binary(timeout: Duration) -> Result<PathBuf> {
     if std::env::var_os("CONARY_HOST_BIN").is_some() || std::env::var_os("CONARY_BIN").is_some() {
         return crate::paths::host_conary_binary();
     }
 
     let project_root = crate::paths::project_dir()?;
     let script = project_root.join(STATIC_CONARY_BUILD_SCRIPT);
-    let output = std::process::Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .arg(&script)
         .arg("--print-path")
-        .current_dir(&project_root)
-        .output()
+        .current_dir(&project_root);
+    let output = run_command_with_timeout(command, timeout, "build staged static Conary binary")
+        .await
         .with_context(|| format!("failed to run {}", script.display()))?;
 
-    if !output.status.success() {
+    if output.exit_code == 124 {
+        return Err(QemuTimeoutError::operation("QEMU staged Conary build", timeout).into());
+    }
+    if output.exit_code != 0 {
         anyhow::bail!(
             "{} failed with {}: {}\n\
              The staged guest binary must be statically linked; set CONARY_HOST_BIN to stage a \
-             specific binary instead, understanding that a host-glibc build fails inside a guest \
-             whose glibc is older.",
+            specific binary instead, understanding that a host-glibc build fails inside a guest \
+            whose glibc is older.",
             script.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            output.exit_code,
+            output.stderr.trim()
         );
     }
 
-    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    let path = PathBuf::from(output.stdout.trim());
     if !path.is_file() {
         anyhow::bail!(
             "{} reported {} but no such file exists",
@@ -907,17 +1000,18 @@ fn resolve_staged_conary_binary() -> Result<PathBuf> {
 async fn stage_conary_binary(
     ssh_port: u16,
     key_path: Option<&Path>,
-    timeout: Duration,
+    deadline: &QemuStepDeadline,
+    operation_cap: Duration,
     stdout: &mut String,
     stderr: &mut String,
 ) -> Result<i32> {
-    let staged = prepare_host_conary_for_guest()?;
+    let staged = prepare_host_conary_for_guest(deadline, operation_cap).await?;
     let copy = copy_file_to_guest(
         ssh_port,
         &staged.path,
         GUEST_CONARY_STAGING_PATH,
         key_path,
-        timeout,
+        deadline.remaining("QEMU Conary binary copy", operation_cap)?,
     )
     .await?;
     append_host_copy_output(
@@ -934,7 +1028,13 @@ async fn stage_conary_binary(
     let install_command = format!(
         "install -m 755 {GUEST_CONARY_STAGING_PATH} {GUEST_CONARY_INSTALL_PATH} && rm -f {GUEST_CONARY_STAGING_PATH} && {GUEST_CONARY_INSTALL_PATH} --version"
     );
-    let install = run_ssh_command(ssh_port, &install_command, key_path, timeout).await?;
+    let install = run_ssh_command(
+        ssh_port,
+        &install_command,
+        key_path,
+        deadline.remaining("QEMU Conary binary installation", operation_cap)?,
+    )
+    .await?;
     append_command_output(stdout, stderr, &install_command, &install);
     Ok(install.exit_code)
 }
@@ -955,10 +1055,23 @@ fn prepare_guest_copy_destination(dest: &Path) -> Result<()> {
 ///
 /// The readers own the pipes, so `wait_with_output` would see nothing here.
 /// The child is killed first: the readers only finish when the pipes close.
-async fn stop_qemu(mut child: Child, console: ConsoleCapture) -> Result<CapturedConsole> {
+async fn stop_qemu(
+    mut child: Child,
+    console: ConsoleCapture,
+    timeout: Duration,
+) -> Result<CapturedConsole> {
     let _ = child.start_kill();
-    let _ = child.wait().await;
-    console.finish().await
+    if timeout.is_zero() {
+        drop(child);
+        return Ok(console.abort());
+    }
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(_)) => console.finish().await,
+        Ok(Err(_)) | Err(_) => {
+            drop(child);
+            Ok(console.abort())
+        }
+    }
 }
 
 fn shell_quote(input: &str) -> String {
@@ -1242,18 +1355,5 @@ mod tests {
         };
 
         assert!(required_qemu_tools(&config).contains(&"scp"));
-    }
-
-    #[tokio::test]
-    async fn test_command_timeout_returns_failure_instead_of_hanging() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 5"]);
-
-        let result =
-            run_command_with_timeout(command, Duration::from_millis(10), "slow command").await;
-
-        let result = result.expect("timeout result");
-        assert_eq!(result.exit_code, 124);
-        assert!(result.stderr.contains("slow command timed out"));
     }
 }

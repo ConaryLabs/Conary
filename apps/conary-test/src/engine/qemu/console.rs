@@ -132,6 +132,17 @@ pub(super) struct CapturedConsole {
     pub(super) matched: BTreeSet<String>,
 }
 
+impl Drop for ConsoleCapture {
+    fn drop(&mut self) {
+        if let Some(stdout) = self.stdout.take() {
+            stdout.abort();
+        }
+        if let Some(stderr) = self.stderr.take() {
+            stderr.abort();
+        }
+    }
+}
+
 impl ConsoleCapture {
     /// Take the child's pipes and start draining them immediately, watching for
     /// `expect_output` tokens as lines arrive.
@@ -172,6 +183,31 @@ impl ConsoleCapture {
             stderr,
             matched,
         })
+    }
+
+    /// Stop readers immediately after the enclosing QEMU step deadline.
+    ///
+    /// A deadline failure must not wait indefinitely for pipes owned by a
+    /// child that is itself being killed. Retained console bytes are forfeited
+    /// on this exceptional path, while already observed marker facts remain.
+    pub(super) fn abort(mut self) -> CapturedConsole {
+        if let Some(stdout) = self.stdout.take() {
+            stdout.abort();
+        }
+        if let Some(stderr) = self.stderr.take() {
+            stderr.abort();
+        }
+        let matched = self
+            .matcher
+            .lock()
+            .expect("console token matcher is not poisoned")
+            .matched
+            .clone();
+        CapturedConsole {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            matched,
+        }
     }
 }
 

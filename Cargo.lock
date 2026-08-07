@@ -1179,6 +1179,7 @@ dependencies = [
  "dashmap",
  "futures",
  "hex",
+ "nix",
  "reqwest 0.13.4",
  "rmcp",
  "rusqlite",
