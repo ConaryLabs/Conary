@@ -550,9 +550,9 @@ fn collect_planned_package(
 
     if conflicts.is_empty() {
         validate_package_files(identity.native.name(), &files)?;
-        super::provides::extend_materialized_file_provides(
+        conary_core::repository::dependency_model::extend_materialized_file_provides(
             &mut provides,
-            &identity.native,
+            identity.native.source_package_format(),
             files.iter().filter_map(|file| {
                 std::fs::symlink_metadata(&file.0)
                     .ok()

@@ -3,6 +3,7 @@
 //! Typed identity for one exact native package-manager database record.
 
 use crate::error::{Error, Result};
+use crate::repository::dependency_model::SourcePackageFormat;
 use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
@@ -37,13 +38,18 @@ pub enum InstalledPackageIdentity {
 }
 
 impl InstalledPackageIdentity {
+    /// Exact source package format that owns this native identity.
+    pub const fn source_package_format(&self) -> SourcePackageFormat {
+        match self {
+            Self::Rpm { .. } => SourcePackageFormat::Rpm,
+            Self::Dpkg { .. } => SourcePackageFormat::Debian,
+            Self::Pacman { .. } => SourcePackageFormat::Alpm,
+        }
+    }
+
     /// Exact version grammar owned by this native package-manager identity.
     pub const fn version_scheme(&self) -> VersionScheme {
-        match self {
-            Self::Rpm { .. } => VersionScheme::Rpm,
-            Self::Dpkg { .. } => VersionScheme::Debian,
-            Self::Pacman { .. } => VersionScheme::Arch,
-        }
+        self.source_package_format().version_scheme()
     }
 
     pub fn rpm(

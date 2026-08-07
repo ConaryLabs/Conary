@@ -98,6 +98,16 @@ pub(crate) fn prepare_ccs_package_for_batch(
     let native_lifecycle_state =
         NativeLifecycleInstallState::from_bundle(package.manifest().native_lifecycle.as_ref())?;
 
+    // A converted artifact declares only its source header capabilities, so the
+    // payload it is about to install is the only authority for the file
+    // providers that satisfy path dependencies.
+    let mut provides = package.resolution_capabilities()?;
+    conary_core::repository::dependency_model::extend_materialized_file_provides(
+        &mut provides,
+        semantics.source_package_format(),
+        extracted_files.iter().map(|file| file.path.as_str()),
+    )?;
+
     Ok(PreparedPackage {
         name: package.name().to_string(),
         version: package.version().to_string(),
@@ -108,7 +118,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         description: package.description().map(str::to_string),
         extracted_files,
         requirements: package.requirements().to_vec(),
-        provides: package.resolution_capabilities()?,
+        provides,
         relations: package.relations().to_vec(),
         relation_removals: Vec::new(),
         relation_deconfigurations: Vec::new(),
