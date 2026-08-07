@@ -7,12 +7,29 @@ use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use conary_core::resolver::identity::{PackageIdentity, ProvidedCapability};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A promised path the transaction actually leaned on to satisfy a dependency.
+///
+/// RPM's `%ghost` means the package owns the path *if present*; it never says
+/// the package creates it, and paths like `/etc/fstab` or a log file are
+/// legitimately absent after a fresh transaction. So the only promises worth
+/// verifying are the ones a dependency edge was certified against: the
+/// transaction checks its own reasoning and claims nothing beyond it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct WitnessedPromise {
+    pub(super) provider: String,
+    pub(super) provider_version: String,
+    pub(super) path: String,
+    pub(super) dependent: String,
+    pub(super) requirement: String,
+}
+
 pub(super) fn order_packages_for_transaction(
     conn: &Connection,
     packages: &mut Vec<PreparedPackage>,
-) -> Result<()> {
+) -> Result<Vec<WitnessedPromise>> {
+    let mut witnessed_promises = Vec::new();
     if packages.len() < 2 {
-        return Ok(());
+        return Ok(witnessed_promises);
     }
 
     let native_architecture = conary_core::repository::registry::detect_system_arch();
@@ -116,6 +133,58 @@ pub(super) fn order_packages_for_transaction(
                     selected_witnesses.remove(position);
                 }
             }
+            // A retained witness may hold the edge up through a promised path.
+            // Drop each promise in turn: if the edge falls, the transaction
+            // relied on that path existing and must later prove it does.
+            for provider_index in &selected_witnesses {
+                for promise in packages[*provider_index]
+                    .provides
+                    .iter()
+                    .filter(|provide| provide.is_promised_path())
+                {
+                    let mut without_promise = installed.clone();
+                    without_promise.push(selected[dependent_index].clone());
+                    for index in &selected_witnesses {
+                        let mut identity = selected[*index].clone();
+                        if index == provider_index {
+                            identity.provided_capabilities.retain(|capability| {
+                                !(capability.is_promised_path() && capability.name == promise.name)
+                            });
+                        }
+                        without_promise.push(identity);
+                    }
+                    if expression_satisfied(
+                        requirement,
+                        package.semantics.version_scheme,
+                        depending_architecture,
+                        &native_architecture,
+                        &without_promise,
+                    )? {
+                        continue;
+                    }
+                    let provider = &packages[*provider_index];
+                    let witnessed = WitnessedPromise {
+                        provider: provider.name.clone(),
+                        provider_version: provider.version.clone(),
+                        path: promise.name.clone(),
+                        dependent: package.name.clone(),
+                        requirement: requirement
+                            .native_text
+                            .as_deref()
+                            .unwrap_or("<typed expression>")
+                            .to_string(),
+                    };
+                    if !witnessed_promises
+                        .iter()
+                        .any(|existing: &WitnessedPromise| {
+                            existing.provider == witnessed.provider
+                                && existing.path == witnessed.path
+                        })
+                    {
+                        witnessed_promises.push(witnessed);
+                    }
+                }
+            }
             for provider_index in selected_witnesses {
                 edges[provider_index].insert(dependent_index);
                 if requirement.kind == RepositoryRequirementKind::PreDepends {
@@ -132,7 +201,7 @@ pub(super) fn order_packages_for_transaction(
             .into_iter()
             .map(|index| slots[index].take().expect("package order repeats an index")),
     );
-    Ok(())
+    Ok(witnessed_promises)
 }
 
 fn expression_satisfied(

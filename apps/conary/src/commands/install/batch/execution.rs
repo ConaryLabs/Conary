@@ -16,43 +16,47 @@ use conary_core::scriptlet::ExecutionMode;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// Prove every promised path the transaction admitted was actually created.
+/// Prove every promised path the transaction *relied on* was actually created.
 ///
-/// A promised path is a dependency witness precisely because the owning
-/// package's lifecycle creates it, so the transaction only stays honest if that
-/// happened. RPM's warning-only slots let a scriptlet fail, or silently do
-/// nothing, while still reporting success, which is why this runs for every
-/// promise regardless of the entry's criticality and after the whole native
-/// lifecycle has had its chance -- including post-transaction slots.
+/// RPM's `%ghost` marks a path the package owns if present -- `rpm-spec.5`
+/// describes it as a file "not to be included in the package", used "when the
+/// attributes of the file are important while the contents is not (e.g. a log
+/// file)". It is not a claim that the package creates the path, and many
+/// promises (`/etc/fstab`, log files, generated certificate links) are
+/// legitimately absent after a fresh transaction. Verifying every declared
+/// promise therefore asserts something the source never said.
+///
+/// So this verifies exactly the promises a dependency edge was certified
+/// against, as computed by the ordering validator: the transaction proves its
+/// own reasoning and nothing beyond it. It still runs regardless of the
+/// declaring lifecycle entry's criticality, because RPM's warning-only slots
+/// let a scriptlet fail, or silently do nothing, while reporting success -- and
+/// it runs after the whole native graph, including post-transaction slots.
 ///
 /// A path is materialized when it exists, symlinks included: the promise is
 /// that the path exists, never what its content resolves to.
 pub(super) fn verify_promised_paths_materialized(
-    packages: &[PreparedPackage],
+    witnessed: &[super::ordering::WitnessedPromise],
     selected_root: &Path,
 ) -> Result<()> {
-    for package in packages {
-        for promise in package
-            .provides
-            .iter()
-            .filter(|provide| provide.is_promised_path())
-        {
-            let target = crate::commands::live_root::target_path(selected_root, &promise.name)
-                .with_context(|| {
-                    format!(
-                        "promised path {} declared by {} is not addressable in the target root",
-                        promise.name, package.name
-                    )
-                })?;
-            if std::fs::symlink_metadata(&target).is_err() {
-                anyhow::bail!(
-                    "package {}-{} did not materialize promised path {} during its native lifecycle \
-                     (checked after the post-transaction stage)",
-                    package.name,
-                    package.version,
-                    promise.name
-                );
-            }
+    for promise in witnessed {
+        let target = crate::commands::live_root::target_path(selected_root, &promise.path)
+            .with_context(|| {
+                format!(
+                    "promised path {} declared by {} is not addressable in the target root",
+                    promise.path, promise.provider
+                )
+            })?;
+        if std::fs::symlink_metadata(&target).is_err() {
+            anyhow::bail!(
+                "package {}-{} did not materialize promised path {} during its native lifecycle \
+                 (checked after the post-transaction stage); {} depends on it through {}",
+                promise.provider,
+                promise.provider_version,
+                promise.path,
+                promise.dependent,
+                promise.requirement
+            );
         }
     }
     Ok(())
@@ -80,6 +84,7 @@ impl BatchInstaller<'_> {
         selected: &mut crate::commands::generation::selected_root::SelectedRootSession,
         rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
         ccs_hook_executors: &mut [Option<conary_core::ccs::HookExecutor>],
+        witnessed_promises: &[super::ordering::WitnessedPromise],
     ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
         let graph_inputs = self.prepare_graph_execution(conn, packages)?;
         let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(
@@ -118,7 +123,7 @@ impl BatchInstaller<'_> {
                 &graph_inputs,
                 &retained_upgrade_trove_ids,
             )?;
-            verify_promised_paths_materialized(packages, &selected_root)?;
+            verify_promised_paths_materialized(witnessed_promises, &selected_root)?;
             let mut activation_requests = native_transaction.take_activation_requests();
             for (package, executor) in packages.iter().zip(ccs_hook_executors.iter()) {
                 let (Some(ccs), Some(executor)) = (package.ccs.as_ref(), executor.as_ref()) else {
