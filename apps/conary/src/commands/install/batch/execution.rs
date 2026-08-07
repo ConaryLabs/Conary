@@ -16,6 +16,48 @@ use conary_core::scriptlet::ExecutionMode;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// Prove every promised path the transaction admitted was actually created.
+///
+/// A promised path is a dependency witness precisely because the owning
+/// package's lifecycle creates it, so the transaction only stays honest if that
+/// happened. RPM's warning-only slots let a scriptlet fail, or silently do
+/// nothing, while still reporting success, which is why this runs for every
+/// promise regardless of the entry's criticality and after the whole native
+/// lifecycle has had its chance -- including post-transaction slots.
+///
+/// A path is materialized when it exists, symlinks included: the promise is
+/// that the path exists, never what its content resolves to.
+pub(super) fn verify_promised_paths_materialized(
+    packages: &[PreparedPackage],
+    selected_root: &Path,
+) -> Result<()> {
+    for package in packages {
+        for promise in package
+            .provides
+            .iter()
+            .filter(|provide| provide.is_promised_path())
+        {
+            let target = crate::commands::live_root::target_path(selected_root, &promise.name)
+                .with_context(|| {
+                    format!(
+                        "promised path {} declared by {} is not addressable in the target root",
+                        promise.name, package.name
+                    )
+                })?;
+            if std::fs::symlink_metadata(&target).is_err() {
+                anyhow::bail!(
+                    "package {}-{} did not materialize promised path {} during its native lifecycle \
+                     (checked after the post-transaction stage)",
+                    package.name,
+                    package.version,
+                    promise.name
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 struct GraphExecutionInputs {
     final_incoming_paths: BTreeSet<String>,
     finalization_troves: Vec<Option<i64>>,
@@ -76,6 +118,7 @@ impl BatchInstaller<'_> {
                 &graph_inputs,
                 &retained_upgrade_trove_ids,
             )?;
+            verify_promised_paths_materialized(packages, &selected_root)?;
             let mut activation_requests = native_transaction.take_activation_requests();
             for (package, executor) in packages.iter().zip(ccs_hook_executors.iter()) {
                 let (Some(ccs), Some(executor)) = (package.ccs.as_ref(), executor.as_ref()) else {

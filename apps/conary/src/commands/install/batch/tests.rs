@@ -1111,3 +1111,70 @@ fn a_promised_path_witnesses_a_dependency_the_provider_ships_no_content_for() {
         "the package that promises the path must be ordered before its dependent"
     );
 }
+
+fn promised(path: &str) -> conary_core::repository::dependency_model::ProvidedCapability {
+    conary_core::repository::dependency_model::ProvidedCapability::promised_path(
+        conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+        path,
+    )
+}
+
+#[test]
+fn a_transaction_fails_when_a_declared_promised_path_is_never_materialized() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+
+    let mut package =
+        prepared_test_package("promise-breaker", "/usr/bin/promise-breaker", b"payload");
+    // Declared as a dependency witness, but no lifecycle ever creates it.
+    package
+        .provides
+        .push(promised("/etc/promise-breaker/generated.conf"));
+    let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
+
+    let error = installer.install_batch(vec![package]).unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("did not materialize promised path /etc/promise-breaker/generated.conf"),
+        "{message}"
+    );
+    assert!(message.contains("promise-breaker"), "{message}");
+}
+
+#[test]
+fn a_promised_path_present_in_the_assembled_root_satisfies_the_post_condition() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+
+    // The post-condition asks whether the path exists in the assembled root,
+    // not who produced it, so a path another batch member ships satisfies it.
+    let mut promiser = prepared_test_package("promiser", "/usr/bin/promiser", b"payload");
+    promiser
+        .provides
+        .push(promised("/usr/share/promised/marker.conf"));
+    let producer = prepared_test_package(
+        "producer",
+        "/usr/share/promised/marker.conf",
+        b"materialized",
+    );
+    let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
+
+    installer.install_batch(vec![producer, promiser]).unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::Changeset::list_all(&conn).unwrap()[0].status,
+        ChangesetStatus::Applied
+    );
+}
