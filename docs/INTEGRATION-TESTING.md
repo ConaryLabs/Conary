@@ -547,8 +547,17 @@ Corpus coverage boundaries (not product support exemptions):
 - dependency installation from the generated local corpus package; this suite
   records dependency metadata and installs with `--no-deps`
 
-The focused `native-cross-source-lifecycle` manifest contains one fatal,
-non-flaky test that executes the same shared lifecycle helper as `TNPM02X`.
+The focused `native-cross-source-lifecycle` manifest contains three non-flaky
+corpus cases, one for each exact source format. A failed case does not suppress
+the remaining source-format evidence. Each case executes
+the same shared lifecycle helper as `TNPM02X`, writes a versioned evidence
+envelope carrying both install and update artifact digests, the typed fixture
+build-manifest authority that produced them, and stage checkpoints. It is
+projected by `conary-test` into a typed
+`CorpusCaseResult`. The suite JSON carries the typed aggregate beside the
+ordinary test results and records the manifest-declared case count; a missing,
+malformed, skipped, failed, or unclassified corpus case makes the command fail
+even if generic command output happened to look successful.
 The `pr-gate` workflow builds each configured distro image first and then runs
 that focused manifest across `fedora44`, `ubuntu-26.04`, and `arch`. Together,
 the required lanes authenticate all three checked-in source-ABI traces and run
@@ -567,7 +576,8 @@ filename, and makes the image install that package through `dnf`, `apt`, or
 digest before the installed `/usr/bin/conary` runs all three source formats.
 Source-built PR evidence is not a substitute for this published-byte lane.
 
-Each full parity run must pass `scripts/check-conary-test-result-gate.sh`,
+Each full parity run must pass `scripts/check-conary-test-result-gate.sh` and
+`scripts/check-conary-corpus-result-gate.sh`,
 which requires zero failed, skipped, and cancelled results before the matrix
 can count as limited-preview release evidence. The `conary-test run` command also exits
 unsuccessfully for skipped or cancelled results. Distro images rebuild by
@@ -741,7 +751,7 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation
 
-Phase 4 currently contains 153 tests across eight manifests. It validates the
+Phase 4 currently contains 155 tests across eight manifests. It validates the
 active, user-facing command surface and checks that claimed features still match
 the current binary. Where a flow is intentionally preview-only or not yet
 implemented, the manifest asserts that it fails cleanly with an explicit
@@ -755,7 +765,7 @@ message rather than pretending it is production-ready.
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
 | E | T256-T277 plus suffix IDs | 24 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
 | Native package-manager parity | TNPM01-TNPM18 plus TNPM02X | 19 | Cross-distro native PM parity and daily-driver corpus |
-| Native cross-source lifecycle | TNPMX01 | 1 | Native-oracle install/update/rollback/remove trace parity on every target image |
+| Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A | 3 | Attributable native-oracle install/update/rollback/remove corpus evidence on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 
 Phase 4 is intentionally mixed:

@@ -165,6 +165,11 @@ jobs:
           --distro "${{ matrix.distro }}"
           --phase 4
           --suite native-cross-source-lifecycle
+      - name: Verify attributable corpus evidence
+        run: |
+          result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
+          bash scripts/check-conary-test-result-gate.sh "$result"
+          bash scripts/check-conary-corpus-result-gate.sh "$result"
 
   native-cross-source-lifecycle-gate:
     name: native-cross-source-lifecycle

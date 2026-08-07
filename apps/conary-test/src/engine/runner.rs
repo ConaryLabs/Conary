@@ -182,6 +182,13 @@ impl TestRunner {
             .await?;
 
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
+        suite.expect_corpus_cases(
+            manifest
+                .test
+                .iter()
+                .filter(|test| test.corpus.is_some())
+                .count(),
+        );
         suite.status = crate::engine::suite::RunStatus::Running;
 
         // Emit suite-started event.
@@ -217,6 +224,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, "cancelled");
                 continue;
             }
 
@@ -236,6 +244,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, "suite timeout exceeded");
                 continue;
             }
 
@@ -248,11 +257,12 @@ impl TestRunner {
                     name: test_def.name.clone(),
                     status: TestStatus::Skipped,
                     duration_ms: 0,
-                    message: Some(msg),
+                    message: Some(msg.clone()),
                     stdout: None,
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, &msg);
                 continue;
             }
 
@@ -272,6 +282,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, &msg);
                 if let Some((run_id, ref tx)) = event_tx {
                     let _ = tx.send(TestEvent::TestSkipped {
                         run_id,
@@ -301,6 +312,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, &msg);
                 if let Some((run_id, ref tx)) = event_tx {
                     let _ = tx.send(TestEvent::TestSkipped {
                         run_id,
@@ -367,6 +379,20 @@ impl TestRunner {
                 attempts: Vec::new(),
             });
 
+            if let Some(corpus) = &test_def.corpus {
+                let corpus_result = crate::engine::corpus::capture_case(
+                    corpus,
+                    &test_def.id,
+                    &self.distro,
+                    status,
+                    message.as_deref(),
+                    backend,
+                    container_id,
+                )
+                .await;
+                suite.record_corpus(corpus_result);
+            }
+
             // Push result to Remi if streaming is configured.
             if let Some(ctx) = remi_ctx {
                 let push_data = build_push_result(
@@ -429,6 +455,17 @@ impl TestRunner {
         }
 
         Ok(suite)
+    }
+
+    fn record_unrun_corpus(&self, suite: &mut TestSuite, test_def: &TestDef, reason: &str) {
+        if let Some(corpus) = &test_def.corpus {
+            suite.record_corpus(crate::engine::corpus::case_did_not_run(
+                corpus,
+                &test_def.id,
+                &self.distro,
+                reason,
+            ));
+        }
     }
 
     async fn run_setup_steps(

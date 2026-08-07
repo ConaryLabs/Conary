@@ -333,8 +333,10 @@ the stated scope, not whether a workstream happens to be active.
   trust, runtime, and failure each require declared coverage, and every fixture
   is selected for its recorded properties.
 - **Typed result:** the runner emits a per-case record carrying source profile,
-  source artifact identity, target capability snapshot, per-stage results, and
-  a typed outcome. Failures aggregate by stage and failure enum. Aggregating by
+  role-tagged source artifact identities for install and update, the typed
+  authority that produced each digest, target capability snapshot, per-stage
+  results, and a typed outcome. Declared and emitted case counts must agree.
+  Failures aggregate by stage and failure enum. Aggregating by
   error-message text is prohibited. Remi's current prewarm result keeps failed
   identity plus a string error, which is adequate for logs and inadequate as
   roadmap authority.

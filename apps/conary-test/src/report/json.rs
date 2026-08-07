@@ -12,6 +12,8 @@ struct JsonReport<'a> {
     status: &'a str,
     summary: Summary,
     results: &'a [crate::engine::suite::TestResult],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    corpus: Option<crate::report::corpus::CorpusReport<'a>>,
 }
 
 #[derive(Serialize)]
@@ -44,6 +46,10 @@ pub fn to_json_value(suite: &TestSuite) -> Result<serde_json::Value> {
             cancelled: suite.cancelled(),
         },
         results: &suite.results,
+        corpus: crate::report::corpus::CorpusReport::from_cases(
+            &suite.corpus_cases,
+            suite.corpus_expected(),
+        ),
     };
     Ok(serde_json::to_value(report)?)
 }
@@ -59,6 +65,10 @@ pub fn write_json_report(suite: &TestSuite, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::engine::suite::{TestResult, TestStatus, TestSuite};
+    use conary_core::corpus::{
+        ConversionStage, CorpusCaseResult, SourceArtifactDigestSource, SourceArtifactIdentity,
+        SourceArtifactRole, SourceProfileIdentity, StageResult, TargetCapabilitySnapshot,
+    };
 
     #[test]
     fn test_json_report_format() {
@@ -88,5 +98,59 @@ mod tests {
         assert_eq!(parsed["summary"]["cancelled"], 0);
         assert_eq!(parsed["results"][0]["id"], "T01");
         assert_eq!(parsed["results"][0]["status"], "passed");
+        assert!(parsed.get("corpus").is_none());
+    }
+
+    #[test]
+    fn corpus_report_is_attributable_and_fail_closed() {
+        let mut suite = TestSuite::new("corpus", 4);
+        suite.expect_corpus_cases(1);
+        suite.record_corpus(CorpusCaseResult::from_stages(
+            "TC-RPM-FEDORA",
+            SourceProfileIdentity {
+                profile: "fedora-44".into(),
+                format: "rpm".into(),
+            },
+            vec![SourceArtifactIdentity {
+                role: SourceArtifactRole::InstallRequest,
+                digest_source: SourceArtifactDigestSource::FixtureBuildManifest,
+                name: "fixture".into(),
+                version: "1.0-1".into(),
+                architecture: Some("x86_64".into()),
+                digest: "a".repeat(64),
+            }],
+            TargetCapabilitySnapshot {
+                profile: "fedora44".into(),
+                architecture: "x86_64".into(),
+                init_system: "systemd".into(),
+                capabilities: vec!["native_lifecycle".into()],
+            },
+            vec![StageResult::passed(ConversionStage::Installation)],
+        ));
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&to_json_report(&suite).unwrap()).unwrap();
+        assert_eq!(parsed["corpus"]["schema_version"], 1);
+        assert_eq!(parsed["corpus"]["expected_cases"], 1);
+        assert_eq!(parsed["corpus"]["aggregate"]["cases"], 1);
+        assert_eq!(parsed["corpus"]["aggregate"]["completed"], 1);
+        assert_eq!(parsed["corpus"]["cases"][0]["case_id"], "TC-RPM-FEDORA");
+        assert_eq!(
+            parsed["corpus"]["cases"][0]["source_artifacts"][0]["role"],
+            "install_request"
+        );
+        assert!(suite.corpus_all_completed());
+    }
+
+    #[test]
+    fn missing_declared_corpus_case_is_published_and_blocks_success() {
+        let mut suite = TestSuite::new("corpus", 4);
+        suite.expect_corpus_cases(1);
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&to_json_report(&suite).unwrap()).unwrap();
+        assert_eq!(parsed["corpus"]["expected_cases"], 1);
+        assert_eq!(parsed["corpus"]["aggregate"]["cases"], 0);
+        assert!(!suite.corpus_all_completed());
     }
 }

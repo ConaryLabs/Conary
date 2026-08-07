@@ -1,5 +1,6 @@
 // conary-test/src/config/mod.rs
 
+pub mod corpus;
 pub mod distro;
 pub mod manifest;
 
@@ -52,3 +53,4 @@ pub fn validate_unique_test_ids(manifests: &[(PathBuf, TestManifest)]) -> Result
 
 #[cfg(test)]
 mod tests;
+pub use corpus::{CorpusCaseDef, CorpusSourceFormat, CorpusTargetDef};

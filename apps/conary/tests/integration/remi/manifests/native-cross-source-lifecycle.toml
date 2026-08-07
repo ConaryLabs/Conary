@@ -5,7 +5,7 @@
 [suite]
 name = "Native Cross-Source Lifecycle"
 phase = 4
-timeout = 1800
+timeout = 3600
 
 [distro_overrides.fedora44]
 native_lifecycle_oracle_format = "rpm"
@@ -17,15 +17,79 @@ native_lifecycle_oracle_format = "deb"
 native_lifecycle_oracle_format = "arch"
 
 [[test]]
-id = "TNPMX01"
-name = "cross_source_install_update_rollback_remove"
-description = "RPM, Debian, and Arch install, update, rollback, and remove traces match native package-manager authority across every target without runtime delegation"
+id = "TNPMX01R"
+name = "rpm_source_install_update_rollback_remove"
+description = "RPM install, update, rollback, and remove traces match native package-manager authority on this target without runtime delegation"
 timeout = 1500
-fatal = true
+fatal = false
 group = "native-cross-source-lifecycle"
 
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-rpm.json"
+source_profile = "fedora-44"
+source_format = "rpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation", "update", "rollback", "removal"]
+
+[test.corpus.target]
+architecture = "x86_64"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
 [[test.step]]
-run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format}"
+run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-rpm.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} rpm"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPMX01D"
+name = "debian_source_install_update_rollback_remove"
+description = "Debian install, update, rollback, and remove traces match native package-manager authority on this target without runtime delegation"
+timeout = 1500
+fatal = false
+group = "native-cross-source-lifecycle"
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-deb.json"
+source_profile = "ubuntu-26.04"
+source_format = "deb"
+digest_source = "fixture_build_manifest"
+stages = ["installation", "update", "rollback", "removal"]
+
+[test.corpus.target]
+architecture = "x86_64"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.step]]
+run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-deb.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} deb"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPMX01A"
+name = "arch_source_install_update_rollback_remove"
+description = "Arch install, update, rollback, and remove traces match native package-manager authority on this target without runtime delegation"
+timeout = 1500
+fatal = false
+group = "native-cross-source-lifecycle"
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-arch.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation", "update", "rollback", "removal"]
+
+[test.corpus.target]
+architecture = "x86_64"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.step]]
+run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-arch.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} arch"
 
 [test.step.assert]
 exit_code = 0

@@ -369,9 +369,14 @@ Each fixture family should record:
 
 ### conary-test-remi-manifests
 
-- **Owner:** Integration harness: `apps/conary-test/src/config/` and
+- **Owner:** Integration harness: `apps/conary-test/src/config/`,
+  `apps/conary-test/src/engine/corpus.rs`, `apps/conary-test/src/report/`, and
   `apps/conary-test/src/suite_inventory.rs`.
-- **Purpose:** Declarative Remi and package-manager integration suites.
+- **Purpose:** Declarative Remi and package-manager integration suites. Corpus
+  tests declare exact source/target/stage and artifact-digest authority,
+  consume a versioned runtime evidence file, and emit `CorpusCaseResult` plus
+  typed aggregation with an exact declared-case count; generic stdout and
+  error messages remain diagnostics only.
 - **Fixture sources:** `apps/conary/tests/integration/remi/manifests/`;
   `apps/conary/tests/integration/remi/containers/`;
   `apps/conary/tests/fixtures/conary-test-fixture/`;
