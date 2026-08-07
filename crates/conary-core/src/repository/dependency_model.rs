@@ -16,7 +16,7 @@
 
 use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Source package format that established a signed or persisted capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -67,6 +67,17 @@ pub enum CapabilityProvenance {
         record_index: u32,
     },
     SourceDerivedFile {
+        format: SourcePackageFormat,
+        source_path: String,
+    },
+    /// A path the source package owns but ships no content for, materialized by
+    /// its own lifecycle (RPM `%ghost`).
+    ///
+    /// Deliberately distinct from [`Self::SourceDerivedFile`]: native solvers
+    /// admit a promised path as a dependency provider, but no consumer may read
+    /// content through it. Keeping it a separate variant forces every match to
+    /// decide, instead of letting a promise pass silently as a shipped file.
+    SourcePromisedPath {
         format: SourcePackageFormat,
         source_path: String,
     },
@@ -342,6 +353,7 @@ impl ProvidedCapability {
             }
             CapabilityProvenance::SourceDeclared { format, .. }
             | CapabilityProvenance::SourceDerivedFile { format, .. }
+            | CapabilityProvenance::SourcePromisedPath { format, .. }
                 if format.version_scheme() != self.version_scheme =>
             {
                 return Err(crate::error::Error::ParseError(format!(
@@ -357,9 +369,81 @@ impl ProvidedCapability {
                         .to_string(),
                 ));
             }
+            CapabilityProvenance::SourcePromisedPath { source_path, .. }
+                if self.kind != RepositoryCapabilityKind::File
+                    || !source_path.starts_with('/')
+                    || source_path != &self.name =>
+            {
+                return Err(crate::error::Error::ParseError(format!(
+                    "promised path capability '{}' requires a file kind and a matching absolute source path",
+                    self.name
+                )));
+            }
+            // A promise states that a path will exist, never what it contains.
+            CapabilityProvenance::SourcePromisedPath { .. } if self.version.is_some() => {
+                return Err(crate::error::Error::ParseError(format!(
+                    "promised path capability '{}' cannot carry a provider version",
+                    self.name
+                )));
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Exact source-derived provider for a path the package ships.
+    #[must_use]
+    pub fn payload_file(format: SourcePackageFormat, path: &str) -> Self {
+        Self {
+            kind: RepositoryCapabilityKind::File,
+            name: path.to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: format.version_scheme(),
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile {
+                format,
+                source_path: path.to_string(),
+            },
+        }
+    }
+
+    /// Exact provider for a path the package owns but materializes at install
+    /// time rather than shipping.
+    #[must_use]
+    pub fn promised_path(format: SourcePackageFormat, path: &str) -> Self {
+        Self {
+            kind: RepositoryCapabilityKind::File,
+            name: path.to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: format.version_scheme(),
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourcePromisedPath {
+                format,
+                source_path: path.to_string(),
+            },
+        }
+    }
+
+    /// Whether this capability is a promise that a path will exist rather than
+    /// a statement that the package ships it.
+    #[must_use]
+    pub const fn is_promised_path(&self) -> bool {
+        matches!(
+            self.provenance,
+            CapabilityProvenance::SourcePromisedPath { .. }
+        )
+    }
+
+    /// Whether a consumer may read installed content through this capability.
+    ///
+    /// Dependency resolution asks only whether a provider exists, so it must
+    /// not call this. Any check that reads, hashes, or verifies the file behind
+    /// a capability must, because a promised path has no content to read.
+    #[must_use]
+    pub const fn witnesses_installed_content(&self) -> bool {
+        !self.is_promised_path()
     }
 }
 
@@ -379,11 +463,33 @@ pub fn extend_materialized_file_provides<'a>(
     format: SourcePackageFormat,
     paths: impl IntoIterator<Item = &'a str>,
 ) -> crate::error::Result<()> {
+    extend_path_ownership(provides, format, paths, false)
+}
+
+/// Add the paths a package owns but materializes at install time.
+///
+/// The promise is what makes a native file dependency solvable against a
+/// package that ships no content for the path. It never states that content
+/// exists; see [`ProvidedCapability::witnesses_installed_content`].
+pub fn extend_promised_path_provides<'a>(
+    provides: &mut Vec<ProvidedCapability>,
+    format: SourcePackageFormat,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> crate::error::Result<()> {
+    extend_path_ownership(provides, format, paths, true)
+}
+
+fn extend_path_ownership<'a>(
+    provides: &mut Vec<ProvidedCapability>,
+    format: SourcePackageFormat,
+    paths: impl IntoIterator<Item = &'a str>,
+    promised: bool,
+) -> crate::error::Result<()> {
     let mut existing = provides
         .iter()
         .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
-        .map(|provide| provide.name.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|provide| (provide.name.clone(), provide.is_promised_path()))
+        .collect::<BTreeMap<_, _>>();
 
     for path in paths.into_iter().collect::<BTreeSet<_>>() {
         if path == "/" {
@@ -394,20 +500,21 @@ pub fn extend_materialized_file_provides<'a>(
                 "materialized package file provider is not an absolute path: {path:?}"
             )));
         }
-        if !existing.insert(path.to_string()) {
-            continue;
+        match existing.insert(path.to_string(), promised) {
+            // Shipping a path and promising to create it are contradictory
+            // claims about the same path, so one package can only make one.
+            Some(previous) if previous != promised => {
+                return Err(crate::error::Error::ParseError(format!(
+                    "package path {path:?} is declared both as shipped payload and as a promised path"
+                )));
+            }
+            Some(_) => continue,
+            None => {}
         }
-        let provide = ProvidedCapability {
-            kind: RepositoryCapabilityKind::File,
-            name: path.to_string(),
-            version: None,
-            version_relation: None,
-            version_scheme: format.version_scheme(),
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourceDerivedFile {
-                format,
-                source_path: path.to_string(),
-            },
+        let provide = if promised {
+            ProvidedCapability::promised_path(format, path)
+        } else {
+            ProvidedCapability::payload_file(format, path)
         };
         provide.validate()?;
         provides.push(provide);
@@ -1052,6 +1159,93 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(provides.is_empty());
+    }
+
+    #[test]
+    fn a_promised_path_is_a_provider_but_never_content() {
+        let promised = ProvidedCapability::promised_path(
+            SourcePackageFormat::Rpm,
+            "/etc/crypto-policies/back-ends/krb5.config",
+        );
+        promised.validate().unwrap();
+
+        assert!(promised.is_promised_path());
+        assert!(!promised.witnesses_installed_content());
+        assert_eq!(promised.kind, RepositoryCapabilityKind::File);
+        assert_eq!(promised.version_scheme, VersionScheme::Rpm);
+
+        let shipped = ProvidedCapability::payload_file(SourcePackageFormat::Rpm, "/usr/bin/sh");
+        shipped.validate().unwrap();
+        assert!(!shipped.is_promised_path());
+        assert!(shipped.witnesses_installed_content());
+    }
+
+    #[test]
+    fn a_promised_path_cannot_claim_content_semantics() {
+        let mut promised =
+            ProvidedCapability::promised_path(SourcePackageFormat::Rpm, "/etc/tool/generated.conf");
+
+        promised.version = Some("1".to_string());
+        promised.version_relation = Some(ProvideVersionRelation::Equal);
+        assert!(promised.validate().is_err(), "a promise carries no version");
+
+        let mut wrong_kind =
+            ProvidedCapability::promised_path(SourcePackageFormat::Rpm, "/etc/tool/generated.conf");
+        wrong_kind.kind = RepositoryCapabilityKind::Generic;
+        assert!(wrong_kind.validate().is_err(), "a promise is a file path");
+
+        let mut relative =
+            ProvidedCapability::promised_path(SourcePackageFormat::Rpm, "etc/tool/generated.conf");
+        relative.name = "etc/tool/generated.conf".to_string();
+        assert!(
+            relative.validate().is_err(),
+            "a promise is an absolute path"
+        );
+    }
+
+    #[test]
+    fn one_package_cannot_both_ship_and_promise_a_path() {
+        let mut provides = Vec::new();
+        extend_promised_path_provides(
+            &mut provides,
+            SourcePackageFormat::Rpm,
+            ["/etc/pam.d/system-auth"],
+        )
+        .unwrap();
+
+        let error = extend_materialized_file_provides(
+            &mut provides,
+            SourcePackageFormat::Rpm,
+            ["/etc/pam.d/system-auth"],
+        )
+        .expect_err("shipping a promised path contradicts the promise");
+        assert!(
+            error.to_string().contains("shipped payload"),
+            "unexpected error: {error}"
+        );
+
+        // The reverse order is the same contradiction.
+        let mut shipped = Vec::new();
+        extend_materialized_file_provides(&mut shipped, SourcePackageFormat::Rpm, ["/usr/bin/sh"])
+            .unwrap();
+        assert!(
+            extend_promised_path_provides(&mut shipped, SourcePackageFormat::Rpm, ["/usr/bin/sh"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn repeating_the_same_ownership_claim_is_not_a_contradiction() {
+        let mut provides = Vec::new();
+        for _ in 0..2 {
+            extend_promised_path_provides(
+                &mut provides,
+                SourcePackageFormat::Rpm,
+                ["/etc/pam.d/system-auth"],
+            )
+            .unwrap();
+        }
+        assert_eq!(provides.len(), 1);
     }
 
     #[test]

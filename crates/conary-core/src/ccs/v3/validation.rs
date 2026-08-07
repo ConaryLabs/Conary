@@ -645,6 +645,55 @@ mod tests {
     }
 
     #[test]
+    fn signed_authority_accepts_a_promised_path_the_package_does_not_ship() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("crypto-policies");
+        authority.identity.version_scheme = VersionScheme::Rpm;
+        authority.identity.version = "20251128-3".to_string();
+        authority.provided_capabilities =
+            vec![promised_capability_v3("/etc/example/back-end.config")];
+
+        validate_authority(&authority).unwrap();
+    }
+
+    #[test]
+    fn signed_authority_refuses_a_promised_path_that_is_also_payload_content() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("contradiction");
+        authority.identity.version_scheme = VersionScheme::Rpm;
+        authority.identity.version = "1-1".to_string();
+        // package_for_tests signs /usr/bin/hello as payload content.
+        authority.provided_capabilities = vec![promised_capability_v3("/usr/bin/hello")];
+
+        let error = validate_authority(&authority).unwrap_err();
+        assert!(
+            error.diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("is also signed payload content")
+            }),
+            "{:?}",
+            error.diagnostics
+        );
+    }
+
+    fn promised_capability_v3(path: &str) -> ProvidedCapabilityV3 {
+        ProvidedCapabilityV3 {
+            kind: DependencyKindV3::File,
+            name: path.to_string(),
+            provider_version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance:
+                crate::repository::dependency_model::CapabilityProvenance::SourcePromisedPath {
+                    format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+                    source_path: path.to_string(),
+                },
+            target: None,
+            component: None,
+        }
+    }
+
+    #[test]
     fn capability_list_rejects_a_second_exact_identity_origin() {
         let mut authority = AuthorityDocumentV3::package_for_tests("identity-spoof");
         authority.provided_capabilities = vec![ProvidedCapabilityV3 {

@@ -1056,3 +1056,58 @@ fn payload_file_provider_satisfies_an_exact_path_requirement_and_orders_provider
         vec!["bash", "systemd-udev"]
     );
 }
+
+#[test]
+fn a_promised_path_witnesses_a_dependency_the_provider_ships_no_content_for() {
+    let (_temp, conn) = empty_test_db();
+    let dependent_of = |requirement: &str| {
+        let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+        dependent.requirements = vec![depends_on(requirement)];
+        dependent
+    };
+    let promised = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // Before the package publishes its promise, nothing in the transaction can
+    // witness a path the provider owns but never ships.
+    let mut without_promise = vec![
+        dependent_of(promised),
+        prepared_test_package(
+            "crypto-policies",
+            "/usr/share/crypto-policies/DEFAULT",
+            b"policy",
+        ),
+    ];
+    let error =
+        super::ordering::order_packages_for_transaction(&conn, &mut without_promise).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for krb5-libs"
+        ),
+        "{error:#}"
+    );
+
+    let mut provider = prepared_test_package(
+        "crypto-policies",
+        "/usr/share/crypto-policies/DEFAULT",
+        b"policy",
+    );
+    provider.install_reason = InstallReason::Dependency;
+    provider.provides.push(
+        conary_core::repository::dependency_model::ProvidedCapability::promised_path(
+            conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+            promised,
+        ),
+    );
+    let mut packages = vec![dependent_of(promised), provider];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["crypto-policies", "krb5-libs"],
+        "the package that promises the path must be ordered before its dependent"
+    );
+}

@@ -17,6 +17,7 @@ fn package_for_test(name: &str, version: &str) -> RpmPackage {
             architecture: "x86_64".to_string(),
             provides: Vec::new(),
             config: Vec::new(),
+            promised_paths: Vec::new(),
         },
         description: None,
         files: Vec::new(),
