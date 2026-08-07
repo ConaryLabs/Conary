@@ -285,7 +285,7 @@ impl<'a> BatchInstaller<'a> {
 
         // Open database connection
         let mut conn = open_db(self.db_path)?;
-        ordering::order_packages_for_transaction(&conn, &mut packages)?;
+        let witnessed_promises = ordering::order_packages_for_transaction(&conn, &mut packages)?;
         self.plan_package_relations_for_batch(&conn, &mut packages)?;
         // Build transaction description
         let tx_description = if package_count == 1 {
@@ -416,6 +416,7 @@ impl<'a> BatchInstaller<'a> {
             &mut selected_root,
             rollback_root,
             &mut ccs_hook_executors,
+            &witnessed_promises,
         );
         let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = transaction_result?;
 

@@ -1120,7 +1120,7 @@ fn promised(path: &str) -> conary_core::repository::dependency_model::ProvidedCa
 }
 
 #[test]
-fn a_transaction_fails_when_a_declared_promised_path_is_never_materialized() {
+fn a_transaction_fails_when_a_witness_used_promised_path_is_never_materialized() {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("conary.db");
@@ -1128,27 +1128,42 @@ fn a_transaction_fails_when_a_declared_promised_path_is_never_materialized() {
     conary_core::db::init(&db_path).unwrap();
     crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
     let db_path_string = db_path.to_string_lossy().into_owned();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
 
-    let mut package =
-        prepared_test_package("promise-breaker", "/usr/bin/promise-breaker", b"payload");
-    // Declared as a dependency witness, but no lifecycle ever creates it.
-    package
-        .provides
-        .push(promised("/etc/promise-breaker/generated.conf"));
+    // The dependent is satisfied only through the promise, so the transaction
+    // certified an edge against a path that must then exist.
+    let mut provider = prepared_test_package(
+        "crypto-policies",
+        "/usr/share/crypto-policies/DEFAULT/krb5.txt",
+        b"policy",
+    );
+    provider.install_reason = InstallReason::Dependency;
+    provider.provides.push(promised(promised_path));
+    let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+    dependent.requirements = vec![depends_on(promised_path)];
     let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
 
-    let error = installer.install_batch(vec![package]).unwrap_err();
+    let error = installer
+        .install_batch(vec![dependent, provider])
+        .unwrap_err();
 
     let message = format!("{error:#}");
     assert!(
-        message.contains("did not materialize promised path /etc/promise-breaker/generated.conf"),
+        message.contains(&format!(
+            "did not materialize promised path {promised_path}"
+        )),
         "{message}"
     );
-    assert!(message.contains("promise-breaker"), "{message}");
+    assert!(message.contains("crypto-policies"), "{message}");
+    // The diagnostic must name the edge that relied on the promise.
+    assert!(
+        message.contains("krb5-libs depends on it through"),
+        "{message}"
+    );
 }
 
 #[test]
-fn a_promised_path_present_in_the_assembled_root_satisfies_the_post_condition() {
+fn an_unused_promised_path_never_fails_the_transaction() {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp = tempfile::tempdir().unwrap();
     let db_path = temp.path().join("conary.db");
@@ -1156,21 +1171,51 @@ fn a_promised_path_present_in_the_assembled_root_satisfies_the_post_condition() 
     conary_core::db::init(&db_path).unwrap();
     crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
     let db_path_string = db_path.to_string_lossy().into_owned();
+
+    // The real case this pins: Fedora's setup package owns /etc/fstab as a
+    // %ghost and never creates it -- an OS installer does. Nothing in the
+    // transaction depends on it, so the transaction has nothing to prove.
+    let mut setup = prepared_test_package("setup", "/etc/profile", b"profile");
+    setup.provides.push(promised("/etc/fstab"));
+    setup.provides.push(promised("/run/motd"));
+    // setup is a retained witness for a real edge, so the promises are in
+    // scope for consideration -- they are simply not what holds the edge up.
+    let mut other = prepared_test_package("filesystem", "/usr/bin/filesystem-marker", b"marker");
+    other.requirements = vec![depends_on("setup")];
+    let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
+
+    installer.install_batch(vec![setup, other]).unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::Changeset::list_all(&conn).unwrap()[0].status,
+        ChangesetStatus::Applied
+    );
+}
+
+#[test]
+fn a_witness_used_promise_already_present_satisfies_the_post_condition() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let promised_path = "/usr/share/promised/marker.conf";
 
     // The post-condition asks whether the path exists in the assembled root,
     // not who produced it, so a path another batch member ships satisfies it.
     let mut promiser = prepared_test_package("promiser", "/usr/bin/promiser", b"payload");
-    promiser
-        .provides
-        .push(promised("/usr/share/promised/marker.conf"));
-    let producer = prepared_test_package(
-        "producer",
-        "/usr/share/promised/marker.conf",
-        b"materialized",
-    );
+    promiser.provides.push(promised(promised_path));
+    let producer = prepared_test_package("producer", promised_path, b"materialized");
+    let mut dependent = prepared_test_package("dependent", "/usr/bin/dependent", b"dependent");
+    dependent.requirements = vec![depends_on(promised_path)];
     let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
 
-    installer.install_batch(vec![producer, promiser]).unwrap();
+    installer
+        .install_batch(vec![dependent, producer, promiser])
+        .unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
     assert_eq!(
