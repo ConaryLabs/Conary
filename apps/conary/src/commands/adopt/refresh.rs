@@ -335,9 +335,9 @@ pub async fn cmd_adopt_refresh(
                     continue;
                 }
             };
-            super::provides::extend_materialized_file_provides(
+            conary_core::repository::dependency_model::extend_materialized_file_provides(
                 &mut provides,
-                identity,
+                identity.source_package_format(),
                 captured_files.iter().map(|file| file.source.0.as_str()),
             )?;
 

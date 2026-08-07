@@ -871,3 +871,188 @@ fn selected_root_batch_conflict_preflight_runs_before_lifecycle() {
         "owned elsewhere"
     );
 }
+
+/// Sign one CCS carrying `paths` as its complete runtime payload.
+///
+/// The manifest declares no capability naming a payload path, which is how a
+/// converted artifact reaches the transaction: source headers own `Provides`,
+/// and the payload alone owns file ownership.
+fn signed_rpm_ccs_package(
+    temp_dir: &std::path::Path,
+    name: &str,
+    paths: &[&str],
+) -> conary_core::ccs::CcsPackage {
+    let signing_key =
+        conary_core::ccs::SigningKeyPair::generate().with_key_id("payload-file-provider");
+    let mut manifest = conary_core::ccs::CcsManifest::new_minimal(name, "1.0.0");
+    manifest.package.version_scheme = conary_core::repository::versioning::VersionScheme::Rpm;
+    manifest.components.default = vec!["runtime".to_string()];
+
+    let mut entries = Vec::new();
+    let mut blobs = HashMap::new();
+    let mut total_size = 0;
+    for path in paths {
+        let content = format!("payload for {path}").into_bytes();
+        let sha256 = conary_core::hash::sha256(&content);
+        total_size += content.len() as u64;
+        entries.push(conary_core::ccs::FileEntry {
+            path: (*path).to_string(),
+            node: payload_node(
+                PayloadNodeKind::Regular {
+                    hardlink_identity: None,
+                },
+                libc::S_IFREG | 0o755,
+            ),
+            content: Some(PayloadContentAuthority {
+                sha256: sha256.clone(),
+                size: content.len() as u64,
+            }),
+            component: "runtime".to_string(),
+            chunks: None,
+        });
+        blobs.insert(sha256, content);
+    }
+
+    let result = conary_core::ccs::BuildResult {
+        manifest,
+        components: HashMap::from([(
+            "runtime".to_string(),
+            conary_core::ccs::ComponentData {
+                name: "runtime".to_string(),
+                files: entries.clone(),
+                hash: "runtime".to_string(),
+                size: total_size,
+            },
+        )]),
+        files: entries.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &entries, blobs,
+        )
+        .unwrap(),
+        total_size,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let package_path = temp_dir.join(format!("{name}.ccs"));
+    conary_core::ccs::builder::write_signed_current_ccs_package(
+        &result,
+        &package_path,
+        &signing_key,
+        false,
+    )
+    .unwrap();
+    let verified = conary_core::ccs::verify::verify_package(
+        &package_path,
+        &conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]),
+    )
+    .unwrap();
+    conary_core::ccs::CcsPackage::from_verified_archive(package_path.to_str().unwrap(), &verified)
+        .unwrap()
+}
+
+fn prepare_signed_ccs_dependency(
+    temp_dir: &std::path::Path,
+    db_path: &std::path::Path,
+    name: &str,
+    paths: &[&str],
+) -> PreparedPackage {
+    let package = signed_rpm_ccs_package(temp_dir, name, paths);
+    prepare_ccs_package_for_batch(
+        &package,
+        db_path.to_str().unwrap(),
+        InstallReason::Dependency,
+        "required by the exact selected transaction",
+        false,
+        InstallIntent::PackageChange,
+        None,
+    )
+    .unwrap()
+}
+
+fn ccs_test_db(temp_dir: &std::path::Path) -> (std::path::PathBuf, rusqlite::Connection) {
+    let db_path = temp_dir.join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    (db_path, conn)
+}
+
+#[test]
+fn prepared_package_publishes_every_payload_path_as_a_file_provider() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db_path, _conn) = ccs_test_db(temp.path());
+    let paths = ["/usr/bin/sh", "/usr/share/doc/bash/README"];
+
+    let prepared = prepare_signed_ccs_dependency(temp.path(), &db_path, "bash", &paths);
+
+    assert!(
+        !prepared.extracted_files.is_empty(),
+        "the fixture must carry a payload"
+    );
+    for file in &prepared.extracted_files {
+        assert!(
+            prepared.provides.iter().any(|provide| {
+                provide.kind
+                    == conary_core::repository::dependency_model::RepositoryCapabilityKind::File
+                    && provide.name == file.path
+            }),
+            "payload path {} is not published as a file provider: {:?}",
+            file.path,
+            prepared
+                .provides
+                .iter()
+                .map(|provide| provide.name.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        prepared
+            .provides
+            .iter()
+            .any(|provide| provide.name == "bash"),
+        "materialized paths must not displace the exact package self-provider"
+    );
+}
+
+#[test]
+fn payload_file_provider_satisfies_an_exact_path_requirement_and_orders_provider_first() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db_path, conn) = ccs_test_db(temp.path());
+    let dependent_of = |requirement: &str| {
+        let mut dependent =
+            prepared_test_package("systemd-udev", "/usr/lib/udev/rules.d/99.rules", b"rule");
+        dependent.requirements = vec![depends_on(requirement)];
+        dependent
+    };
+
+    // A converted artifact reduced to its declared header capabilities cannot
+    // satisfy the path dependency the solver resolved from repository metadata.
+    let mut declared_only =
+        prepare_signed_ccs_dependency(temp.path(), &db_path, "bash", &["/usr/bin/sh"]);
+    declared_only.provides.retain(|provide| {
+        provide.kind != conary_core::repository::dependency_model::RepositoryCapabilityKind::File
+    });
+    let error = super::ordering::order_packages_for_transaction(
+        &conn,
+        &mut vec![dependent_of("/usr/bin/sh"), declared_only],
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for systemd-udev"
+        ),
+        "{error:#}"
+    );
+
+    let shell = prepare_signed_ccs_dependency(temp.path(), &db_path, "bash", &["/usr/bin/sh"]);
+    let mut packages = vec![dependent_of("/usr/bin/sh"), shell];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["bash", "systemd-udev"]
+    );
+}

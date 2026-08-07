@@ -61,6 +61,7 @@ pub fn prepare_package_for_batch(
 
     // Parse package
     let pkg = parse_package(package_path, format)?;
+    let semantics = InstallSemantics::native_package(format);
 
     // Open database
     let conn = open_db(db_path)?;
@@ -69,7 +70,7 @@ pub fn prepare_package_for_batch(
     let (is_upgrade, old_trove) = match check_upgrade_status(
         &conn,
         pkg.as_ref(),
-        &InstallSemantics::native_package(format),
+        &semantics,
         allow_downgrade,
         InstallIntent::PackageChange,
     )? {
@@ -96,16 +97,25 @@ pub fn prepare_package_for_batch(
     let native_lifecycle_state =
         NativeLifecycleInstallState::from_native_package(pkg.as_ref(), format, source_profile_id)?;
 
+    // A native header declares only its own `Provides`; the payload it ships is
+    // the only authority for the file providers that satisfy path dependencies.
+    let mut provides = pkg.resolution_capabilities()?;
+    conary_core::repository::dependency_model::extend_materialized_file_provides(
+        &mut provides,
+        semantics.source_package_format(),
+        extracted_files.iter().map(|file| file.path.as_str()),
+    )?;
+
     Ok(Some(PreparedPackage {
         name: pkg.name().to_string(),
         version: pkg.version().to_string(),
-        semantics: InstallSemantics::native_package(format),
+        semantics,
         package_release: pkg.package_release().map(str::to_string),
         debian_multi_arch: pkg.debian_multi_arch(),
         architecture: pkg.architecture().map(|s| s.to_string()),
         description: pkg.description().map(|s| s.to_string()),
         extracted_files,
-        provides: pkg.resolution_capabilities()?,
+        provides,
         requirements: pkg.requirements().to_vec(),
         relations: pkg.relations().to_vec(),
         relation_removals: Vec::new(),

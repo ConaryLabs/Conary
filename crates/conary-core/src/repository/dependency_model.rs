@@ -16,6 +16,7 @@
 
 use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// Source package format that established a signed or persisted capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -35,6 +36,21 @@ impl SourcePackageFormat {
             Self::Debian => VersionScheme::Debian,
             Self::Alpm => VersionScheme::Arch,
             Self::Ccs => VersionScheme::Conary,
+        }
+    }
+
+    /// Exact source format that owns package identity under `scheme`.
+    ///
+    /// Inverse of [`Self::version_scheme`]. A capability's provenance format and
+    /// its version scheme are one fact, so a consumer holding either recovers
+    /// the other instead of restating the pairing.
+    #[must_use]
+    pub const fn for_version_scheme(scheme: VersionScheme) -> Self {
+        match scheme {
+            VersionScheme::Rpm => Self::Rpm,
+            VersionScheme::Debian => Self::Debian,
+            VersionScheme::Arch => Self::Alpm,
+            VersionScheme::Conary => Self::Ccs,
         }
     }
 }
@@ -345,6 +361,58 @@ impl ProvidedCapability {
         }
         Ok(())
     }
+}
+
+/// Add exact materialized package paths as source-derived file providers.
+///
+/// Native solvers admit file dependencies through package file ownership, not
+/// only through declared `Provides` header fields. Every consumer holding a
+/// package's exact paths -- adoption reading the owning package database, or a
+/// transaction holding the artifact it is about to install -- must publish that
+/// authority, otherwise a path dependency the solver satisfied from repository
+/// file metadata becomes unsatisfiable against the same package's own facts.
+///
+/// `format` owns the resulting version scheme, so the provenance format and the
+/// capability scheme cannot contradict each other.
+pub fn extend_materialized_file_provides<'a>(
+    provides: &mut Vec<ProvidedCapability>,
+    format: SourcePackageFormat,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> crate::error::Result<()> {
+    let mut existing = provides
+        .iter()
+        .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
+        .map(|provide| provide.name.clone())
+        .collect::<BTreeSet<_>>();
+
+    for path in paths.into_iter().collect::<BTreeSet<_>>() {
+        if path == "/" {
+            continue;
+        }
+        if !path.starts_with('/') {
+            return Err(crate::error::Error::ParseError(format!(
+                "materialized package file provider is not an absolute path: {path:?}"
+            )));
+        }
+        if !existing.insert(path.to_string()) {
+            continue;
+        }
+        let provide = ProvidedCapability {
+            kind: RepositoryCapabilityKind::File,
+            name: path.to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: format.version_scheme(),
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile {
+                format,
+                source_path: path.to_string(),
+            },
+        };
+        provide.validate()?;
+        provides.push(provide);
+    }
+    Ok(())
 }
 
 impl ProvideVersionRelation {
@@ -896,5 +964,108 @@ mod tests {
         capability.provenance = CapabilityProvenance::AuthorDeclared;
         capability.architecture_qualifier = ProvideArchitectureQualifier::Exact(String::new());
         assert!(capability.validate().is_err());
+    }
+
+    #[test]
+    fn every_materialized_file_provider_validates_under_its_source_format() {
+        for format in [
+            SourcePackageFormat::Rpm,
+            SourcePackageFormat::Debian,
+            SourcePackageFormat::Alpm,
+            SourcePackageFormat::Ccs,
+        ] {
+            let mut provides = Vec::new();
+            extend_materialized_file_provides(
+                &mut provides,
+                format,
+                ["/usr/bin/sh", "/usr/share/doc/tool/README", "/"],
+            )
+            .unwrap();
+
+            assert_eq!(
+                provides
+                    .iter()
+                    .map(|provide| provide.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["/usr/bin/sh", "/usr/share/doc/tool/README"],
+                "the root directory is not a file provider"
+            );
+            for provide in &provides {
+                provide.validate().unwrap();
+                assert_eq!(provide.kind, RepositoryCapabilityKind::File);
+                assert_eq!(provide.version_scheme, format.version_scheme());
+                assert_eq!(
+                    provide.provenance,
+                    CapabilityProvenance::SourceDerivedFile {
+                        format,
+                        source_path: provide.name.clone(),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn materialized_file_providers_never_duplicate_a_declared_path() {
+        let mut provides = vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::File,
+            name: "/usr/bin/sh".to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile {
+                format: SourcePackageFormat::Rpm,
+                source_path: "/usr/bin/sh".to_string(),
+            },
+        }];
+
+        extend_materialized_file_provides(
+            &mut provides,
+            SourcePackageFormat::Rpm,
+            ["/usr/bin/sh", "/usr/bin/sh", "/usr/bin/bash"],
+        )
+        .unwrap();
+
+        assert_eq!(
+            provides
+                .iter()
+                .map(|provide| provide.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/usr/bin/sh", "/usr/bin/bash"]
+        );
+    }
+
+    #[test]
+    fn materialized_file_providers_reject_a_relative_payload_path() {
+        let mut provides = Vec::new();
+
+        let error = extend_materialized_file_provides(
+            &mut provides,
+            SourcePackageFormat::Rpm,
+            ["usr/bin/sh"],
+        )
+        .expect_err("a relative payload path has no absolute file-provider identity");
+
+        assert!(
+            error.to_string().contains("absolute path"),
+            "unexpected error: {error}"
+        );
+        assert!(provides.is_empty());
+    }
+
+    #[test]
+    fn source_format_and_version_scheme_recover_each_other() {
+        for format in [
+            SourcePackageFormat::Rpm,
+            SourcePackageFormat::Debian,
+            SourcePackageFormat::Alpm,
+            SourcePackageFormat::Ccs,
+        ] {
+            assert_eq!(
+                SourcePackageFormat::for_version_scheme(format.version_scheme()),
+                format
+            );
+        }
     }
 }

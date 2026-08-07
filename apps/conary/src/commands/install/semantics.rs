@@ -38,6 +38,19 @@ impl InstallSemantics {
         }
     }
 
+    /// Exact source format that owns the capabilities this artifact publishes.
+    ///
+    /// A converted CCS keeps the version scheme of the format it was built
+    /// from, so both prepared sources recover their format from the one scheme
+    /// they already carry.
+    pub(super) const fn source_package_format(
+        self,
+    ) -> conary_core::repository::dependency_model::SourcePackageFormat {
+        conary_core::repository::dependency_model::SourcePackageFormat::for_version_scheme(
+            self.version_scheme,
+        )
+    }
+
     pub(super) const fn payload_sharing_policy(self) -> conary_core::payload::PayloadSharingPolicy {
         match self.source {
             PreparedSourceKind::NativePackage {
