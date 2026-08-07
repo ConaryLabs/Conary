@@ -34,13 +34,10 @@ mod async_client;
 pub use async_client::AsyncRemiClient;
 mod protocol;
 use protocol::RemiClientCore;
-pub use protocol::{ChunkRef, ConversionAccepted, JobStatus, PackageManifest};
+pub use protocol::{ChunkRef, ConversionAccepted, ConversionJobState, JobStatus, PackageManifest};
 
 /// Default timeout for initial request (30 seconds)
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Default timeout for polling (5 minutes max wait)
-const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Poll interval (2 seconds)
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -123,7 +120,7 @@ impl RemiClient {
     /// Request a package from the Remi
     ///
     /// Returns the manifest when the package is ready. If conversion is needed,
-    /// this will poll automatically until complete or timeout.
+    /// this polls until Remi reports a terminal job state or the caller cancels.
     pub async fn get_package(
         &self,
         distro: &str,
@@ -209,7 +206,6 @@ impl RemiClient {
     /// refused) with exponential backoff. 4xx errors fail immediately.
     async fn poll_for_completion(&self, job_id: &str) -> Result<PackageManifest> {
         let url = self.core.job_url(job_id);
-        let start = std::time::Instant::now();
         let max_transient_retries: u32 = 3;
 
         // Create a spinner for visual feedback
@@ -225,15 +221,6 @@ impl RemiClient {
         let mut consecutive_transient_failures: u32 = 0;
 
         loop {
-            // Check timeout
-            if start.elapsed() > POLL_TIMEOUT {
-                spinner.finish_with_message("Conversion timed out");
-                return Err(Error::TimeoutError(format!(
-                    "Conversion job {} timed out after {:?}",
-                    job_id, POLL_TIMEOUT
-                )));
-            }
-
             // Poll job status
             let response = match self.client.get(&url).send().await {
                 Ok(resp) => resp,
@@ -296,10 +283,11 @@ impl RemiClient {
             // Successful response -- reset transient failure counter
             consecutive_transient_failures = 0;
 
-            let status: JobStatus = response.json().await.parse_context("job status")?;
+            let body = response.text().await.download_context(&url)?;
+            let status: JobStatus = serde_json::from_str(&body).parse_context("job status")?;
 
-            match status.status.as_str() {
-                "ready" => {
+            match status.poll_decision() {
+                protocol::JobPollDecision::Ready => {
                     spinner.finish_with_message("Conversion complete");
                     info!("Conversion complete for job {}", job_id);
 
@@ -327,15 +315,14 @@ impl RemiClient {
                     let manifest = response.json().await.parse_context("manifest")?;
                     return Ok(manifest);
                 }
-                "failed" => {
+                protocol::JobPollDecision::Failed(error_msg) => {
                     spinner.finish_with_message("Conversion failed");
-                    let error_msg = status.error.unwrap_or_else(|| "Unknown error".to_string());
                     return Err(Error::DownloadError(format!(
                         "Conversion failed: {}",
                         error_msg
                     )));
                 }
-                "converting" | "queued" => {
+                protocol::JobPollDecision::Wait => {
                     // Still in progress - update spinner and continue polling
                     if let Some(progress) = status.progress {
                         spinner.set_message(format!(
@@ -343,14 +330,7 @@ impl RemiClient {
                             status.package, progress
                         ));
                     }
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                }
-                other => {
-                    spinner.finish_with_message("Conversion protocol error");
-                    return Err(Error::DownloadError(format!(
-                        "Remi returned unsupported conversion status {other} for {}/{}",
-                        status.distro, status.package
-                    )));
+                    self.core.wait_for_next_poll().await;
                 }
             }
         }

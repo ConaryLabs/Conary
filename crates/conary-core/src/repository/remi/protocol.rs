@@ -15,7 +15,7 @@ pub struct ConversionAccepted {
 #[derive(Debug, Deserialize)]
 pub struct JobStatus {
     pub job_id: String,
-    pub status: String,
+    pub status: ConversionJobState,
     pub distro: String,
     pub package: String,
     pub version: Option<String>,
@@ -23,6 +23,35 @@ pub struct JobStatus {
     pub progress: Option<u8>,
     pub error: Option<String>,
     pub manifest: Option<PackageManifest>,
+}
+
+/// Exact lifecycle states published by Remi's job-status endpoint.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversionJobState {
+    Pending,
+    Converting,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum JobPollDecision<'a> {
+    Wait,
+    Ready,
+    Failed(&'a str),
+}
+
+impl JobStatus {
+    pub(super) fn poll_decision(&self) -> JobPollDecision<'_> {
+        match self.status {
+            ConversionJobState::Pending | ConversionJobState::Converting => JobPollDecision::Wait,
+            ConversionJobState::Ready => JobPollDecision::Ready,
+            ConversionJobState::Failed => {
+                JobPollDecision::Failed(self.error.as_deref().unwrap_or("Unknown error"))
+            }
+        }
+    }
 }
 
 /// Package manifest with chunk list
@@ -51,6 +80,7 @@ pub struct ChunkRef {
 /// duplicating these operations.
 pub(super) struct RemiClientCore {
     pub(super) base_url: String,
+    pub(super) poll_interval: Duration,
 }
 
 impl RemiClientCore {
@@ -59,7 +89,12 @@ impl RemiClientCore {
         crate::repository::client::validate_url_scheme(base_url)?;
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
+            poll_interval: POLL_INTERVAL,
         })
+    }
+
+    pub(super) async fn wait_for_next_poll(&self) {
+        tokio::time::sleep(self.poll_interval).await;
     }
 
     /// Construct a package URL with optional version and architecture query parameters.
