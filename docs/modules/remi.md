@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 16
+last_updated: 2026-08-08
+revision: 17
 summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -276,9 +276,10 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 26 retains
-revision 25's source-authority and fail-closed state constraints while requiring
-an explicit mixing policy for every persisted source pin. It is a pre-alpha
+schema rejects missing, empty, or malformed values. Schema revision 27 retains
+revision 26's source-authority, fail-closed state constraints, and explicit
+mixing policy for every persisted source pin, and stores path-owning capability
+provenance without a duplicated path. It is a pre-alpha
 hard cut: prior databases are rebuilt and re-ingested from configured
 repository authority rather than migrated. Local conversion tracking is
 written only after the CCS install transaction commits.

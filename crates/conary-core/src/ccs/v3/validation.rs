@@ -686,7 +686,6 @@ mod tests {
             provenance:
                 crate::repository::dependency_model::CapabilityProvenance::SourcePromisedPath {
                     format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
-                    source_path: path.to_string(),
                 },
             target: None,
             component: None,

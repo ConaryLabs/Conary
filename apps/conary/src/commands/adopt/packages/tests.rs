@@ -468,13 +468,14 @@ fn preview_and_apply_share_identity_mode_and_record_plan() {
         file.kind,
         conary_core::repository::dependency_model::RepositoryCapabilityKind::File
     );
-    assert!(matches!(
-        &file.provenance,
+    // The row above was found by its capability, which is the path; provenance
+    // states only that a signed RPM file record established it.
+    assert_eq!(
+        file.provenance,
         conary_core::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
             format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
-            source_path,
-        } if source_path == live_file.to_string_lossy().as_ref()
-    ));
+        }
+    );
 }
 
 #[test]

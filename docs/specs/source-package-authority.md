@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 4
+last_updated: 2026-08-08
+revision: 5
 summary: Define lossless RPM, Debian, ALPM, and CCS package authority plus explicit consumer projections
 ---
 
@@ -199,6 +199,11 @@ Capability provenance is a closed enum with at least these roles:
 | `author-declared` | Explicit capability in a directly authored CCS package |
 | `source-declared` | Exact RPM, Debian, or ALPM provision with source-format identity and source-record position |
 | `source-derived-file` | Capability derived by one pinned source-format rule from an exact payload record |
+| `source-promised-path` | A path the source package owns but ships no content for, materialized by its own lifecycle |
+
+A path role carries its source format and nothing else. The capability's name
+is the path, so provenance never restates it: one path, one owner, and one
+stored copy per package-owned path across a whole distribution.
 
 Package-name satisfaction comes directly from signed `identity`. It is not a
 fourth capability role. A duplicate or contradictory identity, an unknown

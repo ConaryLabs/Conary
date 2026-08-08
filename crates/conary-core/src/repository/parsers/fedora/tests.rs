@@ -278,7 +278,6 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
         && provide.provenance
             == crate::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
                 format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
-                source_path: provide.name.clone(),
             }));
 }
 

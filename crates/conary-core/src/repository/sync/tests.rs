@@ -106,7 +106,7 @@ mod tests {
             .with_native_text("libbar".to_string());
 
             let index = json!({
-                "schema": 1,
+                "schema": crate::repository::static_repo::SCHEMA_VERSION,
                 "name": "acme-tools",
                 "index_version": 7,
                 "generated": "2026-06-10T18:00:00Z",
@@ -132,7 +132,7 @@ mod tests {
             .unwrap();
 
             let keys = json!({
-                "schema": 1,
+                "schema": crate::repository::static_repo::SCHEMA_VERSION,
                 "keys": [
                     {
                         "algorithm": "ed25519",

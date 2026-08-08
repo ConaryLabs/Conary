@@ -171,8 +171,9 @@ fn repo_identity_toml(name: &str, description: Option<&str>, root_key_ids: &[Str
     let description = description
         .map(|value| format!("description = \"{value}\"\n"))
         .unwrap_or_default();
+    let schema = conary_core::repository::static_repo::SCHEMA_VERSION;
     format!(
-        "schema = 1\n[repo]\nname = \"{name}\"\n{description}[trust]\nroot_key_ids = [{root_keys}]\n"
+        "schema = {schema}\n[repo]\nname = \"{name}\"\n{description}[trust]\nroot_key_ids = [{root_keys}]\n"
     )
 }
 
