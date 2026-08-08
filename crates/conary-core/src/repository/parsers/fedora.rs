@@ -2,11 +2,15 @@
 
 //! Fedora/RPM repository metadata parser
 //!
-//! Parses Fedora-style repomd.xml and primary.xml files which contain
-//! RPM package metadata in XML format.
+//! Parses Fedora-style repomd.xml, primary.xml, and filelists.xml files which
+//! contain RPM package metadata in XML format.
 //! Generator-selected `<file>` records in primary.xml are package-owned file
 //! provides. This follows createrepo_c's pinned primary metadata contract:
 //! <https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump.c#L175-L225>.
+//! primary.xml carries only the paths that contract selects, so complete
+//! package file ownership comes from the signed filelists.xml document
+//! (`fedora/filelists.rs`), which is projected into the same typed file
+//! capabilities.
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{ChecksumType, PackageMetadata, RepositoryParser};
@@ -25,13 +29,18 @@ use quick_xml::events::Event;
 use serde_json::json;
 use tracing::{debug, info};
 
+mod filelists;
+mod files;
 mod metalink;
 mod provides;
 mod relation;
+mod repomd;
+use files::FileRecordReader;
 use metalink::parse_metalink_repomd_identity;
 use relation::{
     RpmProvideConstraint, rpm_provide_constraint, rpm_relation_native_text, rpm_require_to_group,
 };
+use repomd::{RepoMdDocument, RepoMdIndex, RepoMdRecord};
 
 /// Fedora/RPM repository parser
 pub struct FedoraParser {
@@ -59,11 +68,26 @@ impl FormatSection {
     }
 }
 
-impl FedoraParser {
-    fn local_tag_name(tag_name: &str) -> &str {
-        tag_name.rsplit(':').next().unwrap_or(tag_name)
-    }
+/// Namespace-prefixed and unprefixed element names name the same element.
+fn local_tag_name(tag_name: &str) -> &str {
+    tag_name.rsplit(':').next().unwrap_or(tag_name)
+}
 
+/// Build one RPM version string from the exact epoch, version, and release a
+/// signed document records.
+///
+/// primary.xml and filelists.xml both carry `<version epoch ver rel/>`, so one
+/// owner keeps the corpus version and the filelists join comparable.
+fn rpm_version_text(epoch: Option<&str>, ver: &str, rel: &str) -> String {
+    let epoch = epoch.unwrap_or("0");
+    if epoch == "0" {
+        format!("{ver}-{rel}")
+    } else {
+        format!("{epoch}:{ver}-{rel}")
+    }
+}
+
+impl FedoraParser {
     /// Create a new Fedora/RPM parser
     pub fn new(architecture: String, trust: PreparedOpenPgpTrust) -> Result<Self> {
         if !matches!(trust.policy(), RepositoryTrustPolicy::Rpm { .. }) {
@@ -77,10 +101,10 @@ impl FedoraParser {
         })
     }
 
-    /// Download repomd.xml and find primary.xml location
+    /// Download repomd.xml and admit the metadata records Conary reads.
     ///
     /// Uses RepositoryClient for HTTP.
-    async fn get_primary_xml_location(&self, repo_url: &str) -> Result<PrimaryMetadataLocation> {
+    async fn fetch_repomd_index(&self, repo_url: &str) -> Result<RepoMdIndex> {
         let repomd_url = format!("{}/repodata/repomd.xml", repo_url.trim_end_matches('/'));
         debug!("Downloading repomd.xml from: {}", repomd_url);
 
@@ -116,194 +140,35 @@ impl FedoraParser {
         let xml_content = String::from_utf8(xml_bytes)
             .map_err(|e| Error::ParseError(format!("Invalid UTF-8 in repomd.xml: {}", e)))?;
 
-        // Parse repomd.xml to find primary location
-        let mut reader = Reader::from_str(&xml_content);
-        reader.config_mut().trim_text_end = true;
-
-        let mut buf = Vec::new();
-        let mut in_primary = false;
-        let mut location = None;
-        let mut checksum = None;
-        let mut checksum_type = None;
-        let mut size = None;
-        let mut current_field = None;
-        let mut primary_records = 0usize;
-
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) if e.name().as_ref() == b"data" => {
-                    // Check if this is the primary data type
-                    for attr in e.attributes() {
-                        let attr = attr.map_err(|error| {
-                            Error::ParseError(format!(
-                                "Failed to parse repomd.xml data attribute: {error}"
-                            ))
-                        })?;
-                        if attr.key.as_ref() == b"type"
-                            && attr
-                                .decoded_and_normalized_value(
-                                    quick_xml::XmlVersion::Implicit1_0,
-                                    reader.decoder(),
-                                )
-                                .map_err(|error| {
-                                    Error::ParseError(format!(
-                                        "Failed to decode repomd.xml data type: {error}"
-                                    ))
-                                })?
-                                == "primary"
-                        {
-                            primary_records += 1;
-                            if primary_records > 1 {
-                                return Err(Error::ParseError(
-                                    "repomd.xml repeats primary metadata records".to_string(),
-                                ));
-                            }
-                            in_primary = true;
-                        }
-                    }
-                }
-                Ok(Event::Start(e)) if in_primary && e.name().as_ref() == b"checksum" => {
-                    current_field = Some("checksum");
-                    for attr in e.attributes() {
-                        let attr = attr.map_err(|error| {
-                            Error::ParseError(format!(
-                                "Failed to parse repomd.xml checksum attribute: {error}"
-                            ))
-                        })?;
-                        if attr.key.as_ref() == b"type" {
-                            checksum_type = Some(
-                                attr.decoded_and_normalized_value(
-                                    quick_xml::XmlVersion::Implicit1_0,
-                                    reader.decoder(),
-                                )
-                                .map_err(|error| {
-                                    Error::ParseError(format!(
-                                        "Failed to decode repomd.xml checksum type: {error}"
-                                    ))
-                                })?
-                                .into_owned(),
-                            );
-                        }
-                    }
-                }
-                Ok(Event::Start(e)) if in_primary && e.name().as_ref() == b"size" => {
-                    current_field = Some("size");
-                }
-                Ok(Event::Start(e) | Event::Empty(e))
-                    if e.name().as_ref() == b"location" && in_primary =>
-                {
-                    // Extract href attribute
-                    for attr in e.attributes() {
-                        let attr = attr.map_err(|error| {
-                            Error::ParseError(format!(
-                                "Failed to parse repomd.xml location attribute: {error}"
-                            ))
-                        })?;
-                        if attr.key.as_ref() == b"href" {
-                            location = Some(
-                                attr.decoded_and_normalized_value(
-                                    quick_xml::XmlVersion::Implicit1_0,
-                                    reader.decoder(),
-                                )
-                                .map_err(|error| {
-                                    Error::ParseError(format!(
-                                        "Failed to decode repomd.xml location: {error}"
-                                    ))
-                                })?
-                                .into_owned(),
-                            );
-                        }
-                    }
-                }
-                Ok(Event::Text(text)) if in_primary => {
-                    let value = text
-                        .xml_content(quick_xml::XmlVersion::Implicit1_0)
-                        .map_err(|error| {
-                            Error::ParseError(format!("Failed to decode repomd.xml text: {error}"))
-                        })?
-                        .trim()
-                        .to_string();
-                    match current_field {
-                        Some("checksum") => checksum = Some(value),
-                        Some("size") => size = Some(value),
-                        _ => {}
-                    }
-                }
-                Ok(Event::End(e)) if e.name().as_ref() == b"data" => {
-                    in_primary = false;
-                    current_field = None;
-                }
-                Ok(Event::End(e)) if matches!(e.name().as_ref(), b"checksum" | b"size") => {
-                    current_field = None;
-                }
-                Ok(Event::Eof) => break,
-                Err(e) => {
-                    return Err(Error::ParseError(format!(
-                        "Failed to parse repomd.xml: {}",
-                        e
-                    )));
-                }
-                _ => {}
-            }
-            buf.clear();
-        }
-
-        let href = location.ok_or_else(|| {
-            Error::ParseError("Could not find primary data location in repomd.xml".to_string())
-        })?;
-        common::validate_filename(&href).map_err(Error::ParseError)?;
-        if checksum_type.as_deref() != Some("sha256") {
-            return Err(Error::ParseError(format!(
-                "RPM primary metadata requires exact sha256 identity; found {:?}",
-                checksum_type.as_deref()
-            )));
-        }
-        let sha256 = checksum.ok_or_else(|| {
-            Error::ParseError("repomd.xml primary record has no checksum".to_string())
-        })?;
-        validate_sha256(&sha256, "repomd.xml primary")?;
-        let size = size
-            .ok_or_else(|| {
-                Error::ParseError("repomd.xml primary record has no compressed size".to_string())
-            })?
-            .parse::<u64>()
-            .map_err(|error| {
-                Error::ParseError(format!(
-                    "repomd.xml primary compressed size is invalid: {error}"
-                ))
-            })?;
-        Ok(PrimaryMetadataLocation { href, sha256, size })
+        // Parse repomd.xml into the records Conary reads.
+        repomd::parse_repomd(&xml_content)
     }
 
-    /// Download and decompress primary.xml
+    /// Download one metadata document and verify it against its signed record.
     ///
-    /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
-    async fn download_primary_xml(
+    /// The served (still compressed) bytes are what the signed repomd.xml
+    /// records, so identity is established before a decoder ever sees them.
+    async fn download_verified_document(
         &self,
         repo_url: &str,
-        location: &PrimaryMetadataLocation,
-    ) -> Result<String> {
-        let primary_url = format!("{}/{}", repo_url.trim_end_matches('/'), location.href);
-        debug!("Downloading primary.xml from: {}", primary_url);
+        record: &RepoMdRecord,
+    ) -> Result<(String, Vec<u8>)> {
+        let document_url = format!("{}/{}", repo_url.trim_end_matches('/'), record.href);
+        debug!(
+            "Downloading {} metadata from: {}",
+            record.document.label(),
+            document_url
+        );
 
         let client = RepositoryClient::new()?;
-        let raw_bytes = client.download_to_bytes(&primary_url).await?;
-        if raw_bytes.len() as u64 != location.size {
-            return Err(Error::GpgVerificationFailed(format!(
-                "signed repomd.xml authenticates primary metadata as {} bytes but the repository \
-                 served {} bytes",
-                location.size,
-                raw_bytes.len()
-            )));
-        }
-        let actual = crate::hash::sha256(&raw_bytes);
-        if actual != location.sha256 {
-            return Err(Error::GpgVerificationFailed(format!(
-                "RPM primary metadata identity mismatch: signed repomd.xml SHA256 is {}, \
-                 downloaded SHA256 is {}",
-                location.sha256, actual
-            )));
-        }
+        let raw_bytes = client.download_to_bytes(&document_url).await?;
+        record.verify_served_bytes(&raw_bytes)?;
+        Ok((document_url, raw_bytes))
+    }
+
+    /// Download, verify, and decompress primary.xml.
+    async fn download_primary_xml(&self, repo_url: &str, record: &RepoMdRecord) -> Result<String> {
+        let (primary_url, raw_bytes) = self.download_verified_document(repo_url, record).await?;
         let decompressed =
             decompress_metadata_auto(&raw_bytes, &format!("RPM primary metadata {primary_url}"))?;
         let content = String::from_utf8(decompressed).map_err(|error| {
@@ -327,18 +192,14 @@ impl FedoraParser {
         let mut current_tag = String::new();
         let mut in_format = false;
         let mut format_section = None;
-        let mut current_primary_file = None::<String>;
+        let mut file_record = FileRecordReader::new(RepoMdDocument::Primary);
 
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    let local_tag = Self::local_tag_name(&tag_name);
-                    if current_primary_file.is_some() {
-                        return Err(Error::ParseError(
-                            "RPM primary file record cannot contain nested elements".to_string(),
-                        ));
-                    }
+                    let local_tag = local_tag_name(&tag_name);
+                    file_record.reject_nested_element()?;
                     current_tag = tag_name.clone();
 
                     match local_tag {
@@ -364,10 +225,7 @@ impl FedoraParser {
                                     "RPM primary file record appears outside a package".to_string(),
                                 ));
                             }
-                            current_primary_file = Some(String::new());
-                            // A path's trailing XML whitespace is package
-                            // identity, not inter-element formatting.
-                            reader.config_mut().trim_text_end = false;
+                            file_record.open(&mut reader);
                         }
                         "checksum" => {
                             if let Some(ref mut pkg) = current_package {
@@ -400,12 +258,8 @@ impl FedoraParser {
                 }
                 Ok(Event::Empty(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    let local_tag = Self::local_tag_name(&tag_name);
-                    if current_primary_file.is_some() {
-                        return Err(Error::ParseError(
-                            "RPM primary file record cannot contain nested elements".to_string(),
-                        ));
-                    }
+                    let local_tag = local_tag_name(&tag_name);
+                    file_record.reject_nested_element()?;
 
                     match local_tag {
                         "version" => {
@@ -629,9 +483,7 @@ impl FedoraParser {
                             }
                         }
                         "file" if in_format => {
-                            return Err(Error::ParseError(
-                                "RPM primary file record must contain an absolute path".to_string(),
-                            ));
+                            return Err(file_record.empty_record_error());
                         }
                         _ => {}
                     }
@@ -657,9 +509,9 @@ impl FedoraParser {
                     if text.is_empty() {
                         continue;
                     }
-                    if let Some(file) = current_primary_file.as_mut() {
-                        file.push_str(&text);
-                    } else if let Some(ref mut pkg) = current_package {
+                    if !file_record.push_text(&text)
+                        && let Some(ref mut pkg) = current_package
+                    {
                         append_package_text(pkg, &current_tag, &text);
                     }
                 }
@@ -685,9 +537,9 @@ impl FedoraParser {
                                 .to_string()
                         }
                     };
-                    if let Some(file) = current_primary_file.as_mut() {
-                        file.push_str(&text);
-                    } else if let Some(ref mut pkg) = current_package {
+                    if !file_record.push_text(&text)
+                        && let Some(ref mut pkg) = current_package
+                    {
                         append_package_text(pkg, &current_tag, &text);
                     }
                 }
@@ -699,23 +551,17 @@ impl FedoraParser {
                                     "Failed to decode primary.xml CDATA: {error}"
                                 ))
                             })?;
-                    if let Some(file) = current_primary_file.as_mut() {
-                        file.push_str(&text);
-                    } else if let Some(ref mut pkg) = current_package {
+                    if !file_record.push_text(&text)
+                        && let Some(ref mut pkg) = current_package
+                    {
                         append_package_text(pkg, &current_tag, &text);
                     }
                 }
                 Ok(Event::End(e)) => {
                     let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    let local_tag = Self::local_tag_name(&tag_name);
+                    let local_tag = local_tag_name(&tag_name);
                     if local_tag == "file" && in_format {
-                        let file = current_primary_file.take().ok_or_else(|| {
-                            Error::ParseError(
-                                "RPM primary file record ended without starting".to_string(),
-                            )
-                        })?;
-                        reader.config_mut().trim_text_end = true;
-                        let file = validate_primary_file_path(file)?;
+                        let file = file_record.close(&mut reader)?;
                         current_package
                             .as_mut()
                             .ok_or_else(|| {
@@ -758,14 +604,7 @@ impl FedoraParser {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PrimaryMetadataLocation {
-    href: String,
-    sha256: String,
-    size: u64,
-}
-
-fn validate_sha256(value: &str, label: &str) -> Result<()> {
+pub(super) fn validate_sha256(value: &str, label: &str) -> Result<()> {
     if value.len() != 64
         || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
         || value.bytes().any(|byte| byte.is_ascii_uppercase())
@@ -816,11 +655,7 @@ impl PackageBuilder {
         let rel = self
             .rel
             .ok_or_else(|| Error::ParseError("Missing release".to_string()))?;
-        let version = if epoch == "0" {
-            format!("{}-{}", ver, rel)
-        } else {
-            format!("{}:{}-{}", epoch, ver, rel)
-        };
+        let version = rpm_version_text(Some(&epoch), &ver, &rel);
 
         let checksum = self
             .checksum
@@ -924,15 +759,6 @@ impl PackageBuilder {
     }
 }
 
-fn validate_primary_file_path(path: String) -> Result<String> {
-    if path.is_empty() || !path.starts_with('/') {
-        return Err(Error::ParseError(
-            "RPM primary file record must contain an absolute path".to_string(),
-        ));
-    }
-    Ok(path)
-}
-
 fn append_package_text(package: &mut PackageBuilder, tag: &str, text: &str) {
     let field = match tag {
         "name" => Some(&mut package.name),
@@ -955,16 +781,40 @@ impl RepositoryParser for FedoraParser {
     async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
         info!("Syncing Fedora repository for {}", self.architecture);
 
-        // Get primary.xml location from repomd.xml
-        let primary_location = self.get_primary_xml_location(repo_url).await?;
+        // Admit the signed repomd.xml records Conary reads.
+        let repomd = self.fetch_repomd_index(repo_url).await?;
 
-        // Download and decompress primary.xml
-        let primary_xml = self
-            .download_primary_xml(repo_url, &primary_location)
-            .await?;
+        // Download, verify, and parse primary.xml.
+        let primary_xml = self.download_primary_xml(repo_url, &repomd.primary).await?;
+        let mut packages = self.parse_primary_xml(&primary_xml, repo_url)?;
+        drop(primary_xml);
 
-        // Parse primary.xml
-        let packages = self.parse_primary_xml(&primary_xml, repo_url)?;
+        // primary.xml carries only the generator-selected file set, so
+        // complete package file ownership comes from filelists.xml.
+        match repomd.filelists {
+            Some(record) => {
+                let (filelists_url, raw_bytes) =
+                    self.download_verified_document(repo_url, &record).await?;
+                let compressed =
+                    crate::compression::CompressionFormat::from_magic_bytes(&raw_bytes)
+                        != crate::compression::CompressionFormat::None;
+                let open_size = record.authenticated_open_size(compressed)?;
+                let ingest = filelists::ingest_verified_filelists(
+                    &mut packages,
+                    &raw_bytes,
+                    open_size,
+                    &filelists_url,
+                )?;
+                info!(
+                    "Ingested {} filelists package records: {} file capabilities added, {} already \
+                     published by primary.xml",
+                    ingest.records, ingest.files_added, ingest.files_already_known
+                );
+            }
+            None => {
+                filelists::require_no_filelists_dependent_requirements(&packages, repo_url)?;
+            }
+        }
 
         info!("Parsed {} packages from Fedora repository", packages.len());
         Ok(packages)

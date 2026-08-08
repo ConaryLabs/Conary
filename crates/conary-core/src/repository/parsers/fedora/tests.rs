@@ -4,7 +4,7 @@ use super::*;
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 use crate::repository::dependency_model::{ConditionalRequirementBehavior, ProvideVersionRelation};
 
-fn parser() -> FedoraParser {
+pub(super) fn parser() -> FedoraParser {
     let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Rpm {
         metadata: RpmMetadataAuthority::Metalink {
             url: "https://mirrors.example.test/metalink".to_string(),

@@ -22,9 +22,10 @@ use super::registry::{self, RepositoryFormat};
 use super::static_repo::sync::fetch_static_sync_snapshot;
 use super::trust::openpgp::PreparedOpenPgpTrust;
 use super::versioning::VersionScheme;
-pub(in crate::repository) use native::{capability_kind_to_db, convert_requirement_groups};
-use native::{
-    normalized_repository_capabilities, persist_native_sync_rows, persist_synced_package_rows,
+use native::persist_native_sync_rows;
+pub(in crate::repository) use native::{
+    capability_kind_to_db, convert_requirement_groups, persist_synced_package_rows,
+    synced_package_row,
 };
 #[cfg(test)]
 use remi::remi_sync_row;
@@ -79,50 +80,15 @@ async fn fetch_repository_native_snapshot(
     let synced_packages: Vec<SyncedPackageRow> = packages
         .into_iter()
         .map(|pkg_meta| {
-            let provides = normalized_repository_capabilities(&pkg_meta);
-
-            // Rebase download URL if content_url is configured (reference mirror)
-            let download_url = rebase_download_url(
-                &pkg_meta.download_url,
+            synced_package_row(
+                repo_id,
+                &source_profile_id,
                 &repo.url,
                 repo.content_url.as_deref(),
-            );
-
-            let version_scheme = pkg_meta.version_scheme;
-            let mut repo_pkg = RepositoryPackage::new(
-                repo_id,
-                pkg_meta.name,
-                pkg_meta.version,
-                version_scheme,
-                pkg_meta.checksum,
-                pkg_meta.size as i64,
-                download_url,
-            );
-
-            repo_pkg.architecture = pkg_meta.architecture;
-            repo_pkg.debian_multi_arch = pkg_meta.debian_multi_arch;
-            repo_pkg.description = pkg_meta.description;
-            repo_pkg.metadata = match &pkg_meta.extra_metadata {
-                serde_json::Value::Null => None,
-                value => Some(value.to_string()),
-            };
-
-            // Persist the exact repository profile. Package format remains a
-            // separate typed field and is never promoted to distro authority.
-            repo_pkg.source_profile = Some(source_profile_id.clone());
-
-            // Convert parser-level requirement groups to DB models
-            let (req_groups, req_group_clauses) =
-                convert_requirement_groups(0, &pkg_meta.requirements);
-
-            Ok(SyncedPackageRow {
-                package: repo_pkg,
-                provides,
-                requirement_groups: req_groups,
-                requirement_group_clauses: req_group_clauses,
-            })
+                pkg_meta,
+            )
         })
-        .collect::<Result<_>>()?;
+        .collect();
     Ok(RepositorySyncSnapshot::NativeRows(synced_packages))
 }
 

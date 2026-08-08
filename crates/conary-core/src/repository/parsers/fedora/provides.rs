@@ -56,12 +56,26 @@ pub(super) fn project_repository_provides(
         });
     }
 
-    projected.extend(primary_files.iter().cloned().map(|path| RepositoryProvide {
+    for path in primary_files {
+        extend_file_provides(&mut projected, path);
+    }
+    Ok(projected)
+}
+
+/// Project one package-owned path as a typed file capability.
+///
+/// Primary and filelists records are the same authority -- one generator
+/// writing the same `<file>` element from the same package file list -- so they
+/// produce the same capability with the same `source-derived-file` provenance
+/// through this one owner. Provenance carries the path the record named, which
+/// is what makes a later reader able to say which signed record a provider came
+/// from.
+pub(super) fn extend_file_provides(provides: &mut Vec<RepositoryProvide>, path: &str) {
+    provides.push(RepositoryProvide {
         provenance: CapabilityProvenance::SourceDerivedFile {
             format: SourcePackageFormat::Rpm,
-            source_path: path.clone(),
+            source_path: path.to_string(),
         },
-        ..RepositoryProvide::file(path)
-    }));
-    Ok(projected)
+        ..RepositoryProvide::file(path.to_string())
+    });
 }
