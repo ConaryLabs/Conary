@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.11.1] - 2026-08-08
+
+### Fixed
+- bulk-delete R2 orphans in chunk GC (#311)
+
 ## [remi-v0.11.0] - 2026-08-07
 
 ### Added
