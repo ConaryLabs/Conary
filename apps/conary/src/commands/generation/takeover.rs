@@ -1,4 +1,4 @@
-// src/commands/generation/takeover.rs
+// apps/conary/src/commands/generation/takeover.rs
 //! Progressive system takeover pipeline
 //!
 //! Replaces the old all-or-nothing takeover with a three-level progressive
@@ -194,13 +194,13 @@ pub async fn cmd_system_takeover(
             takeover_level_name(level),
             takeover_inventory_from_plan(&plan),
             pm.display_name(),
-            bootloader_name(bootloader),
+            bootloader_name(&bootloader),
         )
     });
     record.requested_level = takeover_level_name(level).to_string();
     record.inventory = takeover_inventory_from_plan(&plan);
     record.discovered_package_manager = pm.display_name().to_string();
-    record.discovered_bootloader = bootloader_name(bootloader).to_string();
+    record.discovered_bootloader = bootloader_name(&bootloader).to_string();
     record.save(db_path)?;
 
     // Print inventory summary
@@ -410,7 +410,7 @@ pub async fn cmd_system_takeover(
     info!("Built generation {gen_number}");
 
     println!("  Writing boot entry ...");
-    let boot_entry_outcome = match write_boot_entry(gen_number) {
+    let boot_entry_outcome = match write_boot_entry(gen_number, &bootloader) {
         Ok(()) => BootEntryOutcome::Written,
         Err(error) => {
             warn!("Failed to write boot entry: {error}");
@@ -556,10 +556,10 @@ fn takeover_level_name(level: TakeoverLevel) -> &'static str {
     }
 }
 
-fn bootloader_name(bootloader: super::boot::BootLoader) -> &'static str {
+fn bootloader_name(bootloader: &super::boot::BootLoader) -> &'static str {
     match bootloader {
         super::boot::BootLoader::Bls => "bls",
-        super::boot::BootLoader::Grub => "grub",
+        super::boot::BootLoader::Grub(_) => "grub",
         super::boot::BootLoader::None => "none",
     }
 }
