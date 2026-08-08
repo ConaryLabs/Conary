@@ -154,6 +154,9 @@ jobs:
       - uses: ./.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
+      - uses: ./.github/actions/cache-base-image
+        with:
+          distro: ${{ matrix.distro }}
       - name: Install the published native package in the test image
         run: >-
           cargo run -p conary-test --

@@ -8,8 +8,16 @@
 # The staged binary is the static musl artifact from
 # scripts/build-static-conary.sh, so this image no longer compiles Conary from
 # source to escape the host's glibc and OpenSSL ABI.
-
-FROM docker.io/library/ubuntu:26.04
+#
+# The base image is pinned by digest so upstream tag drift is a deliberate
+# bump, not silent CI exposure (issue #323). Re-resolve with (needs an
+# anonymous Docker Hub pull token first):
+#   token=$(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull' | jq -r .token)
+#   curl -sI -H "Authorization: Bearer $token" \
+#     -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+#     https://registry-1.docker.io/v2/library/ubuntu/manifests/26.04
+# and take the Docker-Content-Digest response header.
+FROM docker.io/library/ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
 ARG INSTALL_MODE=binary
 

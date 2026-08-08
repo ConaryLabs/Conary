@@ -155,6 +155,9 @@ jobs:
       - uses: ./.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
+      - uses: ./.github/actions/cache-base-image
+        with:
+          distro: ${{ matrix.distro }}
       - name: Build the ${{ matrix.distro }} test image
         run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
       - name: Capture the native oracle and run Cartesian lifecycle parity
