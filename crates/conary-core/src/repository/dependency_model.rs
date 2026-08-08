@@ -57,6 +57,12 @@ impl SourcePackageFormat {
 
 /// Why a capability exists. Exact package identity is deliberately distinct
 /// from every declared or derived capability.
+///
+/// A path-owning variant states only *why* the path is a capability. It never
+/// carries the path: the capability's own name is the path, so restating it in
+/// provenance would be one fact with two owners that can disagree -- and, at
+/// repository scale, one stored copy of every file path per package in the
+/// distribution.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "kebab-case")]
 pub enum CapabilityProvenance {
@@ -66,9 +72,9 @@ pub enum CapabilityProvenance {
         format: SourcePackageFormat,
         record_index: u32,
     },
+    /// A path the source package ships, derived from one exact signed record.
     SourceDerivedFile {
         format: SourcePackageFormat,
-        source_path: String,
     },
     /// A path the source package owns but ships no content for, materialized by
     /// its own lifecycle (RPM `%ghost`).
@@ -79,7 +85,6 @@ pub enum CapabilityProvenance {
     /// decide, instead of letting a promise pass silently as a shipped file.
     SourcePromisedPath {
         format: SourcePackageFormat,
-        source_path: String,
     },
 }
 
@@ -361,21 +366,14 @@ impl ProvidedCapability {
                     self.name
                 )));
             }
-            CapabilityProvenance::SourceDerivedFile { source_path, .. }
-                if self.kind != RepositoryCapabilityKind::File || !source_path.starts_with('/') =>
-            {
-                return Err(crate::error::Error::ParseError(
-                    "source-derived file capability requires a file kind and absolute source path"
-                        .to_string(),
-                ));
-            }
-            CapabilityProvenance::SourcePromisedPath { source_path, .. }
-                if self.kind != RepositoryCapabilityKind::File
-                    || !source_path.starts_with('/')
-                    || source_path != &self.name =>
+            // Both path-owning provenances name the path through the capability
+            // itself, so the one absolute-path-and-file-kind rule covers both.
+            CapabilityProvenance::SourceDerivedFile { .. }
+            | CapabilityProvenance::SourcePromisedPath { .. }
+                if self.kind != RepositoryCapabilityKind::File || !self.name.starts_with('/') =>
             {
                 return Err(crate::error::Error::ParseError(format!(
-                    "promised path capability '{}' requires a file kind and a matching absolute source path",
+                    "source path capability '{}' requires a file kind and an absolute path name",
                     self.name
                 )));
             }
@@ -401,10 +399,7 @@ impl ProvidedCapability {
             version_relation: None,
             version_scheme: format.version_scheme(),
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourceDerivedFile {
-                format,
-                source_path: path.to_string(),
-            },
+            provenance: CapabilityProvenance::SourceDerivedFile { format },
         }
     }
 
@@ -419,10 +414,7 @@ impl ProvidedCapability {
             version_relation: None,
             version_scheme: format.version_scheme(),
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourcePromisedPath {
-                format,
-                source_path: path.to_string(),
-            },
+            provenance: CapabilityProvenance::SourcePromisedPath { format },
         }
     }
 
@@ -1054,23 +1046,89 @@ mod tests {
 
     #[test]
     fn capability_validation_rejects_malformed_provenance_and_architecture() {
+        // The capability name is the only path a source-path provenance has, so
+        // a relative name is exactly the malformation the rule must catch.
         let mut capability = ProvidedCapability {
             kind: RepositoryCapabilityKind::File,
-            name: "/usr/bin/tool".to_string(),
+            name: "usr/bin/tool".to_string(),
             version: None,
             version_relation: None,
             version_scheme: VersionScheme::Arch,
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             provenance: CapabilityProvenance::SourceDerivedFile {
                 format: SourcePackageFormat::Alpm,
-                source_path: "usr/bin/tool".to_string(),
             },
         };
         assert!(capability.validate().is_err());
 
+        capability.provenance = CapabilityProvenance::SourcePromisedPath {
+            format: SourcePackageFormat::Alpm,
+        };
+        assert!(capability.validate().is_err());
+
+        // The same relative name is fine once nothing claims it is a path.
         capability.provenance = CapabilityProvenance::AuthorDeclared;
+        capability.kind = RepositoryCapabilityKind::Generic;
+        capability.validate().unwrap();
+
         capability.architecture_qualifier = ProvideArchitectureQualifier::Exact(String::new());
         assert!(capability.validate().is_err());
+    }
+
+    #[test]
+    fn a_path_capability_never_stores_its_path_in_provenance() {
+        // The persisted and signed shape is the contract: `repository_provides`
+        // holds one row per package-owned path for a whole distribution, so a
+        // duplicated path is one copy of every file path in the repository.
+        let shipped = ProvidedCapability::payload_file(SourcePackageFormat::Rpm, "/usr/bin/sh");
+        let promised = ProvidedCapability::promised_path(SourcePackageFormat::Rpm, "/var/run/tool");
+        let declared = ProvidedCapability {
+            kind: RepositoryCapabilityKind::Generic,
+            name: "webserver".to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Rpm,
+                record_index: 7,
+            },
+        };
+
+        for capability in [&shipped, &promised] {
+            let encoded = serde_json::to_value(&capability.provenance).unwrap();
+            assert_eq!(
+                encoded
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["role", "format"]),
+                "a path provenance carries only why the path is a capability"
+            );
+            assert!(
+                !serde_json::to_string(&capability.provenance)
+                    .unwrap()
+                    .contains(&capability.name),
+                "provenance must not restate the capability path"
+            );
+            capability.validate().unwrap();
+        }
+
+        assert_eq!(
+            serde_json::to_string(&shipped.provenance).unwrap(),
+            r#"{"role":"source-derived-file","format":"rpm"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&promised.provenance).unwrap(),
+            r#"{"role":"source-promised-path","format":"rpm"}"#
+        );
+        // A non-path provenance is untouched by that cut.
+        assert_eq!(
+            serde_json::to_string(&declared.provenance).unwrap(),
+            r#"{"role":"source-declared","format":"rpm","record_index":7}"#
+        );
     }
 
     #[test]
@@ -1103,10 +1161,7 @@ mod tests {
                 assert_eq!(provide.version_scheme, format.version_scheme());
                 assert_eq!(
                     provide.provenance,
-                    CapabilityProvenance::SourceDerivedFile {
-                        format,
-                        source_path: provide.name.clone(),
-                    }
+                    CapabilityProvenance::SourceDerivedFile { format }
                 );
             }
         }
@@ -1123,7 +1178,6 @@ mod tests {
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             provenance: CapabilityProvenance::SourceDerivedFile {
                 format: SourcePackageFormat::Rpm,
-                source_path: "/usr/bin/sh".to_string(),
             },
         }];
 

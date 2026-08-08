@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-03
-revision: 10
+last_updated: 2026-08-08
+revision: 11
 summary: Canonical current signed CCS v3 identity, capability, archive, payload, and trust contract
 ---
 
@@ -97,7 +97,9 @@ architecture qualifier, and either no version authority or a paired typed
 relation and version boundary. RPM may use all five ordered relations; Debian,
 Arch, and Conary providers may use only equality. It also signs one closed
 provenance role: `author-declared`, `source-declared` with source format and
-record position, or `source-derived-file` with source format and path. Exact
+record position, or `source-derived-file` / `source-promised-path` with source
+format alone. A path role never carries the path: the capability name is the
+path, and a second copy would be one fact with two owners. Exact
 package identity exists only in `identity`; resolution derives its one exact
 package-name provider from that field. A same-name source capability may carry
 a different compatibility version without becoming a second identity.

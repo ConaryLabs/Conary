@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 40
+last_updated: 2026-08-08
+revision: 41
 summary: Describe workspace architecture, source-authority projections, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -582,10 +582,14 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 26 retains revision 25's fail-closed persisted-state
-constraints and requires every persisted source pin to carry an explicit
-`strict`, `guarded`, or `permissive` dependency-mixing policy. Omitting the
-policy never selects one on the operator's behalf.
+Schema revision 27 retains revision 26's fail-closed persisted-state
+constraints and explicit `strict`, `guarded`, or `permissive` dependency-mixing
+policy on every persisted source pin, and stores every path-owning capability
+provenance without a duplicated path. That last change moves no table
+definition, so the revision is the only thing separating the two shapes:
+`provides.provenance` is JSON text inside a UNIQUE contract index and no resync
+rebuilds installed rows, so a database mixing both shapes would admit one path
+twice as two distinct providers.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the

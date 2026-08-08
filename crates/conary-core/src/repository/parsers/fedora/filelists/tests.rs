@@ -147,7 +147,6 @@ fn filelists_paths_carry_the_same_provenance_primary_paths_carry() {
             provide.provenance,
             CapabilityProvenance::SourceDerivedFile {
                 format: SourcePackageFormat::Rpm,
-                source_path: provide.name.clone(),
             }
         );
     }

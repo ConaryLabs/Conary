@@ -240,6 +240,7 @@ mod tests {
         RepositoryCapabilityKind, RepositoryProvide, RepositoryRequirementClause,
         RepositoryRequirementGroup, RepositoryRequirementKind,
     };
+    use crate::repository::static_repo::SCHEMA_VERSION;
     use crate::repository::sync::types::RepositorySyncSnapshot;
     use crate::trust::metadata::{TargetDescription, VerifiedTufState};
     use std::collections::BTreeMap;
@@ -298,7 +299,7 @@ mod tests {
             let provides = Self::typed_provides();
             let requirements = Self::typed_requirements();
             let index = serde_json::json!({
-                "schema": 1,
+                "schema": SCHEMA_VERSION,
                 "name": "acme-tools",
                 "index_version": index_version,
                 "generated": "2026-06-10T18:00:00Z",
@@ -328,7 +329,7 @@ mod tests {
             let provides = Self::typed_provides();
             let requirements = Self::typed_requirements();
             let index = serde_json::json!({
-                "schema": 1,
+                "schema": SCHEMA_VERSION,
                 "name": "acme-tools",
                 "index_version": 7,
                 "generated": "2026-06-10T18:00:00Z",
@@ -394,7 +395,7 @@ mod tests {
 
         fn write_valid_package_keys(&mut self) {
             let keys = serde_json::json!({
-                "schema": 1,
+                "schema": SCHEMA_VERSION,
                 "keys": [
                     {
                         "algorithm": "ed25519",
@@ -418,7 +419,7 @@ mod tests {
 
         fn write_package_keys_with_status(&mut self, status: &str) {
             let keys = serde_json::json!({
-                "schema": 1,
+                "schema": SCHEMA_VERSION,
                 "keys": [{
                     "algorithm": "ed25519",
                     "public_key": self.package_key_active,

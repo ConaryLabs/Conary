@@ -14,7 +14,15 @@ use crate::repository::versioning::{VersionScheme, parse_repo_constraint};
 
 use super::paths::validate_repo_relative_path;
 
-const SCHEMA_VERSION: u64 = 1;
+/// Document major for every static repository document a client parses.
+///
+/// Major 2 carries capability provenance without its duplicated path. A major-1
+/// index cannot be read as major 2 and a major-1 client cannot read a major-2
+/// index -- the provenance shapes are incompatible in both directions -- so the
+/// major is what clients gate on, exactly as the format specification requires.
+/// The publisher stamps this constant rather than a literal so a published
+/// document and the parser that admits it cannot drift apart.
+pub const SCHEMA_VERSION: u64 = 2;
 const SHA256_HEX_LEN: usize = 64;
 const ED25519_PUBLIC_KEY_LEN: usize = 32;
 const MAX_REPO_NAME_LEN: usize = 64;
@@ -444,7 +452,7 @@ fn validate_lower_hex(value: &str, expected_len: usize, field: &str) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{PackageKeysFile, RepoIdentity, StaticIndex};
+    use super::{PackageKeysFile, RepoIdentity, SCHEMA_VERSION, StaticIndex};
     use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
     const VALID_ROOT_KEY_ID: &str =
@@ -453,36 +461,12 @@ mod tests {
 
     #[test]
     fn repo_identity_rejects_bad_name() {
-        let input = r#"
-schema = 1
+        let input = format!(
+            r#"
+schema = {SCHEMA_VERSION}
 [repo]
 name = "Bad_Name"
 description = "bad"
-[trust]
-root_key_ids = ["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"]
-"#;
-        assert!(RepoIdentity::parse(input).is_err());
-    }
-
-    #[test]
-    fn repo_identity_rejects_bad_root_key_id() {
-        let input = r#"
-schema = 1
-[repo]
-name = "good-name"
-[trust]
-root_key_ids = ["not-a-key"]
-"#;
-        assert!(RepoIdentity::parse(input).is_err());
-    }
-
-    #[test]
-    fn repo_identity_rejects_unknown_schema() {
-        let input = format!(
-            r#"
-schema = 2
-[repo]
-name = "good-name"
 [trust]
 root_key_ids = ["{VALID_ROOT_KEY_ID}"]
 "#
@@ -491,19 +475,133 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     }
 
     #[test]
+    fn repo_identity_rejects_bad_root_key_id() {
+        let input = format!(
+            r#"
+schema = {SCHEMA_VERSION}
+[repo]
+name = "good-name"
+[trust]
+root_key_ids = ["not-a-key"]
+"#
+        );
+        assert!(RepoIdentity::parse(&input).is_err());
+    }
+
+    #[test]
+    fn repo_identity_rejects_unknown_schema() {
+        // Both directions: the retired major and any future major.
+        for schema in [SCHEMA_VERSION - 1, SCHEMA_VERSION + 1] {
+            let input = format!(
+                r#"
+schema = {schema}
+[repo]
+name = "good-name"
+[trust]
+root_key_ids = ["{VALID_ROOT_KEY_ID}"]
+"#
+            );
+            let error = RepoIdentity::parse(&input).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!(
+                    "repo identity schema {schema} is unsupported; expected {SCHEMA_VERSION}"
+                )),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn static_index_rejects_unknown_schema() {
+        for schema in [SCHEMA_VERSION - 1, SCHEMA_VERSION + 1] {
+            let input = valid_index_json(
+                schema,
+                "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+                1048576,
+            );
+            let error = StaticIndex::parse(&input).unwrap_err();
+            assert!(
+                error.to_string().contains(&format!(
+                    "static index schema {schema} is unsupported; expected {SCHEMA_VERSION}"
+                )),
+                "{error}"
+            );
+        }
+    }
+
+    /// A retired-major index carrying the retired provenance shape must be
+    /// refused by the version gate, not deserialized into the current shape
+    /// with its duplicated path silently dropped.
+    #[test]
+    fn a_retired_major_index_carrying_a_duplicated_provenance_path_is_refused() {
+        // Major 1 is named absolutely, not as `SCHEMA_VERSION - 1`: it is the
+        // exact published major whose provenance carried a duplicated path.
+        // A relative bound would follow the constant back down and prove
+        // nothing about whether the major was actually raised for that change.
+        const RETIRED_DUPLICATED_PATH_MAJOR: u64 = 1;
+
         let input = valid_index_json(
-            2,
+            RETIRED_DUPLICATED_PATH_MAJOR,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
+        )
+        .replace(
+            r#"{ "role": "exact-identity" }"#,
+            r#"{ "role": "source-derived-file", "format": "ccs", "source_path": "/usr/bin/widget" }"#,
         );
-        assert!(StaticIndex::parse(&input).is_err());
+        let error = StaticIndex::parse(&input).unwrap_err();
+        assert!(
+            error.to_string().contains(&format!(
+                "static index schema {RETIRED_DUPLICATED_PATH_MAJOR} is unsupported; expected {SCHEMA_VERSION}"
+            )),
+            "{error}"
+        );
+
+        // The same retired major is refused for the identity and key documents,
+        // so no static document can be read under the old provenance shape.
+        let identity = format!(
+            r#"
+schema = {RETIRED_DUPLICATED_PATH_MAJOR}
+[repo]
+name = "acme-tools"
+[trust]
+root_key_ids = ["{VALID_ROOT_KEY_ID}"]
+"#
+        );
+        assert!(RepoIdentity::parse(&identity).is_err());
+        assert!(
+            PackageKeysFile::parse(&valid_package_keys_json(
+                RETIRED_DUPLICATED_PATH_MAJOR,
+                &BASE64.encode([1_u8; 32])
+            ))
+            .is_err()
+        );
+    }
+
+    /// The publisher stamps the constant, so a published document and the
+    /// parser that admits it cannot drift apart.
+    #[test]
+    fn every_published_document_stamps_the_current_major() {
+        let index = StaticIndex::parse(&valid_index_json(
+            SCHEMA_VERSION,
+            "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        ))
+        .unwrap();
+        assert_eq!(index.schema, SCHEMA_VERSION);
+
+        let keys = PackageKeysFile::parse(&valid_package_keys_json(
+            SCHEMA_VERSION,
+            &BASE64.encode([1_u8; 32]),
+        ))
+        .unwrap();
+        assert_eq!(keys.schema, SCHEMA_VERSION);
     }
 
     #[test]
     fn static_index_rejects_package_filename_mismatch() {
         let input = valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/wrong-name-1.4.2-1-x86_64.ccs",
             1048576,
         );
@@ -512,14 +610,18 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
 
     #[test]
     fn static_index_rejects_package_path_outside_name_directory() {
-        let input = valid_index_json(1, "packages/other/acme-widget-1.4.2-1-x86_64.ccs", 1048576);
+        let input = valid_index_json(
+            SCHEMA_VERSION,
+            "packages/other/acme-widget-1.4.2-1-x86_64.ccs",
+            1048576,
+        );
         assert!(StaticIndex::parse(&input).is_err());
     }
 
     #[test]
     fn static_index_rejects_package_size_above_i64_max() {
         let input = valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             i64::MAX as u64 + 1,
         );
@@ -530,7 +632,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     fn static_index_rejects_duplicate_package_identity() {
         let input = format!(
             r#"{{
-  "schema": 1,
+  "schema": {SCHEMA_VERSION},
   "name": "acme-tools",
   "index_version": 7,
   "generated": "2026-06-10T18:00:00Z",
@@ -588,7 +690,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     #[test]
     fn static_index_rejects_string_dependency_contract() {
         let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
         ))
@@ -608,7 +710,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     #[test]
     fn static_index_preserves_same_name_compatibility_capability() {
         let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
         ))
@@ -643,7 +745,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     #[test]
     fn static_index_rejects_negative_requirement_groups() {
         let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
         ))
@@ -680,7 +782,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     #[test]
     fn static_index_round_trips_typed_relation_authority() {
         let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
         ))
@@ -701,7 +803,7 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     #[test]
     fn static_index_rejects_malformed_typed_relation_constraint() {
         let mut value: serde_json::Value = serde_json::from_str(&valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
         ))
@@ -727,19 +829,19 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
 
     #[test]
     fn package_keys_reject_unknown_schema() {
-        let input = valid_package_keys_json(2, &BASE64.encode([0_u8; 32]));
+        let input = valid_package_keys_json(SCHEMA_VERSION + 1, &BASE64.encode([0_u8; 32]));
         assert!(PackageKeysFile::parse(&input).is_err());
     }
 
     #[test]
     fn package_keys_reject_malformed_public_key() {
-        let input = valid_package_keys_json(1, "not base64!");
+        let input = valid_package_keys_json(SCHEMA_VERSION, "not base64!");
         assert!(PackageKeysFile::parse(&input).is_err());
     }
 
     #[test]
     fn package_keys_reject_wrong_public_key_length() {
-        let input = valid_package_keys_json(1, &BASE64.encode([0_u8; 31]));
+        let input = valid_package_keys_json(SCHEMA_VERSION, &BASE64.encode([0_u8; 31]));
         assert!(PackageKeysFile::parse(&input).is_err());
     }
 
@@ -759,12 +861,13 @@ root_key_ids = ["{VALID_ROOT_KEY_ID}"]
     #[test]
     fn package_keys_reject_empty_keys_for_non_empty_index() {
         let index = StaticIndex::parse(&valid_index_json(
-            1,
+            SCHEMA_VERSION,
             "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs",
             1048576,
         ))
         .unwrap();
-        let keys = PackageKeysFile::parse(r#"{"schema":1,"keys":[]}"#).unwrap();
+        let keys =
+            PackageKeysFile::parse(&format!(r#"{{"schema":{SCHEMA_VERSION},"keys":[]}}"#)).unwrap();
         assert!(keys.validate_for_index(&index).is_err());
     }
 

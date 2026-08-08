@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-08
-revision: 29
+revision: 30
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -339,7 +339,11 @@ record as an unversioned typed file provider with `source-derived-file`
 provenance on the exact package. The projection is owned by
 `repository/parsers/fedora/provides.rs`. It does not reimplement createrepo's
 path-selection rule or infer providers from package names, payload guesses, or
-a curated path list.
+a curated path list. The provenance names the source format only: the
+capability is the path, so a path-owning provenance never restates it. At this
+scale that is not a stylistic point -- a duplicated path is one extra copy of
+every package-owned path in the distribution, in both the synced database and
+every converted artifact's signed capability list.
 
 That selection rule is a filter, so `primary.xml` is not complete file
 ownership: the same generator writes every owned path through the same
@@ -376,9 +380,19 @@ missing path is an ordinary unsatisfied dependency.
 Fedora 44 `Everything/x86_64` measures that cost exactly (repomd revision
 1776864872): 76,354 packages, 81,720 file providers from `primary.xml`, and
 9,416,909 more from `filelists.xml`, taking `repository_provides` from 657,873
-rows to 10,074,782 and the synced SQLite database from 0.61 GB to 4.77 GB. The
+rows to 10,074,782 and the synced SQLite database from 0.61 GB to 3.90 GB. The
 829 MB decompressed document is never materialized: it is streamed from the
 verified compressed bytes under the ceiling the signed `<open-size>` declares.
+
+Dropping the duplicated path from file provenance is measured on that same
+corpus and revision: the synced database falls from 4.78 GB to 3.90 GB
+(-18.3%), the persist phase from 446.3 s to 392.3 s (-12.1%), and peak process
+RSS from 6.33 GiB to 5.15 GiB, with row counts identical. What remains is not
+provenance: at 4.78 GB the `repository_provides` table held 2,332 MB against
+1,684 MB of index (869 MB for `(kind, capability)`, 815 MB for `(capability)`,
+127 MB for the package key), so every path is still stored once in the table
+and twice more in indexes. Path interning or index consolidation is the next
+lever, not a second pass over provenance.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:

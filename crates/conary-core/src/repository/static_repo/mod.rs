@@ -11,7 +11,7 @@ pub(crate) mod sync;
 
 pub use format::{
     PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, RepoIdentityRepo,
-    RepoIdentityTrust, StaticIndex, StaticPackageEntry,
+    RepoIdentityTrust, SCHEMA_VERSION, StaticIndex, StaticPackageEntry,
 };
 pub use location::RepoLocation;
 pub use paths::validate_repo_relative_path;

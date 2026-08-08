@@ -7,7 +7,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::ccs::signing::SigningKeyPair;
-use crate::repository::static_repo::{PackageKeyEntry, PackageKeyStatus, PackageKeysFile};
+use crate::repository::static_repo::{
+    PackageKeyEntry, PackageKeyStatus, PackageKeysFile, SCHEMA_VERSION,
+};
 use crate::trust::keys::signing_keypair_to_tuf_key;
 use crate::trust::metadata::{RootMetadata, Signed};
 
@@ -234,7 +236,7 @@ pub(crate) fn build_package_keys_file(
     });
 
     let keys = PackageKeysFile {
-        schema: 1,
+        schema: SCHEMA_VERSION,
         keys: entries,
     };
     keys.validate()?;
