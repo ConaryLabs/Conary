@@ -92,6 +92,7 @@ pub fn create_external_admin_router(
             post(admin_handlers::sync_repo),
         )
         .route("/v1/admin/refresh", post(admin_handlers::refresh_repos))
+        .route("/v1/admin/chunk-gc", post(admin_handlers::chunk_gc))
         .route(
             "/v1/admin/federation/peers",
             get(admin_handlers::list_peers),

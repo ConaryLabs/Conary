@@ -241,6 +241,66 @@ fn validate_external_ip(ip: &IpAddr) -> Result<(), ServiceError> {
 }
 
 // ---------------------------------------------------------------------------
+// Chunk garbage collection
+// ---------------------------------------------------------------------------
+
+/// Chunks touched more recently than this are kept even when unreferenced, so
+/// an in-flight conversion cannot lose the chunks it is still writing.
+const CHUNK_GC_GRACE_PERIOD_SECS: u64 = 3600;
+
+/// Outcome of a chunk garbage-collection run.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChunkGcReport {
+    pub dry_run: bool,
+    pub referenced: usize,
+    pub local_scanned: usize,
+    pub r2_scanned: usize,
+    pub local_deleted: usize,
+    pub r2_deleted: usize,
+    pub local_bytes_freed: u64,
+    pub r2_bytes_freed: u64,
+}
+
+/// Garbage collect chunks that no converted package references.
+///
+/// With `dry_run` set the run only reports what it would remove.  This is the
+/// single implementation behind both the HTTP admin route and the MCP tool.
+pub async fn run_chunk_gc_op(
+    state: &Arc<RwLock<ServerState>>,
+    dry_run: bool,
+) -> Result<ChunkGcReport, ServiceError> {
+    let (db_path, objects_dir, r2_store) = {
+        let state = state.read().await;
+        (
+            state.config.db_path.clone(),
+            state.config.chunk_dir.join("objects"),
+            state.r2_store.clone(),
+        )
+    };
+
+    let result = crate::server::chunk_gc::run_chunk_gc(
+        &db_path,
+        &objects_dir,
+        r2_store,
+        dry_run,
+        CHUNK_GC_GRACE_PERIOD_SECS,
+    )
+    .await
+    .map_err(|e| ServiceError::Internal(e.to_string()))?;
+
+    Ok(ChunkGcReport {
+        dry_run,
+        referenced: result.referenced,
+        local_scanned: result.local_scanned,
+        r2_scanned: result.r2_scanned,
+        local_deleted: result.local_deleted,
+        r2_deleted: result.r2_deleted,
+        local_bytes_freed: result.local_bytes_freed,
+        r2_bytes_freed: result.r2_bytes_freed,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Token operations
 // ---------------------------------------------------------------------------
 

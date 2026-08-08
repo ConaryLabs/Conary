@@ -395,6 +395,23 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Configuration updated" }, "400": { "description": "Invalid configuration" }, "401": { "description": "Invalid or missing token" } }
                 }
             },
+            "/v1/admin/chunk-gc": {
+                "post": {
+                    "operationId": "chunkGarbageCollect",
+                    "summary": "Garbage collect orphaned chunks",
+                    "description": "Deletes chunks that no converted package references, from local disk and R2. An omitted body, or a body without dry_run, previews the run without deleting. Requires admin scope.",
+                    "tags": ["admin"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": false,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "properties": { "dry_run": { "type": "boolean", "default": true, "description": "Preview only; set false to delete." } }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Chunk garbage collection report" }, "400": { "description": "Invalid request body" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
             "/v1/admin/test-runs/gc": {
                 "delete": {
                     "operationId": "testRunGarbageCollect",
@@ -668,6 +685,7 @@ mod tests {
             ("/v1/admin/federation/peers/{id}", &["delete"][..]),
             ("/v1/admin/federation/peers/{id}/health", &["get"][..]),
             ("/v1/admin/federation/config", &["get", "put"][..]),
+            ("/v1/admin/chunk-gc", &["post"][..]),
             ("/v1/admin/test-runs/gc", &["delete"][..]),
             ("/v1/admin/test-health", &["get"][..]),
             ("/v1/admin/test-runs", &["get", "post"][..]),

@@ -3,6 +3,7 @@
 
 mod artifacts;
 mod audit;
+mod chunk_gc;
 mod events;
 mod federation;
 mod repos;
@@ -11,6 +12,7 @@ mod tokens;
 
 pub use artifacts::*;
 pub use audit::*;
+pub use chunk_gc::*;
 pub use events::*;
 pub use federation::*;
 pub use repos::*;
