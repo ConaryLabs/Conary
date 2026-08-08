@@ -1,0 +1,81 @@
+name: cache-base-image
+description: >-
+  Load a lifecycle test image's digest-pinned base image from an
+  actions/cache entry keyed on that digest, so the upstream registry
+  (registry.fedoraproject.org or docker.io) is off the CI hot path on every
+  cache hit. On a cache miss the base image is pulled once, with bounded
+  retry, and the cache is populated for the next run. Because the cache key
+  is the digest baked into the Containerfile's FROM line, a stale cache is
+  impossible by construction: an upstream tag bump only takes effect once the
+  Containerfile is deliberately re-pinned (issue #323).
+inputs:
+  distro:
+    description: Test distro slug (fedora44, ubuntu-26.04, arch).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Resolve the pinned base image reference
+      id: base-image
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        containerfile="apps/conary/tests/integration/remi/containers/Containerfile.${{ inputs.distro }}"
+        [[ -f "$containerfile" ]] || {
+          echo "no Containerfile for distro ${{ inputs.distro }}: $containerfile" >&2
+          exit 1
+        }
+
+        ref="$(grep -m1 '^FROM ' "$containerfile" | awk '{print $2}')"
+        [[ "$ref" == *@sha256:* ]] || {
+          echo "FROM line in $containerfile is not digest-pinned: $ref" >&2
+          exit 1
+        }
+
+        digest="${ref##*@sha256:}"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the cached base image
+      id: cache
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ~/.cache/conary-base-images/${{ inputs.distro }}.tar
+        key: conary-base-image-${{ inputs.distro }}-${{ steps.base-image.outputs.digest }}
+
+    - name: Load the cached base image
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: docker load --input ~/.cache/conary-base-images/${{ inputs.distro }}.tar
+
+    - name: Pull the base image by digest (cache miss)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        BASE_IMAGE_REF: ${{ steps.base-image.outputs.ref }}
+      run: |
+        set -euo pipefail
+
+        max_attempts=3
+        attempt=1
+        until docker pull "$BASE_IMAGE_REF"; do
+          if (( attempt >= max_attempts )); then
+            echo "failed to pull $BASE_IMAGE_REF after $max_attempts attempts" >&2
+            exit 1
+          fi
+          sleep_for=$(( attempt * 5 ))
+          echo "pull attempt $attempt of $max_attempts failed for $BASE_IMAGE_REF, retrying in ${sleep_for}s..." >&2
+          sleep "$sleep_for"
+          attempt=$(( attempt + 1 ))
+        done
+
+    - name: Save the pulled base image into the cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        BASE_IMAGE_REF: ${{ steps.base-image.outputs.ref }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.cache/conary-base-images
+        docker save --output ~/.cache/conary-base-images/${{ inputs.distro }}.tar "$BASE_IMAGE_REF"

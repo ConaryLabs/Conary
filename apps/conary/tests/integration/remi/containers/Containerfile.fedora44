@@ -4,8 +4,13 @@
 # Modes:
 #   binary  (default) - copies the pre-built static binary directly
 #   package           - installs from RPM via dnf
-
-FROM registry.fedoraproject.org/fedora:44
+#
+# The base image is pinned by digest so upstream tag drift is a deliberate
+# bump, not silent CI exposure (issue #323). Re-resolve with:
+#   curl -sI -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+#     https://registry.fedoraproject.org/v2/fedora/manifests/44
+# and take the Docker-Content-Digest response header.
+FROM registry.fedoraproject.org/fedora:44@sha256:67aa3cac2eb64f9cdfbe826c6ede7826589281c6c9c0d0fad5cb74c94b415689
 
 ARG INSTALL_MODE=binary
 
