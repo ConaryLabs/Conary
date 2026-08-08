@@ -152,6 +152,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
+      - uses: ./.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
       - name: Build the ${{ matrix.distro }} test image

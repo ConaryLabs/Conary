@@ -171,13 +171,15 @@ FAT/ext4 mkfs tools, and composefs inspection tools as needed). Group P uses the
 same source fixture and provisions ISO helper packages through Conary when
 `xorriso`/`mtools` are absent before it assembles the generation.
 
-A step with `stage_conary = true` copies the host-built `conary` into the guest,
-which couples the guest to the build host's glibc and to a matching
-`libseccomp.so.2`. `scripts/build-static-conary.sh` removes that coupling: it
-builds a static libseccomp for musl once, caches it, and produces a
-statically linked `conary` for `x86_64-unknown-linux-musl` that runs on any
-guest. Point the harness at it with `CONARY_HOST_BIN`. The build is debug
-profile and the binary is a test-staging artifact, not a release artifact.
+A step with `stage_conary = true` copies a `conary` into the guest. A host-built
+binary would couple the guest to the build host's glibc and to a matching
+`libseccomp.so.2`, so the harness stages the artifact from
+`scripts/build-static-conary.sh` instead: it builds a static libseccomp for musl
+once, caches it, and produces a statically linked `conary` for
+`x86_64-unknown-linux-musl` that runs on any guest. `CONARY_HOST_BIN` overrides
+that default to stage a specific binary. The build is debug profile and the
+binary is a test-staging artifact, not a release artifact. Distro container
+images stage the same artifact through `build_context = "static-binary"`.
 
 `scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
 Fedora Cloud Base qcow2 plus provisioning, and `bash
@@ -668,14 +670,26 @@ FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_p
 
 | Distro | Container | Base | `build_context` |
 |--------|-----------|------|-----------------|
-| `fedora44` | `Containerfile.fedora44` | Fedora 44 | `binary` |
-| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `workspace-source` |
-| `arch` | `Containerfile.arch` | Arch Linux (rolling) | `binary` |
+| `fedora44` | `Containerfile.fedora44` | Fedora 44 | `static-binary` |
+| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `static-binary` |
+| `arch` | `Containerfile.arch` | Arch Linux (rolling) | `static-binary` |
 
-`build_context` is a required typed distro capability in `config.toml`.
-`binary` stages the built Conary binary and fixtures; `workspace-source` also
-stages the workspace for a container-native build. Distro names do not select
-this behavior.
+`build_context` is a required typed distro capability in `config.toml` that
+selects which Conary binary an image receives. Distro names do not select this
+behavior.
+
+- `static-binary` stages the static `x86_64-unknown-linux-musl` artifact from
+  `scripts/build-static-conary.sh`. It carries no glibc or `libseccomp.so.2`
+  coupling, so one artifact runs in every image. Build it before
+  `images build`; staging fails closed when it is missing or not actually
+  static.
+- `binary` stages the host-built Conary binary. It only runs in an image whose
+  userland matches the build host.
+
+Every distro uses `static-binary`. Ubuntu was the forcing case: its container
+userland does not match the build host, which is why that image used to compile
+Conary from source in a builder stage and made its CI leg roughly three times
+slower than the others.
 
 ## Test Structure
 
@@ -986,7 +1000,7 @@ Current JSON semantics:
 
 1. Create `apps/conary/tests/integration/remi/containers/Containerfile.<name>`
 2. Add `[distros.<name>]` to `config.toml` with an explicit typed
-   `build_context = "binary"` or `build_context = "workspace-source"`
+   `build_context = "static-binary"` or `build_context = "binary"`
 3. Add to CI workflow matrices
 
 ## Troubleshooting

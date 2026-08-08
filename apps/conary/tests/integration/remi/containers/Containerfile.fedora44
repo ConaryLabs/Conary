@@ -2,7 +2,7 @@
 # Minimal Fedora 44 container for Remi integration testing
 #
 # Modes:
-#   binary  (default) - copies pre-built binary directly
+#   binary  (default) - copies the pre-built static binary directly
 #   package           - installs from RPM via dnf
 
 FROM registry.fedoraproject.org/fedora:44

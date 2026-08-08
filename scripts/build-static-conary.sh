@@ -35,8 +35,9 @@ Options:
   --help             Show this help text
 
 Host requirements: a Rust toolchain with the x86_64-unknown-linux-musl target
-(`rustup target add x86_64-unknown-linux-musl`), `musl-gcc`, Linux kernel
-headers under /usr/include, plus curl, tar, make, and gperf.
+(`rustup target add x86_64-unknown-linux-musl`), `musl-gcc`, the Linux kernel
+UAPI headers (linux-libc-dev, kernel-headers, or linux-api-headers), plus
+curl, tar, make, and gperf.
 
 Debug profile only. Conary is pre-alpha and this binary is a test-staging
 artifact, not a release artifact.
@@ -97,8 +98,23 @@ fi
 # headers (linux/audit.h, asm/unistd.h), which are not part of musl. -idirafter
 # adds them at the end of the search path so they are found without shadowing
 # any musl header of the same name.
-[[ -d /usr/include/linux && -d /usr/include/asm ]] ||
-    fail "Linux kernel headers not found under /usr/include; libseccomp cannot be built for musl without them"
+#
+# Distributions disagree on where those headers live: Arch and Fedora keep them
+# in /usr/include, while Debian and Ubuntu ship linux-libc-dev under the
+# multiarch directory. Probe for the headers themselves rather than assuming a
+# layout, so this works on a developer workstation and on a CI runner alike.
+KERNEL_HEADER_DIR=""
+KERNEL_HEADER_CANDIDATES=("/usr/include" "/usr/include/$(uname -m)-linux-gnu")
+for candidate in "${KERNEL_HEADER_CANDIDATES[@]}"; do
+    if [[ -f "$candidate/linux/audit.h" && -f "$candidate/asm/unistd.h" ]]; then
+        KERNEL_HEADER_DIR="$candidate"
+        break
+    fi
+done
+[[ -n "$KERNEL_HEADER_DIR" ]] || fail "Linux kernel UAPI headers (linux/audit.h and asm/unistd.h) were not found in ${KERNEL_HEADER_CANDIDATES[*]}
+libseccomp cannot be built for musl without them; install your distribution's
+kernel header package (linux-libc-dev on Debian/Ubuntu, kernel-headers on
+Fedora, linux-api-headers on Arch)."
 
 PREFIX="$CACHE_DIR/libseccomp-$LIBSECCOMP_VERSION-musl"
 if [[ "$REBUILD_DEPS" == "yes" ]]; then
@@ -128,7 +144,7 @@ The cached download has been removed; re-run to fetch it again."
     tar xzf "$tarball" -C "$BUILD_DIR"
     (
         cd "$BUILD_DIR/libseccomp-$LIBSECCOMP_VERSION"
-        CC=musl-gcc CFLAGS="-O2 -idirafter /usr/include" \
+        CC=musl-gcc CFLAGS="-O2 -idirafter $KERNEL_HEADER_DIR" \
             ./configure --prefix="$PREFIX" --enable-static --disable-shared
         make -j"$(nproc)"
         make install
@@ -148,7 +164,7 @@ log "building conary for $TARGET"
     LIBSECCOMP_LIB_PATH="$PREFIX/lib" \
     LIBSECCOMP_LINK_TYPE=static \
     CC_x86_64_unknown_linux_musl=musl-gcc \
-    CFLAGS_x86_64_unknown_linux_musl="-idirafter /usr/include" \
+    CFLAGS_x86_64_unknown_linux_musl="-idirafter $KERNEL_HEADER_DIR" \
         cargo build -p conary --target "$TARGET"
 )
 
