@@ -29,7 +29,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::server::ServerState;
-use crate::server::admin_service::{self, AddPeerInput, ServiceError};
+use crate::server::admin_service::{self, AddPeerInput, ChunkGcReport, ServiceError};
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 ///
@@ -43,6 +43,15 @@ fn service_err_to_mcp(e: ServiceError) -> McpError {
         ServiceError::Conflict(msg) => McpError::invalid_request(msg, None),
         ServiceError::Internal(msg) => McpError::internal_error(msg, None),
     }
+}
+
+/// Render a [`ChunkGcReport`] as the `chunk_gc` tool's output object.
+///
+/// Going through [`serde_json::Value`] keeps the tool's established key order,
+/// which is independent of the report struct's field order.
+fn chunk_gc_tool_output(report: &ChunkGcReport) -> Result<serde_json::Value, McpError> {
+    serde_json::to_value(report)
+        .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
 }
 
 /// MCP server instance that wraps Remi admin operations as tools.
@@ -597,34 +606,12 @@ impl RemiMcpServer {
         Parameters(params): Parameters<ChunkGcParams>,
     ) -> Result<CallToolResult, McpError> {
         let dry_run = params.dry_run.unwrap_or(true);
-        let grace_period_secs: u64 = 3600; // 1 hour grace period
 
-        let state = self.state.read().await;
-        let db_path = state.config.db_path.clone();
-        let objects_dir = state.config.chunk_dir.join("objects");
-        let r2_store = state.r2_store.clone();
-        drop(state);
+        let report = admin_service::run_chunk_gc_op(&self.state, dry_run)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        let gc_result = crate::server::chunk_gc::run_chunk_gc(
-            &db_path,
-            &objects_dir,
-            r2_store,
-            dry_run,
-            grace_period_secs,
-        )
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let text = to_json_text(&serde_json::json!({
-            "dry_run": dry_run,
-            "referenced": gc_result.referenced,
-            "local_scanned": gc_result.local_scanned,
-            "r2_scanned": gc_result.r2_scanned,
-            "local_deleted": gc_result.local_deleted,
-            "r2_deleted": gc_result.r2_deleted,
-            "local_bytes_freed": gc_result.local_bytes_freed,
-            "r2_bytes_freed": gc_result.r2_bytes_freed,
-        }))?;
+        let text = to_json_text(&chunk_gc_tool_output(&report)?)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -751,6 +738,35 @@ mod tests {
 
         let info = server.get_info();
         assert_eq!(info.server_info.name, "remi-mcp");
+    }
+
+    #[test]
+    fn chunk_gc_tool_output_matches_the_published_report_object() {
+        let report = ChunkGcReport {
+            dry_run: true,
+            referenced: 1,
+            local_scanned: 2,
+            r2_scanned: 3,
+            local_deleted: 4,
+            r2_deleted: 5,
+            local_bytes_freed: 6,
+            r2_bytes_freed: 7,
+        };
+
+        let rendered = to_json_text(&chunk_gc_tool_output(&report).unwrap()).unwrap();
+        let expected = to_json_text(&serde_json::json!({
+            "dry_run": true,
+            "referenced": 1,
+            "local_scanned": 2,
+            "r2_scanned": 3,
+            "local_deleted": 4,
+            "r2_deleted": 5,
+            "local_bytes_freed": 6,
+            "r2_bytes_freed": 7,
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, expected);
     }
 
     #[test]

@@ -422,3 +422,17 @@ local experiments unless you intentionally want to warm a real Remi cache.
 The former scan-only corpus tokenizer was removed because line splitting and
 manual command lists duplicated the formal shell/parser pipeline and produced
 non-authoritative evidence that required ongoing heuristic maintenance.
+
+## Chunk Garbage Collection
+
+`apps/remi/src/server/chunk_gc.rs` owns the referenced-set computation and the
+local/R2 deletion pass. `admin_service::run_chunk_gc_op` is the single caller:
+it resolves the database path, chunk objects directory, and optional R2 store
+from server state, applies the one-hour grace period that protects chunks of
+in-flight conversions, and returns the typed report.
+
+Two surfaces call that one function, so neither can drift from the other. The
+MCP tool `chunk_gc` is the agent surface, and `POST /v1/admin/chunk-gc` on the
+external admin router is the operator surface; both require the `admin` scope.
+Deletion requires an explicit `dry_run: false`, so an omitted body, an omitted
+field, or an absent MCP parameter previews the run instead of deleting.
