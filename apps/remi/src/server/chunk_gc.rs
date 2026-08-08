@@ -8,7 +8,7 @@
 //! configurable grace period to avoid removing chunks that are still
 //! being written by in-flight conversions.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -30,9 +30,17 @@ pub struct GcResult {
     pub local_deleted: usize,
     /// Number of chunks deleted from R2
     pub r2_deleted: usize,
-    /// Bytes freed on local disk
+    /// Bytes freed on local disk, measured by stat before each unlink.
+    ///
+    /// A dry run cannot measure this without stat-ing every candidate, so it
+    /// reports 0 here and only counts chunks.
     pub local_bytes_freed: u64,
-    /// Bytes freed in R2 (estimated from chunk_access size_bytes)
+    /// Bytes freed in R2, estimated from `chunk_access.size_bytes`.
+    ///
+    /// R2 object sizes are not in the listing this GC uses, so the recorded
+    /// chunk size is the estimate on both paths. It costs one `chunk_access`
+    /// scan either way, so a dry run reports the same estimate for the chunks
+    /// it would have deleted.
     pub r2_bytes_freed: u64,
 }
 
@@ -215,6 +223,72 @@ fn filter_recently_accessed(
     Ok(collected)
 }
 
+/// Hashes whose bytes count as freed from R2: everything submitted to the bulk
+/// delete except the keys R2 refused.
+///
+/// Deletion is idempotent, so a key R2 did not report as an error is gone
+/// whether or not the object existed -- the same rule `R2BatchDeleteOutcome`
+/// counts by.
+fn r2_freed_hashes(submitted: &[String], failed: &BTreeSet<String>) -> HashSet<String> {
+    submitted
+        .iter()
+        .filter(|hash| !failed.contains(*hash))
+        .cloned()
+        .collect()
+}
+
+/// Sum the recorded `chunk_access.size_bytes` of `hashes`.
+///
+/// The table is streamed once and filtered in memory rather than bound one host
+/// variable per hash: a production orphan set is an order of magnitude past
+/// SQLite's ~32,766 parameter limit, the same wall the grace query hit. Cost is
+/// one scan of `chunk_access` however many hashes are being priced, and the
+/// running total is a single integer.
+///
+/// A hash with no `chunk_access` row contributes nothing; its size was never
+/// recorded, so the result is an underestimate rather than a guess.
+fn sum_chunk_access_bytes(conn: &Connection, hashes: &HashSet<String>) -> Result<u64> {
+    if hashes.is_empty() {
+        return Ok(0);
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT hash, size_bytes FROM chunk_access")
+        .context("prepare chunk_access size query")?;
+    let mut rows = stmt.query([]).context("query chunk_access sizes")?;
+
+    let mut total = 0u64;
+    while let Some(row) = rows.next().context("read chunk_access size row")? {
+        let hash: String = row.get(0).context("read chunk_access size row hash")?;
+        if !hashes.contains(&hash) {
+            continue;
+        }
+        let size: i64 = row.get(1).context("read chunk_access size row size")?;
+        total += u64::try_from(size).unwrap_or(0);
+    }
+
+    Ok(total)
+}
+
+/// Estimate the R2 bytes represented by `hashes` from the `chunk_access` table.
+///
+/// Callers must run this before `chunk_access` rows are deleted: the sizes only
+/// exist while the rows do.
+async fn estimate_r2_bytes_freed(db_path: &Path, hashes: HashSet<String>) -> Result<u64> {
+    if hashes.is_empty() {
+        return Ok(0);
+    }
+
+    let db_path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<u64> {
+        let conn = crate::server::open_runtime_db(&db_path)?;
+        sum_chunk_access_bytes(&conn, &hashes)
+    })
+    .await
+    .context("spawn_blocking for R2 freed-bytes estimate")?
+    .context("R2 freed-bytes estimate")
+}
+
 /// Delete `chunk_access` rows for `hashes` in batched explicit transactions.
 ///
 /// Returns the number of rows actually removed. A per-row failure warns and
@@ -256,7 +330,9 @@ fn delete_chunk_access_rows(conn: &mut Connection, hashes: &[String]) -> Result<
 /// 3. Identifies orphans (stored but not referenced).
 /// 4. Applies a grace period: chunks with `last_accessed` newer than `now - grace_period_secs`
 ///    are kept even if unreferenced, to avoid removing chunks for in-flight conversions.
-/// 5. Deletes orphans from local disk, R2, and the `chunk_access` table.
+/// 5. Deletes orphans from local disk, R2, and the `chunk_access` table, in
+///    that order: the R2 freed-bytes estimate reads `chunk_access.size_bytes`,
+///    which only exists until the row cleanup runs.
 /// 6. In `dry_run` mode, logs what would be deleted without making changes.
 pub async fn run_chunk_gc(
     db_path: &Path,
@@ -331,16 +407,30 @@ pub async fn run_chunk_gc(
         .context("spawn_blocking for grace period check")?
         .context("grace period check")?;
 
+    // The keys the bulk delete below submits. Built once so a dry run reports
+    // exactly the set a real run would remove, rather than a second expression
+    // that has to be kept in step with it.
+    let r2_orphans: Vec<String> = if r2_store.is_some() {
+        orphans_after_grace
+            .iter()
+            .filter(|h| r2_set.contains(h.as_str()))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     if dry_run {
         // Populate counts for reporting even in dry-run
         result.local_deleted = orphans_after_grace
             .iter()
             .filter(|h| local_set.contains(h.as_str()))
             .count();
-        result.r2_deleted = orphans_after_grace
-            .iter()
-            .filter(|h| r2_set.contains(h.as_str()))
-            .count();
+        result.r2_deleted = r2_orphans.len();
+        // Nothing has been refused yet, so a dry run prices every submitted key.
+        result.r2_bytes_freed =
+            estimate_r2_bytes_freed(db_path, r2_freed_hashes(&r2_orphans, &BTreeSet::new()))
+                .await?;
 
         // Summarize rather than logging a line per orphan: a production store
         // has millions of them.
@@ -363,15 +453,10 @@ pub async fn run_chunk_gc(
 
     // Step 6: Delete orphans.
     //
-    // Local unlinks stay one at a time, but R2 orphans are collected here and
+    // Local unlinks stay one at a time, but the R2 orphans collected above are
     // removed in one bulk pass below. One HTTP round trip per orphan turned the
     // first production run's 345,913 R2 orphans into hours of serial deletes.
-    let mut r2_orphans: Vec<String> = Vec::new();
     for hash in &orphans_after_grace {
-        if r2_store.is_some() && r2_set.contains(hash.as_str()) {
-            r2_orphans.push(hash.clone());
-        }
-
         // Delete from local disk
         if local_set.contains(hash.as_str()) {
             let path = chunk_path(objects_dir, hash);
@@ -407,14 +492,23 @@ pub async fn run_chunk_gc(
             .await
             .context("bulk delete R2 orphan chunks")?;
         result.r2_deleted += outcome.deleted;
-        if outcome.failed > 0 {
+        if outcome.failed() > 0 {
             tracing::warn!(
                 "Failed to delete {} of {} R2 orphan chunk(s); samples: {:?}",
-                outcome.failed,
+                outcome.failed(),
                 outcome.attempted,
                 outcome.failure_samples
             );
         }
+
+        // Price the delete before the cleanup below drops the rows that hold
+        // the sizes. Keys R2 refused are still in the bucket, so their bytes
+        // were not freed.
+        result.r2_bytes_freed = estimate_r2_bytes_freed(
+            db_path,
+            r2_freed_hashes(&r2_orphans, &outcome.failed_hashes),
+        )
+        .await?;
     }
 
     // Delete chunk_access rows for all deleted orphans (blocking DB)
@@ -757,6 +851,136 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
         assert_eq!(delete_chunk_access_rows(&mut conn, &[]).unwrap(), 0);
+    }
+
+    fn insert_sized_chunk_access(conn: &Connection, hash: &str, size_bytes: i64) {
+        conn.execute(
+            "INSERT INTO chunk_access (hash, size_bytes, access_count, protected)
+             VALUES (?1, ?2, 1, 0)",
+            rusqlite::params![hash, size_bytes],
+        )
+        .unwrap();
+    }
+
+    /// The freed-bytes estimate must count the chunks R2 removed and only those:
+    /// a key R2 refused is still occupying the bucket.
+    #[test]
+    fn r2_bytes_freed_excludes_hashes_r2_refused() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        insert_sized_chunk_access(&conn, "deleted-a", 1_000);
+        insert_sized_chunk_access(&conn, "deleted-b", 20);
+        insert_sized_chunk_access(&conn, "refused", 400_000);
+        // A chunk nobody asked to delete must not be priced into the run.
+        insert_sized_chunk_access(&conn, "untouched", 9_999);
+
+        let submitted = vec![
+            "deleted-a".to_string(),
+            "deleted-b".to_string(),
+            "refused".to_string(),
+        ];
+        let failed = BTreeSet::from(["refused".to_string()]);
+
+        let freed = r2_freed_hashes(&submitted, &failed);
+        assert_eq!(freed.len(), 2);
+        assert!(!freed.contains("refused"));
+
+        assert_eq!(sum_chunk_access_bytes(&conn, &freed).unwrap(), 1_020);
+    }
+
+    /// The estimate must not bind one host variable per hash: production runs
+    /// price hundreds of thousands of orphans in one pass.
+    #[test]
+    fn r2_bytes_estimate_handles_more_hashes_than_sqlite_host_variables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        for i in 0..33_000 {
+            insert_sized_chunk_access(&conn, &format!("hash-{i:05}"), 2);
+        }
+
+        let mut hashes: HashSet<String> = (0..33_000).map(|i| format!("hash-{i:05}")).collect();
+        // A hash with no chunk_access row contributes nothing.
+        hashes.insert("never-recorded".to_string());
+
+        assert_eq!(sum_chunk_access_bytes(&conn, &hashes).unwrap(), 66_000);
+    }
+
+    #[test]
+    fn r2_bytes_estimate_is_zero_without_hashes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        insert_sized_chunk_access(&conn, "orphan", 512);
+
+        assert_eq!(
+            sum_chunk_access_bytes(&conn, &HashSet::new()).unwrap(),
+            0,
+            "an empty delete set must not sum the whole table"
+        );
+    }
+
+    /// A dry run reports what it would remove without touching disk, R2, or the
+    /// `chunk_access` rows it priced.
+    #[tokio::test]
+    async fn dry_run_counts_orphans_without_deleting_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("remi.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        insert_sized_chunk_access(&conn, "abcdef0123456789", 4_096);
+        drop(conn);
+
+        let objects_dir = tmp.path().join("objects");
+        std::fs::create_dir_all(objects_dir.join("ab")).unwrap();
+        std::fs::write(objects_dir.join("ab").join("cdef0123456789"), b"chunk").unwrap();
+
+        let result = run_chunk_gc(&db_path, &objects_dir, None, true, 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.local_scanned, 1);
+        assert_eq!(result.local_deleted, 1);
+        // No R2 store configured: nothing was listed, so nothing is priced.
+        assert_eq!(result.r2_scanned, 0);
+        assert_eq!(result.r2_deleted, 0);
+        assert_eq!(result.r2_bytes_freed, 0);
+        assert!(objects_dir.join("ab").join("cdef0123456789").exists());
+
+        let conn = Connection::open(&db_path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "a dry run must not delete chunk_access rows");
+    }
+
+    /// The real path deletes the local orphan, measures its bytes, and drops its
+    /// `chunk_access` row.
+    #[tokio::test]
+    async fn real_run_deletes_local_orphans_and_their_access_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("remi.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        insert_sized_chunk_access(&conn, "abcdef0123456789", 4_096);
+        drop(conn);
+
+        let objects_dir = tmp.path().join("objects");
+        std::fs::create_dir_all(objects_dir.join("ab")).unwrap();
+        let chunk = objects_dir.join("ab").join("cdef0123456789");
+        std::fs::write(&chunk, b"chunk bytes").unwrap();
+
+        let result = run_chunk_gc(&db_path, &objects_dir, None, false, 0)
+            .await
+            .unwrap();
+
+        assert_eq!(result.local_deleted, 1);
+        assert_eq!(result.local_bytes_freed, b"chunk bytes".len() as u64);
+        assert!(!chunk.exists());
+
+        let conn = Connection::open(&db_path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[test]
