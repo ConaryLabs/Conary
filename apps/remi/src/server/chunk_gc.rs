@@ -160,6 +160,95 @@ fn chunk_path(objects_dir: &Path, hash: &str) -> PathBuf {
     objects_dir.join(prefix).join(rest)
 }
 
+/// Return the orphan candidates that fall outside the grace period.
+///
+/// A candidate is skipped only when `chunk_access` records a `last_accessed`
+/// strictly newer than `cutoff`. Timestamps use the sortable
+/// `%Y-%m-%d %H:%M:%S` format, so the comparison is lexicographic in SQLite
+/// exactly as it was in Rust. (`last_accessed` is declared NOT NULL; a
+/// hypothetical NULL would compare as not-recent and be collected.)
+///
+/// The recent set is loaded with a single bound parameter so query size stays
+/// independent of the orphan count. Binding one host variable per candidate
+/// exceeds SQLite's ~32,766 parameter limit once a store holds tens of
+/// thousands of orphans, which failed the prepare and aborted the whole run.
+/// The in-memory recent set is bounded by rows accessed inside the grace
+/// window — small next to the orphan and local-scan sets already held here.
+fn filter_recently_accessed(
+    conn: &Connection,
+    orphans: &[String],
+    cutoff: &str,
+) -> Result<Vec<String>> {
+    if orphans.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT hash FROM chunk_access WHERE last_accessed > ?1")
+        .context("prepare chunk_access grace period query")?;
+    let mut rows = stmt
+        .query([cutoff])
+        .context("query recently-accessed chunks")?;
+
+    let mut recent: HashSet<String> = HashSet::new();
+    while let Some(row) = rows.next().context("read recently-accessed chunk row")? {
+        recent.insert(row.get(0).context("read recently-accessed chunk hash")?);
+    }
+
+    let mut collected = Vec::with_capacity(orphans.len());
+    for hash in orphans {
+        if recent.contains(hash) {
+            continue;
+        }
+        collected.push(hash.clone());
+    }
+
+    let skipped = orphans.len() - collected.len();
+    if skipped > 0 {
+        tracing::debug!(
+            "Keeping {} recently-accessed orphan chunk(s) (last_accessed newer than {})",
+            skipped,
+            cutoff
+        );
+    }
+
+    Ok(collected)
+}
+
+/// Delete `chunk_access` rows for `hashes` in batched explicit transactions.
+///
+/// Returns the number of rows actually removed. A per-row failure warns and
+/// continues so one bad hash cannot abandon the rest of its batch.
+fn delete_chunk_access_rows(conn: &mut Connection, hashes: &[String]) -> Result<usize> {
+    /// Rows per commit: one implicit transaction per hash costs one fsync each.
+    const BATCH_SIZE: usize = 10_000;
+
+    let mut deleted = 0usize;
+
+    for batch in hashes.chunks(BATCH_SIZE) {
+        let tx = conn
+            .transaction()
+            .context("begin chunk_access cleanup transaction")?;
+        {
+            let mut stmt = tx
+                .prepare("DELETE FROM chunk_access WHERE hash = ?1")
+                .context("prepare chunk_access delete")?;
+            for hash in batch {
+                match stmt.execute([hash]) {
+                    Ok(rows) => deleted += rows,
+                    Err(e) => {
+                        tracing::warn!("Failed to delete chunk_access row for {}: {}", hash, e);
+                    }
+                }
+            }
+        }
+        tx.commit()
+            .context("commit chunk_access cleanup transaction")?;
+    }
+
+    Ok(deleted)
+}
+
 /// Run chunk garbage collection.
 ///
 /// 1. Builds the referenced set from `converted_packages` and protected `chunk_access` rows.
@@ -236,69 +325,13 @@ pub async fn run_chunk_gc(
             let conn = crate::server::open_runtime_db(&db_path_grace)?;
             let cutoff = chrono::Utc::now() - chrono::Duration::seconds(grace as i64);
             let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
-
-            // Batch-load all chunk_access entries into a HashMap to avoid
-            // one query per orphan candidate.
-            let mut access_map: std::collections::HashMap<String, Option<String>> =
-                std::collections::HashMap::new();
-            if !orphan_strings.is_empty() {
-                let placeholders = orphan_strings
-                    .iter()
-                    .map(|_| "?")
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let sql = format!(
-                    "SELECT hash, last_accessed FROM chunk_access WHERE hash IN ({})",
-                    placeholders
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let params: Vec<&dyn rusqlite::types::ToSql> = orphan_strings
-                    .iter()
-                    .map(|s| s as &dyn rusqlite::types::ToSql)
-                    .collect();
-                let mut rows = stmt.query(params.as_slice())?;
-                while let Some(row) = rows.next()? {
-                    let hash: String = row.get(0)?;
-                    let last_accessed: Option<String> = row.get(1)?;
-                    access_map.insert(hash, last_accessed);
-                }
-            }
-
-            let mut kept = Vec::new();
-            for hash in &orphan_strings {
-                // Check if this chunk was recently accessed.
-                // ISO 8601 timestamps are lexicographically sortable, so string
-                // comparison is correct here.
-                if let Some(Some(last)) = access_map.get(hash)
-                    && last.as_str() > cutoff_str.as_str()
-                {
-                    tracing::debug!(
-                        "Keeping recently-accessed orphan chunk {} (last_accessed: {})",
-                        hash,
-                        last
-                    );
-                    continue;
-                }
-                kept.push(hash.clone());
-            }
-            Ok(kept)
+            filter_recently_accessed(&conn, &orphan_strings, &cutoff_str)
         })
         .await
         .context("spawn_blocking for grace period check")?
         .context("grace period check")?;
 
     if dry_run {
-        // Log what would be deleted without making changes
-        for hash in &orphans_after_grace {
-            let on_local = local_set.contains(hash.as_str());
-            let on_r2 = r2_set.contains(hash.as_str());
-            tracing::info!(
-                "[DRY RUN] Would delete orphan chunk {} (local={}, r2={})",
-                hash,
-                on_local,
-                on_r2
-            );
-        }
         // Populate counts for reporting even in dry-run
         result.local_deleted = orphans_after_grace
             .iter()
@@ -308,6 +341,23 @@ pub async fn run_chunk_gc(
             .iter()
             .filter(|h| r2_set.contains(h.as_str()))
             .count();
+
+        // Summarize rather than logging a line per orphan: a production store
+        // has millions of them.
+        tracing::info!(
+            "[DRY RUN] Would delete {} orphan chunk(s): {} on local disk, {} in R2",
+            orphans_after_grace.len(),
+            result.local_deleted,
+            result.r2_deleted
+        );
+        for hash in orphans_after_grace.iter().take(10) {
+            tracing::debug!(
+                "[DRY RUN] Orphan chunk sample {} (local={}, r2={})",
+                hash,
+                local_set.contains(hash.as_str()),
+                r2_set.contains(hash.as_str())
+            );
+        }
         return Ok(result);
     }
 
@@ -318,11 +368,13 @@ pub async fn run_chunk_gc(
             let path = chunk_path(objects_dir, hash);
             match tokio::fs::metadata(&path).await {
                 Ok(meta) => {
-                    result.local_bytes_freed += meta.len();
+                    let size = meta.len();
                     if let Err(e) = tokio::fs::remove_file(&path).await {
                         tracing::warn!("Failed to delete local chunk {}: {}", hash, e);
                         continue;
                     }
+                    // Count bytes only once the unlink actually succeeded.
+                    result.local_bytes_freed += size;
                     result.local_deleted += 1;
 
                     // Try to remove the parent prefix directory if empty
@@ -355,12 +407,9 @@ pub async fn run_chunk_gc(
     let db_path_cleanup = db_path.to_path_buf();
     let deleted_hashes = orphans_after_grace.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = crate::server::open_runtime_db(&db_path_cleanup)?;
-        for hash in &deleted_hashes {
-            if let Err(e) = conary_core::db::models::ChunkAccess::delete(&conn, hash) {
-                tracing::warn!("Failed to delete chunk_access row for {}: {}", hash, e);
-            }
-        }
+        let mut conn = crate::server::open_runtime_db(&db_path_cleanup)?;
+        let removed = delete_chunk_access_rows(&mut conn, &deleted_hashes)?;
+        tracing::debug!("Removed {} chunk_access row(s)", removed);
         Ok(())
     })
     .await
@@ -608,6 +657,92 @@ mod tests {
             )),
             "{error}"
         );
+    }
+
+    fn insert_chunk_access(conn: &Connection, hash: &str, last_accessed: &str) {
+        conn.execute(
+            "INSERT INTO chunk_access (hash, size_bytes, access_count, protected, last_accessed)
+             VALUES (?1, 1024, 1, 0, ?2)",
+            rusqlite::params![hash, last_accessed],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn grace_filter_handles_more_orphans_than_sqlite_host_variables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+
+        let cutoff = "2026-01-02 00:00:00";
+        insert_chunk_access(&conn, "recent-orphan", "2026-01-03 00:00:00");
+        insert_chunk_access(&conn, "old-orphan", "2026-01-01 00:00:00");
+        // Equal to the cutoff is not "recent": the comparison is strict.
+        insert_chunk_access(&conn, "cutoff-orphan", cutoff);
+
+        // More candidates than SQLite's ~32,766 host-variable limit, which the
+        // previous `hash IN (?,?,...)` form bound one parameter at a time.
+        let mut orphans = vec![
+            "recent-orphan".to_string(),
+            "old-orphan".to_string(),
+            "cutoff-orphan".to_string(),
+        ];
+        orphans.extend((0..33_000).map(|i| format!("never-accessed-{i:05}")));
+
+        let collected = filter_recently_accessed(&conn, &orphans, cutoff)
+            .expect("grace filter must survive more candidates than SQLite host variables");
+        let collected_set: HashSet<&str> = collected.iter().map(String::as_str).collect();
+
+        assert!(
+            !collected_set.contains("recent-orphan"),
+            "recently-accessed orphan must be kept out of the delete set"
+        );
+        assert!(collected_set.contains("old-orphan"));
+        assert!(collected_set.contains("cutoff-orphan"));
+        // Chunks with no chunk_access row at all are collected.
+        assert!(collected_set.contains("never-accessed-00000"));
+        assert!(collected_set.contains("never-accessed-32999"));
+        assert_eq!(collected.len(), orphans.len() - 1);
+    }
+
+    #[test]
+    fn grace_filter_returns_empty_for_no_candidates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        insert_chunk_access(&conn, "recent-orphan", "2026-01-03 00:00:00");
+
+        let collected = filter_recently_accessed(&conn, &[], "2026-01-02 00:00:00").unwrap();
+        assert!(collected.is_empty());
+    }
+
+    #[test]
+    fn chunk_access_cleanup_deletes_every_batch() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+
+        // Spans three 10,000-row batches.
+        let hashes: Vec<String> = (0..25_000).map(|i| format!("hash-{i:05}")).collect();
+        for hash in &hashes {
+            insert_chunk_access(&conn, hash, "2026-01-01 00:00:00");
+        }
+
+        // A hash with no row must not abort the batch containing it.
+        let mut targets = hashes.clone();
+        targets.push("absent-hash".to_string());
+
+        let deleted = delete_chunk_access_rows(&mut conn, &targets).unwrap();
+        assert_eq!(deleted, hashes.len());
+
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn chunk_access_cleanup_accepts_empty_input() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        assert_eq!(delete_chunk_access_rows(&mut conn, &[]).unwrap(), 0);
     }
 
     #[test]
