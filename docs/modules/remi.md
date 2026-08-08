@@ -100,11 +100,16 @@ scriptlet summaries, and content hashes stay on other public projections
 because sync does not consume them.
 `GET /v1/{distro}/metadata` is not a client-sync fallback.
 
-For Fedora, normalized provides include every generator-selected `<file>`
-record from authenticated `primary.xml` as `kind = "file"` with exact
-`source-derived-file` provenance. The sparse page and per-name lookup project
-that persisted typed row unchanged; Remi does not derive file providers from
-package names or filter them through its own path rules.
+For Fedora, normalized provides include every package-owned `<file>` record
+from authenticated `primary.xml` and `filelists.xml` as `kind = "file"` with
+exact `source-derived-file` provenance. The sparse page and per-name lookup
+project that persisted typed row unchanged; Remi does not derive file
+providers from package names or filter them through its own path rules.
+Complete file ownership is what makes a path dependency outside createrepo's
+primary filter solvable, and it is the dominant row population: Fedora 44
+`Everything/x86_64` carries 9.5M file providers against 76,354 packages, so
+sparse pages, their wire payload, and the replace transaction all scale with
+it.
 
 Remi opens SQLite once for each HTTP page, selects all visible package/version
 rows for the page together, and batch-loads their normalized provides and

@@ -237,10 +237,12 @@ The supported chains are:
   package stanza's exact SHA-256 and size authenticate its `.deb`.
 - RPM: repository metadata and packages have distinct authorities. Either a
   detached OpenPGP signature or an exact HTTPS metalink identity authenticates
-  `repomd.xml`; its SHA-256 and size authenticate `primary.xml`; primary
-  metadata supplies exact package relations and generator-selected file
-  providers and authenticates the RPM bytes; and an independently pinned
-  package certificate verifies the RPM's embedded OpenPGP signature.
+  `repomd.xml`; its SHA-256 and size authenticate `primary.xml` and, by the
+  same discipline, `filelists.xml`; primary metadata supplies exact package
+  relations and generator-selected file providers and authenticates the RPM
+  bytes; filelists supplies complete package file ownership; and an
+  independently pinned package certificate verifies the RPM's embedded OpenPGP
+  signature.
 - Arch: one exact keyring source supplies the pinned master certificates,
   their certifications, packager certificates, and the companion
   `<keyring>-revoked` disabled-key list. An explicit threshold says how many
@@ -327,7 +329,7 @@ prerequisite. The Fedora parser preserves that marker as the typed
 name. Direct RPM parsing projects the corresponding header sense flags through
 the same relation kind.
 
-RPM primary-file authority is derived from `createrepo_c`
+RPM file authority is derived from `createrepo_c`
 `5cf41fe5d703901d78078ed18c67ab667e446c1a`: its
 [`cr_xml_dump_files()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump.c#L175-L225)
 selects and emits package-owned `<file>` records in `primary.xml`, and its
@@ -338,6 +340,45 @@ provenance on the exact package. The projection is owned by
 `repository/parsers/fedora/provides.rs`. It does not reimplement createrepo's
 path-selection rule or infer providers from package names, payload guesses, or
 a curated path list.
+
+That selection rule is a filter, so `primary.xml` is not complete file
+ownership: the same generator writes every owned path through the same
+`<file>` writer into `filelists.xml` with the filter off
+([`cr_xml_dump_filelists()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump_filelists.c)).
+Conary reads both documents. `repository/parsers/fedora/repomd.rs` admits the
+`primary` and `filelists` records with one size plus SHA-256 discipline;
+`repository/parsers/fedora/files.rs` owns the one `<file>` record grammar both
+parsers read, so a path one document admits is never a path the other rejects;
+`repository/parsers/fedora/filelists.rs` folds each `<package>` record into the
+package `primary.xml` published, joined on `pkgid` (the package SHA-256), and
+projects each path through the same `provides.rs` owner. A path both documents
+carry becomes exactly one capability. The join is total: both signed documents
+must name the same package set and agree on name, architecture, and EVR.
+Directory and `%ghost` records are owned paths in both documents, so the
+`type` attribute does not gate the projection.
+
+A repository that publishes no `filelists` record is refused at sync when any
+package carries a positive dependency that cannot be satisfied at all under
+that filter. An RPM dependency name beginning with `/` is a dependency on a
+path, so a path outside the filtered primary set has no possible repository
+provider. The decision evaluates the requirement's typed boolean expression,
+never its flattened alternatives: every unprovidable path atom is false, every
+other atom may hold, and no atom is guaranteed to hold, so a conditional stays
+satisfiable through its else branch. A group is refused only when the
+expression cannot hold under that optimistic assignment, which refuses
+`(cap and /unprovidable)` while admitting `(cap or /unprovidable)` and
+`(/unprovidable if cap)`. Repeated atoms are evaluated independently, which can
+only cost a warranted refusal and never invent one. The typed refusal names the
+repository, the package, the paths, and the missing document instead of
+surfacing later as an anonymous solver conflict. When filelists is published, a
+missing path is an ordinary unsatisfied dependency.
+
+Fedora 44 `Everything/x86_64` measures that cost exactly (repomd revision
+1776864872): 76,354 packages, 81,720 file providers from `primary.xml`, and
+9,416,909 more from `filelists.xml`, taking `repository_provides` from 657,873
+rows to 10,074,782 and the synced SQLite database from 0.61 GB to 4.77 GB. The
+829 MB decompressed document is never materialized: it is streamed from the
+verified compressed bytes under the ceiling the signed `<open-size>` declares.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:

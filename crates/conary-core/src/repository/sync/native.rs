@@ -41,7 +41,7 @@ pub(super) fn persist_native_sync_rows(
     Ok(count)
 }
 
-pub(super) fn persist_synced_package_rows(
+pub(in crate::repository) fn persist_synced_package_rows(
     conn: &Connection,
     repo_id: i64,
     synced_packages: Vec<SyncedPackageRow>,
@@ -120,6 +120,54 @@ pub(super) fn append_synced_package_rows(
     RepositoryRequirement::batch_insert(conn, &grouped_clauses)?;
 
     Ok(count)
+}
+
+/// Build the complete normalized row set for one parsed package.
+///
+/// Native sync and its tests share this owner so the capability projection,
+/// requirement conversion, and reference-mirror rebasing that turn one parsed
+/// package into persistable rows cannot drift apart.
+pub(in crate::repository) fn synced_package_row(
+    repo_id: i64,
+    source_profile: &str,
+    repo_url: &str,
+    content_url: Option<&str>,
+    pkg_meta: PackageMetadata,
+) -> SyncedPackageRow {
+    let provides = normalized_repository_capabilities(&pkg_meta);
+    let download_url = super::rebase_download_url(&pkg_meta.download_url, repo_url, content_url);
+    let version_scheme = pkg_meta.version_scheme;
+    let mut repo_pkg = RepositoryPackage::new(
+        repo_id,
+        pkg_meta.name,
+        pkg_meta.version,
+        version_scheme,
+        pkg_meta.checksum,
+        pkg_meta.size as i64,
+        download_url,
+    );
+
+    repo_pkg.architecture = pkg_meta.architecture;
+    repo_pkg.debian_multi_arch = pkg_meta.debian_multi_arch;
+    repo_pkg.description = pkg_meta.description;
+    repo_pkg.metadata = match &pkg_meta.extra_metadata {
+        serde_json::Value::Null => None,
+        value => Some(value.to_string()),
+    };
+
+    // Persist the exact repository profile. Package format remains a separate
+    // typed field and is never promoted to distro authority.
+    repo_pkg.source_profile = Some(source_profile.to_string());
+
+    let (requirement_groups, requirement_group_clauses) =
+        convert_requirement_groups(0, &pkg_meta.requirements);
+
+    SyncedPackageRow {
+        package: repo_pkg,
+        provides,
+        requirement_groups,
+        requirement_group_clauses,
+    }
 }
 
 pub(super) fn normalized_repository_capabilities(

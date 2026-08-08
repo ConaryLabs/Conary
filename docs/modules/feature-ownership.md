@@ -441,6 +441,9 @@ package transactions.
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
 `crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
+`crates/conary-core/src/repository/parsers/fedora/repomd.rs`;
+`crates/conary-core/src/repository/parsers/fedora/files.rs`;
+`crates/conary-core/src/repository/parsers/fedora/filelists.rs`;
 `crates/conary-core/src/repository/parsers/fedora/provides.rs`;
 `crates/conary-core/src/repository/sync.rs`;
 `crates/conary-core/src/repository/download.rs`;

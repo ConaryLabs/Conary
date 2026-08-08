@@ -3,6 +3,7 @@
 mod tests {
     use super::*;
     use crate::ccs::signing::SigningKeyPair;
+    use crate::repository::sync::native::normalized_repository_capabilities;
     use crate::db::models::{
         ConvertedPackage, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,
         RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
