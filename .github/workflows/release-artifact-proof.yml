@@ -151,6 +151,7 @@ jobs:
 
           echo "native_package=${package}" >> "$GITHUB_OUTPUT"
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
       - name: Install the published native package in the test image

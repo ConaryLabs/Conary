@@ -373,7 +373,7 @@ test_packages = [{ package = "tree", binary = "/usr/bin/tree" }]
 [distros."ubuntu-26.04"]
 remi_distro = "ubuntu-26.04"
 repo_name = "remi-ubuntu-26.04"
-build_context = "workspace-source"
+build_context = "static-binary"
 test_packages = [{ package = "tree", binary = "/usr/bin/tree" }]
 
 [fixtures]
@@ -403,7 +403,7 @@ ccs_file = "conary-test-fixture-1.0.0-1.ccs"
     );
     assert_eq!(
         config.distros["ubuntu-26.04"].build_context,
-        DistroBuildContext::WorkspaceSource
+        DistroBuildContext::StaticBinary
     );
 
     let fixtures = config.fixtures.as_ref().unwrap();
@@ -485,9 +485,28 @@ repo_name = "custom"
         .expect_err("build context must use the typed contract")
         .to_string();
     assert!(
-        invalid_error.contains("binary") && invalid_error.contains("workspace-source"),
+        invalid_error.contains("binary") && invalid_error.contains("static-binary"),
         "invalid capability should list typed values: {invalid_error}"
     );
+}
+
+/// The shipped integration config is what CI parses, so hold it to the typed
+/// contract directly rather than to a copy of it.
+#[test]
+fn shipped_integration_config_stages_the_static_binary_everywhere() {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../conary/tests/integration/remi/config.toml");
+    let contents = std::fs::read_to_string(&config_path).expect("read integration config");
+    let config: GlobalConfig = toml::from_str(&contents).expect("parse integration config");
+
+    assert!(!config.distros.is_empty(), "config must declare distros");
+    for (distro, distro_config) in &config.distros {
+        assert_eq!(
+            distro_config.build_context,
+            DistroBuildContext::StaticBinary,
+            "{distro} must stage the host-independent static artifact"
+        );
+    }
 }
 
 #[test]

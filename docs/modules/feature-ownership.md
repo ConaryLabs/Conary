@@ -1331,6 +1331,9 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `apps/conary/tests/fixtures/*`;
 `apps/conary/tests/integration/remi/containers/*`;
 `apps/conary/tests/integration/remi/manifests/*`;
+`scripts/build-static-conary.sh`;
+`scripts/kernel-header-roots.sh`;
+`.github/actions/build-static-conary/action.yml`;
 `.github/workflows/pr-gate.yml`.
 
 **Focused proof:** `cargo run -p conary-test -- list`;
@@ -1339,7 +1342,8 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
 `cargo test -p conary-test native_cross_source_`.
 
-**Interaction gate:** `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
+**Interaction gate:** `bash scripts/build-static-conary.sh`;
+`cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
 `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`;
 run `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro <distro> --phase 4`
 for each configured distro when native conversion/lifecycle behavior or image
@@ -1352,8 +1356,11 @@ build-context staging changes.
 need parser proof and migration or defaulting decisions. Suite names in
 `--suite` arguments use the manifest filename stem, such as
 `phase4-native-pm-parity`, not the human-readable title shown by
-`cargo run -p conary-test -- list`. Distro image source staging is selected by
-the typed `build_context` field, never by matching the distro key. Corpus cases
+`cargo run -p conary-test -- list`. Which Conary binary a distro image stages is
+selected by the typed `build_context` field, never by matching the distro key.
+The static choice fails closed rather than falling back to the host build, so an
+image build requires `scripts/build-static-conary.sh` to have produced its
+artifact first. Corpus cases
 must carry versioned runtime evidence with exact role-tagged artifact digests,
 typed digest authority, target capabilities, and canonically ordered stage
 checkpoints; report aggregation uses typed stage/failure discriminants and

@@ -2,44 +2,13 @@
 # Ubuntu 26.04 LTS container for Remi integration testing
 #
 # Modes:
-#   binary  - builds from source in-container (avoids OpenSSL ABI mismatch)
-#   package - installs from DEB via apt
+#   binary  (default) - copies the pre-built static binary directly
+#   package           - installs from DEB via apt
+#
+# The staged binary is the static musl artifact from
+# scripts/build-static-conary.sh, so this image no longer compiles Conary from
+# source to escape the host's glibc and OpenSSL ABI.
 
-# -- Builder stage: compile from source (binary mode only) -----------------
-# In package mode, source/ contains only a placeholder; the build is skipped.
-FROM docker.io/library/ubuntu:26.04 AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake pkg-config libssl-dev libseccomp-dev curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install the pinned Rust toolchain without a pipeline that can hide a failed
-# download behind a successful empty shell invocation.
-RUN set -eu; \
-    installer=/tmp/rustup-init.sh; \
-    curl --proto '=https' --tlsv1.2 \
-        --fail --show-error --silent --location \
-        --retry 5 --retry-all-errors \
-        --output "$installer" \
-        https://sh.rustup.rs; \
-    sh "$installer" -y --default-toolchain 1.96.0 --profile minimal; \
-    rm -f "$installer"; \
-    /root/.cargo/bin/cargo --version; \
-    /root/.cargo/bin/rustc --version
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-ARG INSTALL_MODE=binary
-
-# Copy source and build (only in binary mode; package mode has placeholder)
-COPY source/ /build/
-WORKDIR /build
-RUN if [ "$INSTALL_MODE" = "binary" ] && [ -f Cargo.toml ]; then \
-        cargo build --release -p conary 2>&1 && strip target/release/conary; \
-    else \
-        mkdir -p target/release && touch target/release/conary; \
-    fi
-
-# -- Runtime stage ----------------------------------------------------------
 FROM docker.io/library/ubuntu:26.04
 
 ARG INSTALL_MODE=binary
@@ -48,17 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl diffutils libseccomp2 passwd python3 sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy all conary* files from build context (package mode)
+# Copy all conary* files from build context (binary or package)
 COPY conary* /tmp/install/
 
-# Copy built binary from builder stage (only meaningful in binary mode)
-COPY --from=builder /build/target/release/conary /tmp/install/conary-built
-
-# Install: exact staged DEB package or built binary from source
+# Install: exact staged DEB package or raw binary
 RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.deb ]; then \
         apt-get update && apt-get install -y /tmp/install/conary-release.deb && rm -rf /var/lib/apt/lists/*; \
-    elif [ "$INSTALL_MODE" = "binary" ] && [ -f /tmp/install/conary-built ] && [ -s /tmp/install/conary-built ]; then \
-        install -m 755 /tmp/install/conary-built /usr/bin/conary; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \

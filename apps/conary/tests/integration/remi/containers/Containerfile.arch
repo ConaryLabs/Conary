@@ -2,8 +2,8 @@
 # Arch Linux container for Remi integration testing
 #
 # Modes:
-#   binary  - copies pre-built binary (Arch rolling glibc is compatible)
-#   package - installs from pkg.tar.zst via pacman
+#   binary  (default) - copies the pre-built static binary directly
+#   package           - installs from pkg.tar.zst via pacman
 
 FROM docker.io/library/archlinux:latest
 

@@ -73,14 +73,22 @@ pub struct DistroConfig {
     pub test_packages: Vec<TestPackage>,
 }
 
-/// Files staged into a distro image build context.
+/// Which Conary binary a distro image build context stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DistroBuildContext {
-    /// Stage the host Conary binary and integration fixtures only.
+    /// Stage the host-built Conary binary and integration fixtures.
+    ///
+    /// The staged binary keeps the host's glibc and `libseccomp.so.2`
+    /// couplings, so it only runs in an image whose userland matches the
+    /// build host.
     Binary,
-    /// Stage the binary, fixtures, and the complete workspace source tree.
-    WorkspaceSource,
+    /// Stage the static `x86_64-unknown-linux-musl` Conary artifact.
+    ///
+    /// Built by `scripts/build-static-conary.sh`, this artifact carries no
+    /// runtime library couplings and therefore runs in any image regardless
+    /// of the build host.
+    StaticBinary,
 }
 
 #[derive(Debug, Clone)]
