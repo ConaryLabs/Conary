@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-08
-revision: 28
+revision: 29
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -134,10 +134,11 @@ An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`
 and `converting` jobs; it does not turn elapsed wall time into conversion
 failure. Cancellation and complete-operation deadlines belong to the caller.
-The regular and async clients share one decision over the typed job state, so a
-status outside that contract is a typed rejection in both rather than an
-active job. Bounded transport and 5xx retries stay separate from that decision:
-exhausting them is a transport failure, not a conversion failure.
+`RemiClientCore` owns the one decision over the typed job state, so a status
+outside that contract is a typed rejection rather than an active job. Any
+future client rebuilds on that same authority instead of restating it. Bounded
+transport and 5xx retries stay separate from that decision: exhausting them is
+a transport failure, not a conversion failure.
 
 ## Remi CCS Package Authority
 

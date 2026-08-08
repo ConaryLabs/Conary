@@ -153,8 +153,8 @@ crates/conary-core/      Core library crate
     |   +-- parsers/     Authenticated RPM repodata, Debian Packages, and Arch DB grammars
     |   +-- sync.rs      Trust preparation and atomic repository metadata persistence
     |   +-- download.rs  Metadata checksum plus ecosystem package-signature termination
-    |   +-- remi.rs      Remi client hub (sync client)
-    |   +-- remi/        Remi protocol DTOs, refusal formatting, async client, and tests
+    |   +-- remi.rs      Remi client hub (the Remi client)
+    |   +-- remi/        Remi protocol DTOs, refusal formatting, and tests
     |   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
     |   +-- mirror_health.rs Mirror health scoring
     |   +-- mirror_selector.rs Ranked mirror selection

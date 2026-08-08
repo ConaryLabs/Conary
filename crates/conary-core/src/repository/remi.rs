@@ -25,13 +25,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::repository::chunk_fetcher::{ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher};
-use std::sync::Arc;
-
 mod acquisition_error;
 use acquisition_error::ReadyPackageAcquisitionError;
-mod async_client;
-pub use async_client::AsyncRemiClient;
 mod protocol;
 use protocol::RemiClientCore;
 pub use protocol::{ChunkRef, ConversionAccepted, ConversionJobState, JobStatus, PackageManifest};

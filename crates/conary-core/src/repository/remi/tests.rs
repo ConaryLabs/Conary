@@ -309,14 +309,14 @@ fn ready_job_response() -> String {
     job_response("ready", None, Some(&manifest))
 }
 
-/// Outcome the shared contract requires from every client for a given state.
+/// Outcome the shared contract requires for a given state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExpectedOutcome {
     ReadyManifest,
     ConversionFailed,
 }
 
-/// The poll responses that exercise `state`, and the outcome both clients must
+/// The poll responses that exercise `state`, and the outcome the client must
 /// reach.
 ///
 /// The match is exhaustive, so a new `ConversionJobState` cannot be added
@@ -362,17 +362,8 @@ async fn spawn_job_poll_server(
     (base_url, server)
 }
 
-async fn regular_client_outcome(base_url: &str) -> Result<PackageManifest> {
+async fn remi_client_outcome(base_url: &str) -> Result<PackageManifest> {
     let mut client = RemiClient::new(base_url).unwrap();
-    client.core.poll_interval = Duration::from_millis(1);
-    client
-        .get_package("fedora", CONTRACT_PACKAGE, None, Some("x86_64"))
-        .await
-}
-
-async fn async_client_outcome(base_url: &str) -> Result<PackageManifest> {
-    let cache = tempfile::tempdir().unwrap();
-    let mut client = AsyncRemiClient::new(base_url, cache.path()).unwrap();
     client.core.poll_interval = Duration::from_millis(1);
     client
         .get_package("fedora", CONTRACT_PACKAGE, None, Some("x86_64"))
@@ -383,77 +374,54 @@ fn assert_contract_outcome(
     result: Result<PackageManifest>,
     expected: ExpectedOutcome,
     state: ConversionJobState,
-    client: &str,
 ) {
     match expected {
         ExpectedOutcome::ReadyManifest => {
             let manifest = result.unwrap_or_else(|error| {
-                panic!("{client} client failed on {state:?}: {error}");
+                panic!("Remi client failed on {state:?}: {error}");
             });
             assert_eq!(manifest.name, CONTRACT_PACKAGE);
         }
         ExpectedOutcome::ConversionFailed => {
             let message = result
                 .err()
-                .unwrap_or_else(|| panic!("{client} client accepted a failed {state:?} job"))
+                .unwrap_or_else(|| panic!("Remi client accepted a failed {state:?} job"))
                 .to_string();
             assert!(
                 message.contains("Conversion failed"),
-                "{client} client on {state:?}: {message}"
+                "Remi client on {state:?}: {message}"
             );
             assert!(
                 message.contains(CONTRACT_FAILURE_REASON),
-                "{client} client dropped the server failure reason on {state:?}: {message}"
+                "Remi client dropped the server failure reason on {state:?}: {message}"
             );
         }
     }
 }
 
-/// Every state the shared protocol admits reaches the same outcome in the
-/// regular and async clients, and no active state is failed on elapsed time.
+/// Every state the shared protocol admits reaches its contracted outcome in the
+/// Remi client, and no active state is failed on elapsed time.
 #[tokio::test]
-async fn both_clients_share_one_polling_state_contract() {
+async fn the_remi_client_honors_the_shared_polling_contract() {
     for state in ConversionJobState::ALL {
         let (responses, expected) = contract_case(state);
 
-        let (base_url, server) = spawn_job_poll_server(responses.clone()).await;
-        assert_contract_outcome(
-            regular_client_outcome(&base_url).await,
-            expected,
-            state,
-            "regular",
-        );
-        server.await.unwrap();
-
         let (base_url, server) = spawn_job_poll_server(responses).await;
-        assert_contract_outcome(
-            async_client_outcome(&base_url).await,
-            expected,
-            state,
-            "async",
-        );
+        assert_contract_outcome(remi_client_outcome(&base_url).await, expected, state);
         server.await.unwrap();
     }
 }
 
-/// A status outside the shared contract is a typed rejection in both clients,
-/// never silently treated as an active job.
+/// A status outside the shared contract is a typed rejection, never silently
+/// treated as an active job.
 #[tokio::test]
-async fn both_clients_reject_a_status_outside_the_shared_contract() {
+async fn the_remi_client_rejects_a_status_outside_the_shared_contract() {
     let retired = vec![job_response("blocked", None, None)];
 
-    let (base_url, server) = spawn_job_poll_server(retired.clone()).await;
-    let message = regular_client_outcome(&base_url)
-        .await
-        .expect_err("regular client accepted a retired job status")
-        .to_string();
-    assert!(message.contains("unknown variant `blocked`"), "{message}");
-    server.await.unwrap();
-
     let (base_url, server) = spawn_job_poll_server(retired).await;
-    let message = async_client_outcome(&base_url)
+    let message = remi_client_outcome(&base_url)
         .await
-        .expect_err("async client accepted a retired job status")
+        .expect_err("Remi client accepted a retired job status")
         .to_string();
     assert!(message.contains("unknown variant `blocked`"), "{message}");
     server.await.unwrap();
@@ -803,61 +771,30 @@ async fn valid_body_atomically_replaces_existing_destination() {
     assert_eq!(output_filenames(output.path()), ["qemu-img.ccs"]);
 }
 
-mod async_tests {
-    use super::*;
+#[tokio::test]
+async fn health_check_reports_an_unreachable_server_as_unhealthy() {
+    let client = RemiClient::new("http://localhost:59999").unwrap();
 
-    #[test]
-    fn test_async_client_base_url_normalization() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    let result = client.health_check().await.unwrap();
+    assert!(!result);
+}
 
-        // With trailing slash
-        let client = AsyncRemiClient::new("http://localhost:8080/", temp_dir.path()).unwrap();
-        assert_eq!(client.core.base_url, "http://localhost:8080");
+#[test]
+fn test_manifest_parsing() {
+    let json = r#"{
+        "name": "nginx",
+        "version": "1.24.0",
+        "distro": "arch",
+        "chunks": [
+            {"hash": "abc123", "size": 1024, "offset": 0},
+            {"hash": "def456", "size": 2048, "offset": 1024}
+        ],
+        "total_size": 3072,
+        "content_hash": "xyz789"
+    }"#;
 
-        // Without trailing slash
-        let client = AsyncRemiClient::new("http://localhost:8080", temp_dir.path()).unwrap();
-        assert_eq!(client.core.base_url, "http://localhost:8080");
-    }
-
-    #[test]
-    fn test_async_client_with_custom_fetcher() {
-        use crate::repository::chunk_fetcher::{CompositeChunkFetcher, LocalCacheFetcher};
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let cache = LocalCacheFetcher::new(temp_dir.path());
-        let fetcher = CompositeChunkFetcher::new(vec![Arc::new(cache)]);
-
-        let client = AsyncRemiClient::with_fetcher("http://localhost:8080", fetcher).unwrap();
-        assert_eq!(client.core.base_url, "http://localhost:8080");
-    }
-
-    #[tokio::test]
-    async fn test_async_client_health_check_unreachable() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let client = AsyncRemiClient::new("http://localhost:59999", temp_dir.path()).unwrap();
-
-        // Should return false for unreachable server
-        let result = client.health_check().await.unwrap();
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_manifest_parsing() {
-        let json = r#"{
-            "name": "nginx",
-            "version": "1.24.0",
-            "distro": "arch",
-            "chunks": [
-                {"hash": "abc123", "size": 1024, "offset": 0},
-                {"hash": "def456", "size": 2048, "offset": 1024}
-            ],
-            "total_size": 3072,
-            "content_hash": "xyz789"
-        }"#;
-
-        let manifest: PackageManifest = serde_json::from_str(json).unwrap();
-        assert_eq!(manifest.name, "nginx");
-        assert_eq!(manifest.chunks.len(), 2);
-        assert_eq!(manifest.total_size, 3072);
-    }
+    let manifest: PackageManifest = serde_json::from_str(json).unwrap();
+    assert_eq!(manifest.name, "nginx");
+    assert_eq!(manifest.chunks.len(), 2);
+    assert_eq!(manifest.total_size, 3072);
 }
