@@ -14,6 +14,9 @@ set -euo pipefail
 # libseccomp for musl once and caches it, then points the crate at it through
 # the two environment variables its build script reads.
 
+# shellcheck source=scripts/kernel-header-roots.sh
+source "$(dirname "${BASH_SOURCE[0]}")/kernel-header-roots.sh"
+
 LIBSECCOMP_VERSION="2.6.0"
 LIBSECCOMP_SHA256="83b6085232d1588c379dc9b9cae47bb37407cf262e6e74993c61ba72d2a784dc"
 LIBSECCOMP_URL="https://github.com/seccomp/libseccomp/releases/download/v${LIBSECCOMP_VERSION}/libseccomp-${LIBSECCOMP_VERSION}.tar.gz"
@@ -94,27 +97,17 @@ if ! rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; then
     fail "target $TARGET is not installed; run: rustup target add $TARGET"
 fi
 
-# musl-gcc compiles with musl's headers only. libseccomp needs the Linux UAPI
-# headers (linux/audit.h, asm/unistd.h), which are not part of musl. -idirafter
-# adds them at the end of the search path so they are found without shadowing
-# any musl header of the same name.
-#
-# Distributions disagree on where those headers live: Arch and Fedora keep them
-# in /usr/include, while Debian and Ubuntu ship linux-libc-dev under the
-# multiarch directory. Probe for the headers themselves rather than assuming a
-# layout, so this works on a developer workstation and on a CI runner alike.
-KERNEL_HEADER_DIR=""
-KERNEL_HEADER_CANDIDATES=("/usr/include" "/usr/include/$(uname -m)-linux-gnu")
-for candidate in "${KERNEL_HEADER_CANDIDATES[@]}"; do
-    if [[ -f "$candidate/linux/audit.h" && -f "$candidate/asm/unistd.h" ]]; then
-        KERNEL_HEADER_DIR="$candidate"
-        break
-    fi
-done
-[[ -n "$KERNEL_HEADER_DIR" ]] || fail "Linux kernel UAPI headers (linux/audit.h and asm/unistd.h) were not found in ${KERNEL_HEADER_CANDIDATES[*]}
-libseccomp cannot be built for musl without them; install your distribution's
-kernel header package (linux-libc-dev on Debian/Ubuntu, kernel-headers on
-Fedora, linux-api-headers on Arch)."
+# musl-gcc compiles with musl's headers only, and libseccomp needs the Linux
+# UAPI headers, which are not part of musl. Where those headers live, and
+# whether they even live together, is distribution-specific; the probe owns
+# that knowledge and returns every directory that has to be searched.
+mapfile -t KERNEL_HEADER_CANDIDATES < <(kernel_header_candidates)
+if ! kernel_header_root_lines="$(kernel_header_roots "${KERNEL_HEADER_CANDIDATES[@]}")"; then
+    exit 1
+fi
+mapfile -t KERNEL_HEADER_ROOTS <<< "$kernel_header_root_lines"
+KERNEL_HEADER_FLAGS="$(kernel_header_include_flags "${KERNEL_HEADER_ROOTS[@]}")"
+log "kernel UAPI headers: ${KERNEL_HEADER_ROOTS[*]}"
 
 PREFIX="$CACHE_DIR/libseccomp-$LIBSECCOMP_VERSION-musl"
 if [[ "$REBUILD_DEPS" == "yes" ]]; then
@@ -144,7 +137,7 @@ The cached download has been removed; re-run to fetch it again."
     tar xzf "$tarball" -C "$BUILD_DIR"
     (
         cd "$BUILD_DIR/libseccomp-$LIBSECCOMP_VERSION"
-        CC=musl-gcc CFLAGS="-O2 -idirafter $KERNEL_HEADER_DIR" \
+        CC=musl-gcc CFLAGS="-O2 $KERNEL_HEADER_FLAGS" \
             ./configure --prefix="$PREFIX" --enable-static --disable-shared
         make -j"$(nproc)"
         make install
@@ -164,7 +157,7 @@ log "building conary for $TARGET"
     LIBSECCOMP_LIB_PATH="$PREFIX/lib" \
     LIBSECCOMP_LINK_TYPE=static \
     CC_x86_64_unknown_linux_musl=musl-gcc \
-    CFLAGS_x86_64_unknown_linux_musl="-idirafter $KERNEL_HEADER_DIR" \
+    CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS" \
         cargo build -p conary --target "$TARGET"
 )
 
