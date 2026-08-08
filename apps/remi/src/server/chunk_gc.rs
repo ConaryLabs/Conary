@@ -361,8 +361,17 @@ pub async fn run_chunk_gc(
         return Ok(result);
     }
 
-    // Step 6: Delete orphans
+    // Step 6: Delete orphans.
+    //
+    // Local unlinks stay one at a time, but R2 orphans are collected here and
+    // removed in one bulk pass below. One HTTP round trip per orphan turned the
+    // first production run's 345,913 R2 orphans into hours of serial deletes.
+    let mut r2_orphans: Vec<String> = Vec::new();
     for hash in &orphans_after_grace {
+        if r2_store.is_some() && r2_set.contains(hash.as_str()) {
+            r2_orphans.push(hash.clone());
+        }
+
         // Delete from local disk
         if local_set.contains(hash.as_str()) {
             let path = chunk_path(objects_dir, hash);
@@ -387,19 +396,24 @@ pub async fn run_chunk_gc(
                 }
             }
         }
+    }
 
-        // Delete from R2
-        if r2_set.contains(hash.as_str())
-            && let Some(ref store) = r2_store
-        {
-            match store.delete_chunk(hash).await {
-                Ok(_) => {
-                    result.r2_deleted += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to delete R2 chunk {}: {}", hash, e);
-                }
-            }
+    // Bulk-delete the R2 orphans in one pass.
+    if let Some(ref store) = r2_store
+        && !r2_orphans.is_empty()
+    {
+        let outcome = store
+            .delete_chunks(&r2_orphans)
+            .await
+            .context("bulk delete R2 orphan chunks")?;
+        result.r2_deleted += outcome.deleted;
+        if outcome.failed > 0 {
+            tracing::warn!(
+                "Failed to delete {} of {} R2 orphan chunk(s); samples: {:?}",
+                outcome.failed,
+                outcome.attempted,
+                outcome.failure_samples
+            );
         }
     }
 
