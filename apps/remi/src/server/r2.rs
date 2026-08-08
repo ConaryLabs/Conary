@@ -10,6 +10,7 @@ use s3::Bucket;
 use s3::Region;
 use s3::creds::Credentials;
 use s3::serde_types::{DeleteObjectsResult, ObjectIdentifier};
+use std::collections::BTreeSet;
 
 /// Maximum keys S3/R2 accepts in one `DeleteObjects` request.
 const R2_DELETE_BATCH_SIZE: usize = 1000;
@@ -51,15 +52,27 @@ pub struct R2BatchDeleteOutcome {
     pub attempted: usize,
     /// Keys R2 removed (or that were already absent)
     pub deleted: usize,
-    /// Keys R2 refused, plus keys in a batch whose request failed outright
-    pub failed: usize,
+    /// Keys R2 refused, plus keys in a batch whose request failed outright.
+    ///
+    /// Held in full rather than counted: the caller subtracts these from what it
+    /// submitted to decide which chunks are actually gone, and a count cannot
+    /// answer that. Size is bounded by the submitted key set the caller already
+    /// holds.
+    pub failed_hashes: BTreeSet<String>,
     /// Up to `R2_DELETE_FAILURE_SAMPLES` (hash, error) pairs for diagnostics
     pub failure_samples: Vec<(String, String)>,
 }
 
 impl R2BatchDeleteOutcome {
+    /// Number of keys that were not removed.
+    pub fn failed(&self) -> usize {
+        self.failed_hashes.len()
+    }
+
     fn record_failure(&mut self, hash: &str, error: &str) {
-        self.failed += 1;
+        if !self.failed_hashes.insert(hash.to_string()) {
+            return;
+        }
         if self.failure_samples.len() < R2_DELETE_FAILURE_SAMPLES {
             self.failure_samples
                 .push((hash.to_string(), error.to_string()));
@@ -69,8 +82,7 @@ impl R2BatchDeleteOutcome {
     /// Fold a batch whose request succeeded.
     ///
     /// S3 reports only the keys it refused; deletion is idempotent, so every
-    /// other key in the batch is gone whether or not it existed. That matches
-    /// what the single-key `delete_chunk` path counts as a delete.
+    /// other key in the batch is gone whether or not it existed.
     fn fold_batch(&mut self, batch: &[String], failures: &[(String, String)]) {
         for (hash, error) in failures {
             self.record_failure(hash, error);
@@ -191,16 +203,6 @@ impl R2Store {
                 }
             }
         }
-    }
-
-    /// Delete a chunk from R2. Returns `true` if the object was deleted,
-    /// `false` if it did not exist.
-    pub async fn delete_chunk(&self, hash: &str) -> Result<bool> {
-        let key = self.chunk_key(hash);
-        let response = self.bucket.delete_object(&key).await?;
-
-        // S3/R2 returns 204 for successful delete, 404 if not found
-        Ok(response.status_code() < 300)
     }
 
     /// Delete many chunks from R2 using the S3 multi-object delete API.
@@ -441,7 +443,7 @@ mod tests {
 
         assert_eq!(outcome.attempted, 5);
         assert_eq!(outcome.deleted, 4);
-        assert_eq!(outcome.failed, 1);
+        assert_eq!(outcome.failed(), 1);
         assert_eq!(
             outcome.failure_samples,
             vec![(
@@ -465,7 +467,7 @@ mod tests {
         outcome.fold_batch_request_failure(&second, "connection reset");
 
         assert_eq!(outcome.deleted, 3);
-        assert_eq!(outcome.failed, 3);
+        assert_eq!(outcome.failed(), 3);
         assert_eq!(outcome.failure_samples.len(), 3);
         assert!(
             outcome
@@ -486,7 +488,7 @@ mod tests {
         outcome.fold_batch_request_failure(&batch, "timeout");
 
         assert_eq!(outcome.deleted, 0);
-        assert_eq!(outcome.failed, 250);
+        assert_eq!(outcome.failed(), 250);
         assert_eq!(outcome.failure_samples.len(), R2_DELETE_FAILURE_SAMPLES);
         // Samples are the first failures seen, not a random subset.
         assert_eq!(outcome.failure_samples[0].0, "hash-000000");
@@ -511,7 +513,7 @@ mod tests {
         );
 
         assert_eq!(outcome.deleted, 0);
-        assert_eq!(outcome.failed, 3);
+        assert_eq!(outcome.failed(), 3);
     }
 
     #[test]
