@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.11.2] - 2026-08-08
+
+### Fixed
+- keep refused-key GC rows and stop the SPA fallback lying (#319)
+- close the GC/conversion race and report R2 bytes honestly (#318)
+
 ## [remi-v0.11.1] - 2026-08-08
 
 ### Fixed
