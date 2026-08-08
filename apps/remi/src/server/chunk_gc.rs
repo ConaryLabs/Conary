@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::r2::R2Store;
+use super::r2::{R2BatchDeleteOutcome, R2Store};
 
 /// Result of a garbage collection run.
 #[derive(Debug, Clone, Default)]
@@ -332,7 +332,8 @@ fn delete_chunk_access_rows(conn: &mut Connection, hashes: &[String]) -> Result<
 ///    are kept even if unreferenced, to avoid removing chunks for in-flight conversions.
 /// 5. Deletes orphans from local disk, R2, and the `chunk_access` table, in
 ///    that order: the R2 freed-bytes estimate reads `chunk_access.size_bytes`,
-///    which only exists until the row cleanup runs.
+///    which only exists until the row cleanup runs. A key R2 refused keeps its
+///    row so the next run can still price the retry.
 /// 6. In `dry_run` mode, logs what would be deleted without making changes.
 pub async fn run_chunk_gc(
     db_path: &Path,
@@ -341,6 +342,59 @@ pub async fn run_chunk_gc(
     dry_run: bool,
     grace_period_secs: u64,
 ) -> Result<GcResult> {
+    let Some(store) = r2_store else {
+        return run_chunk_gc_with_deleter(
+            db_path,
+            objects_dir,
+            None,
+            |_| async {
+                Err(anyhow::anyhow!(
+                    "chunk GC submitted an R2 delete without an R2 listing"
+                ))
+            },
+            dry_run,
+            grace_period_secs,
+        )
+        .await;
+    };
+
+    let r2_chunks = store.list_chunks().await.context("list R2 chunks")?;
+    run_chunk_gc_with_deleter(
+        db_path,
+        objects_dir,
+        Some(r2_chunks),
+        move |hashes: Arc<Vec<String>>| async move {
+            store
+                .delete_chunks(&hashes)
+                .await
+                .context("bulk delete R2 orphan chunks")
+        },
+        dry_run,
+        grace_period_secs,
+    )
+    .await
+}
+
+/// Run chunk garbage collection against an already-listed R2 key set and an
+/// injected bulk deleter.
+///
+/// The deleter is a parameter so a test can drive the real run against an R2
+/// that refuses keys; production passes `R2Store::delete_chunks`. It is handed
+/// an `Arc` of the submitted keys because the caller still needs that set
+/// afterwards to decide which chunks are actually gone, and a production run
+/// submits hundreds of thousands of them.
+async fn run_chunk_gc_with_deleter<F, Fut>(
+    db_path: &Path,
+    objects_dir: &Path,
+    r2_chunks: Option<Vec<String>>,
+    delete_r2: F,
+    dry_run: bool,
+    grace_period_secs: u64,
+) -> Result<GcResult>
+where
+    F: FnOnce(Arc<Vec<String>>) -> Fut,
+    Fut: Future<Output = Result<R2BatchDeleteOutcome>>,
+{
     let mut result = GcResult::default();
 
     // Step 1: Build referenced set (blocking DB work)
@@ -364,14 +418,9 @@ pub async fn run_chunk_gc(
         .context("scan_local_chunks")?;
     result.local_scanned = local_chunks.len();
 
-    // Step 3: Optionally list R2 chunks
-    let r2_chunks = if let Some(ref store) = r2_store {
-        let chunks = store.list_chunks().await.context("list R2 chunks")?;
-        result.r2_scanned = chunks.len();
-        chunks
-    } else {
-        Vec::new()
-    };
+    // Step 3: Account for the R2 listing, when R2 is configured at all.
+    let r2_chunks = r2_chunks.unwrap_or_default();
+    result.r2_scanned = r2_chunks.len();
 
     // Step 4: Find orphans (stored but not referenced)
     let local_set: HashSet<&str> = local_chunks.iter().map(String::as_str).collect();
@@ -409,16 +458,15 @@ pub async fn run_chunk_gc(
 
     // The keys the bulk delete below submits. Built once so a dry run reports
     // exactly the set a real run would remove, rather than a second expression
-    // that has to be kept in step with it.
-    let r2_orphans: Vec<String> = if r2_store.is_some() {
+    // that has to be kept in step with it. Without an R2 listing `r2_set` is
+    // empty, so this is empty too and the deleter is never called.
+    let r2_orphans: Arc<Vec<String>> = Arc::new(
         orphans_after_grace
             .iter()
             .filter(|h| r2_set.contains(h.as_str()))
             .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
+            .collect(),
+    );
 
     if dry_run {
         // Populate counts for reporting even in dry-run
@@ -484,13 +532,9 @@ pub async fn run_chunk_gc(
     }
 
     // Bulk-delete the R2 orphans in one pass.
-    if let Some(ref store) = r2_store
-        && !r2_orphans.is_empty()
-    {
-        let outcome = store
-            .delete_chunks(&r2_orphans)
-            .await
-            .context("bulk delete R2 orphan chunks")?;
+    let mut r2_refused: BTreeSet<String> = BTreeSet::new();
+    if !r2_orphans.is_empty() {
+        let outcome = delete_r2(Arc::clone(&r2_orphans)).await?;
         result.r2_deleted += outcome.deleted;
         if outcome.failed() > 0 {
             tracing::warn!(
@@ -509,11 +553,27 @@ pub async fn run_chunk_gc(
             r2_freed_hashes(&r2_orphans, &outcome.failed_hashes),
         )
         .await?;
+        r2_refused = outcome.failed_hashes;
     }
 
-    // Delete chunk_access rows for all deleted orphans (blocking DB)
+    // Delete chunk_access rows for the orphans that are actually gone.
+    //
+    // A key R2 refused still has its object in the bucket, and that row holds
+    // the only record of its size. Orphan detection is listing-based, so the
+    // next run re-lists the surviving object and retries the delete -- but
+    // without the row it could not price what it freed, and `r2_bytes_freed`
+    // would silently under-report every retry. A failed local unlink is not
+    // excluded here: local bytes are measured by `stat` at unlink rather than
+    // read from the row, so the row carries nothing that path needs.
     let db_path_cleanup = db_path.to_path_buf();
-    let deleted_hashes = orphans_after_grace.clone();
+    let deleted_hashes: Vec<String> = if r2_refused.is_empty() {
+        orphans_after_grace
+    } else {
+        orphans_after_grace
+            .into_iter()
+            .filter(|hash| !r2_refused.contains(hash))
+            .collect()
+    };
     tokio::task::spawn_blocking(move || -> Result<()> {
         let mut conn = crate::server::open_runtime_db(&db_path_cleanup)?;
         let removed = delete_chunk_access_rows(&mut conn, &deleted_hashes)?;
@@ -981,6 +1041,174 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rows, 0);
+    }
+
+    /// Seed a store whose only local chunk is `hash`, plus `chunk_access` rows
+    /// for every hash in `sized`.
+    fn seed_gc_store(sized: &[(&str, i64)]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("remi.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        for (hash, size) in sized {
+            insert_sized_chunk_access(&conn, hash, *size);
+        }
+        drop(conn);
+
+        let objects_dir = tmp.path().join("objects");
+        std::fs::create_dir_all(&objects_dir).unwrap();
+        (tmp, db_path, objects_dir)
+    }
+
+    fn remaining_access_rows(db_path: &Path) -> Vec<String> {
+        let conn = Connection::open(db_path).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT hash FROM chunk_access ORDER BY hash")
+            .unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows
+    }
+
+    /// A `chunk_access` row may only die once everything it describes is gone.
+    /// R2 refused `refused-orphan`, so its object is still in the bucket and its
+    /// recorded size is the only thing that can price the next run's retry.
+    #[tokio::test]
+    async fn refused_r2_orphan_keeps_its_chunk_access_row() {
+        let (_tmp, db_path, objects_dir) =
+            seed_gc_store(&[("deleted-orphan", 1_000), ("refused-orphan", 400_000)]);
+
+        let submitted = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&submitted);
+        let result = run_chunk_gc_with_deleter(
+            &db_path,
+            &objects_dir,
+            Some(vec![
+                "deleted-orphan".to_string(),
+                "refused-orphan".to_string(),
+            ]),
+            move |hashes: Arc<Vec<String>>| async move {
+                recorder.lock().unwrap().extend(hashes.iter().cloned());
+                Ok(R2BatchDeleteOutcome {
+                    attempted: hashes.len(),
+                    deleted: 1,
+                    failed_hashes: BTreeSet::from(["refused-orphan".to_string()]),
+                    failure_samples: vec![(
+                        "refused-orphan".to_string(),
+                        "AccessDenied: denied".to_string(),
+                    )],
+                })
+            },
+            false,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let mut submitted = submitted.lock().unwrap().clone();
+        submitted.sort();
+        assert_eq!(submitted, vec!["deleted-orphan", "refused-orphan"]);
+
+        assert_eq!(result.r2_scanned, 2);
+        assert_eq!(result.r2_deleted, 1);
+        assert_eq!(
+            result.r2_bytes_freed, 1_000,
+            "a refused key's bytes are still in the bucket"
+        );
+
+        assert_eq!(
+            remaining_access_rows(&db_path),
+            vec!["refused-orphan".to_string()],
+            "the refused key must keep the row that records its size"
+        );
+    }
+
+    /// The other half of the same contract: a key R2 actually removed loses its
+    /// row, so a refusal is what keeps a row rather than the R2 path as a whole.
+    #[tokio::test]
+    async fn fully_deleted_r2_orphans_lose_their_chunk_access_rows() {
+        let (_tmp, db_path, objects_dir) = seed_gc_store(&[("orphan-a", 1_000), ("orphan-b", 20)]);
+
+        let result = run_chunk_gc_with_deleter(
+            &db_path,
+            &objects_dir,
+            Some(vec!["orphan-a".to_string(), "orphan-b".to_string()]),
+            |hashes: Arc<Vec<String>>| async move {
+                Ok(R2BatchDeleteOutcome {
+                    attempted: hashes.len(),
+                    deleted: hashes.len(),
+                    ..Default::default()
+                })
+            },
+            false,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.r2_deleted, 2);
+        assert_eq!(result.r2_bytes_freed, 1_020);
+        assert!(remaining_access_rows(&db_path).is_empty());
+    }
+
+    /// A whole batch R2 could not even submit refuses every key in it, so no row
+    /// in that batch may be cleaned up.
+    #[tokio::test]
+    async fn r2_request_failure_keeps_every_chunk_access_row_it_covered() {
+        let (_tmp, db_path, objects_dir) = seed_gc_store(&[("orphan-a", 1_000), ("orphan-b", 20)]);
+
+        let result = run_chunk_gc_with_deleter(
+            &db_path,
+            &objects_dir,
+            Some(vec!["orphan-a".to_string(), "orphan-b".to_string()]),
+            |hashes: Arc<Vec<String>>| async move {
+                Ok(R2BatchDeleteOutcome {
+                    attempted: hashes.len(),
+                    deleted: 0,
+                    failed_hashes: hashes.iter().cloned().collect(),
+                    failure_samples: Vec::new(),
+                })
+            },
+            false,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.r2_deleted, 0);
+        assert_eq!(result.r2_bytes_freed, 0);
+        assert_eq!(
+            remaining_access_rows(&db_path),
+            vec!["orphan-a".to_string(), "orphan-b".to_string()]
+        );
+    }
+
+    /// Without an R2 listing there is nothing to refuse, so every collected
+    /// orphan's row is cleaned up and the deleter is never called.
+    #[tokio::test]
+    async fn local_only_run_cleans_up_every_collected_row() {
+        let (_tmp, db_path, objects_dir) = seed_gc_store(&[("abcdef0123456789", 4_096)]);
+        std::fs::create_dir_all(objects_dir.join("ab")).unwrap();
+        std::fs::write(objects_dir.join("ab").join("cdef0123456789"), b"chunk").unwrap();
+
+        let result = run_chunk_gc_with_deleter(
+            &db_path,
+            &objects_dir,
+            None,
+            |_| async { panic!("no R2 listing means no R2 delete") },
+            false,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.local_deleted, 1);
+        assert_eq!(result.r2_scanned, 0);
+        assert_eq!(result.r2_bytes_freed, 0);
+        assert!(remaining_access_rows(&db_path).is_empty());
     }
 
     #[test]
