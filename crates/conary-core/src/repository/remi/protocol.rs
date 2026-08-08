@@ -89,8 +89,8 @@ pub struct ChunkRef {
 /// Shared core logic for Remi clients.
 ///
 /// Handles URL construction, HTTP status mapping, and job status parsing.
-/// Used by both `RemiClient` (sync) and `AsyncRemiClient` (async) to avoid
-/// duplicating these operations.
+/// `RemiClient` owns these operations through this core so that any future
+/// client rebuilds on the same decision authority instead of duplicating it.
 pub(super) struct RemiClientCore {
     pub(super) base_url: String,
     pub(super) poll_interval: Duration,

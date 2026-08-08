@@ -63,7 +63,6 @@ pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
 pub use mirror_selector::{MirrorSelector, MirrorStrategy};
 pub use parsers::{ChecksumType, RepositoryParser};
 pub use registry::{RepositoryFormat, RepositoryParserConfig, create_parser};
-pub use remi::AsyncRemiClient;
 pub use remi::{PackageManifest, RemiClient};
 pub use resolution::{
     PackageResolver, PackageSource, RepositorySourceKind, RepositorySourceMetadata,
