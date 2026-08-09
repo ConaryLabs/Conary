@@ -40,8 +40,9 @@ pub(crate) use package_set::{PackageSetRequest, install_package_set};
 
 #[allow(unused_imports)]
 pub(crate) use ccs_transaction::{
-    CcsTransactionInstallOptions, CcsTransactionInstallResult, install_ccs_package_transactionally,
-    install_ccs_package_transactionally_in_selected_root,
+    CcsTransactionInstallOptions, CcsTransactionInstallResult, check_ccs_upgrade_status,
+    install_ccs_package_transactionally, install_ccs_package_transactionally_in_selected_root,
+    install_semantics_for_ccs_manifest,
 };
 
 #[allow(unused_imports)]
