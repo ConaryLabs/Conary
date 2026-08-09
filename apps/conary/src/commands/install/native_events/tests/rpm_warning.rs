@@ -4,6 +4,7 @@
 
 use super::*;
 use conary_core::ccs::native_transaction::{NativeTransactionGraph, NativeTransactionStep};
+use conary_core::db::models::{Changeset, ChangesetStatus, LifecycleEvent};
 use conary_core::packages::native_abi::RpmScriptletSlot;
 
 fn rpm_entry_event(bundle: &NativeLifecycleBundle) -> NativeTransactionEvent {
@@ -64,6 +65,12 @@ fn failing_rpm_bundle_for_slot(
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry.transaction_order.position = phase.as_str().to_string();
     bundle
+}
+
+fn pending_changeset(conn: &rusqlite::Connection) -> i64 {
+    Changeset::new("Install lifecycle warning fixture".to_string())
+        .insert(conn)
+        .unwrap()
 }
 
 fn execute_single_event(bundle: NativeLifecycleBundle) -> anyhow::Result<()> {
@@ -246,8 +253,10 @@ fn a_pre_install_class_failure_aborts_before_the_payload_boundary() {
     };
 
     let mut boundaries = Vec::new();
+    let changeset_id = pending_changeset(&conn);
     let error = crate::commands::install::native_graph::drive_native_graph_with(
         &conn,
+        changeset_id,
         &prepared,
         &root,
         &ExecutionMode::Install,
@@ -268,11 +277,13 @@ fn a_pre_install_class_failure_aborts_before_the_payload_boundary() {
     );
 }
 
-/// Evidence the transaction ran past must survive the transaction's own abort.
+/// Evidence the transaction ran past must still be reported on the abort exit.
 ///
-/// A `%post` that failed is most diagnostic precisely when a later step brings
-/// the transaction down, so the accumulator has to be drained and reported on
-/// the error exit as well as the success exit.
+/// Production callers write the event inside the same transaction as the
+/// changeset and roll that transaction back on a graph error. A `%post` that
+/// failed is most diagnostic precisely when a later step brings the transaction
+/// down, so the accumulator has to be drained and reported on the error exit;
+/// the persisted row is durable only on a committed changeset.
 #[test]
 fn a_continued_failure_is_still_reported_when_a_later_graph_step_aborts() {
     let temp = tempfile::tempdir().unwrap();
@@ -281,6 +292,8 @@ fn a_continued_failure_is_still_reported_when_a_later_graph_step_aborts() {
     let conn = conary_core::db::open(&db_path).unwrap();
     let root = temp.path().join("selected-root");
     std::fs::create_dir(&root).unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    let changeset_id = pending_changeset(&tx);
 
     // Entry 0 fails in a warn-and-continue class; entry 1 fails in an aborting
     // class later in the same graph.
@@ -327,7 +340,8 @@ fn a_continued_failure_is_still_reported_when_a_later_graph_step_aborts() {
     // accumulator mid-graph without draining it.
     let mut pending_mid_graph = None;
     let error = crate::commands::install::native_graph::drive_native_graph_with(
-        &conn,
+        &tx,
+        changeset_id,
         &prepared,
         &root,
         &ExecutionMode::Install,
@@ -349,9 +363,102 @@ fn a_continued_failure_is_still_reported_when_a_later_graph_step_aborts() {
     );
     assert!(
         prepared.continued_lifecycle_failures.borrow().is_empty(),
-        "the continued failure must be drained and reported on the abort exit, \
-         not discarded with the transaction"
+        "the continued failure must be drained for the ui::warn abort-path \
+         evidence surface"
     );
+    tx.rollback().unwrap();
+    let events = LifecycleEvent::list_for_changeset(&conn, changeset_id).unwrap();
+    assert_eq!(
+        events.len(),
+        0,
+        "abort rollback must discard lifecycle evidence with the changeset"
+    );
+}
+
+#[test]
+fn a_lifecycle_evidence_persist_error_does_not_change_a_successful_graph_result() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let root = temp.path().join("selected-root");
+    std::fs::create_dir(&root).unwrap();
+    let changeset_id = pending_changeset(&conn);
+    let mut changeset = Changeset::find_by_id(&conn, changeset_id).unwrap().unwrap();
+    changeset
+        .update_status(&conn, ChangesetStatus::Applied)
+        .unwrap();
+
+    let bundle = failing_rpm_bundle_for_slot(
+        "rpm:%post",
+        LifecyclePath::PostInstall,
+        RpmCriticality::WarningOnly,
+    );
+    let event = rpm_entry_event(&bundle);
+    let mut prepared =
+        prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
+    prepared.plan.graph = NativeTransactionGraph {
+        steps: vec![NativeTransactionStep::RunEvent { event_index: 0 }],
+    };
+
+    crate::commands::install::native_graph::drive_native_graph_with(
+        &conn,
+        changeset_id,
+        &prepared,
+        &root,
+        &ExecutionMode::Install,
+        |_, _| Ok(()),
+    )
+    .expect("evidence persistence failure must not escalate a warn-and-continue graph");
+    assert!(
+        prepared.continued_lifecycle_failures.borrow().is_empty(),
+        "the persist-error path must still drain the ui::warn evidence"
+    );
+    assert!(
+        LifecycleEvent::list_for_changeset(&conn, changeset_id)
+            .unwrap()
+            .is_empty(),
+        "the rejected Applied changeset must not receive lifecycle evidence"
+    );
+}
+
+#[test]
+fn a_continued_failure_persists_once_on_the_success_exit() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let root = temp.path().join("selected-root");
+    std::fs::create_dir(&root).unwrap();
+    let changeset_id = pending_changeset(&conn);
+
+    let bundle = failing_rpm_bundle_for_slot(
+        "rpm:%post",
+        LifecyclePath::PostInstall,
+        RpmCriticality::WarningOnly,
+    );
+    let event = rpm_entry_event(&bundle);
+    let mut prepared =
+        prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
+    prepared.plan.graph = NativeTransactionGraph {
+        steps: vec![NativeTransactionStep::RunEvent { event_index: 0 }],
+    };
+
+    crate::commands::install::native_graph::drive_native_graph_with(
+        &conn,
+        changeset_id,
+        &prepared,
+        &root,
+        &ExecutionMode::Install,
+        |_, _| Ok(()),
+    )
+    .unwrap();
+
+    let events = LifecycleEvent::list_for_changeset(&conn, changeset_id).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].source_entry, "rpm:%post");
+    assert_eq!(events[0].requested_sandbox_mode.as_str(), "always");
+    assert_eq!(events[0].effective_sandbox.as_str(), "target-root");
 }
 
 #[test]

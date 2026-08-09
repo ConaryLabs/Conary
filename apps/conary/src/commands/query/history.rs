@@ -88,6 +88,21 @@ fn publication_marker_for_changeset(
         .unwrap_or("")
 }
 
+fn format_lifecycle_event_line(event: &conary_core::db::models::LifecycleEvent) -> String {
+    let details = format!(
+        "lifecycle failure {} {} {} ({}) phase={} sandbox={} effective={}: {}",
+        event.source_package,
+        event.source_version,
+        event.source_entry,
+        event.failure_kind.as_str(),
+        event.phase,
+        event.requested_sandbox_mode.as_str(),
+        event.effective_sandbox.as_str(),
+        event.message,
+    );
+    crate::ui::row_line(crate::ui::Status::Warn, &[&details])
+}
+
 /// Show changeset history
 pub async fn cmd_history(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
@@ -103,6 +118,14 @@ pub async fn cmd_history(db_path: &str) -> Result<()> {
             for line in format_deferred_follow_up_lines(changeset)? {
                 println!("{line}");
             }
+            if let Some(changeset_id) = changeset.id {
+                for event in conary_core::db::models::LifecycleEvent::list_for_changeset(
+                    &conn,
+                    changeset_id,
+                )? {
+                    println!("      {}", format_lifecycle_event_line(&event));
+                }
+            }
         }
         println!("\nTotal: {} changeset(s)", changesets.len());
     }
@@ -114,6 +137,7 @@ pub async fn cmd_history(db_path: &str) -> Result<()> {
 mod tests {
     use super::*;
     use conary_core::db::models::{Changeset, ChangesetStatus};
+    use conary_core::scriptlet::{EffectiveSandbox, SandboxMode, ScriptletFailureKind};
 
     #[test]
     fn clean_applied_changeset_has_no_deferred_marker() {
@@ -186,5 +210,30 @@ mod tests {
             publication_marker_for_changeset(&[publication], Some(8)),
             " [publication-failed]"
         );
+    }
+
+    #[test]
+    fn lifecycle_failure_history_line_uses_warn_vocabulary_and_typed_fields() {
+        let event = conary_core::db::models::LifecycleEvent {
+            id: 1,
+            changeset_id: 8,
+            sequence: 0,
+            source_package: "fixture".to_string(),
+            source_version: "1.0.0".to_string(),
+            source_entry: "rpm:%post".to_string(),
+            failure_kind: ScriptletFailureKind::ScriptExited,
+            requested_sandbox_mode: SandboxMode::Always,
+            effective_sandbox: EffectiveSandbox::TargetRoot,
+            phase: "post-install".to_string(),
+            message: "script returned 42".to_string(),
+            created_at: "2026-08-09 12:00:00".to_string(),
+        };
+
+        let line = format_lifecycle_event_line(&event);
+        assert!(line.starts_with(&crate::ui::tag(crate::ui::Status::Warn)));
+        assert!(line.contains("fixture 1.0.0 rpm:%post"));
+        assert!(line.contains("ScriptExited"));
+        assert!(line.contains("phase=post-install"));
+        assert!(line.contains("script returned 42"));
     }
 }

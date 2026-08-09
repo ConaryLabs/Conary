@@ -582,18 +582,15 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 28 retains revision 27's fail-closed persisted-state
+Schema revision 29 retains revision 28's fail-closed persisted-state
 constraints, explicit `strict`, `guarded`, or `permissive` dependency-mixing
-policy on every persisted source pin, and path-free capability provenance, and
-carries one capability index on `repository_provides` instead of two. Neither
-change moves a table definition, so the revision is the only thing separating
-the shapes. Revision 27's cut was correctness: `provides.provenance` is JSON
-text inside a UNIQUE contract index and no resync rebuilds installed rows, so a
-database mixing both provenance shapes would admit one path twice as two
-distinct providers. Revision 28's cut is physical: an index lives in the
-database file for its lifetime, so a revision-27 database would keep serving a
-`(kind, capability)` index the build no longer defines, and its physical schema
-would disagree with the revision it reports.
+policy on every persisted source pin, path-free capability provenance, and
+physical repository-provide index shape. It adds `lifecycle_events`, an
+ordered per-changeset table that records each typed warn-and-continue native
+lifecycle failure before the changeset can become applied. The event stores
+only fields carried by `ContinuedLifecycleFailure` and its
+`ScriptletFailureOutcome`; it does not infer an exit code or stderr field that
+the source type does not expose.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the
@@ -606,7 +603,7 @@ not carry a compatibility chain or silently reset an existing database.
 
 The stable table families are:
 
-- Installed state: troves, changesets, files, components, dependencies, and provides
+- Installed state: troves, changesets, lifecycle events, files, components, dependencies, and provides
 - Repository and resolution state: repositories, synced package metadata, capability inputs, labels, and canonical mapping data
 - System state and configuration: state snapshots, config tracking, triggers, redirects, and settings
 - Try state: active/kept/rolled-back package try sessions and selected generation metadata

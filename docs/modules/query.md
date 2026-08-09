@@ -32,6 +32,7 @@ conary query <subcommand> [args]
   +-- repquery               -> repo.rs         (RepositoryPackage table)
   +-- component / components -> components.rs   (Component + FileEntry tables)
   +-- scripts                -> scripts.rs      (package files plus installed scriptlet/bundle state)
+  +-- system history        -> commands/query/history.rs (changesets plus lifecycle_events)
   +-- conflicts              -> dependency.rs   (file ownership overlap detection)
   +-- delta-stats            -> dependency.rs   (delta update statistics)
   +-- label                  -> cli/label.rs + dispatch/query.rs   (label path, delegation, and provenance management)
@@ -63,6 +64,7 @@ conary system sbom <package|all> [--format cyclonedx]
 | `RepositoryPackage` | db/models/ | Available package from synced repo metadata |
 | `InstalledCcsRemoveHook` | db/models/ | Exact persisted CCS-authored pre-remove hook |
 | `InstalledNativeLifecycleBundle` | db/models/ | Persisted source-ABI lifecycle authority for later query and transaction planning |
+| `LifecycleEvent` | db/models/ | Typed per-changeset warn-and-continue lifecycle failure evidence |
 
 ## Database Tables
 
@@ -79,6 +81,7 @@ Primary tables hit by queries:
 | `repository_packages` | name, repository_id | repquery |
 | `installed_ccs_remove_hooks` | trove_id | scripts |
 | `installed_native_lifecycle_bundles` | trove_id, evidence_digest | scripts |
+| `lifecycle_events` | changeset_id, sequence | system history |
 
 ## Query Patterns
 
@@ -100,6 +103,12 @@ Primary tables hit by queries:
   and evidence digest without printing preserved raw script bodies by default.
   The JSON bundle summary exposes `diagnostic_class_counts`; these counts are
   evidence for implementation prioritization and never lifecycle authority.
+
+## Lifecycle Failure History
+
+`conary system history` reads the ordered `lifecycle_events` rows attached to
+each changeset and displays their typed package, entry, failure class, phase,
+sandbox, and message fields.
 
 ## Related SBOM Commands
 

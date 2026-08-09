@@ -12,21 +12,14 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 28 of the current-only schema epoch.
+/// Revision 29 of the current-only schema epoch.
 ///
-/// Revision 28 retains revision 27's fail-closed persisted states, explicit
-/// dependency-mixing policy, and path-free capability provenance, and carries
-/// one capability index on `repository_provides` instead of two. `capability`
-/// was the second column of the retired `(kind, capability)` composite, so that
-/// index could never serve the capability-only seek every provider lookup
-/// issues; the single-column index serves those seeks, and the one statement
-/// that also filters `kind` seeks the same index and filters the rows a single
-/// capability holds. An index is physical schema that a database keeps for the
-/// life of the file, so a revision-27 database still carries the retired index
-/// and reports a schema its build no longer defines. The revision gate is what
-/// keeps the two apart. Earlier pre-alpha databases must be rebuilt; no
-/// compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 28;
+/// Revision 29 retains revision 28's fail-closed persisted states, explicit
+/// dependency-mixing policy, path-free capability provenance, and physical
+/// repository-provide index shape. It adds `lifecycle_events`, the ordered
+/// per-changeset store for typed warn-and-continue lifecycle failures. Earlier
+/// pre-alpha databases must be rebuilt; no compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 29;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -205,6 +198,7 @@ mod tests {
             "installed_file_capabilities",
             "generation_publications",
             "activation_requests",
+            "lifecycle_events",
             "generation_activation_intents",
             "debian_alternative_groups",
         ] {
@@ -221,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_27_requires_rebuild_for_revision_28() {
+    fn revision_28_requires_rebuild_for_revision_29() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -229,19 +223,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 27);
+                VALUES ('conary-current-v1', 28);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (27);",
+            INSERT INTO schema_version (version) VALUES (28);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 27; this pre-alpha build supports only schema epoch conary-current-v1 revision 28"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 28; this pre-alpha build supports only schema epoch conary-current-v1 revision 29"
         );
     }
 

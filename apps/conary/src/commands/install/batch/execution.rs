@@ -264,6 +264,7 @@ impl BatchInstaller<'_> {
         };
         super::super::native_graph::drive_native_graph(
             tx,
+            changeset_id,
             native_transaction,
             selected_root,
             native_execution_mode,

@@ -211,6 +211,13 @@ a live binary or an operator queue.
 Each successful selected-root transaction appends the canonical invocation,
 source package/version/entry, source kind, exact sequence, canonical JSON, and
 SHA-256 to `activation_requests` before its changeset can become applied.
+When a source format explicitly permits a lifecycle class to fail while the
+transaction continues, the same transaction appends one ordered row per typed
+`ContinuedLifecycleFailure` to `lifecycle_events` before the changeset can
+become applied. The row mirrors the current evidence type: source
+package/version/entry, failure kind, phase, requested and effective sandbox,
+and message. It does not synthesize an exit-code or stderr column absent from
+`ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy requests also retain the exact invoked path, canonical path,
 and executable SHA-256 observed inside that selected root. Current-only
 database schema revision 9 stores the tagged systemd/SELinux/AppArmor union;
