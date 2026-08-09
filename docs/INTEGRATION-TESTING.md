@@ -241,11 +241,7 @@ Common conary-test operations have CLI equivalents for human use:
 |---------|---------|
 | `conary-test bootstrap check [--json]` | Inspect local developer prerequisites and smoke-readiness status |
 | `conary-test bootstrap smoke [--dry-run] [--json]` | Preview or run the local developer smoke proof loop |
-| `conary-test deploy rollout (--unit <name> \| --group <name>) [--ref <git-ref> \| --path <path>]` | Managed Forge deploy flow; trusted default source is a GitHub ref |
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
-| `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
-| `conary-test deploy rebuild` | Rebuild binaries from the currently deployed source checkout |
-| `conary-test deploy restart` | Restart the test service |
 | `conary-test deploy status` | Show local binary, checkout, and managed-rollout status |
 | `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
 | `conary-test fixtures publish` | Publish fixtures to Remi |
@@ -306,13 +302,13 @@ cargo run -p conary-test -- bootstrap smoke --json
 result files through the normal runner. It is not package publishing, does not
 publish fixtures, and does not require cloud credentials.
 
-Remote Forge control-plane validation is temporarily paused while Conary
-replaces the old VPS runner with a KVM-capable host. The Forge scripts remain
-checked in for the next runner, but they are not active release evidence today.
+Remote Forge control-plane validation and conary-test deployment are
+decommissioned. Use the local QEMU/KVM gate for temporary release evidence;
+there is no replacement Forge rollout path.
 
-Do not describe local evidence as hosted CI while the remote KVM path is
-paused. Any QEMU release evidence must name the absolute run date, distro,
-suite name, and pass/fail/skip/cancel counts.
+Do not describe local evidence as hosted CI. Any QEMU release evidence must
+name the absolute run date, distro, suite name, and pass/fail/skip/cancel
+counts.
 
 For the temporary local QEMU release gate, run this on a development machine
 with `/dev/kvm`:
@@ -608,8 +604,8 @@ Fresh Goal 3 evidence from May 19, 2026:
 
 The former Forge control-plane smoke depended on the removed conary-test
 network server and is no longer a validation path. Use the CLI run/list proof
-and the hosted Remi checks below; a future replacement runner needs its own
-explicit service contract before it can become release evidence.
+and the hosted Remi checks below; no replacement Forge runner or rollout path
+is part of the supported surface.
 
 ## Release Evidence Block
 
@@ -640,23 +636,16 @@ available. Review the generated bundle before attaching it. It does not copy
 `conary.db`, raw logs, environment dumps, shell history, private keys, SSH keys,
 `/etc/conary/trust`, host-local access notes, or package payloads.
 
-For managed Forge deployments from an operator workstation, prefer:
-
-```bash
-FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main
-```
-
 ## Validation Modes
 
 - `merge-validation` is the trusted on-merge lane. The former Forge
   control-plane server smoke is retired; the workflow currently runs hosted
   build/list/Remi smoke checks instead.
 - `scheduled-ops` keeps hosted Remi health, audit, and manifest-inventory
-  checks active. Forge-backed Phase 1-3 and QEMU jobs are paused rather than
-  queued against a missing runner.
-- Raw `cargo run -p conary-test -- run ...` from an SSH shell is still useful
-  for debugging, but it is no longer the main supported Forge control-plane
-  check.
+  checks active. Forge-backed Phase 1-3 and QEMU jobs are retired; local QEMU
+  evidence must name its host, date, distro, suite, and counts.
+- Raw `cargo run -p conary-test -- run ...` remains useful for local debugging
+  and evidence collection.
 
 ### Available Distros
 
@@ -959,7 +948,7 @@ the specific workflow run.
 `conary-test deploy status` is internal infrastructure state, not a product
 release identity. Operators should read it as local checkout and managed-rollout
 provenance; the removed conary-test server no longer provides a live service
-identity.
+identity, and no deploy execution command remains.
 
 Current JSON semantics:
 
