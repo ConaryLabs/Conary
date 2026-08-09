@@ -1223,3 +1223,344 @@ fn a_witness_used_promise_already_present_satisfies_the_post_condition() {
         ChangesetStatus::Applied
     );
 }
+
+/// A database with a bootable runtime and one completed prior transaction.
+///
+/// Whatever that transaction installed is exactly what a later batch inherits:
+/// promises held by packages the later transaction never sees among its own
+/// members.
+fn db_with_prior_transaction(
+    temp: &std::path::Path,
+    prior: Vec<PreparedPackage>,
+) -> (std::path::PathBuf, String) {
+    let db_path = temp.join("conary.db");
+    std::fs::create_dir_all(temp.join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(prior)
+        .expect("the prior transaction must install");
+    (db_path, db_path_string)
+}
+
+fn crypto_policies_with_promise(promised_path: &str) -> PreparedPackage {
+    let mut holder = prepared_test_package(
+        "crypto-policies",
+        "/usr/share/crypto-policies/DEFAULT/krb5.txt",
+        b"policy",
+    );
+    holder.provides.push(promised(promised_path));
+    holder
+}
+
+fn every_changeset_applied(db_path: &std::path::Path) -> bool {
+    let conn = conary_core::db::open(db_path).unwrap();
+    conary_core::db::models::Changeset::list_all(&conn)
+        .unwrap()
+        .iter()
+        .all(|changeset| changeset.status == ChangesetStatus::Applied)
+}
+
+#[test]
+fn a_later_transaction_verifies_a_promise_it_relied_on_from_an_installed_package() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+    let later_batch = || {
+        let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+        dependent.requirements = vec![depends_on(promised_path)];
+        vec![dependent]
+    };
+
+    // The promise materialized during the earlier transaction, so the path the
+    // later one leans on is really there and the batch applies. The producer
+    // declares no capability for the path, so the installed promise is the only
+    // witness the requirement has.
+    let kept = tempfile::tempdir().unwrap();
+    let (kept_db, kept_db_string) = db_with_prior_transaction(
+        kept.path(),
+        vec![
+            crypto_policies_with_promise(promised_path),
+            prepared_test_package("materializer", promised_path, b"generated"),
+        ],
+    );
+
+    BatchInstaller::new(&kept_db_string, SandboxMode::Always)
+        .install_batch(later_batch())
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&kept_db),
+        "a present promise must not fail the transaction that relies on it"
+    );
+
+    // Same reasoning, same reliance, but the path was never created. Scoping
+    // the post-condition to the current batch left nothing to re-ask the disk.
+    let broken = tempfile::tempdir().unwrap();
+    let (_broken_db, broken_db_string) = db_with_prior_transaction(
+        broken.path(),
+        vec![crypto_policies_with_promise(promised_path)],
+    );
+
+    let error = BatchInstaller::new(&broken_db_string, SandboxMode::Always)
+        .install_batch(later_batch())
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&format!(
+            "installed package crypto-policies-1.0.0 no longer holds promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    // The remedy differs from a batch member that never materialized its own
+    // promise, so the diagnostic names the installed holder to repair.
+    assert!(
+        message.contains("repair or reinstall crypto-policies"),
+        "{message}"
+    );
+    assert!(
+        message.contains("krb5-libs depends on it through"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_installed_promise_no_batch_requirement_names_is_never_verified() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+
+    // Fedora's setup owns /etc/fstab as a %ghost and never creates it. Being
+    // installed does not put it in a later transaction's reach: only a promise
+    // that transaction leaned on is its business.
+    let mut setup = prepared_test_package("setup", "/etc/profile", b"profile");
+    setup.provides.push(promised("/etc/fstab"));
+    setup.provides.push(promised("/run/motd"));
+    let (db_path, db_path_string) = db_with_prior_transaction(temp.path(), vec![setup]);
+    let mut later = prepared_test_package("filesystem", "/usr/bin/filesystem-marker", b"marker");
+    later.requirements = vec![depends_on("setup")];
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![later])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "an installed promise nothing in the batch requires must not be verified"
+    );
+}
+
+#[test]
+fn an_installed_promise_an_alternative_satisfies_is_never_verified() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // The requirement names the promised path, but its other alternative is
+    // satisfied too, so the transaction never leaned on the path. Naming an
+    // atom is not relying on it -- which is why membership in the batch's atom
+    // set selects candidates and the counterfactual decides.
+    let (db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![crypto_policies_with_promise(promised_path)],
+    );
+    let mut later = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+    later.requirements = vec![
+        conary_core::repository::dependency_model::RepositoryRequirementGroup::alternatives(
+            conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+            vec![
+                conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    promised_path.to_string(),
+                ),
+                conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    "crypto-policies".to_string(),
+                ),
+            ],
+        ),
+    ];
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![later])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "a promise an alternative made dispensable must not be verified"
+    );
+}
+
+fn package_promising(name: &str, payload: &str, promised_path: &str) -> PreparedPackage {
+    let mut package = prepared_test_package(name, payload, b"payload");
+    package.provides.push(promised(promised_path));
+    package.install_reason = InstallReason::Dependency;
+    package
+}
+
+fn krb5_depending_on(
+    requirement: conary_core::repository::dependency_model::RepositoryRequirementGroup,
+) -> PreparedPackage {
+    let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+    dependent.requirements = vec![requirement];
+    dependent
+}
+
+fn any_of(
+    first: &str,
+    second: &str,
+) -> conary_core::repository::dependency_model::RepositoryRequirementGroup {
+    conary_core::repository::dependency_model::RepositoryRequirementGroup::alternatives(
+        conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+        vec![
+            conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                first.to_string(),
+            ),
+            conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                second.to_string(),
+            ),
+        ],
+    )
+}
+
+#[test]
+fn two_packages_promising_one_path_cannot_alibi_each_other() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // One installed holder and one incoming holder promise the same path, and
+    // nothing creates it. Asking whether either promise alone is load-bearing
+    // gets "no" twice -- each is excused by the other -- and an unusable
+    // dependency commits. The question has to be asked of the path.
+    let (_db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![crypto_policies_with_promise(promised_path)],
+    );
+
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![
+            krb5_depending_on(depends_on(promised_path)),
+            package_promising(
+                "crypto-policies-extra",
+                "/usr/share/crypto-policies/EXTRA",
+                promised_path,
+            ),
+        ])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    // Both holders are named, each with the remedy its own side needs.
+    assert!(
+        message.contains(&format!(
+            "installed package crypto-policies-1.0.0 no longer holds promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "package crypto-policies-extra-1.0.0 did not materialize promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains("krb5-libs depends on it through"),
+        "{message}"
+    );
+}
+
+#[test]
+fn two_packages_promising_one_present_path_satisfy_the_post_condition() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // Same two holders, but the path is really there. The post-condition asks
+    // the disk about the path, not about who is credited with it.
+    let (db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![
+            crypto_policies_with_promise(promised_path),
+            prepared_test_package("materializer", promised_path, b"generated"),
+        ],
+    );
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![
+            krb5_depending_on(depends_on(promised_path)),
+            package_promising(
+                "crypto-policies-extra",
+                "/usr/share/crypto-policies/EXTRA",
+                promised_path,
+            ),
+        ])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "a present path must satisfy every package that promised it"
+    );
+}
+
+#[test]
+fn an_or_of_two_promised_paths_fails_when_neither_materializes() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let first = "/etc/promise-first";
+    let second = "/etc/promise-second";
+
+    // Two promised alternatives excuse each other exactly like two holders of
+    // one path do, one level up the expression.
+    let (_db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![
+            package_promising("holder-first", "/usr/share/holder-first", first),
+            package_promising("holder-second", "/usr/share/holder-second", second),
+        ],
+    );
+
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![krb5_depending_on(any_of(first, second))])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&format!(
+            "installed package holder-first-1.0.0 no longer holds promised path {first}"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "installed package holder-second-1.0.0 no longer holds promised path {second}"
+        )),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_or_of_two_promised_paths_passes_when_one_materializes() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let first = "/etc/promise-first";
+    let second = "/etc/promise-second";
+
+    // The requirement is satisfied by either alternative, so one materialized
+    // promise is the whole obligation. Demanding both would reject a correct
+    // transaction -- the exact over-enforcement #300 removed.
+    let (db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![
+            package_promising("holder-first", "/usr/share/holder-first", first),
+            package_promising("holder-second", "/usr/share/holder-second", second),
+            prepared_test_package("materializer", second, b"generated"),
+        ],
+    );
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![krb5_depending_on(any_of(first, second))])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "one materialized alternative must satisfy an OR of promised paths"
+    );
+}
