@@ -820,6 +820,35 @@ CREATE INDEX idx_activation_requests_changeset
             ON activation_requests(changeset_id, sequence);
 CREATE INDEX idx_activation_requests_digest
             ON activation_requests(invocation_sha256);
+CREATE TABLE lifecycle_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changeset_id INTEGER NOT NULL REFERENCES changesets(id) ON DELETE CASCADE,
+            sequence INTEGER NOT NULL CHECK(sequence >= 0),
+            source_package TEXT NOT NULL,
+            source_version TEXT NOT NULL,
+            source_entry TEXT NOT NULL,
+            failure_kind TEXT NOT NULL CHECK(failure_kind IN (
+                'ScriptExited',
+                'ScriptTimedOut',
+                'ContractViolation',
+                'ProgramUnavailable',
+                'ProcessSetupFailed',
+                'SandboxSetupUnavailable',
+                'EnforcementSetupFailed'
+            )),
+            requested_sandbox_mode TEXT NOT NULL CHECK(
+                requested_sandbox_mode IN ('always')
+            ),
+            effective_sandbox TEXT NOT NULL CHECK(
+                effective_sandbox IN ('target-root')
+            ),
+            phase TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(changeset_id, sequence)
+        );
+CREATE INDEX idx_lifecycle_events_changeset
+            ON lifecycle_events(changeset_id, sequence);
 CREATE TABLE generation_activation_intents (
             generation_number INTEGER NOT NULL
                 REFERENCES system_states(state_number) ON DELETE CASCADE,

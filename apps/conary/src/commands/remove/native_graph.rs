@@ -102,6 +102,7 @@ fn execute_selected_root_graph(
     let mut purge_plan = None;
     let graph_result = drive_native_graph_with(
         &tx,
+        changeset_id,
         native_transaction,
         &selected_path,
         &ExecutionMode::Remove,

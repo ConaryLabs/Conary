@@ -45,6 +45,7 @@ mod installed_native_lifecycle_bundle;
 mod installed_requirement_atom;
 mod installed_requirement_group;
 mod label;
+mod lifecycle_event;
 mod metadata;
 mod native_lifecycle_residual_state;
 mod native_publication;
@@ -105,6 +106,7 @@ pub use installed_native_lifecycle_bundle::InstalledNativeLifecycleBundle;
 pub use installed_requirement_atom::InstalledRequirementAtom;
 pub use installed_requirement_group::InstalledRequirementGroup;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
+pub use lifecycle_event::{LifecycleEvent, NewLifecycleEvent};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
 pub use native_lifecycle_residual_state::NativeLifecycleResidualState;
 pub use native_publication::{

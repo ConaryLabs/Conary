@@ -409,6 +409,7 @@ fn execute_removal_graph(graph: RestoreRemovalGraph<'_, '_>) -> Result<()> {
     };
     drive_native_graph(
         tx,
+        changeset_id,
         native_transaction,
         &selected_path,
         &ExecutionMode::Remove,
@@ -688,6 +689,7 @@ fn execute_install_graph(
     };
     drive_native_graph(
         tx,
+        changeset_id,
         native_transaction,
         &selected_path,
         native_mode,

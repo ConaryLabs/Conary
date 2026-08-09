@@ -276,13 +276,14 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 28 retains
-revision 27's source-authority, fail-closed state constraints, explicit mixing
-policy for every persisted source pin, and path-free capability provenance, and
-carries one capability index on `repository_provides` instead of two. It is a
-pre-alpha hard cut: prior databases are rebuilt and re-ingested from configured
-repository authority rather than migrated. Local conversion tracking is
-written only after the CCS install transaction commits.
+schema rejects missing, empty, or malformed values. Schema revision 29 retains
+revision 28's source-authority, fail-closed state constraints, explicit mixing
+policy for every persisted source pin, path-free capability provenance, and
+physical `repository_provides` index shape, and adds ordered per-changeset
+`lifecycle_events` for typed continued lifecycle failures. It is a pre-alpha
+hard cut: prior databases are rebuilt and re-ingested from configured repository
+authority rather than migrated. Local conversion tracking is written only after
+the CCS install transaction commits.
 
 Ready conversion means the artifact carries a source-independent Conary
 lifecycle contract. A client may install it on any target whose typed
