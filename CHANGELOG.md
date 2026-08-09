@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [remi-v0.12.1] - 2026-08-09
+
+### Changed
+- delete the Forge-shaped server layer (#355)
+- delete the consumerless ChunkFetcherBuilder (#339)
+
+### Fixed
+- serve MCP as modern-only stateless Streamable HTTP on rmcp 3.1.2 (#350)
+- ordering witnesses come from the transaction's end state (#348)
+- drop the redundant kind+capability index from repository_provides (#343)
+- declare scriptlet failure posture as typed authority, keep the evidence (#338)
+
+### Performance
+- seek the capability index in conary query provides; delete test-only lookup (#353)
+- load ProvidesIndex on demand instead of every provides row (#349)
+
 ## [remi-v0.12.0] - 2026-08-08
 
 ### Added
