@@ -1,6 +1,7 @@
 // conary-core/src/packages/rpm/scriptlets.rs
 
 use super::*;
+use crate::scriptlet::RpmClassAuthority;
 
 mod runtime_context;
 use runtime_context::ParsedRpmRuntimeContext;
@@ -15,8 +16,7 @@ impl RpmPackage {
 
     pub(super) fn rpm_scriptlet_flags_metadata(
         flags: rpm::ScriptletFlags,
-        default_critical: bool,
-        force_warning_only: bool,
+        authority: RpmClassAuthority,
     ) -> RpmScriptletFlagsMetadata {
         let mut names = Vec::new();
         if flags.contains(rpm::ScriptletFlags::EXPAND) {
@@ -33,15 +33,7 @@ impl RpmPackage {
             | rpm::ScriptletFlags::QFORMAT.bits()
             | rpm::ScriptletFlags::CRITICAL.bits();
         let header_critical = flags.contains(rpm::ScriptletFlags::CRITICAL);
-        let (critical, criticality) = if force_warning_only {
-            (false, RpmScriptletCriticality::ForcedWarningOnly)
-        } else if header_critical {
-            (true, RpmScriptletCriticality::Header)
-        } else if default_critical {
-            (true, RpmScriptletCriticality::SlotDefault)
-        } else {
-            (false, RpmScriptletCriticality::WarningOnly)
-        };
+        let criticality = authority.effective_criticality(header_critical);
 
         RpmScriptletFlagsMetadata {
             names,
@@ -49,7 +41,7 @@ impl RpmPackage {
             unknown_bits: flags.bits() & !known_bits,
             expand: flags.contains(rpm::ScriptletFlags::EXPAND),
             query_format: flags.contains(rpm::ScriptletFlags::QFORMAT),
-            critical,
+            critical: criticality.is_critical(),
             criticality,
         }
     }
@@ -57,8 +49,7 @@ impl RpmPackage {
     fn rpm_runtime_metadata(
         interpreter: &str,
         flags: rpm::ScriptletFlags,
-        default_critical: bool,
-        force_warning_only: bool,
+        authority: RpmClassAuthority,
         install_prefixes: &[String],
         context: &ParsedRpmRuntimeContext,
     ) -> RpmScriptletRuntimeMetadata {
@@ -69,7 +60,7 @@ impl RpmPackage {
             } else {
                 RpmScriptletProgram::External
             },
-            flags: Self::rpm_scriptlet_flags_metadata(flags, default_critical, force_warning_only),
+            flags: Self::rpm_scriptlet_flags_metadata(flags, authority),
             install_prefixes: install_prefixes.to_vec(),
             macro_context: if needs_macros {
                 context.macros.clone()
@@ -363,8 +354,7 @@ impl RpmPackage {
         let runtime = Self::rpm_runtime_metadata(
             &interpreter,
             flags,
-            Self::rpm_slot_is_critical(slot),
-            false,
+            crate::scriptlet::rpm_package_slot_authority(slot),
             install_prefixes,
             runtime_context,
         );
@@ -389,18 +379,6 @@ impl RpmPackage {
             }),
         });
         Ok(())
-    }
-
-    fn rpm_slot_is_critical(slot: RpmScriptletSlot) -> bool {
-        matches!(
-            slot,
-            RpmScriptletSlot::Pre
-                | RpmScriptletSlot::PreUn
-                | RpmScriptletSlot::PreTrans
-                | RpmScriptletSlot::PreUnTrans
-                | RpmScriptletSlot::Verify
-                | RpmScriptletSlot::Sysusers
-        )
     }
 
     fn add_rpm_sysusers_entries(
@@ -442,8 +420,9 @@ impl RpmPackage {
                         program: RpmScriptletProgram::Sysusers,
                         flags: Self::rpm_scriptlet_flags_metadata(
                             rpm::ScriptletFlags::from_bits_retain(0),
-                            true,
-                            false,
+                            crate::scriptlet::rpm_package_slot_authority(
+                                RpmScriptletSlot::Sysusers,
+                            ),
                         ),
                         install_prefixes: install_prefixes.to_vec(),
                         macro_context: RpmMacroContextMetadata::default(),
@@ -564,11 +543,7 @@ impl RpmPackage {
             let runtime = Self::rpm_runtime_metadata(
                 &interpreter,
                 flags,
-                matches!(
-                    primary_action,
-                    RpmTriggerAction::PreInstall | RpmTriggerAction::Uninstall
-                ),
-                family != RpmTriggerFamily::Package,
+                crate::scriptlet::rpm_trigger_authority(family, primary_action),
                 install_prefixes,
                 runtime_context,
             );

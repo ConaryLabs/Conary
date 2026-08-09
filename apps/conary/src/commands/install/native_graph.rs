@@ -134,6 +134,28 @@ pub(crate) fn drive_native_graph(
     execution_mode: &ExecutionMode,
     payload: &mut impl NativeGraphPayloadMutation,
 ) -> Result<()> {
+    let result = drive_native_graph_steps(
+        conn,
+        native_transaction,
+        selected_root,
+        execution_mode,
+        payload,
+    );
+    // Both exits report, because a later abort is exactly when "this package's
+    // %post already failed" is most diagnostic. Reporting only on success would
+    // discard that evidence with the transaction it explains. The abort error
+    // itself is untouched; these lines simply precede it.
+    report_continued_lifecycle_failures(native_transaction);
+    result
+}
+
+fn drive_native_graph_steps(
+    conn: &rusqlite::Connection,
+    native_transaction: &PreparedNativeTransaction,
+    selected_root: &Path,
+    execution_mode: &ExecutionMode,
+    payload: &mut impl NativeGraphPayloadMutation,
+) -> Result<()> {
     let mut arch_finalizer_executed = false;
     for step in native_transaction.graph_steps() {
         match *step {
@@ -179,6 +201,24 @@ pub(crate) fn drive_native_graph(
     }
     native_transaction.refresh_debian_admin_projection(conn, selected_root)?;
     Ok(())
+}
+
+/// Surface every lifecycle failure the transaction ran past.
+///
+/// The source format's failure table says the transaction proceeds, but the
+/// operator is still told, through the user-facing channel rather than an
+/// internal log record, that a package's own lifecycle did not complete.
+fn report_continued_lifecycle_failures(native_transaction: &PreparedNativeTransaction) {
+    for record in native_transaction.take_continued_lifecycle_failures() {
+        crate::ui::warn(&format!(
+            "{} {} lifecycle entry {} failed ({}) and the transaction continued: {}",
+            record.package,
+            record.version,
+            record.entry,
+            record.failure.failure_kind.as_str(),
+            record.failure.message
+        ));
+    }
 }
 
 pub(crate) fn finalize_owned_trove(

@@ -6,10 +6,21 @@ use super::{NativeBundleOwner, debian_runtime};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::NativeLifecycleEntry;
 use conary_core::scriptlet::{
-    ExecutionMode, NativeInterpreterAvailability, NativeInvocationRuntime,
-    NativeLifecycleExecution, ScriptletExecutor, ScriptletFailureKind, ScriptletOutcome,
+    ExecutionMode, FailurePosture, LifecycleFailureClass, NativeInterpreterAvailability,
+    NativeInvocationRuntime, NativeLifecycleExecution, ScriptletExecutor, ScriptletFailureOutcome,
+    ScriptletOutcome,
 };
 use tracing::warn;
+
+/// What executing one native lifecycle entry did to the transaction.
+///
+/// A continued failure is evidence, not a success: the source format's own
+/// contract says the transaction proceeds past it, and the caller retains the
+/// typed outcome so the transaction can report what it ran past.
+pub(super) enum EntryExecution {
+    Completed,
+    ContinuedAfterFailure(Box<ScriptletFailureOutcome>),
+}
 
 struct EntryRuntimeContext {
     environment: Vec<String>,
@@ -46,7 +57,7 @@ pub(super) fn execute_entry(
     owner: &NativeBundleOwner,
     executor: &ScriptletExecutor,
     invocation: EntryInvocation<'_>,
-) -> Result<()> {
+) -> Result<EntryExecution> {
     let entry = bundle_entry_for_event(owner, invocation.entry_id)?;
     let context = entry_runtime_context(owner, entry, invocation.deb_package_refcount)?;
     let execution = native_lifecycle_execution(entry, &context.environment);
@@ -61,16 +72,27 @@ pub(super) fn execute_entry(
     } else {
         executor.execute_native_lifecycle_entry_with_outcome(&execution, &runtime)
     };
-    match outcome {
-        ScriptletOutcome::Failure(failure)
-            if entry.rpm_runtime.as_ref().is_some_and(|rpm| {
-                !rpm.critical
-                    && matches!(
-                        failure.failure_kind,
-                        ScriptletFailureKind::ScriptExited | ScriptletFailureKind::ScriptTimedOut
-                    )
-            }) =>
-        {
+    let ScriptletOutcome::Failure(failure) = outcome else {
+        return outcome
+            .into_result()
+            .map(|()| EntryExecution::Completed)
+            .map_err(anyhow::Error::from);
+    };
+    // The source format's own per-scriptlet-class table decides this, never the
+    // entry's name. See docs/specs/foreign-package-lifecycle-contracts.md,
+    // "RPM Scriptlet Failure Posture".
+    let posture = FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
+        source_format: owner.bundle.source_format,
+        rpm_criticality: entry.rpm_runtime.as_ref().map(|rpm| rpm.criticality),
+        failure_kind: failure.failure_kind,
+    });
+    match posture {
+        FailurePosture::AbortsTransaction => Err(anyhow::Error::from(
+            ScriptletOutcome::Failure(failure)
+                .into_result()
+                .expect_err("a failure outcome must convert into a typed scriptlet error"),
+        )),
+        FailurePosture::WarnAndContinue => {
             warn!(
                 package = %owner.package_name,
                 version = %owner.package_version,
@@ -80,11 +102,10 @@ pub(super) fn execute_entry(
                 requested_sandbox = failure.requested_sandbox_mode.as_str(),
                 effective_sandbox = failure.effective_sandbox.as_str(),
                 error = %failure.message,
-                "RPM warning-only native lifecycle event failed; continuing transaction"
+                "native lifecycle event failed in a warn-and-continue class; continuing transaction"
             );
-            Ok(())
+            Ok(EntryExecution::ContinuedAfterFailure(Box::new(failure)))
         }
-        outcome => outcome.into_result().map_err(anyhow::Error::from),
     }
 }
 

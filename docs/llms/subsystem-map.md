@@ -101,8 +101,12 @@ commands.
   pre-payload sysusers target-interface execution starts in
   `crates/conary-core/src/scriptlet/sysusers.rs`; generic native argv remains
   selected-root confined in
-  `crates/conary-core/src/scriptlet/native_command.rs`. Exact source-independent
-  payload nodes start in `crates/conary-core/src/payload.rs`.
+  `crates/conary-core/src/scriptlet/native_command.rs`. The per-scriptlet-class
+  failure posture that decides whether a failed lifecycle entry aborts its
+  transaction is owned by `crates/conary-core/src/scriptlet/failure_policy.rs`
+  and declared in `docs/specs/foreign-package-lifecycle-contracts.md`. Exact
+  source-independent payload nodes start in
+  `crates/conary-core/src/payload.rs`.
   `apps/conary/src/commands/live_root/recovery.rs` is confined to the
   selected-root session journal implementation.
 - Declarative models, source selection, and replatforming:
