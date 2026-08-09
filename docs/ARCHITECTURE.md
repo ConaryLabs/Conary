@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-08
-revision: 41
+revision: 42
 summary: Describe workspace architecture, source-authority projections, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -582,14 +582,18 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 27 retains revision 26's fail-closed persisted-state
-constraints and explicit `strict`, `guarded`, or `permissive` dependency-mixing
-policy on every persisted source pin, and stores every path-owning capability
-provenance without a duplicated path. That last change moves no table
-definition, so the revision is the only thing separating the two shapes:
-`provides.provenance` is JSON text inside a UNIQUE contract index and no resync
-rebuilds installed rows, so a database mixing both shapes would admit one path
-twice as two distinct providers.
+Schema revision 28 retains revision 27's fail-closed persisted-state
+constraints, explicit `strict`, `guarded`, or `permissive` dependency-mixing
+policy on every persisted source pin, and path-free capability provenance, and
+carries one capability index on `repository_provides` instead of two. Neither
+change moves a table definition, so the revision is the only thing separating
+the shapes. Revision 27's cut was correctness: `provides.provenance` is JSON
+text inside a UNIQUE contract index and no resync rebuilds installed rows, so a
+database mixing both provenance shapes would admit one path twice as two
+distinct providers. Revision 28's cut is physical: an index lives in the
+database file for its lifetime, so a revision-27 database would keep serving a
+`(kind, capability)` index the build no longer defines, and its physical schema
+would disagree with the revision it reports.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-08
-revision: 30
+revision: 31
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -391,8 +391,33 @@ RSS from 6.33 GiB to 5.15 GiB, with row counts identical. What remains is not
 provenance: at 4.78 GB the `repository_provides` table held 2,332 MB against
 1,684 MB of index (869 MB for `(kind, capability)`, 815 MB for `(capability)`,
 127 MB for the package key), so every path is still stored once in the table
-and twice more in indexes. Path interning or index consolidation is the next
-lever, not a second pass over provenance.
+and twice more in indexes.
+
+Index consolidation is the lever that answered. `capability` was the second
+column of the `(kind, capability)` composite, so that index could never serve a
+capability-only seek -- which is what every provider lookup issues -- and only
+the single statement that also filters `kind` could use it. Schema revision 28
+retires it. Measured on the same corpus and revision, with row counts identical
+at 10,074,782: the synced database falls from 3,903,258,624 to 2,991,742,976
+bytes (-23.4%), and the difference is exactly the 911,515,648 bytes the retired
+index occupied, with the table (1,570,963,456), the capability index
+(854,863,872), and the package key (133,562,368) byte-identical across the
+pair. Peak process RSS is unchanged (0.2% across six runs): an index that is
+not read during a sync costs disk, not resident memory.
+
+The kind-filtering statement now seeks the capability index and filters the
+rows one capability holds. No statement in the inventory falls back to a table
+scan, before or after. The corpus bounds that filter exactly: its most-provided
+capability is `/usr/lib/.build-id` at 20,494 providers, and 9,498,629 of the
+10,074,782 rows are `file`, so the worst measured latency change is +6.7 ms on
+a hot capability whose kind does not match, while an ordinary package lookup is
+unchanged at 0.014 ms.
+
+Persist-phase timing is deliberately not quoted for this change. Five
+same-binary baseline syncs on this host ranged from 450.5 s to 952.4 s under
+concurrent build load, a spread far larger than any delta worth claiming, so
+the persist effect of maintaining one fewer index across 10M inserts remains
+unpriced rather than estimated.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:

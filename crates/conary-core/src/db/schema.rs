@@ -12,19 +12,21 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 27 of the current-only schema epoch.
+/// Revision 28 of the current-only schema epoch.
 ///
-/// Revision 27 retains revision 26's fail-closed persisted states and explicit
-/// dependency-mixing policy, and stores every path-owning capability provenance
-/// without its duplicated path. The table definitions are unchanged, so the
-/// revision is what separates the two shapes: `provides.provenance` and
-/// `repository_provides.provenance` are JSON text inside a UNIQUE contract
-/// index, so a database mixing old and new rows would admit the same path twice
-/// as two distinct providers. No installed-state resync rebuilds
-/// `provides`, so the version gate is the only thing that can refuse the mix.
-/// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
-/// provided.
-pub const SCHEMA_VERSION: i32 = 27;
+/// Revision 28 retains revision 27's fail-closed persisted states, explicit
+/// dependency-mixing policy, and path-free capability provenance, and carries
+/// one capability index on `repository_provides` instead of two. `capability`
+/// was the second column of the retired `(kind, capability)` composite, so that
+/// index could never serve the capability-only seek every provider lookup
+/// issues; the single-column index serves those seeks, and the one statement
+/// that also filters `kind` seeks the same index and filters the rows a single
+/// capability holds. An index is physical schema that a database keeps for the
+/// life of the file, so a revision-27 database still carries the retired index
+/// and reports a schema its build no longer defines. The revision gate is what
+/// keeps the two apart. Earlier pre-alpha databases must be rebuilt; no
+/// compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 28;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -219,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_26_requires_rebuild_for_revision_27() {
+    fn revision_27_requires_rebuild_for_revision_28() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -227,19 +229,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 26);
+                VALUES ('conary-current-v1', 27);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (26);",
+            INSERT INTO schema_version (version) VALUES (27);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 26; this pre-alpha build supports only schema epoch conary-current-v1 revision 27"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 27; this pre-alpha build supports only schema epoch conary-current-v1 revision 28"
         );
     }
 
@@ -286,16 +288,13 @@ mod tests {
             2,
         );
 
-        conn.execute(
-            "UPDATE schema_identity SET revision = ?1",
-            params![SCHEMA_VERSION - 1],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE schema_version SET version = ?1",
-            params![SCHEMA_VERSION - 1],
-        )
-        .unwrap();
+        // Revision 26 is the last revision that wrote this shape. Naming it
+        // absolutely keeps the test pinned to that database, not to whatever
+        // revision happens to sit one below the current constant.
+        conn.execute("UPDATE schema_identity SET revision = 26", [])
+            .unwrap();
+        conn.execute("UPDATE schema_version SET version = 26", [])
+            .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert!(
