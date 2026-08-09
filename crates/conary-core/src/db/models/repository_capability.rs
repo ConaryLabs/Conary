@@ -20,10 +20,8 @@ use std::io;
 /// tests reads the same text the production path executes. `repository_provides`
 /// is the largest table Conary persists (10.07M rows on Fedora 44
 /// `Everything/x86_64` with `filelists.xml`), so which index each statement can
-/// seek through is a contract, not an implementation detail. The single named
-/// exception is the CLI raw-spelling arm (`SELECT_BY_CLI_RAW_QUERY_SQL`), which
-/// traverses by design because `raw` has no index; the query-plan proof pins
-/// that traversal explicitly.
+/// seek through is a contract, not an implementation detail. The CLI
+/// raw-spelling arm (`SELECT_BY_CLI_RAW_QUERY_SQL`) seeks the partial raw index.
 const INSERT_PROVIDE_SQL: &str = "INSERT INTO repository_provides
              (repository_package_id, capability, version, kind, raw, version_scheme,
               version_relation, architecture_qualifier_kind, architecture, provenance)
@@ -90,9 +88,11 @@ const SELECT_BY_CLI_EXACT_QUERY_SQL: &str =
 /// the untyped query (e.g. `libssl.so.3()(64bit)`), including typed rows no
 /// normalized capability equals.
 ///
-/// `raw` is deliberately unindexed -- an index over it would partially
-/// resurrect what #343 retired (~0.8 GB) for a column only the CLI's diagnostic
-/// spelling lookup reads -- so this statement traverses `repository_provides`.
+/// `raw` now seeks the partial `idx_repository_provides_raw` index. Its
+/// predicate is the same non-null/non-empty guard as the raw arm below. The
+/// measured 69,476,352-byte cost (0.9% of a 27.8M-row three-distro client DB,
+/// dbstat page-exact, 2026-08-09 fresh production sync; methodology on issue
+/// #341) answers the #343 resurrection concern.
 /// It stays a separate statement so the capability arm above keeps its seek.
 /// The `raw != ''` guard keeps the two arms disjoint: empty-raw rows belong to
 /// the capability arm, exactly as the original OR partitioned them for every
@@ -683,10 +683,11 @@ mod tests {
 
     /// `repository_provides` is the largest table Conary persists, so its index
     /// inventory is a contract. A `(kind, capability)` composite cannot serve a
-    /// capability-only seek, which is what every provider lookup issues, so
-    /// exactly two indexes are carried: the package key and the capability key.
+    /// capability-only seek, which is what every provider lookup issues. The
+    /// raw-spelling arm has its own partial index, so exactly three indexes are
+    /// carried: the package key, capability key, and raw-spelling key.
     #[test]
-    fn repository_provides_carries_exactly_the_package_and_capability_indexes() {
+    fn repository_provides_carries_exactly_the_package_capability_and_raw_indexes() {
         let conn = test_db();
 
         let mut indexes = conn
@@ -707,26 +708,20 @@ mod tests {
             vec![
                 "idx_repository_provides_capability".to_string(),
                 "idx_repository_provides_pkg".to_string(),
+                "idx_repository_provides_raw".to_string(),
             ],
-            "an index on repository_provides costs ~0.8 GB at filelists scale; \
-             adding one needs its own query-plan proof"
+            "the raw-spelling index is partial and has its own query-plan proof"
         );
     }
 
     /// The property, not the instance: no statement this module owns may reach
     /// `repository_provides` by scanning it, and every statement that filters
-    /// `capability` must seek the capability index -- including the ones that
-    /// also filter `kind` or `raw`, which have no composite to seek. The one
-    /// named exception is the CLI raw-spelling arm, whose deliberate traversal
-    /// is pinned explicitly below.
+    /// `capability` or `raw` must seek the corresponding index.
     #[test]
     fn every_owned_statement_reaches_repository_provides_through_an_index() {
         let conn = test_db();
 
         for (label, sql) in owned_statements() {
-            if label == "find_by_cli_raw_query" {
-                continue;
-            }
             let plan = query_plan(&conn, &sql);
             for step in &plan {
                 assert!(
@@ -736,10 +731,23 @@ mod tests {
             }
         }
 
-        for label in [
-            "find_by_capability",
-            "find_by_cli_exact_query",
-            "find_by_capability_and_kind",
+        for (label, expected_step) in [
+            (
+                "find_by_capability",
+                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+            ),
+            (
+                "find_by_cli_exact_query",
+                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+            ),
+            (
+                "find_by_capability_and_kind",
+                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+            ),
+            (
+                "find_by_cli_raw_query",
+                "SEARCH rp USING INDEX idx_repository_provides_raw (raw=?)",
+            ),
         ] {
             let (_, sql) = owned_statements()
                 .into_iter()
@@ -747,36 +755,10 @@ mod tests {
                 .expect("statement is inventoried");
             let plan = query_plan(&conn, &sql);
             assert!(
-                plan.iter().any(|step| step
-                    == "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)"),
-                "{label} must seek the capability index: {plan:?}"
+                plan.iter().any(|step| step == expected_step),
+                "{label} must seek its expected index: {plan:?}"
             );
         }
-
-        // `raw` has no index: an index over it would partially resurrect the
-        // ~0.8 GB #343 retired, for a column only the CLI's diagnostic spelling
-        // lookup reads. The raw arm is therefore the module's one deliberate
-        // full traversal. The planner is free to pick the traversal shape
-        // (`SCAN rp`, or driving through the repo/package indexes and probing
-        // rp per package — both visit every enabled-repo provides row), so
-        // the pin asserts the property rather than one plan string: this
-        // statement must not claim the capability seek the other statements
-        // are held to. The slice that adds a raw index (or drops raw-spelling
-        // resolution, #341) must replace this with a seek assertion on
-        // purpose.
-        let (_, raw_sql) = owned_statements()
-            .into_iter()
-            .find(|(name, _)| *name == "find_by_cli_raw_query")
-            .expect("statement is inventoried");
-        let plan = query_plan(&conn, &raw_sql);
-        assert!(
-            !plan
-                .iter()
-                .any(|step| step.contains("idx_repository_provides_capability")),
-            "find_by_cli_raw_query is the named raw-spelling traversal and must \
-             not silently become a capability-index path — if it now seeks, \
-             update this pin deliberately: {plan:?}"
-        );
     }
 
     #[test]
