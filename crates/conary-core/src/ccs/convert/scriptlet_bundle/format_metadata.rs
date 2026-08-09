@@ -8,8 +8,8 @@ use crate::ccs::native_lifecycle::{
     DebMaintainerInvocationMetadata, DebMaintainerMetadata,
     DebMaintainerMode as BundleDebMaintainerMode, DebTriggerAwaitMode as BundleDebTriggerAwaitMode,
     DebTriggerDirective as BundleDebTriggerDirective, DebTriggerMetadata, RpmBodyTransform,
-    RpmCriticality, RpmHeaderContext, RpmHeaderFact, RpmHeaderFactSource, RpmHeaderValue,
-    RpmMacroContext, RpmMacroDefinition, RpmMacroDefinitionSource, RpmProgram, RpmRuntimeMetadata,
+    RpmHeaderContext, RpmHeaderFact, RpmHeaderFactSource, RpmHeaderValue, RpmMacroContext,
+    RpmMacroDefinition, RpmMacroDefinitionSource, RpmProgram, RpmRuntimeMetadata,
     RpmSysusersDirective as BundleRpmSysusersDirective,
     RpmSysusersMetadata as BundleRpmSysusersMetadata, RpmTriggerAction as BundleRpmTriggerAction,
     RpmTriggerKind, RpmTriggerMetadata as BundleRpmTriggerMetadata, RpmTriggerTargetConstraint,
@@ -22,8 +22,8 @@ use crate::packages::native_abi::{
     NativeScriptletMetadata, NativeStdinContract, RpmHeaderFactSource as NativeRpmHeaderFactSource,
     RpmHeaderValueMetadata as NativeRpmHeaderValueMetadata,
     RpmMacroDefinitionSource as NativeRpmMacroDefinitionSource, RpmNativeScriptletMetadata,
-    RpmScriptletCriticality, RpmScriptletProgram,
-    RpmSysusersDirective as NativeRpmSysusersDirective, RpmTriggerAction, RpmTriggerFamily,
+    RpmScriptletProgram, RpmSysusersDirective as NativeRpmSysusersDirective, RpmTriggerAction,
+    RpmTriggerFamily,
 };
 pub(super) struct FormatMetadataProjection {
     pub(super) rpm_runtime: Option<RpmRuntimeMetadata>,
@@ -114,13 +114,8 @@ fn project_rpm_metadata(
         .into_iter()
         .flatten()
         .collect(),
-        critical: metadata.runtime.flags.critical,
-        criticality: match metadata.runtime.flags.criticality {
-            RpmScriptletCriticality::Header => RpmCriticality::Header,
-            RpmScriptletCriticality::SlotDefault => RpmCriticality::SlotDefault,
-            RpmScriptletCriticality::WarningOnly => RpmCriticality::WarningOnly,
-            RpmScriptletCriticality::ForcedWarningOnly => RpmCriticality::ForcedWarningOnly,
-        },
+        critical: metadata.runtime.flags.criticality.is_critical(),
+        criticality: metadata.runtime.flags.criticality.persisted(),
         raw_flags: metadata.runtime.flags.raw_bits,
         unknown_flags: metadata.runtime.flags.unknown_bits,
         install_prefixes: metadata.runtime.install_prefixes.clone(),

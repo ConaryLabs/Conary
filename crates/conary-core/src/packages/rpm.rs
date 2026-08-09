@@ -14,10 +14,10 @@ use crate::packages::traits::{
     NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition, PackageFile,
     PackageFormat, RpmHeaderContextMetadata, RpmHeaderFactMetadata, RpmHeaderFactSource,
     RpmHeaderValueMetadata, RpmMacroContextMetadata, RpmMacroDefinitionMetadata,
-    RpmMacroDefinitionSource, RpmNativeScriptletMetadata, RpmScriptletCriticality,
-    RpmScriptletFlagsMetadata, RpmScriptletProgram, RpmScriptletRuntimeMetadata, RpmScriptletSlot,
-    RpmSysusersDirective, RpmSysusersMetadata, RpmTriggerAction, RpmTriggerCondition,
-    RpmTriggerFamily, RpmTriggerMetadata,
+    RpmMacroDefinitionSource, RpmNativeScriptletMetadata, RpmScriptletFlagsMetadata,
+    RpmScriptletProgram, RpmScriptletRuntimeMetadata, RpmScriptletSlot, RpmSysusersDirective,
+    RpmSysusersMetadata, RpmTriggerAction, RpmTriggerCondition, RpmTriggerFamily,
+    RpmTriggerMetadata,
 };
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,

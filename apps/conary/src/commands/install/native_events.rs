@@ -113,6 +113,19 @@ pub(crate) struct PreparedNativeTransaction {
     host_capabilities: Option<conary_core::ccs::HostCapabilityInventory>,
     path_projection: NativePathProjection,
     activation_invocations: RefCell<Vec<CapturedNativeActivation>>,
+    continued_lifecycle_failures: RefCell<Vec<ContinuedLifecycleFailure>>,
+}
+
+/// A lifecycle entry that failed in a warn-and-continue class.
+///
+/// The source format proceeds past this failure, so the transaction does too,
+/// but the failure stays typed evidence rather than becoming a silent success.
+#[derive(Debug, Clone)]
+pub(crate) struct ContinuedLifecycleFailure {
+    pub(crate) package: String,
+    pub(crate) version: String,
+    pub(crate) entry: String,
+    pub(crate) failure: conary_core::scriptlet::ScriptletFailureOutcome,
 }
 
 #[derive(Debug, Clone)]
@@ -579,6 +592,7 @@ impl PreparedNativeTransaction {
             host_capabilities,
             path_projection,
             activation_invocations: RefCell::new(Vec::new()),
+            continued_lifecycle_failures: RefCell::new(Vec::new()),
         })
     }
 
@@ -778,6 +792,7 @@ impl PreparedNativeTransaction {
             host_capabilities,
             path_projection,
             activation_invocations: RefCell::new(Vec::new()),
+            continued_lifecycle_failures: RefCell::new(Vec::new()),
         })
     }
 

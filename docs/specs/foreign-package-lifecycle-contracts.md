@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 40
+last_updated: 2026-08-08
+revision: 41
 summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -863,15 +863,82 @@ interpreters such as `<lua>`. Those are executable ABI semantics. A plain
 process executor cannot run such an entry; the corresponding RPM expansion or
 embedded-interpreter contract is required Conary implementation.
 
-The persisted effective critical flag owns RPM script-result handling. Matching
-the pinned RPM
+### Lifecycle Failure Posture
+
+The source package format owns its lifecycle ABI, so a lifecycle failure is
+exactly as fatal as that format's own contract says it is, in both directions.
+Conary neither aborts where the format proceeds nor proceeds where the format
+aborts. The posture is a typed per-scriptlet-class table, not a judgment about
+the entry's name, body, or apparent importance.
+
+The table below is the declared authority. `conary-core`'s
+`scriptlet::failure_policy` module is its single implementation: conversion
+consults it to stamp each entry's effective criticality, and the install runtime
+consults it to decide whether a failed entry aborts its transaction. Neither
+side matches a scriptlet name at decision time.
+
+#### RPM Scriptlet Failure Posture
+
+Derived from pinned RPM
+[`lib/rpmscript.cc` `scriptInfo[]`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmscript.cc#L54-L99),
+whose per-tag `deflags` column sets `RPMSCRIPT_FLAG_CRITICAL`, and dispatched by
 [`runScript()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/transaction.cc#L1709-L1762),
-a failed non-critical script is reported but does not fail its transaction
-element, while a critical script failure remains fatal. Conary applies that
-source policy only to a program exit or timeout after exact preflight and the
-selected-root enforcement boundary have succeeded. Missing interpreters,
-malformed contracts, process or sandbox setup failures, and enforcement
-failures remain fatal; RPM criticality is not a security-boundary bypass.
+where `warn_only = !(rpmScriptFlags(script) & RPMSCRIPT_FLAG_CRITICAL)` and a
+warn-only failure is mapped back to `RPMRC_OK` after notifying the callback.
+RPM's own comment there records that the return code "only reflects whether the
+condition prevented install/erase (which is only happens with %prein and %preun
+scriptlets)".
+
+| Scriptlet class | Class default | Failure posture | Note |
+| --- | --- | --- | --- |
+| `%pretrans` | `CRITICAL` | aborts transaction | runs before any payload for the element lands |
+| `%pre` | `CRITICAL` | aborts transaction | runs before this package's payload lands |
+| `%post` | none | warn and continue | payload is already on disk |
+| `%posttrans` | none | warn and continue | |
+| `%preuntrans` | `CRITICAL` | aborts transaction | |
+| `%preun` | `CRITICAL` | aborts transaction | RPM prevents the erase |
+| `%postun` | none | warn and continue | |
+| `%postuntrans` | none | warn and continue | |
+| `%verify` | `CRITICAL` | aborts transaction | |
+| `%sysusers` | `CRITICAL` | aborts transaction | RPM's synthesized sysusers class |
+| `%triggerprein` | `CRITICAL` | aborts transaction | |
+| `%triggerun` | `CRITICAL` | aborts transaction | |
+| `%triggerin` | none | warn and continue | |
+| `%triggerpostun` | none | warn and continue | |
+| `%filetrigger*`, `%transfiletrigger*` | cleared | warn and continue | RPM clears `CRITICAL`; no header flag can promote a file trigger |
+
+A package header may carry `RPMSCRIPT_FLAG_CRITICAL` on an entry whose class
+defaults to none, which promotes that entry to aborting the transaction. Only
+the file-trigger classes refuse promotion, because RPM clears the bit for them
+unconditionally. The promotion outcome is persisted as the entry's effective
+criticality: `header`, `slot-default`, `warning-only`, or
+`forced-warning-only`.
+
+Conary applies a warn-and-continue posture only to a program exit or timeout
+after exact preflight and the selected-root enforcement boundary have succeeded.
+Missing interpreters, malformed contracts, process or sandbox setup failures,
+and enforcement failures remain fatal for every class: criticality is a source
+lifecycle contract, not a security-boundary bypass.
+
+A warn-and-continue failure is typed evidence, not a success. The transaction
+retains each one and reports it on the user-facing channel, and the promised-path
+post-condition in the shared transaction model remains the backstop: a
+warn-and-continue entry that fails to materialize a path the transaction relied
+on as a dependency witness still fails the transaction.
+
+#### Debian And Arch Failure Posture
+
+| Source format | Failure posture | Status |
+| --- | --- | --- |
+| Debian maintainer scripts | aborts transaction | pending the Debian lifecycle-posture slice |
+| Arch `.INSTALL` functions and ALPM hooks | aborts transaction | pending the ALPM lifecycle-posture slice |
+
+Neither format's table is declared yet, so every failure aborts, which is the
+strict direction. Debian's real contract is not RPM's: `dpkg` leaves a package
+whose `postinst` failed in an errored, unconfigured state and reports the
+transaction as failed rather than proceeding as if configured, so the Debian row
+must be replaced by a per-script table stating which script failures leave which
+`dpkg` package state before that format can claim class-accurate posture.
 
 ### RPM Runtime Compatibility
 
