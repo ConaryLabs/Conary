@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-08
-revision: 20
+last_updated: 2026-08-09
+revision: 21
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -16,15 +16,12 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
   updates this document. The Remi host OS is independent of the public client
   distro support matrix, which is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux
   for the limited preview.
-- Forge remote validation is temporarily paused. The old VPS runner is being
-  retired because it did not expose `/dev/kvm`, which made it unusable for
-  scheduled QEMU release evidence.
-- Until a replacement KVM-capable runner is registered, hosted CI keeps Remi
-  health/audit/build/list checks active, and QEMU release evidence comes from
-  `scripts/local-qemu-validation.sh` on a local development machine with
-  `/dev/kvm`.
-- Forge-local `conaryd` staging deployment is also paused while there is no
-  active Forge host.
+- Forge remote validation and Forge-local staging deployment are decommissioned.
+  The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
+  or conary-test deployment path is supported.
+- Hosted CI keeps Remi health/audit/build/list checks active. QEMU release
+  evidence comes from `scripts/local-qemu-validation.sh` on a local
+  development machine with `/dev/kvm`.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
 
@@ -74,47 +71,11 @@ not cover the task or when you are debugging the underlying service path itself.
 
 ### Forge
 
-- **Paused:** these commands describe the next Forge runner, not an active host.
-  Do not treat them as release evidence until a KVM-capable runner with
-  `/dev/kvm` is registered.
-- Preferred deployment path is managed rollout orchestration through
-  `conary-test deploy rollout`
-- From an operator workstation, use
-  `FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main`
-  for the trusted default path after a replacement host exists
-- `scripts/deploy-forge.sh` currently requires `FORGE_HOST`; it has no default
-  while the old Forge host is retired
-- `--ref` is the normal supported source mode and resolves an exact GitHub ref
-  on Forge before build/restart/verify
-- `--path` remains available for debug/local-snapshot deploys; the wrapper keeps
-  the rsync boundary by syncing directly over the active Forge checkout before
-  invoking the managed rollout there
-- Rollout groups live in `deploy/forge-rollouts.toml`
-- `conary-test deploy status --json` reports local checkout and managed-rollout
-  provenance; the removed server is not a live binary-status authority
-- The former Forge smoke depended on the removed conary-test listener and is
-  retired. Use the local CLI suite/list proof and hosted Remi checks.
-- For trusted-runner runtime verification, run
-  `bash scripts/forge-preflight.sh --mode container` before container suites
-  and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites.
-  QEMU mode requires `/dev/kvm`; Forge runners without exposed KVM are infra
-  blockers for scheduled QEMU validation, not product pass evidence.
-- Container-heavy Forge validation should reclaim inactive rootless Podman
-  storage with `bash scripts/forge-container-cleanup.sh`; scheduled deep/QEMU
-  CI does this before starting the matrix.
-- Forge runtime repair should use
-  `sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh`; this refreshes
-  Podman/QEMU tooling and the rootless Podman socket without re-registering the
-  GitHub Actions runner
-- `conaryd` staging deployment is paused while Forge is retired. The release
-  matrix marks `conaryd` as `deploy_mode=none` until a replacement staging host
-  is available.
-- The dormant Forge-local verifier is `scripts/conaryd-health.sh`, which probes
-  `/run/conary/conaryd.sock` rather than a public network endpoint.
-- The retired Forge SSH host key is not retained. A replacement key must be
-  verified out of band and installed in host-local `known_hosts` before this
-  lane is re-enabled; `deploy/sudoers/conaryd-forge` is the dormant narrowed
-  privilege policy to review at that time.
+Forge staging, conary-test deployment, and the managed rollout path are
+decommissioned. No Forge host, remote test-service deployment, or rollout
+command is supported. Use the local QEMU/KVM validation gate and hosted Remi
+checks for current evidence; historical Forge artifacts are not an active host
+workflow.
 
 ### Remi
 

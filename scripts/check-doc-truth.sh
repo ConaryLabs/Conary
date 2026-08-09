@@ -278,8 +278,8 @@ check_preview_status() {
     require_match "ROADMAP.md" 'docs/roadmaps/development-roadmap\.md' 'detailed development roadmap link'
     require_match "docs/roadmaps/development-roadmap.md" '[Ff]irst external tester milestone' 'first external tester milestone wording'
 
-    require_match "docs/roadmaps/development-roadmap.md" 'remote Forge validation is paused pending (a new |a )KVM-capable runner|Remote Forge validation is paused pending (a new |a )KVM-capable runner' 'remote Forge paused wording'
-    require_match "docs/INTEGRATION-TESTING.md" 'Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner|Forge-backed.*paused' 'remote Forge paused wording'
+    require_match "docs/roadmaps/development-roadmap.md" 'Remote Forge validation and conary-test deployment are decommissioned' 'Forge deployment retirement wording'
+    require_match "docs/INTEGRATION-TESTING.md" 'no replacement Forge rollout path|Remote Forge control-plane validation and conary-test deployment are' 'Forge deployment retirement wording'
 
     require_match "docs/roadmaps/development-roadmap.md" '2026-07-31.*Group O' 'dated Group O evidence'
     require_match "docs/roadmaps/development-roadmap.md" '2026-07-31.*Group P' 'dated Group P evidence'

@@ -32,7 +32,7 @@ and unadoption remain a migration bridge for already-installed native packages,
 not the product's primary package path. Generation, conaryd, and federation
 claims stay inside the narrower limits recorded below.
 
-Remote Forge validation is paused pending a KVM-capable runner. The dated
+Remote Forge validation and conary-test deployment are decommissioned. The dated
 2026-05-21 Group O local QEMU run established the earlier export baseline. The
 dated 2026-07-16 Group O local KVM run superseded it by passing all five
 installed-runtime, file-capability, and bootstrap-run raw/qcow2 cases against

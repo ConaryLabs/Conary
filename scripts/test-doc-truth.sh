@@ -116,7 +116,7 @@ EOF
 # Roadmap
 
 The cross-distro package-installation preview is active.
-Remote Forge validation is paused pending a KVM-capable runner.
+Remote Forge validation and conary-test deployment are decommissioned.
 The 2026-07-31 Group O QEMU run is dated local evidence.
 The 2026-07-31 Group P QEMU run is dated local evidence.
 The current milestone is the first external tester loop.
@@ -127,7 +127,7 @@ EOF
 # Development Roadmap
 
 The first external tester milestone is the current product milestone.
-Remote Forge validation is paused pending a KVM-capable runner.
+Remote Forge validation and conary-test deployment are decommissioned.
 The 2026-07-31 Group O QEMU run is dated local evidence.
 The 2026-07-31 Group P QEMU run is dated local evidence.
 EOF
@@ -159,7 +159,7 @@ EOF
     cat > "$root/docs/INTEGRATION-TESTING.md" <<'EOF'
 # Integration Testing
 
-Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner.
+Remote Forge control-plane validation and conary-test deployment are decommissioned; there is no replacement Forge rollout path.
 Current Group O QEMU export evidence from 2026-07-31 is local evidence.
 Current Group P ISO export evidence from 2026-07-31 is local evidence.
 EOF
@@ -520,7 +520,7 @@ break_unassigned_outreach_candidate_version() {
     printf '\nNo new release is assigned.\n' >> "$1/docs/operations/external-tester-outreach.md"
 }
 
-break_detailed_remote_forge_evidence() {
+break_detailed_forge_retirement_evidence() {
     sed -i '/Remote Forge validation/d' "$1/docs/roadmaps/development-roadmap.md"
 }
 
@@ -654,7 +654,7 @@ expect_failure "tracker release version drift" break_tracker_release_version 'st
 expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
 expect_failure "outreach target state" break_outreach_target_state 'exact vMAJOR.MINOR.PATCH tag or unassigned'
 expect_failure "unassigned outreach candidate version" break_unassigned_outreach_candidate_version 'outside current/target contract|outside retained current release'
-expect_failure "missing detailed remote Forge evidence" break_detailed_remote_forge_evidence 'remote Forge paused wording'
+expect_failure "missing Forge deployment retirement evidence" break_detailed_forge_retirement_evidence 'Forge deployment retirement wording'
 expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
 expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'

@@ -46,10 +46,6 @@ cargo run -p conary-test -- run --distro fedora44 --phase 1
 # Run a specific suite on all configured distros
 cargo run -p conary-test -- run --suite phase1-core --all-distros --phase 1
 
-# Run a managed Forge rollout from a trusted GitHub ref when a replacement
-# Forge host exists
-cargo run -p conary-test -- deploy rollout --group control_plane --ref main
-
 # List available test suites
 cargo run -p conary-test -- list
 
@@ -59,8 +55,6 @@ cargo run -p conary-test -- images build --distro fedora44
 # List built container images
 cargo run -p conary-test -- images list
 
-# Rebuild binaries from the currently deployed source checkout
-cargo run -p conary-test -- deploy rebuild
 ```
 
 `bootstrap smoke` is a local developer proof loop for a checkout. It may build
@@ -129,15 +123,14 @@ the harness uses `REMI_ADMIN_ENDPOINT` and `REMI_ADMIN_TOKEN` for health, log
 queries, and fixture publication. The retained result-streaming/WAL path is
 currently unconstructed for local runs; issue #354 tracks its wiring.
 
-Remote Forge validation is temporarily paused while Conary replaces the old VPS
-runner with a KVM-capable host. Use `scripts/local-qemu-validation.sh` on a
-local KVM-capable development machine for temporary QEMU release evidence.
+Forge-hosted validation and conary-test deployment are decommissioned. Use
+`scripts/local-qemu-validation.sh` on a local KVM-capable development machine
+for temporary QEMU release evidence.
 
 `conary-test deploy status --json` reports the invoking binary's local build
 metadata, checkout state, and managed-rollout provenance. It does not query a
-remote runner or a local HTTP service. `conary-test deploy rollout` remains the
-managed Forge deployment path for checked-in units/groups, with `--ref` as the
-trusted default and `--path` as explicit debug/local-snapshot mode.
+remote runner or a local HTTP service. The `deploy` namespace is read-only and
+has no source, rebuild, restart, or rollout execution command.
 `conary-test health --json` emits one normalized envelope with local
 `deploy_status`, optional `remi`, and optional `reason`.
 

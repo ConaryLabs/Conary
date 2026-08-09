@@ -4,23 +4,15 @@ use super::{
     BOLD, GREEN, RED, RESET, YELLOW, color, manifest_dir, print_step, project_dir, run_command,
 };
 use anyhow::{Context, Result, bail};
-use async_trait::async_trait;
-use chrono::Utc;
 use conary_test::build_info::BuildInfo;
-use conary_test::deploy::manifest::load_rollout_manifest_from_file;
-use conary_test::deploy::orchestrator::{RolloutExecutor, execute_rollout};
-use conary_test::deploy::plan::{RolloutPlan, RolloutPlanRequest, build_rollout_plan};
 use conary_test::deploy::status::{
-    BinaryStatus, DeploymentStatus, RolloutProvenance, RolloutStatus, evaluate_rollout_status,
-    load_rollout_provenance, write_rollout_provenance,
+    BinaryStatus, DeploymentStatus, RolloutStatus, evaluate_rollout_status, load_rollout_provenance,
 };
 use conary_test::paths;
 use conary_test::remi_client::RemiClient;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct CheckoutStatus {
@@ -43,123 +35,6 @@ struct HealthEnvelope {
     deploy_status: DeploymentStatus,
     remi: Option<Value>,
     reason: Option<String>,
-}
-
-struct HandlerRolloutExecutor {
-    json: bool,
-}
-
-impl HandlerRolloutExecutor {
-    async fn run_checked(
-        &self,
-        label: &str,
-        cmd: &str,
-        args: &[&str],
-        cwd: Option<&Path>,
-    ) -> Result<()> {
-        let cwd_string = cwd
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let cwd_ref = if cwd.is_some() {
-            Some(cwd_string.as_str())
-        } else {
-            None
-        };
-
-        let (code, stdout, stderr) = run_command(cmd, args, cwd_ref).await?;
-        print_step(label, code, &stdout, &stderr, self.json);
-        if code != 0 {
-            bail!("{label} failed (exit {code})");
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl RolloutExecutor for HandlerRolloutExecutor {
-    async fn git_fetch(&mut self, repo_dir: &Path, git_ref: &str) -> Result<()> {
-        self.run_checked(
-            &format!("git fetch {git_ref}"),
-            "git",
-            &["fetch", "origin", git_ref],
-            Some(repo_dir),
-        )
-        .await
-    }
-
-    async fn git_checkout(&mut self, repo_dir: &Path, git_ref: &str) -> Result<()> {
-        let _ = git_ref;
-        self.run_checked(
-            "git checkout FETCH_HEAD",
-            "git",
-            &["checkout", "--detach", "FETCH_HEAD"],
-            Some(repo_dir),
-        )
-        .await
-    }
-
-    async fn cargo_build_package(&mut self, repo_dir: &Path, package: &str) -> Result<()> {
-        self.run_checked(
-            &format!("cargo build {package}"),
-            "cargo",
-            &["build", "-p", package],
-            Some(repo_dir),
-        )
-        .await
-    }
-
-    async fn restart_systemd_user_unit(&mut self, unit: &str) -> Result<()> {
-        self.run_checked(
-            &format!("systemctl --user restart {unit}"),
-            "systemctl",
-            &["--user", "restart", unit],
-            None,
-        )
-        .await?;
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        self.run_checked(
-            &format!("systemctl --user is-active {unit}"),
-            "systemctl",
-            &["--user", "is-active", unit],
-            None,
-        )
-        .await
-    }
-
-    async fn verify(&mut self, verify_mode: &str, repo_dir: &Path) -> Result<()> {
-        match verify_mode {
-            "forge_smoke" => {
-                self.run_checked(
-                    "forge smoke",
-                    "bash",
-                    &["scripts/forge-smoke.sh"],
-                    Some(repo_dir),
-                )
-                .await
-            }
-            other => bail!("unsupported verify mode `{other}`"),
-        }
-    }
-
-    async fn record_success(&mut self, plan: &RolloutPlan, work_tree: &Path) -> Result<()> {
-        let work_tree_string = work_tree.to_string_lossy().to_string();
-        let (code, stdout, stderr) = run_command(
-            "git",
-            &["rev-parse", "HEAD"],
-            Some(work_tree_string.as_str()),
-        )
-        .await?;
-        print_step("git rev-parse HEAD", code, &stdout, &stderr, self.json);
-        if code != 0 {
-            bail!("git rev-parse HEAD failed (exit {code})");
-        }
-
-        let provenance = RolloutProvenance::from_plan(plan, stdout.trim(), Utc::now());
-        let provenance_path = paths::rollout_provenance_path()?;
-        write_rollout_provenance(&provenance_path, &provenance)?;
-        Ok(())
-    }
 }
 
 fn combine_deploy_status(
@@ -219,39 +94,6 @@ async fn current_checkout_status() -> CheckoutStatus {
     }
 }
 
-pub(super) async fn cmd_deploy_source(git_ref: Option<&str>, json: bool) -> Result<()> {
-    let dir = project_dir()?;
-
-    if let Some(git_ref) = git_ref {
-        let (code, stdout, stderr) = run_command("git", &["fetch", "--all"], Some(&dir)).await?;
-        print_step("git fetch", code, &stdout, &stderr, json);
-        if code != 0 {
-            bail!("git fetch failed (exit {})", code);
-        }
-
-        let (code, stdout, stderr) = run_command("git", &["checkout", git_ref], Some(&dir)).await?;
-        print_step("git checkout", code, &stdout, &stderr, json);
-        if code != 0 {
-            bail!("git checkout failed (exit {})", code);
-        }
-    } else {
-        let (code, stdout, stderr) = run_command("git", &["pull"], Some(&dir)).await?;
-        print_step("git pull", code, &stdout, &stderr, json);
-        if code != 0 {
-            bail!("git pull failed (exit {})", code);
-        }
-    }
-
-    let (code, stdout, stderr) =
-        run_command("cargo", &["build", "-p", "conary-test"], Some(&dir)).await?;
-    print_step("cargo build conary-test", code, &stdout, &stderr, json);
-
-    let (code, stdout, stderr) = run_command("cargo", &["build"], Some(&dir)).await?;
-    print_step("cargo build conary", code, &stdout, &stderr, json);
-
-    Ok(())
-}
-
 fn append_reason(reason: Option<String>, extra: impl Into<String>) -> Option<String> {
     let extra = extra.into();
     match reason {
@@ -270,103 +112,6 @@ fn attach_rollout_status(
         output.reason = append_reason(output.reason, error);
     }
     output
-}
-
-pub(super) async fn cmd_deploy_rebuild(crate_name: Option<&str>, json: bool) -> Result<()> {
-    let dir = project_dir()?;
-
-    let crates: Vec<(&str, &[&str])> = match crate_name {
-        Some("conary-test") => vec![("conary-test", &["build", "-p", "conary-test"])],
-        Some("conary") => vec![("conary", &["build"])],
-        Some(other) => bail!("unknown crate: {other}. Expected: conary, conary-test"),
-        None => vec![
-            ("conary-test", &["build", "-p", "conary-test"] as &[&str]),
-            ("conary", &["build"]),
-        ],
-    };
-
-    for (label, args) in crates {
-        let (code, stdout, stderr) = run_command("cargo", args, Some(&dir)).await?;
-        let full_label = format!("cargo build {label}");
-        print_step(&full_label, code, &stdout, &stderr, json);
-        if code != 0 {
-            bail!("{full_label} failed (exit {code})");
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) async fn cmd_deploy_restart(json: bool) -> Result<()> {
-    let (code, stdout, stderr) =
-        run_command("systemctl", &["--user", "restart", "conary-test"], None).await?;
-    print_step(
-        "systemctl --user restart conary-test",
-        code,
-        &stdout,
-        &stderr,
-        json,
-    );
-
-    if code != 0 {
-        bail!("service restart failed (exit {code})");
-    }
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let (code, stdout, _) =
-        run_command("systemctl", &["--user", "is-active", "conary-test"], None).await?;
-    let status = stdout.trim();
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"service_status": status, "exit_code": code})
-        );
-    } else if code == 0 {
-        println!("Service status: {}", color(status, GREEN));
-    } else {
-        println!("Service status: {}", color(status, RED));
-    }
-
-    Ok(())
-}
-
-pub(super) async fn cmd_deploy_rollout(
-    unit: Option<String>,
-    group: Option<String>,
-    git_ref: Option<String>,
-    path: Option<PathBuf>,
-    json: bool,
-) -> Result<()> {
-    let project_root = PathBuf::from(project_dir()?);
-    let manifest_path = project_root.join("deploy/forge-rollouts.toml");
-    let manifest = load_rollout_manifest_from_file(&manifest_path)?;
-    let plan = build_rollout_plan(
-        &manifest,
-        RolloutPlanRequest {
-            unit,
-            group,
-            git_ref,
-            path,
-        },
-    )?;
-
-    let mut executor = HandlerRolloutExecutor { json };
-    execute_rollout(&mut executor, &plan, &project_root).await?;
-
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "ok",
-                "target": format!("{:?}", plan.target),
-                "source": format!("{:?}", plan.source),
-            })
-        );
-    } else {
-        println!("Managed rollout completed successfully.");
-    }
-
-    Ok(())
 }
 
 pub(super) async fn cmd_deploy_status(json: bool) -> Result<()> {
@@ -826,10 +571,9 @@ pub(super) fn cmd_manifests_reload(json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
-    use conary_test::deploy::manifest::load_rollout_manifest_from_str;
-    use conary_test::deploy::plan::{RolloutPlanRequest, build_rollout_plan};
-    use conary_test::deploy::status::{BinaryStatus, RolloutProvenance};
+    use conary_test::deploy::status::{
+        BinaryStatus, RolloutProvenance, RolloutSourceKind, RolloutTargetKind,
+    };
     use serde_json::json;
 
     fn sample_deploy_status(git_commit: &str) -> DeploymentStatus {
@@ -844,35 +588,15 @@ mod tests {
     }
 
     fn sample_rollout() -> RolloutStatus {
-        let manifest = load_rollout_manifest_from_str(
-            r#"
-[units.conary_test]
-build = { cargo_package = "conary-test" }
-restart = { systemd_user_unit = "conary-test.service" }
-verify = "forge_smoke"
-
-[groups.control_plane]
-units = ["conary_test"]
-"#,
-        )
-        .expect("manifest parses");
-        let plan = build_rollout_plan(
-            &manifest,
-            RolloutPlanRequest {
-                unit: None,
-                group: Some("control_plane".to_string()),
-                git_ref: Some("main".to_string()),
-                path: None,
-            },
-        )
-        .expect("plan builds");
-        let provenance = RolloutProvenance::from_plan(
-            &plan,
-            "abc123".to_string(),
-            DateTime::parse_from_rfc3339("2026-04-09T00:00:00Z")
-                .expect("timestamp parses")
-                .with_timezone(&Utc),
-        );
+        let provenance = RolloutProvenance {
+            source_kind: RolloutSourceKind::GitRef,
+            requested_ref: Some("main".to_string()),
+            resolved_commit: "abc123".to_string(),
+            target_kind: RolloutTargetKind::Group,
+            rollout_name: "control_plane".to_string(),
+            units: vec!["conary_test".to_string()],
+            deployed_at: "2026-04-09T00:00:00+00:00".to_string(),
+        };
 
         evaluate_rollout_status(&provenance, Some("abc123"), Some("abc123"))
     }

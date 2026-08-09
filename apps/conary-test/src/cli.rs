@@ -1,11 +1,10 @@
 // conary-test/src/cli.rs
 
 use anyhow::{Context, Result, bail};
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
-    cmd_deploy_rebuild, cmd_deploy_restart, cmd_deploy_rollout, cmd_deploy_source,
     cmd_deploy_status, cmd_fixtures_build, cmd_fixtures_publish, cmd_health, cmd_images_info,
     cmd_images_prune, cmd_logs, cmd_manifests_reload,
 };
@@ -88,7 +87,7 @@ enum Commands {
         command: ImageCommands,
     },
 
-    /// Deploy source, rebuild binaries, restart service
+    /// Inspect local build, checkout, and drift status
     Deploy {
         #[command(subcommand)]
         command: DeployCommands,
@@ -180,48 +179,8 @@ enum ImageCommands {
 
 #[derive(Subcommand)]
 enum DeployCommands {
-    /// Pull source from git (optionally checkout a specific ref)
-    Source {
-        /// Git ref to checkout (branch, tag, or commit). Default: pull current branch.
-        #[arg(long = "ref")]
-        git_ref: Option<String>,
-    },
-
-    /// Rebuild binaries from current source
-    Rebuild {
-        /// Specific crate to build (conary, conary-test). Default: both.
-        #[arg(long = "crate")]
-        crate_name: Option<String>,
-    },
-
-    /// Restart the conary-test systemd user service
-    Restart,
-
     /// Show local build, checkout, and rollout status
     Status,
-
-    /// Perform a managed Forge rollout from a Git ref or explicit local snapshot
-    #[command(
-        group(ArgGroup::new("rollout_target").args(["unit", "group"]).required(true).multiple(false)),
-        group(ArgGroup::new("rollout_source").args(["git_ref", "path"]).required(true).multiple(false))
-    )]
-    Rollout {
-        /// Deploy a single manifest-defined rollout unit
-        #[arg(long, group = "rollout_target")]
-        unit: Option<String>,
-
-        /// Deploy a manifest-defined rollout group
-        #[arg(long, group = "rollout_target")]
-        group: Option<String>,
-
-        /// Resolve and deploy an exact Git ref on Forge
-        #[arg(long = "ref", group = "rollout_source")]
-        git_ref: Option<String>,
-
-        /// Deploy an explicit local-snapshot path already synced to Forge
-        #[arg(long, group = "rollout_source")]
-        path: Option<PathBuf>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -874,20 +833,7 @@ fn main() -> Result<()> {
         Commands::Deploy { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
-                DeployCommands::Source { git_ref } => {
-                    rt.block_on(cmd_deploy_source(git_ref.as_deref(), json))
-                }
-                DeployCommands::Rebuild { crate_name } => {
-                    rt.block_on(cmd_deploy_rebuild(crate_name.as_deref(), json))
-                }
-                DeployCommands::Restart => rt.block_on(cmd_deploy_restart(json)),
                 DeployCommands::Status => rt.block_on(cmd_deploy_status(json)),
-                DeployCommands::Rollout {
-                    unit,
-                    group,
-                    git_ref,
-                    path,
-                } => rt.block_on(cmd_deploy_rollout(unit, group, git_ref, path, json)),
             }
         }
 
