@@ -110,7 +110,11 @@ impl PromiseWitnessPlan {
     }
 }
 
-fn dependency_requirements(
+/// The hard requirements a transaction must be able to certify.
+///
+/// Shared with [`super::ordering`] so the edge validator and the promise
+/// planner cannot disagree about which requirements are in scope.
+pub(super) fn dependency_requirements(
     package: &PreparedPackage,
 ) -> impl Iterator<Item = &RepositoryRequirementGroup> {
     package.requirements.iter().filter(|requirement| {

@@ -11,6 +11,9 @@ use conary_core::payload::{
 };
 use std::collections::BTreeMap;
 
+#[path = "tests/witness_universe.rs"]
+mod witness_universe;
+
 fn payload_node(kind: PayloadNodeKind, mode: u32) -> PayloadNode {
     PayloadNode {
         kind,
