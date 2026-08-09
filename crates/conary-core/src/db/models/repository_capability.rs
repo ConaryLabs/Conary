@@ -20,7 +20,10 @@ use std::io;
 /// tests reads the same text the production path executes. `repository_provides`
 /// is the largest table Conary persists (10.07M rows on Fedora 44
 /// `Everything/x86_64` with `filelists.xml`), so which index each statement can
-/// seek through is a contract, not an implementation detail.
+/// seek through is a contract, not an implementation detail. The single named
+/// exception is the CLI raw-spelling arm (`SELECT_BY_CLI_RAW_QUERY_SQL`), which
+/// traverses by design because `raw` has no index; the query-plan proof pins
+/// that traversal explicitly.
 const INSERT_PROVIDE_SQL: &str = "INSERT INTO repository_provides
              (repository_package_id, capability, version, kind, raw, version_scheme,
               version_relation, architecture_qualifier_kind, architecture, provenance)
@@ -66,6 +69,10 @@ const SELECT_BY_CAPABILITY_SQL: &str =
              WHERE repo.enabled = 1 AND rp.capability = ?1
              ORDER BY rp.capability, rp.version";
 
+/// Capability arm of the CLI exact query: untyped input matching a normalized
+/// package-name capability. This statement seeks
+/// `idx_repository_provides_capability`; the raw-spelling arm below is a
+/// separate statement so the seek never rides an OR the planner cannot index.
 const SELECT_BY_CLI_EXACT_QUERY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
@@ -74,24 +81,33 @@ const SELECT_BY_CLI_EXACT_QUERY_SQL: &str =
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1
-               AND (
-                 rp.raw = ?1
-                 OR (
-                   (rp.raw IS NULL OR rp.raw = '')
-                   AND (rp.kind IS NULL OR rp.kind = '' OR rp.kind = 'package')
-                   AND rp.capability = ?1
-                 )
-               )
+               AND rp.capability = ?1
+               AND (rp.kind IS NULL OR rp.kind = '' OR rp.kind = 'package')
+               AND (rp.raw IS NULL OR rp.raw = '')
              ORDER BY rp.capability, rp.version";
 
-const SELECT_BY_CAPABILITY_WITH_NAME_SQL: &str =
+/// Raw-spelling arm of the CLI exact query: rows whose source-native text equals
+/// the untyped query (e.g. `libssl.so.3()(64bit)`), including typed rows no
+/// normalized capability equals.
+///
+/// `raw` is deliberately unindexed -- an index over it would partially
+/// resurrect what #343 retired (~0.8 GB) for a column only the CLI's diagnostic
+/// spelling lookup reads -- so this statement traverses `repository_provides`.
+/// It stays a separate statement so the capability arm above keeps its seek.
+/// The `raw != ''` guard keeps the two arms disjoint: empty-raw rows belong to
+/// the capability arm, exactly as the original OR partitioned them for every
+/// non-empty query.
+const SELECT_BY_CLI_RAW_QUERY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance, pkg.name
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
              FROM repository_provides rp
              JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
-             WHERE repo.enabled = 1 AND rp.capability = ?1
+             WHERE repo.enabled = 1
+               AND rp.raw = ?1
+               AND rp.raw IS NOT NULL
+               AND rp.raw != ''
              ORDER BY rp.capability, rp.version";
 
 const SELECT_BY_CAPABILITY_AND_KIND_SQL: &str =
@@ -415,43 +431,36 @@ impl RepositoryProvide {
 
     /// Find rows that exactly match a CLI query without interpreting normalized
     /// typed capability rows as untyped user input.
-    pub fn find_by_cli_exact_query(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(SELECT_BY_CLI_EXACT_QUERY_SQL)?;
-        let rows = stmt
-            .query_map([capability], Self::from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    /// Find provides matching a capability and return each paired with its package name.
     ///
-    /// This single JOIN avoids the N+1 pattern of calling `find_by_capability` and then
-    /// issuing a separate `SELECT name FROM repository_packages WHERE id = ?` for each
-    /// result row. The `pkg.name` column is appended after the capability columns so the
-    /// existing `from_row` mapper is not disturbed.
-    pub fn find_by_capability_with_name(
-        conn: &Connection,
-        capability: &str,
-    ) -> Result<Vec<(Self, String)>> {
-        let mut stmt = conn.prepare(SELECT_BY_CAPABILITY_WITH_NAME_SQL)?;
-        let rows = stmt
-            .query_map([capability], |row| {
-                let provide = Self {
-                    id: row.get(0)?,
-                    repository_package_id: row.get(1)?,
-                    capability: row.get(2)?,
-                    version: row.get(3)?,
-                    version_relation: version_relation_from_row(row, 4, 3)?,
-                    kind: row.get(5)?,
-                    raw: row.get(6)?,
-                    version_scheme: version_scheme_from_row(row, 7)?,
-                    architecture_qualifier: architecture_qualifier_from_row(row, 8, 9)?,
-                    provenance: provenance_from_row(row, 10)?,
-                };
-                let pkg_name: String = row.get(11)?;
-                Ok((provide, pkg_name))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+    /// Runs the package-name arm (a capability-index seek) and the raw-spelling
+    /// arm (a separate statement) and merges their rows in the original
+    /// `capability, version` order. See the query-plan proof below.
+    pub fn find_by_cli_exact_query(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
+        // An empty query names nothing. The pre-split OR accidentally matched
+        // rows whose raw column was the empty string; the arms below would
+        // partition that accident differently, so the degenerate input is
+        // answered here instead of by either statement.
+        if capability.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut rows = Vec::new();
+        let mut stmt = conn.prepare(SELECT_BY_CLI_EXACT_QUERY_SQL)?;
+        rows.extend(
+            stmt.query_map([capability], Self::from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+        let mut stmt = conn.prepare(SELECT_BY_CLI_RAW_QUERY_SQL)?;
+        rows.extend(
+            stmt.query_map([capability], Self::from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+        rows.sort_by(|left, right| {
+            (&left.capability, &left.version, left.id).cmp(&(
+                &right.capability,
+                &right.version,
+                right.id,
+            ))
+        });
         Ok(rows)
     }
 
@@ -644,8 +653,8 @@ mod tests {
                 SELECT_BY_CLI_EXACT_QUERY_SQL.to_string(),
             ),
             (
-                "find_by_capability_with_name",
-                SELECT_BY_CAPABILITY_WITH_NAME_SQL.to_string(),
+                "find_by_cli_raw_query",
+                SELECT_BY_CLI_RAW_QUERY_SQL.to_string(),
             ),
             (
                 "find_by_capability_and_kind",
@@ -706,13 +715,18 @@ mod tests {
 
     /// The property, not the instance: no statement this module owns may reach
     /// `repository_provides` by scanning it, and every statement that filters
-    /// `capability` must seek the capability index -- including the one that
-    /// also filters `kind`, which no longer has a composite to seek.
+    /// `capability` must seek the capability index -- including the ones that
+    /// also filter `kind` or `raw`, which have no composite to seek. The one
+    /// named exception is the CLI raw-spelling arm, whose deliberate traversal
+    /// is pinned explicitly below.
     #[test]
     fn every_owned_statement_reaches_repository_provides_through_an_index() {
         let conn = test_db();
 
         for (label, sql) in owned_statements() {
+            if label == "find_by_cli_raw_query" {
+                continue;
+            }
             let plan = query_plan(&conn, &sql);
             for step in &plan {
                 assert!(
@@ -724,7 +738,7 @@ mod tests {
 
         for label in [
             "find_by_capability",
-            "find_by_capability_with_name",
+            "find_by_cli_exact_query",
             "find_by_capability_and_kind",
         ] {
             let (_, sql) = owned_statements()
@@ -738,6 +752,31 @@ mod tests {
                 "{label} must seek the capability index: {plan:?}"
             );
         }
+
+        // `raw` has no index: an index over it would partially resurrect the
+        // ~0.8 GB #343 retired, for a column only the CLI's diagnostic spelling
+        // lookup reads. The raw arm is therefore the module's one deliberate
+        // full traversal. The planner is free to pick the traversal shape
+        // (`SCAN rp`, or driving through the repo/package indexes and probing
+        // rp per package — both visit every enabled-repo provides row), so
+        // the pin asserts the property rather than one plan string: this
+        // statement must not claim the capability seek the other statements
+        // are held to. The slice that adds a raw index (or drops raw-spelling
+        // resolution, #341) must replace this with a seek assertion on
+        // purpose.
+        let (_, raw_sql) = owned_statements()
+            .into_iter()
+            .find(|(name, _)| *name == "find_by_cli_raw_query")
+            .expect("statement is inventoried");
+        let plan = query_plan(&conn, &raw_sql);
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("idx_repository_provides_capability")),
+            "find_by_cli_raw_query is the named raw-spelling traversal and must \
+             not silently become a capability-index path — if it now seeks, \
+             update this pin deliberately: {plan:?}"
+        );
     }
 
     #[test]
@@ -936,6 +975,15 @@ mod tests {
             VersionScheme::Rpm,
         );
         package.insert(&conn).unwrap();
+        let mut empty_raw = RepositoryProvide::new(
+            1,
+            "empty-raw-cap".to_string(),
+            None,
+            "package".to_string(),
+            Some(String::new()),
+            VersionScheme::Rpm,
+        );
+        empty_raw.insert(&conn).unwrap();
 
         let untyped = RepositoryProvide::find_by_cli_exact_query(&conn, "libssl.so.3").unwrap();
         assert!(untyped.is_empty());
@@ -946,33 +994,22 @@ mod tests {
 
         let package = RepositoryProvide::find_by_cli_exact_query(&conn, "openssl").unwrap();
         assert_eq!(package.len(), 1);
-    }
 
-    #[test]
-    fn find_by_capability_with_name_requires_normalized_capability() {
-        let conn = test_db();
-        seed_repo_and_package(&conn);
-
-        let mut typed = RepositoryProvide::new(
+        let empty_raw = RepositoryProvide::find_by_cli_exact_query(&conn, "empty-raw-cap").unwrap();
+        assert_eq!(
+            empty_raw.len(),
             1,
-            "libssl.so.3".to_string(),
-            None,
-            "soname".to_string(),
-            Some("libssl.so.3()(64bit)".to_string()),
-            VersionScheme::Rpm,
+            "empty-raw rows belong to the capability arm exactly once"
         );
-        typed.insert(&conn).unwrap();
 
-        let raw =
-            RepositoryProvide::find_by_capability_with_name(&conn, "libssl.so.3()(64bit)").unwrap();
-        assert!(raw.is_empty());
-
-        let normalized =
-            RepositoryProvide::find_by_capability_with_name(&conn, "libssl.so.3").unwrap();
-        assert_eq!(normalized.len(), 1);
-        assert_eq!(normalized[0].0.capability, "libssl.so.3");
-        assert_eq!(normalized[0].0.raw.as_deref(), Some("libssl.so.3()(64bit)"));
-        assert_eq!(normalized[0].1, "pkg");
+        // The empty query is answered without consulting either arm: the
+        // fixture's empty-raw row must not resurface through raw equality the
+        // way the pre-split OR accidentally allowed.
+        let empty_query = RepositoryProvide::find_by_cli_exact_query(&conn, "").unwrap();
+        assert!(
+            empty_query.is_empty(),
+            "an empty query names nothing: {empty_query:?}"
+        );
     }
 
     #[test]
