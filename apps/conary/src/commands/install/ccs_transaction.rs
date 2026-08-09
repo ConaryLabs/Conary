@@ -152,7 +152,7 @@ fn show_ccs_dry_run_summary(pkg: &conary_core::ccs::CcsPackage, extraction: &Ext
     println!("\nDry run complete. No changes made.");
 }
 
-pub(super) fn check_ccs_upgrade_status(
+pub(crate) fn check_ccs_upgrade_status(
     conn: &rusqlite::Connection,
     pkg: &conary_core::ccs::CcsPackage,
     semantics: &InstallSemantics,
@@ -186,7 +186,7 @@ pub(super) fn check_ccs_upgrade_status(
 /// Recover the package-manager semantics carried through a converted CCS
 /// archive. CCS is a transport here; it must not erase the source package
 /// manager's version, config, or directory-materialization contract.
-pub(super) fn install_semantics_for_ccs_manifest(
+pub(crate) fn install_semantics_for_ccs_manifest(
     manifest: &conary_core::ccs::manifest::CcsManifest,
 ) -> Result<InstallSemantics> {
     let Some(native) = manifest.native_lifecycle.as_ref() else {

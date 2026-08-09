@@ -18,7 +18,7 @@ pub(crate) enum InstallIntent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct InstallSemantics {
+pub(crate) struct InstallSemantics {
     pub(super) source: PreparedSourceKind,
     pub(super) version_scheme: VersionScheme,
 }
