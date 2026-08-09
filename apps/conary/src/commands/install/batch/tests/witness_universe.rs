@@ -253,11 +253,10 @@ fn a_lone_package_that_upgrades_away_a_shipped_path_it_requires_fails() {
         vec![openssl, crypto_policies_with_promise(PROMISED_CONFIG)],
     );
 
-    // The withheld capability is an ordinary provide this time. The promised
-    // path is what gives a single-package batch a reason to compute a universe
-    // at all -- whether every single-package batch should validate against
-    // installed state is a separate open question -- and the requirement that
-    // fails is the shipped one the superseded version alone provided.
+    // The withheld capability is an ordinary provide this time. Every
+    // single-package batch is certified against the end-state universe since
+    // #345, promised path or not, and the requirement that fails is the
+    // shipped one the superseded version alone provided.
     let mut lone = vec![upgrade_of(
         &conn,
         "openssl-libs",
@@ -287,4 +286,26 @@ fn a_lone_package_whose_provider_survives_the_transaction_orders() {
 
     super::super::ordering::order_packages_for_transaction(&conn, &mut lone)
         .expect("a surviving installed holder must still certify a lone package's requirement");
+}
+
+#[test]
+fn a_lone_package_satisfied_by_surviving_installed_state_passes_validation() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let mut provider = prepared_test_package("libprovider", "/usr/lib64/libprovider.so.1", b"lib");
+    provider
+        .provides
+        .push(shipped("/usr/lib64/libprovider.so.1"));
+    let conn = database_after(temp.path(), vec![provider]);
+
+    // No promised path anywhere: since #345 the end-state universe is computed
+    // for every single-package batch, so an installed provider this batch
+    // leaves alone must certify the lone package's requirement exactly as it
+    // would certify an edge in an ordered batch. Uniform validation must not
+    // over-reject a correct lone install.
+    let mut lone = prepared_test_package("consumer", "/usr/bin/consumer", b"consumer");
+    lone.requirements = vec![depends_on("/usr/lib64/libprovider.so.1")];
+
+    super::super::ordering::order_packages_for_transaction(&conn, &mut vec![lone])
+        .expect("a surviving installed provider must certify a lone package's requirement");
 }

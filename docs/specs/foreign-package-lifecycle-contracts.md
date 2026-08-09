@@ -796,13 +796,15 @@ execution order, so relation planning answers that one against the ordered
 batch.
 
 Withholding an identity must never make a transaction quieter than admitting it
-would have been. Where the universe is computed, every `Depends`/`PreDepends`
-requirement of every incoming package is certified against it, and a requirement
-the end state cannot satisfy fails the transaction with one typed diagnostic --
-including a batch of one package, which has no edges to order but can still be
-the transaction that removes the sole provider of its own requirement. Nothing
-downstream would report that case: with no holder left there is no promised-path
-obligation to record, so the post-condition below would have nothing to re-ask.
+would have been. Every `Depends`/`PreDepends` requirement of every incoming
+package is certified against the end-state universe, and a requirement the end
+state cannot satisfy fails the transaction with one typed diagnostic. A batch of
+one package is not excused: it has no edges to order, but its requirements are
+certified against the same universe, whether or not any promised path is in
+play. Nothing downstream would report an unsatisfiable requirement instead --
+with no holder left there is no promised-path obligation to record, and the
+transaction layer does not assume an upstream layer (the solver) already caught
+it, so the post-condition below would have nothing to re-ask.
 
 The promised-path post-condition plans and re-evaluates against this same
 universe.

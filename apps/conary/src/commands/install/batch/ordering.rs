@@ -16,7 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// facts. [`super::promises`] owns the second one for both holders -- incoming
 /// packages and already installed ones -- because a promise made by an earlier
 /// transaction can hold up this one's edge, and because a single-package batch
-/// has promises to answer for even though it has nothing to order.
+/// has requirements to certify and promises to answer for even though it has
+/// nothing to order.
 ///
 /// Both questions are asked of the transaction's end state, never of the
 /// database as it stands: [`super::witness_universe`] withholds every installed
@@ -26,18 +27,18 @@ pub(super) fn order_packages_for_transaction(
     conn: &Connection,
     packages: &mut Vec<PreparedPackage>,
 ) -> Result<PromiseWitnessPlan> {
-    let requirement_atoms = super::promises::batch_requirement_atom_names(packages);
-    if packages.len() < 2
-        && !super::promises::batch_requirements_can_lean_on_a_promise(
-            conn,
-            packages,
-            &requirement_atoms,
-        )?
-    {
-        return Ok(PromiseWitnessPlan::empty());
-    }
-
     let native_architecture = conary_core::repository::registry::detect_system_arch();
+    // A lone package with no hard requirements has nothing to certify and no
+    // edges to order, so the installed universe is not loaded for it. This is
+    // the only excused shape: one package, zero Depends/PreDepends. Every
+    // requirement-carrying batch of any size certifies below.
+    if packages.len() < 2
+        && packages
+            .iter()
+            .all(|package| dependency_requirements(package).next().is_none())
+    {
+        return Ok(PromiseWitnessPlan::default());
+    }
     let installed = super::witness_universe::surviving_installed_identities(
         conn,
         packages,
@@ -48,17 +49,17 @@ pub(super) fn order_packages_for_transaction(
         .map(|package| transaction_identity(package, &native_architecture))
         .collect::<Vec<_>>();
     if packages.len() < 2 {
-        // A single-package batch has no edges to order, but it still reasons
-        // against a universe its own execution shrinks. When the package it
-        // supersedes -- or relation-removes -- was the only provider of one of
-        // its own requirements, nothing downstream would notice: with no holder
-        // left, promise planning has no obligation to record and the post
-        // condition has nothing to re-ask. So the transaction asks here, with
+        // A single-package batch has no edges to order, but every requirement
+        // is still certified against the transaction's end state -- the
+        // package itself plus the installed identities that survive it -- with
         // the same expression evaluation and the same diagnostic the ordered
-        // path uses.
-        //
-        // This is exactly the withheld-identity case, not general single-package
-        // validation against installed state, which is its own open question.
+        // path uses. The transaction layer does not assume an upstream layer
+        // (the solver) already caught an unsatisfiable requirement, so a lone
+        // package is not excused from certification. When the package
+        // supersedes -- or relation-removes -- the only provider of one of its
+        // own requirements, nothing downstream would notice: with no holder
+        // left, promise planning has no obligation to record and the post
+        // condition has nothing to re-ask.
         let mut witnesses = installed;
         witnesses.extend(selected.iter().cloned());
         for package in packages.iter() {
