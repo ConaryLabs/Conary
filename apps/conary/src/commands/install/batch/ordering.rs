@@ -2,34 +2,32 @@
 
 //! Deterministic dependency-first ordering for an exact selected batch.
 
+use super::promises::PromiseWitnessPlan;
 use super::*;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
 use conary_core::resolver::identity::{PackageIdentity, ProvidedCapability};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A promised path the transaction actually leaned on to satisfy a dependency.
+/// Order the batch and plan what it must prove about promised paths.
 ///
-/// RPM's `%ghost` means the package owns the path *if present*; it never says
-/// the package creates it, and paths like `/etc/fstab` or a log file are
-/// legitimately absent after a fresh transaction. So the only promises worth
-/// verifying are the ones a dependency edge was certified against: the
-/// transaction checks its own reasoning and claims nothing beyond it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WitnessedPromise {
-    pub(super) provider: String,
-    pub(super) provider_version: String,
-    pub(super) path: String,
-    pub(super) dependent: String,
-    pub(super) requirement: String,
-}
-
+/// Ordering and promise reliance are separate questions asked of the same
+/// facts. [`super::promises`] owns the second one for both holders -- incoming
+/// packages and already installed ones -- because a promise made by an earlier
+/// transaction can hold up this one's edge, and because a single-package batch
+/// has promises to answer for even though it has nothing to order.
 pub(super) fn order_packages_for_transaction(
     conn: &Connection,
     packages: &mut Vec<PreparedPackage>,
-) -> Result<Vec<WitnessedPromise>> {
-    let mut witnessed_promises = Vec::new();
-    if packages.len() < 2 {
-        return Ok(witnessed_promises);
+) -> Result<PromiseWitnessPlan> {
+    let requirement_atoms = super::promises::batch_requirement_atom_names(packages);
+    if packages.len() < 2
+        && !super::promises::batch_requirements_can_lean_on_a_promise(
+            conn,
+            packages,
+            &requirement_atoms,
+        )?
+    {
+        return Ok(PromiseWitnessPlan::empty());
     }
 
     let native_architecture = conary_core::repository::registry::detect_system_arch();
@@ -46,6 +44,14 @@ pub(super) fn order_packages_for_transaction(
         .iter()
         .map(|package| transaction_identity(package, &native_architecture))
         .collect::<Vec<_>>();
+    if packages.len() < 2 {
+        return super::promises::plan_promise_witnesses(
+            packages,
+            installed,
+            &selected,
+            &native_architecture,
+        );
+    }
     let stable_indices = stable_package_indices(packages);
     let mut edges = vec![BTreeSet::new(); packages.len()];
     let mut strong_edges = vec![BTreeSet::new(); packages.len()];
@@ -133,58 +139,6 @@ pub(super) fn order_packages_for_transaction(
                     selected_witnesses.remove(position);
                 }
             }
-            // A retained witness may hold the edge up through a promised path.
-            // Drop each promise in turn: if the edge falls, the transaction
-            // relied on that path existing and must later prove it does.
-            for provider_index in &selected_witnesses {
-                for promise in packages[*provider_index]
-                    .provides
-                    .iter()
-                    .filter(|provide| provide.is_promised_path())
-                {
-                    let mut without_promise = installed.clone();
-                    without_promise.push(selected[dependent_index].clone());
-                    for index in &selected_witnesses {
-                        let mut identity = selected[*index].clone();
-                        if index == provider_index {
-                            identity.provided_capabilities.retain(|capability| {
-                                !(capability.is_promised_path() && capability.name == promise.name)
-                            });
-                        }
-                        without_promise.push(identity);
-                    }
-                    if expression_satisfied(
-                        requirement,
-                        package.semantics.version_scheme,
-                        depending_architecture,
-                        &native_architecture,
-                        &without_promise,
-                    )? {
-                        continue;
-                    }
-                    let provider = &packages[*provider_index];
-                    let witnessed = WitnessedPromise {
-                        provider: provider.name.clone(),
-                        provider_version: provider.version.clone(),
-                        path: promise.name.clone(),
-                        dependent: package.name.clone(),
-                        requirement: requirement
-                            .native_text
-                            .as_deref()
-                            .unwrap_or("<typed expression>")
-                            .to_string(),
-                    };
-                    if !witnessed_promises
-                        .iter()
-                        .any(|existing: &WitnessedPromise| {
-                            existing.provider == witnessed.provider
-                                && existing.path == witnessed.path
-                        })
-                    {
-                        witnessed_promises.push(witnessed);
-                    }
-                }
-            }
             for provider_index in selected_witnesses {
                 edges[provider_index].insert(dependent_index);
                 if requirement.kind == RepositoryRequirementKind::PreDepends {
@@ -194,6 +148,12 @@ pub(super) fn order_packages_for_transaction(
         }
     }
 
+    let plan = super::promises::plan_promise_witnesses(
+        packages,
+        installed,
+        &selected,
+        &native_architecture,
+    )?;
     let order = dependency_first_scc_order(packages, &edges, &strong_edges);
     let mut slots = packages.drain(..).map(Some).collect::<Vec<_>>();
     packages.extend(
@@ -201,7 +161,7 @@ pub(super) fn order_packages_for_transaction(
             .into_iter()
             .map(|index| slots[index].take().expect("package order repeats an index")),
     );
-    Ok(witnessed_promises)
+    Ok(plan)
 }
 
 fn expression_satisfied(

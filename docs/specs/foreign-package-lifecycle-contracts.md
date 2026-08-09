@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 40
+last_updated: 2026-08-08
+revision: 41
 summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -762,6 +762,52 @@ native-upgrade rollback schema or mutate a host root and compensate afterward.
 Once SQLite commits, the exact selected-root candidate and typed publication
 debt are the retry authority. Config auxiliary ownership remains defined by the
 documented suffix grammar and the forward `GenerationConfigTransaction`.
+
+### Promised-Path Post-Condition
+
+A promised path is a path a package owns without shipping content for it
+(RPM `%ghost`; `source-promised-path` in
+[`source-package-authority.md`](source-package-authority.md)). Dependency
+resolution admits it as a provider, so a transaction can certify a dependency
+edge against a path no payload record creates.
+
+`%ghost` means owned if present. It is not a claim that the package's lifecycle
+creates the path, so a transaction may not require every declared promise to
+exist; `/etc/fstab`, log files, and generated certificate links are legitimately
+absent. What a transaction may require is that its own reasoning survives
+contact with the assembled root.
+
+The unit of both decisions is the requirement, never the individual promise.
+A promise-at-a-time test is unsound in both directions: two packages promising
+one path, or one expression offering two promised paths, each excuse the other
+when removed singly, so nothing looks load-bearing and an unusable dependency
+commits.
+
+Planning: for each `Depends`/`PreDepends` requirement, remove every promise for
+every path the expression names from the identities the transaction admits. If
+the expression still holds, no promise was relied on and the transaction owes
+nothing. If it falls, the requirement is recorded together with those paths and
+every package promising each of them.
+
+Post-condition: after the native lifecycle graph completes, including
+post-transaction slots, each recorded requirement is re-evaluated with promised
+paths admitted only where the path exists in the selected root. Existence is the
+whole test, symlinks included and content unread: the promise states that the
+path exists, never what it resolves to. A requirement that no longer holds fails
+the transaction. This is deliberately weaker than demanding every promised path
+exist -- an expression satisfied by either of two promised alternatives needs
+only one -- and deliberately stronger than checking promises individually. The
+check ignores the declaring lifecycle entry's criticality, because a
+warning-only slot that fails or silently does nothing is precisely the case that
+would otherwise pass unnoticed.
+
+Both promise holders are in scope, and one failure may name several. A batch
+member's unmaterialized promise fails the incoming package. An already installed
+package's promise -- reachable because a later transaction's requirement can
+lean on an earlier transaction's promise -- names the installed holder to repair
+or reinstall, because the incoming package is not the defect. A path both sides
+promised names both remedies. A promise no requirement in the current
+transaction relied on is never checked.
 
 ## RPM
 

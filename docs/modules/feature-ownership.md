@@ -189,6 +189,7 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/batch.rs`;
 `apps/conary/src/commands/install/batch/config.rs`;
 `apps/conary/src/commands/install/batch/execution.rs`;
+`apps/conary/src/commands/install/batch/promises.rs`;
 `apps/conary/src/commands/generation/selected_root.rs`;
 `apps/conary/src/commands/generation/config_transaction.rs`;
 `apps/conary/src/commands/generation/publication.rs`;
