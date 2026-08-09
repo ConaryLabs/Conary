@@ -88,10 +88,19 @@ pub(super) fn order_packages_for_transaction(
     let mut edges = vec![BTreeSet::new(); packages.len()];
     let mut strong_edges = vec![BTreeSet::new(); packages.len()];
 
+    // One witness vector for the whole loop, seeded by moving the installed
+    // universe in rather than cloning it per requirement or per retained
+    // witness. Every evaluation reads this vector; each requirement truncates
+    // the tail back to its own dependent and grows it with candidate
+    // identities, and the reverse pass takes one candidate out around each
+    // counterfactual and restores it when it is load-bearing -- the same
+    // mutate-and-restore shape promises.rs uses for promised paths.
+    let installed_count = installed.len();
+    let mut witnesses = installed;
     for (dependent_index, package) in packages.iter().enumerate() {
         let depending_architecture = depending_architecture(package, &native_architecture);
         for requirement in dependency_requirements(package) {
-            let mut witnesses = installed.clone();
+            witnesses.truncate(installed_count);
             witnesses.push(selected[dependent_index].clone());
             if expression_satisfied(
                 requirement,
@@ -132,24 +141,23 @@ pub(super) fn order_packages_for_transaction(
             // Remove every dispensable witness in a deterministic reverse
             // pass. The retained set is exact expression authority for the
             // dependency edge; package names and solver trail order never are.
+            // The witness tail mirrors selected_witnesses one for one, so the
+            // counterfactual removes one candidate from the shared universe
+            // and restores it at the same position when it must stay -- no
+            // second universe is built for it.
             for position in (0..selected_witnesses.len()).rev() {
-                let mut without_candidate = installed.clone();
-                without_candidate.push(selected[dependent_index].clone());
-                without_candidate.extend(
-                    selected_witnesses
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| *index != position)
-                        .map(|(_, index)| selected[*index].clone()),
-                );
+                let tail_index = installed_count + 1 + position;
+                let removed = witnesses.remove(tail_index);
                 if expression_satisfied(
                     requirement,
                     package.semantics.version_scheme,
                     depending_architecture,
                     &native_architecture,
-                    &without_candidate,
+                    &witnesses,
                 )? {
                     selected_witnesses.remove(position);
+                } else {
+                    witnesses.insert(tail_index, removed);
                 }
             }
             for provider_index in selected_witnesses {
@@ -161,9 +169,13 @@ pub(super) fn order_packages_for_transaction(
         }
     }
 
+    // The promise planner rebuilds this same universe from the installed
+    // prefix and the selected identities, and decides holder side by position,
+    // so hand back the installed prefix rather than a second copy.
+    witnesses.truncate(installed_count);
     let plan = super::promises::plan_promise_witnesses(
         packages,
-        installed,
+        witnesses,
         &selected,
         &native_architecture,
     )?;
