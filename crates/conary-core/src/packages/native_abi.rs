@@ -220,19 +220,90 @@ pub struct RpmNativeScriptletMetadata {
     pub sysusers: Option<RpmSysusersMetadata>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The typed RPM scriptlet slot class.
+///
+/// This is the same typed value on both sides of the persisted CCS contract:
+/// serde renames pin the exact RPM scriptlet tag strings, so the persisted
+/// `native_slot` is a closed enum rather than a free string. RPM trigger
+/// entries of every family/action share the `Trigger` class; their exact tag
+/// (`%triggerprein`, `%filetriggerin`, ...) is preserved by the entry id and
+/// the typed `rpm_trigger` metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RpmScriptletSlot {
+    #[serde(rename = "%pre")]
     Pre,
+    #[serde(rename = "%post")]
     Post,
+    #[serde(rename = "%preun")]
     PreUn,
+    #[serde(rename = "%postun")]
     PostUn,
+    #[serde(rename = "%pretrans")]
     PreTrans,
+    #[serde(rename = "%posttrans")]
     PostTrans,
+    #[serde(rename = "%preuntrans")]
     PreUnTrans,
+    #[serde(rename = "%postuntrans")]
     PostUnTrans,
+    #[serde(rename = "%verify")]
     Verify,
+    /// The canonical class tag for every RPM trigger. The exact trigger tag is
+    /// re-derivable from the persisted `rpm_trigger` family and action.
+    #[serde(rename = "%triggerin")]
     Trigger,
+    #[serde(rename = "%sysusers")]
     Sysusers,
+}
+
+impl RpmScriptletSlot {
+    /// The exact RPM scriptlet tag this class persists as.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pre => "%pre",
+            Self::Post => "%post",
+            Self::PreUn => "%preun",
+            Self::PostUn => "%postun",
+            Self::PreTrans => "%pretrans",
+            Self::PostTrans => "%posttrans",
+            Self::PreUnTrans => "%preuntrans",
+            Self::PostUnTrans => "%postuntrans",
+            Self::Verify => "%verify",
+            Self::Trigger => "%triggerin",
+            Self::Sysusers => "%sysusers",
+        }
+    }
+
+    /// Parse an exact RPM scriptlet tag into its typed class.
+    ///
+    /// Every tag RPM can carry for a scriptlet class is accepted; the ten
+    /// trigger tags all project onto the `Trigger` class. Unknown tags return
+    /// `None` and are a typed missing-semantic conversion failure.
+    pub fn from_tag(value: &str) -> Option<Self> {
+        match value {
+            "%pre" => Some(Self::Pre),
+            "%post" => Some(Self::Post),
+            "%preun" => Some(Self::PreUn),
+            "%postun" => Some(Self::PostUn),
+            "%pretrans" => Some(Self::PreTrans),
+            "%posttrans" => Some(Self::PostTrans),
+            "%preuntrans" => Some(Self::PreUnTrans),
+            "%postuntrans" => Some(Self::PostUnTrans),
+            "%verify" => Some(Self::Verify),
+            "%sysusers" => Some(Self::Sysusers),
+            "%triggerprein"
+            | "%triggerin"
+            | "%triggerun"
+            | "%triggerpostun"
+            | "%filetriggerin"
+            | "%filetriggerun"
+            | "%filetriggerpostun"
+            | "%transfiletriggerin"
+            | "%transfiletriggerun"
+            | "%transfiletriggerpostun" => Some(Self::Trigger),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

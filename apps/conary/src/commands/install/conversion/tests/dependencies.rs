@@ -78,7 +78,7 @@ fn rpm_pretransaction_absence_bundle(
         scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![NativeLifecycleEntry {
             id: "rpm:%pretrans".to_string(),
-            native_slot: "%pretrans".to_string(),
+            native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PreTrans),
             kind: NativeLifecycleEntryKind::Executable,
             phase: LifecyclePath::PreTransaction,
             lifecycle_paths: vec![LifecyclePath::PreTransaction.as_str().to_string()],
@@ -102,8 +102,7 @@ fn rpm_pretransaction_absence_bundle(
             rpm_runtime: Some(RpmRuntimeMetadata {
                 program: RpmProgram::EmbeddedLua,
                 body_transforms: Vec::new(),
-                critical: true,
-                criticality: RpmCriticality::Header,
+                criticality: RpmCriticality::SlotDefault,
                 raw_flags: 0,
                 unknown_flags: 0,
                 install_prefixes: Vec::new(),

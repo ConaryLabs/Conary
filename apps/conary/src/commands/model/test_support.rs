@@ -149,7 +149,7 @@ end
 "#;
     let entry = NativeLifecycleEntry {
         id: "rpm:%post".to_string(),
-        native_slot: "%post".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::Post),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PostInstall,
         lifecycle_paths: vec!["install:post".to_string()],
@@ -179,9 +179,8 @@ end
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
             criticality: RpmCriticality::Header,
-            raw_flags: 0,
+            raw_flags: conary_core::ccs::native_lifecycle::RPM_SCRIPTLET_FLAG_CRITICAL,
             unknown_flags: 0,
             install_prefixes: Vec::new(),
             macro_context: Default::default(),
@@ -286,7 +285,7 @@ fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
     let body = "print('replatform-upgrade-new-pre')\n";
     NativeLifecycleEntry {
         id: "rpm:%pre".to_string(),
-        native_slot: "%pre".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::Pre),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreUpgrade,
         lifecycle_paths: vec!["upgrade:new-pre".to_string()],
@@ -312,9 +311,8 @@ fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
             criticality: RpmCriticality::Header,
-            raw_flags: 0,
+            raw_flags: conary_core::ccs::native_lifecycle::RPM_SCRIPTLET_FLAG_CRITICAL,
             unknown_flags: 0,
             install_prefixes: Vec::new(),
             macro_context: Default::default(),

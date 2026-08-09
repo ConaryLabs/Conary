@@ -1,6 +1,7 @@
 // conary-core/src/ccs/native_lifecycle.rs
 //! Preserved native package-manager lifecycle metadata for CCS packages.
 
+use crate::packages::native_abi::RpmScriptletSlot;
 use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -14,7 +15,7 @@ pub use rpm::*;
 pub use types::*;
 
 pub const NATIVE_LIFECYCLE_SCHEMA_V1: &str = "conary.native-lifecycles.v1";
-pub const NATIVE_LIFECYCLE_SCHEMA_REVISION: u16 = 19;
+pub const NATIVE_LIFECYCLE_SCHEMA_REVISION: u16 = 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,7 +69,12 @@ pub enum NativeLifecycleEntryKind {
 #[serde(deny_unknown_fields)]
 pub struct NativeLifecycleEntry {
     pub id: String,
-    pub native_slot: String,
+    /// The typed lifecycle slot class. RPM entries carry their exact typed
+    /// `RpmScriptletSlot` class (the persisted wire value is the exact RPM
+    /// scriptlet tag); formats without a declared class table persist no slot
+    /// and their class authority lives in their typed format metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_slot: Option<RpmScriptletSlot>,
     pub kind: NativeLifecycleEntryKind,
     pub phase: LifecyclePath,
     pub lifecycle_paths: Vec<String>,
@@ -181,6 +187,35 @@ pub enum RpmTriggerAction {
     Install,
     Uninstall,
     PostUninstall,
+}
+
+impl RpmTriggerAction {
+    /// The persisted wire value of this trigger action.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PreInstall => "pre-install",
+            Self::Install => "install",
+            Self::Uninstall => "uninstall",
+            Self::PostUninstall => "post-uninstall",
+        }
+    }
+}
+
+/// The typed RPM lifecycle class of a persisted entry.
+///
+/// This is the value the install runtime is told about: it keys the failure
+/// posture table, so format-posture corrections apply to already-converted
+/// artifacts without reconversion. A trigger entry's class carries its exact
+/// persisted trigger kind and its single target action; validation rejects
+/// target constraints with more than one distinct action, so the class is
+/// never constraint-order-dependent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpmLifecycleClass {
+    PackageSlot(RpmScriptletSlot),
+    Trigger {
+        kind: RpmTriggerKind,
+        action: RpmTriggerAction,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -425,12 +460,26 @@ impl NativeLifecycleBundle {
 
         Ok(())
     }
+
+    /// Conversion-output validation: every contract-shape rule plus the
+    /// criticality-stamp agreement with the current posture-table derivation.
+    ///
+    /// Only the converter/publication path calls this, so nothing Conary
+    /// produces can carry a stale or disagreeing stamp. Load paths (installed
+    /// bundle rows, residual rows, manifests, transaction planning) use
+    /// [`Self::validate`], which treats the stamp as evidence only.
+    pub fn validate_as_conversion_output(&self) -> anyhow::Result<()> {
+        self.validate()?;
+        for entry in &self.entries {
+            entry.validate_as_conversion_output()?;
+        }
+        Ok(())
+    }
 }
 
 impl NativeLifecycleEntry {
     fn validate(&self) -> anyhow::Result<()> {
         required_string("entry.id", &self.id)?;
-        required_string("entry.native_slot", &self.native_slot)?;
         required_string("entry.interpreter", &self.interpreter)?;
         required_string("entry.body", &self.body)?;
         required_string(
@@ -518,10 +567,75 @@ impl NativeLifecycleEntry {
             ),
             (_, false) => {}
         }
+        if matches!(self.native_slot, Some(RpmScriptletSlot::Trigger))
+            && self
+                .rpm_trigger
+                .as_ref()
+                .is_some_and(|trigger| trigger.target_constraints.is_empty())
+        {
+            bail!(
+                "entry '{}' declares the RPM trigger class without a target constraint",
+                self.id
+            );
+        }
+        match self.rpm_class() {
+            Some(RpmLifecycleClass::PackageSlot(RpmScriptletSlot::Sysusers))
+                if self
+                    .rpm_runtime
+                    .as_ref()
+                    .is_none_or(|metadata| metadata.program != RpmProgram::Sysusers) =>
+            {
+                bail!(
+                    "entry '{}' declares the RPM sysusers class without the sysusers program",
+                    self.id
+                )
+            }
+            Some(RpmLifecycleClass::Trigger { .. }) if self.rpm_trigger.is_none() => bail!(
+                "entry '{}' declares the RPM trigger class without typed trigger metadata",
+                self.id
+            ),
+            Some(RpmLifecycleClass::PackageSlot(_)) if self.rpm_trigger.is_some() => bail!(
+                "entry '{}' declares typed RPM trigger metadata outside the trigger class",
+                self.id
+            ),
+            _ => {}
+        }
         if let Some(metadata) = &self.residual_lifecycle {
             metadata.validate(&self.id)?;
         }
 
+        Ok(())
+    }
+
+    /// The typed RPM lifecycle class of this entry, or `None` when the entry
+    /// carries no declared RPM class.
+    ///
+    /// Trigger entries project their persisted trigger kind and their single
+    /// target action; validation rejects target constraints with more than one
+    /// distinct action, so the first constraint is provably the only action.
+    pub fn rpm_class(&self) -> Option<RpmLifecycleClass> {
+        match self.native_slot {
+            Some(RpmScriptletSlot::Trigger) => {
+                let trigger = self.rpm_trigger.as_ref()?;
+                let action = trigger.target_constraints.first()?.action;
+                Some(RpmLifecycleClass::Trigger {
+                    kind: trigger.kind,
+                    action,
+                })
+            }
+            Some(slot) => Some(RpmLifecycleClass::PackageSlot(slot)),
+            None => None,
+        }
+    }
+
+    /// Conversion-output validation: everything [`Self::validate`] enforces
+    /// plus the criticality-stamp agreement with the current posture-table
+    /// derivation. Only the converter/publication path calls this.
+    fn validate_as_conversion_output(&self) -> anyhow::Result<()> {
+        self.validate()?;
+        if let Some(metadata) = &self.rpm_runtime {
+            metadata.validate_as_conversion_output(&self.id, self.rpm_class())?;
+        }
         Ok(())
     }
 
@@ -559,6 +673,24 @@ impl NativeLifecycleEntry {
 
 impl RpmTriggerMetadata {
     fn validate(&self, entry_id: &str) -> anyhow::Result<()> {
+        // RPM's model declares one action per trigger scriptlet entry: the
+        // scriptlet's flags word carries a single action. The class projection
+        // reads the first target constraint, so more than one distinct action
+        // would make the class (and therefore the failure posture)
+        // constraint-order-dependent.
+        let mut actions = self
+            .target_constraints
+            .iter()
+            .map(|constraint| constraint.action);
+        if let Some(first) = actions.next()
+            && let Some(other) = actions.find(|action| *action != first)
+        {
+            bail!(
+                "entry '{entry_id}' RPM trigger target constraints mix actions '{}' and '{}'",
+                first.as_str(),
+                other.as_str()
+            );
+        }
         if matches!(
             self.kind,
             RpmTriggerKind::File | RpmTriggerKind::TransactionFile

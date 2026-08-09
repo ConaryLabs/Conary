@@ -171,7 +171,7 @@ fn rollback_typed_rpm_entry() -> NativeLifecycleEntry {
     let body = "print('rollback-post-remove')\n";
     NativeLifecycleEntry {
         id: "rpm:%postun".to_string(),
-        native_slot: "%postun".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PostUn),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PostRemove,
         lifecycle_paths: vec!["remove:last".to_string()],
@@ -195,8 +195,7 @@ fn rollback_typed_rpm_entry() -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
-            criticality: RpmCriticality::Header,
+            criticality: RpmCriticality::WarningOnly,
             raw_flags: 0,
             unknown_flags: 0,
             install_prefixes: Vec::new(),

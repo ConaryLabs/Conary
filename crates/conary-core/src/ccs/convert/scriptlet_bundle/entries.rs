@@ -8,7 +8,8 @@ use super::native_contracts::{
 use super::types::ScriptletBundleInput;
 use crate::ccs::native_lifecycle::NativeLifecycleEntry;
 use crate::packages::native_abi::{
-    ArchNativeScriptletMetadata, NativeScriptletEntry, NativeScriptletMetadata,
+    ArchNativeScriptletMetadata, NativeScriptletEntry, NativeScriptletFormat,
+    NativeScriptletMetadata, RpmScriptletSlot,
 };
 use crate::repository::supported_profiles;
 
@@ -49,7 +50,7 @@ fn build_native_entry(
 
     Ok(NativeLifecycleEntry {
         id: native.id.clone(),
-        native_slot: native.native_slot.clone(),
+        native_slot: native_lifecycle_slot(native)?,
         kind: native_lifecycle_entry_kind(native.kind),
         phase,
         lifecycle_paths,
@@ -73,6 +74,25 @@ fn build_native_entry(
         arch_hook,
         residual_lifecycle: None,
     })
+}
+
+fn native_lifecycle_slot(
+    native: &NativeScriptletEntry,
+) -> anyhow::Result<Option<RpmScriptletSlot>> {
+    if native.format != NativeScriptletFormat::Rpm {
+        // Formats without a declared class table persist no slot; their typed
+        // class authority lives in their format metadata.
+        return Ok(None);
+    }
+    RpmScriptletSlot::from_tag(&native.native_slot)
+        .map(Some)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "RPM native lifecycle entry '{}' carries unknown scriptlet slot '{}'",
+                native.id,
+                native.native_slot
+            )
+        })
 }
 
 fn native_interpreter(

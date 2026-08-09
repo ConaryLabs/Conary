@@ -55,7 +55,7 @@ pub fn build_native_lifecycle_bundle(
     for entry in &mut bundle.entries {
         entry.evidence_digest = Some(digest.clone());
     }
-    bundle.validate()?;
+    bundle.validate_as_conversion_output()?;
 
     Ok(ScriptletBundleBuild {
         summary: summary_from_bundle(&bundle),

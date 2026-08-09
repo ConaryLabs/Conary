@@ -747,7 +747,7 @@ description = "nginx converted from RPM"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 19
+schema_revision = 20
 source_format = "rpm"
 source_family = "fedora-rhel"
 source_profile = "fedora-44"
@@ -775,7 +775,7 @@ body = "{body}"
 native_invocation = {{ args = ["1"], environment = ["RPM_INSTALL_PREFIX=/"], stdin = "none", chroot = "install-root" }}
 transaction_order = {{ position = "after-payload", after = ["payload"] }}
 timeout_ms = 30000
-rpm_runtime = {{ program = "external", critical = false, criticality = "warning-only", raw_flags = 0 }}
+rpm_runtime = {{ program = "external", criticality = "warning-only", raw_flags = 0 }}
 "#
     )
 }
@@ -795,6 +795,10 @@ fn manifest_toml_round_trips_native_lifecycle_bundle() {
     assert_eq!(bundle.source_package, "nginx");
     assert_eq!(bundle.entries.len(), 1);
     assert_eq!(bundle.entries[0].id, "rpm:%post");
+    assert_eq!(
+        bundle.entries[0].native_slot,
+        Some(crate::packages::native_abi::RpmScriptletSlot::Post)
+    );
 
     let encoded = manifest.to_toml().expect("serialize manifest");
     assert!(encoded.contains("[native_lifecycle]"));
@@ -811,6 +815,25 @@ fn manifest_toml_round_trips_native_lifecycle_bundle() {
 }
 
 #[test]
+fn manifest_carrying_the_deleted_critical_bool_fails_naming_the_unknown_field() {
+    let body = "ldconfig";
+    let body_sha256 = crate::hash::sha256_prefixed(body.as_bytes());
+    let toml = manifest_with_native_lifecycle_bundle(body, &body_sha256)
+        .replacen(
+            "rpm_runtime = { program = \"external\", criticality = \"warning-only\", raw_flags = 0 }",
+            "rpm_runtime = { program = \"external\", critical = false, criticality = \"warning-only\", raw_flags = 0 }",
+            1,
+        );
+
+    let error = CcsManifest::parse(&toml)
+        .expect_err("a manifest carrying the deleted critical bool must fail");
+    assert!(
+        error.to_string().contains("unknown field `critical`"),
+        "the rejection must name the deleted field, got: {error}"
+    );
+}
+
+#[test]
 fn manifest_rejects_removed_security_policy_intent_authority() {
     let toml = r#"
 [package]
@@ -823,7 +846,7 @@ description = "policy fixture"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 19
+schema_revision = 20
 source_format = "rpm"
 source_family = "rpm"
 source_profile = "fedora-44"

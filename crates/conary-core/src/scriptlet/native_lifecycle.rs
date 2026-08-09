@@ -897,7 +897,6 @@ mod tests {
         let rpm = RpmRuntimeMetadata {
             program: RpmProgram::External,
             body_transforms: vec![RpmBodyTransform::HeaderQueryFormat],
-            critical: false,
             criticality: RpmCriticality::WarningOnly,
             raw_flags: 0,
             unknown_flags: 0,

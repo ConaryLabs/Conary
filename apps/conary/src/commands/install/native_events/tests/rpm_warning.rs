@@ -30,40 +30,29 @@ fn rpm_entry_event(bundle: &NativeLifecycleBundle) -> NativeTransactionEvent {
     }
 }
 
-fn failing_rpm_bundle(criticality: RpmCriticality, critical: bool) -> NativeLifecycleBundle {
-    let mut bundle = rpm_bundle_for_phase(
-        "rpm-warning-fixture",
-        "1",
-        "rpm:%post",
-        LifecyclePath::PostInstall,
-        "<lua>",
-    );
-    let entry = &mut bundle.entries[0];
-    entry.body = "error('typed fixture failure')\n".to_string();
-    entry.body_sha256 = conary_core::hash::sha256_prefixed(entry.body.as_bytes());
-    let runtime = entry.rpm_runtime.as_mut().unwrap();
-    runtime.program = RpmProgram::EmbeddedLua;
-    runtime.criticality = criticality;
-    runtime.critical = critical;
-    bundle
-}
-
 fn failing_rpm_bundle_for_slot(
     entry_id: &str,
     phase: LifecyclePath,
-    criticality: RpmCriticality,
+    header_critical: bool,
 ) -> NativeLifecycleBundle {
-    let mut bundle = failing_rpm_bundle(
-        criticality,
-        conary_core::scriptlet::FailurePosture::for_rpm_criticality(criticality)
-            .aborts_transaction(),
-    );
+    let mut bundle = rpm_bundle_for_phase("rpm-warning-fixture", "1", entry_id, phase, "<lua>");
     let entry = &mut bundle.entries[0];
-    entry.id = entry_id.to_string();
-    entry.native_slot = entry_id.trim_start_matches("rpm:").to_string();
-    entry.phase = phase;
-    entry.lifecycle_paths = vec![phase.as_str().to_string()];
-    entry.transaction_order.position = phase.as_str().to_string();
+    entry.body = "error('typed fixture failure')\n".to_string();
+    entry.body_sha256 = conary_core::hash::sha256_prefixed(entry.body.as_bytes());
+    // The stamp is derived exactly as conversion derives it: from the typed
+    // class and the header flag word. The runtime itself derives posture from
+    // the class alone, so the stamp is evidence, not the decision input.
+    // Trigger-slot entries cannot derive a class until the caller attaches
+    // rpm_trigger metadata; those callers re-stamp afterwards.
+    let class = entry.rpm_class();
+    let runtime = entry.rpm_runtime.as_mut().unwrap();
+    runtime.program = RpmProgram::EmbeddedLua;
+    if header_critical {
+        runtime.raw_flags |= conary_core::ccs::native_lifecycle::RPM_SCRIPTLET_FLAG_CRITICAL;
+    }
+    if let Some(class) = class {
+        runtime.criticality = class.effective_criticality(header_critical);
+    }
     bundle
 }
 
@@ -96,19 +85,61 @@ fn prepare_single_event(
     (prepared, result)
 }
 
+/// The runtime derives posture from the typed class and the header flag word
+/// alone, so every persisted criticality value lands on the posture the class
+/// declares -- including header promotion and the file-trigger refusal.
 #[test]
-fn rpm_script_execution_failure_follows_every_persisted_criticality_value() {
-    for (criticality, critical, expected_fatal) in [
-        (RpmCriticality::WarningOnly, false, false),
-        (RpmCriticality::ForcedWarningOnly, false, false),
-        (RpmCriticality::Header, true, true),
-        (RpmCriticality::SlotDefault, true, true),
-    ] {
-        let result = execute_single_event(failing_rpm_bundle(criticality, critical));
+fn rpm_runtime_derives_posture_from_typed_class_and_header_flag() {
+    // (bundle, expected fatal): one class/flag pair per persisted criticality
+    // value.
+    let mut cases: Vec<(NativeLifecycleBundle, bool)> = vec![
+        // WarningOnly: a promotable class without the header flag warns.
+        (
+            failing_rpm_bundle_for_slot("rpm:%post", LifecyclePath::PostInstall, false),
+            false,
+        ),
+        // Header: the same class with the header CRITICAL bit promotes to
+        // fatal.
+        (
+            failing_rpm_bundle_for_slot("rpm:%post", LifecyclePath::PostInstall, true),
+            true,
+        ),
+        // SlotDefault: a class whose default aborts, without the header flag.
+        (
+            failing_rpm_bundle_for_slot("rpm:%pre", LifecyclePath::PreInstall, false),
+            true,
+        ),
+    ];
+    // ForcedWarningOnly: a file trigger refuses promotion even with the
+    // header bit set.
+    let mut file_trigger =
+        failing_rpm_bundle_for_slot("rpm:%filetriggerin:0", LifecyclePath::Trigger, true);
+    let entry = &mut file_trigger.entries[0];
+    entry.rpm_trigger = Some(conary_core::ccs::native_lifecycle::RpmTriggerMetadata {
+        kind: conary_core::ccs::native_lifecycle::RpmTriggerKind::File,
+        target_constraints: vec![
+            conary_core::ccs::native_lifecycle::RpmTriggerTargetConstraint {
+                package: "/usr/share/cache".to_string(),
+                action: conary_core::ccs::native_lifecycle::RpmTriggerAction::Install,
+                operator: None,
+                version: None,
+                raw_flags: 0,
+            },
+        ],
+        priority: None,
+        path_prefixes: vec!["/usr/share/cache".to_string()],
+    });
+    let class = entry.rpm_class().expect("typed trigger class");
+    let runtime = entry.rpm_runtime.as_mut().unwrap();
+    runtime.criticality = class.effective_criticality(true);
+    cases.push((file_trigger, false));
+
+    for (bundle, expected_fatal) in cases {
+        let result = execute_single_event(bundle);
         assert_eq!(
             result.is_err(),
             expected_fatal,
-            "unexpected graph result for {criticality:?}: {result:#?}"
+            "unexpected graph result: {result:#?}"
         );
         if let Err(error) = result {
             assert!(
@@ -122,7 +153,7 @@ fn rpm_script_execution_failure_follows_every_persisted_criticality_value() {
 
 #[test]
 fn warning_only_rpm_contract_failure_remains_fatal() {
-    let mut bundle = failing_rpm_bundle(RpmCriticality::WarningOnly, false);
+    let mut bundle = failing_rpm_bundle_for_slot("rpm:%post", LifecyclePath::PostInstall, false);
     bundle.entries[0].interpreter = "/bin/sh".to_string();
 
     let error = execute_single_event(bundle)
@@ -182,15 +213,15 @@ fn every_declared_rpm_class_gets_its_declared_runtime_posture() {
             WarnAndContinue,
         ),
     ] {
-        // Only the persisted criticality comes from the table: it is what
-        // conversion would have stamped on an entry of this class.
-        let criticality =
-            conary_core::scriptlet::rpm_package_slot_authority(slot).effective_criticality(false);
-        let (prepared, result) = prepare_single_event(failing_rpm_bundle_for_slot(
-            entry_id,
-            phase,
-            criticality.persisted(),
-        ));
+        // The runtime is told only the typed class; the persisted stamp is
+        // derived from that class exactly as conversion derives it.
+        let bundle = failing_rpm_bundle_for_slot(entry_id, phase, false);
+        assert_eq!(
+            bundle.entries[0].native_slot,
+            Some(slot),
+            "{entry_id} must carry the declared typed slot"
+        );
+        let (prepared, result) = prepare_single_event(bundle);
         let continued = prepared.take_continued_lifecycle_failures();
         match expected {
             AbortsTransaction => {
@@ -237,11 +268,7 @@ fn a_pre_install_class_failure_aborts_before_the_payload_boundary() {
     let root = temp.path().join("selected-root");
     std::fs::create_dir(&root).unwrap();
 
-    let bundle = failing_rpm_bundle_for_slot(
-        "rpm:%pre",
-        LifecyclePath::PreInstall,
-        RpmCriticality::SlotDefault,
-    );
+    let bundle = failing_rpm_bundle_for_slot("rpm:%pre", LifecyclePath::PreInstall, false);
     let event = rpm_entry_event(&bundle);
     let mut prepared =
         prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
@@ -297,18 +324,10 @@ fn a_continued_failure_is_still_reported_when_a_later_graph_step_aborts() {
 
     // Entry 0 fails in a warn-and-continue class; entry 1 fails in an aborting
     // class later in the same graph.
-    let mut bundle = failing_rpm_bundle_for_slot(
-        "rpm:%post",
-        LifecyclePath::PostInstall,
-        RpmCriticality::WarningOnly,
-    );
-    let aborting = failing_rpm_bundle_for_slot(
-        "rpm:%pre",
-        LifecyclePath::PreInstall,
-        RpmCriticality::SlotDefault,
-    )
-    .entries
-    .remove(0);
+    let mut bundle = failing_rpm_bundle_for_slot("rpm:%post", LifecyclePath::PostInstall, false);
+    let aborting = failing_rpm_bundle_for_slot("rpm:%pre", LifecyclePath::PreInstall, false)
+        .entries
+        .remove(0);
     bundle.entries.push(aborting);
 
     let continuing_event = rpm_entry_event(&bundle);
@@ -389,11 +408,7 @@ fn a_lifecycle_evidence_persist_error_does_not_change_a_successful_graph_result(
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
 
-    let bundle = failing_rpm_bundle_for_slot(
-        "rpm:%post",
-        LifecyclePath::PostInstall,
-        RpmCriticality::WarningOnly,
-    );
+    let bundle = failing_rpm_bundle_for_slot("rpm:%post", LifecyclePath::PostInstall, false);
     let event = rpm_entry_event(&bundle);
     let mut prepared =
         prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);
@@ -432,11 +447,7 @@ fn a_continued_failure_persists_once_on_the_success_exit() {
     std::fs::create_dir(&root).unwrap();
     let changeset_id = pending_changeset(&conn);
 
-    let bundle = failing_rpm_bundle_for_slot(
-        "rpm:%post",
-        LifecyclePath::PostInstall,
-        RpmCriticality::WarningOnly,
-    );
+    let bundle = failing_rpm_bundle_for_slot("rpm:%post", LifecyclePath::PostInstall, false);
     let event = rpm_entry_event(&bundle);
     let mut prepared =
         prepared_with_projected_event(bundle, event, NativeEventPathProjection::CurrentRoot);

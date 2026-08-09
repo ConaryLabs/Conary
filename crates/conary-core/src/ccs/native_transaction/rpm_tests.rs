@@ -8,24 +8,29 @@ use crate::ccs::native_lifecycle::{
     RpmTriggerMetadata, RpmTriggerTargetConstraint, ScriptletFidelity, SourceFormat,
     TransactionOrder, VersionScheme as LifecycleVersionScheme,
 };
+use crate::packages::native_abi::RpmScriptletSlot;
 use std::collections::BTreeSet;
 
-fn runtime(program: RpmProgram, critical: bool) -> RpmRuntimeMetadata {
+fn runtime(program: RpmProgram) -> RpmRuntimeMetadata {
     RpmRuntimeMetadata {
         program,
         body_transforms: Vec::new(),
-        critical,
-        criticality: if critical {
-            RpmCriticality::SlotDefault
-        } else {
-            RpmCriticality::WarningOnly
-        },
+        criticality: RpmCriticality::WarningOnly,
         raw_flags: 0,
         unknown_flags: 0,
         install_prefixes: Vec::new(),
         macro_context: Default::default(),
         header_context: Default::default(),
         package_rpm_version: None,
+    }
+}
+
+/// Keep the persisted criticality stamp consistent with the entry's typed
+/// class authority, exactly as conversion would stamp it.
+fn stamp_criticality(entry: &mut NativeLifecycleEntry) {
+    let entry_class = entry.rpm_class();
+    if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+        runtime.criticality = class.effective_criticality(false);
     }
 }
 
@@ -36,9 +41,15 @@ fn entry(id: &str, phase: LifecyclePath, runtime: RpmRuntimeMetadata) -> NativeL
         RpmProgram::External => "/bin/sh",
         RpmProgram::Sysusers => "/usr/bin/systemd-sysusers",
     };
-    NativeLifecycleEntry {
+    let mut entry = NativeLifecycleEntry {
         id: id.to_string(),
-        native_slot: id.to_string(),
+        // Fixture ids mix `rpm:<slot>`, `rpm:<pkg>:<slot>`, and
+        // `rpm:<slot>:<qualifier>` shapes; the slot is the `%`-prefixed
+        // segment wherever it sits.
+        native_slot: id
+            .strip_prefix("rpm:")
+            .and_then(|suffix| suffix.split(':').find(|part| part.starts_with('%')))
+            .and_then(RpmScriptletSlot::from_tag),
         kind: NativeLifecycleEntryKind::Executable,
         phase,
         lifecycle_paths: vec![phase.as_str().to_string()],
@@ -64,7 +75,9 @@ fn entry(id: &str, phase: LifecyclePath, runtime: RpmRuntimeMetadata) -> NativeL
         arch_install: None,
         arch_hook: None,
         residual_lifecycle: None,
-    }
+    };
+    stamp_criticality(&mut entry);
+    entry
 }
 
 fn bundle(entries: Vec<NativeLifecycleEntry>) -> NativeLifecycleBundle {
@@ -124,7 +137,7 @@ fn trigger_entry(
     let mut entry = entry(
         id,
         LifecyclePath::PostInstall,
-        runtime(RpmProgram::External, false),
+        runtime(RpmProgram::External),
     );
     entry.rpm_trigger = Some(RpmTriggerMetadata {
         kind,
@@ -140,6 +153,7 @@ fn trigger_entry(
             .then(|| vec![target.to_string()])
             .unwrap_or_default(),
     });
+    stamp_criticality(&mut entry);
     entry
 }
 
@@ -180,12 +194,12 @@ fn rpm_regular_events_do_not_delegate_transaction_failure_policy() {
         entry(
             "rpm:%pre",
             LifecyclePath::PreInstall,
-            runtime(RpmProgram::External, true),
+            runtime(RpmProgram::External),
         ),
         entry(
             "rpm:%post",
             LifecyclePath::PostInstall,
-            runtime(RpmProgram::External, false),
+            runtime(RpmProgram::External),
         ),
     ]);
 
@@ -206,7 +220,7 @@ fn rpm_sysusers_is_an_exact_pre_payload_target_interface_event() {
     let mut sysusers = entry(
         "rpm:%sysusers:0",
         LifecyclePath::RpmSysusers,
-        runtime(RpmProgram::Sysusers, true),
+        runtime(RpmProgram::Sysusers),
     );
     sysusers.interpreter = "/usr/bin/systemd-sysusers".to_string();
     sysusers.rpm_sysusers = Some(RpmSysusersMetadata {
@@ -247,7 +261,7 @@ fn rpm_sysusers_is_an_exact_pre_payload_target_interface_event() {
 
 #[test]
 fn rpm_owned_body_engines_are_planned_for_typed_runtime_execution() {
-    let mut transformed = runtime(RpmProgram::External, false);
+    let mut transformed = runtime(RpmProgram::External);
     transformed.body_transforms = vec![RpmBodyTransform::MacroExpand];
     let transformed_bundle = bundle(vec![entry(
         "rpm:%post",
@@ -265,7 +279,7 @@ fn rpm_owned_body_engines_are_planned_for_typed_runtime_execution() {
     let lua_bundle = bundle(vec![entry(
         "rpm:%post",
         LifecyclePath::PostInstall,
-        runtime(RpmProgram::EmbeddedLua, false),
+        runtime(RpmProgram::EmbeddedLua),
     )]);
     let lua_plan = plan_native_transaction(
         &[installing_view(&lua_bundle)],
@@ -795,24 +809,24 @@ fn rpm_transaction_graph_interleaves_each_payload_with_its_lifecycle() {
         entry(
             "rpm:a:%pre",
             LifecyclePath::PreInstall,
-            runtime(RpmProgram::External, true),
+            runtime(RpmProgram::External),
         ),
         entry(
             "rpm:a:%post",
             LifecyclePath::PostInstall,
-            runtime(RpmProgram::External, false),
+            runtime(RpmProgram::External),
         ),
     ]);
     let package_b = bundle(vec![
         entry(
             "rpm:b:%pre",
             LifecyclePath::PreInstall,
-            runtime(RpmProgram::External, true),
+            runtime(RpmProgram::External),
         ),
         entry(
             "rpm:b:%post",
             LifecyclePath::PostInstall,
-            runtime(RpmProgram::External, false),
+            runtime(RpmProgram::External),
         ),
     ]);
     let changes = [

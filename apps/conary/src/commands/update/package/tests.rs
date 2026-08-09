@@ -84,7 +84,7 @@ fn rpm_upgrade_entry() -> NativeLifecycleEntry {
     let body = "print('rpm-upgrade-new-pre')\n";
     NativeLifecycleEntry {
         id: "rpm:%pre".to_string(),
-        native_slot: "%pre".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::Pre),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreUpgrade,
         lifecycle_paths: vec!["upgrade:new-pre".to_string()],
@@ -108,8 +108,7 @@ fn rpm_upgrade_entry() -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
-            criticality: RpmCriticality::Header,
+            criticality: RpmCriticality::SlotDefault,
             raw_flags: 0,
             unknown_flags: 0,
             install_prefixes: Vec::new(),

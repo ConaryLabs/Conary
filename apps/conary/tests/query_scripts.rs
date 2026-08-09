@@ -161,7 +161,7 @@ fn bundle_fixture() -> NativeLifecycleBundle {
         ),
         scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![
-            entry_fixture("rpm:%preun", pre_remove_body, true),
+            entry_fixture("rpm:%filetriggerin:0", pre_remove_body, true),
             entry_fixture("rpm:%post", post_install_body, false),
         ],
     }
@@ -175,14 +175,19 @@ fn zero_entry_bundle_fixture() -> NativeLifecycleBundle {
 }
 
 fn entry_fixture(id: &str, body: &str, with_reserved_metadata: bool) -> NativeLifecycleEntry {
-    NativeLifecycleEntry {
+    let slot = conary_core::packages::native_abi::RpmScriptletSlot::from_tag(
+        id.split(':').nth(1).unwrap_or("%post"),
+    );
+    let mut entry = NativeLifecycleEntry {
         id: id.to_string(),
-        native_slot: id.split(':').nth(1).unwrap_or("%post").to_string(),
+        native_slot: slot,
         kind: NativeLifecycleEntryKind::Executable,
-        phase: if id.ends_with("%preun") {
-            LifecyclePath::PreRemove
-        } else {
-            LifecyclePath::PostInstall
+        phase: match slot {
+            Some(conary_core::packages::native_abi::RpmScriptletSlot::Trigger) => {
+                LifecyclePath::Trigger
+            }
+            _ if id.ends_with("%preun") => LifecyclePath::PreRemove,
+            _ => LifecyclePath::PostInstall,
         },
         lifecycle_paths: vec!["install:first".to_string()],
         interpreter: "/bin/sh".to_string(),
@@ -223,7 +228,6 @@ fn entry_fixture(id: &str, body: &str, with_reserved_metadata: bool) -> NativeLi
         rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
             program: conary_core::ccs::native_lifecycle::RpmProgram::External,
             body_transforms: Vec::new(),
-            critical: false,
             criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,
             raw_flags: 0,
             unknown_flags: 0,
@@ -237,7 +241,14 @@ fn entry_fixture(id: &str, body: &str, with_reserved_metadata: bool) -> NativeLi
         arch_install: None,
         arch_hook: None,
         residual_lifecycle: None,
+    };
+    // Keep the persisted stamp consistent with the typed class authority,
+    // including the trigger class carried by the reserved metadata.
+    let entry_class = entry.rpm_class();
+    if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+        runtime.criticality = class.effective_criticality(false);
     }
+    entry
 }
 
 #[test]
@@ -460,7 +471,7 @@ fn query_scripts_ccs_bundle_entry_filter_prints_single_entry() {
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("rpm:%post"));
-    assert!(!stdout.contains("rpm:%preun"));
+    assert!(!stdout.contains("rpm:%filetriggerin:0"));
 }
 
 #[test]
@@ -502,7 +513,7 @@ fn query_scripts_ccs_bundle_json_is_stable() {
     assert_eq!(json["package"]["name"], "nginx");
     assert_eq!(json["bundle_present"], true);
     assert_eq!(json["bundle"]["schema"], "conary.native-lifecycles.v1");
-    assert_eq!(json["entries"][0]["id"], "rpm:%preun");
+    assert_eq!(json["entries"][0]["id"], "rpm:%filetriggerin:0");
     assert!(json["entries"][0]["body"].is_null());
     assert!(stdout.contains("body_sha256"));
     assert!(!stdout.contains("systemctl daemon-reload"));

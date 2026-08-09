@@ -21,7 +21,10 @@
 //! sides of the persisted contract.
 
 use super::ScriptletFailureKind;
-use crate::ccs::native_lifecycle::{RpmCriticality, SourceFormat};
+use crate::ccs::native_lifecycle::{
+    RpmCriticality, RpmLifecycleClass, RpmTriggerAction as PersistedRpmTriggerAction,
+    RpmTriggerKind, SourceFormat,
+};
 use crate::packages::native_abi::{
     RpmScriptletCriticality, RpmScriptletSlot, RpmTriggerAction, RpmTriggerFamily,
 };
@@ -127,14 +130,55 @@ pub const fn rpm_trigger_authority(
     }
 }
 
+impl From<RpmTriggerKind> for RpmTriggerFamily {
+    fn from(kind: RpmTriggerKind) -> Self {
+        match kind {
+            RpmTriggerKind::Package => Self::Package,
+            RpmTriggerKind::File => Self::File,
+            RpmTriggerKind::TransactionFile => Self::TransactionFile,
+        }
+    }
+}
+
+impl From<PersistedRpmTriggerAction> for RpmTriggerAction {
+    fn from(action: PersistedRpmTriggerAction) -> Self {
+        match action {
+            PersistedRpmTriggerAction::PreInstall => Self::PreInstall,
+            PersistedRpmTriggerAction::Install => Self::Install,
+            PersistedRpmTriggerAction::Uninstall => Self::Uninstall,
+            PersistedRpmTriggerAction::PostUninstall => Self::PostUninstall,
+        }
+    }
+}
+
+impl RpmLifecycleClass {
+    /// The effective criticality this persisted class authority stamps for a
+    /// persisted header flag word carrying (or not carrying) the CRITICAL bit.
+    ///
+    /// This is the single derivation shared by contract validation and the
+    /// install runtime: both consult the current table through the typed
+    /// class, so a posture correction applies to already-converted artifacts
+    /// without reconversion.
+    pub fn effective_criticality(self, header_critical: bool) -> RpmCriticality {
+        let authority = match self {
+            Self::PackageSlot(slot) => rpm_package_slot_authority(slot),
+            Self::Trigger { kind, action } => rpm_trigger_authority(kind.into(), action.into()),
+        };
+        authority.effective_criticality(header_critical).persisted()
+    }
+}
+
 /// The typed inputs the runtime has when a native lifecycle entry fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LifecycleFailureClass {
     /// The source format whose lifecycle contract owns this entry.
     pub source_format: SourceFormat,
-    /// The persisted effective criticality of an RPM entry, or `None` for an
-    /// entry that declares no RPM runtime contract.
-    pub rpm_criticality: Option<RpmCriticality>,
+    /// The persisted typed RPM class of the entry, or `None` for an entry
+    /// that carries no declared RPM class.
+    pub rpm_class: Option<RpmLifecycleClass>,
+    /// Whether the persisted raw scriptlet flag word carries RPM's CRITICAL
+    /// bit, re-derived from `RpmRuntimeMetadata::raw_flags`.
+    pub header_critical: bool,
     /// How the entry failed.
     pub failure_kind: ScriptletFailureKind,
 }
@@ -148,15 +192,17 @@ impl FailurePosture {
     /// malformed contracts, and process or sandbox setup failures are Conary
     /// contract failures rather than source-program results, so they abort
     /// whatever the class says: criticality is not a security-boundary bypass.
-    pub const fn for_lifecycle_failure(class: LifecycleFailureClass) -> Self {
+    pub fn for_lifecycle_failure(class: LifecycleFailureClass) -> Self {
         if !class.failure_kind.is_source_program_result() {
             return Self::AbortsTransaction;
         }
         match class.source_format {
-            SourceFormat::Rpm => match class.rpm_criticality {
-                Some(criticality) => Self::for_rpm_criticality(criticality),
-                // An RPM entry with no persisted RPM runtime contract has no
-                // declared class, so it gets the strict posture.
+            SourceFormat::Rpm => match class.rpm_class {
+                Some(rpm_class) => Self::for_rpm_criticality(
+                    rpm_class.effective_criticality(class.header_critical),
+                ),
+                // An RPM entry with no persisted typed class has no declared
+                // class, so it gets the strict posture.
                 None => Self::AbortsTransaction,
             },
             // dpkg leaves a package whose maintainer script failed in an
@@ -185,14 +231,18 @@ impl FailurePosture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::native_lifecycle::{
+        RpmTriggerAction as PersistedRpmTriggerAction, RpmTriggerKind,
+    };
 
     fn rpm_class(
-        criticality: RpmCriticality,
+        rpm_class: RpmLifecycleClass,
         failure_kind: ScriptletFailureKind,
     ) -> LifecycleFailureClass {
         LifecycleFailureClass {
             source_format: SourceFormat::Rpm,
-            rpm_criticality: Some(criticality),
+            rpm_class: Some(rpm_class),
+            header_critical: false,
             failure_kind,
         }
     }
@@ -357,7 +407,8 @@ mod tests {
     }
 
     /// Every class the parser can produce, for every header flag value, must
-    /// land on the posture the pinned table declares.
+    /// land on the posture the pinned table declares -- through the persisted
+    /// typed class, exactly as the install runtime consults it.
     #[test]
     fn every_rpm_class_reaches_the_runtime_with_its_declared_posture() {
         let classes = [
@@ -385,13 +436,11 @@ mod tests {
             ),
         ];
         for (slot, without_header_flag) in classes {
-            let authority = rpm_package_slot_authority(slot);
             let posture = |header_critical| {
                 FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
                     source_format: SourceFormat::Rpm,
-                    rpm_criticality: Some(
-                        authority.effective_criticality(header_critical).persisted(),
-                    ),
+                    rpm_class: Some(RpmLifecycleClass::PackageSlot(slot)),
+                    header_critical,
                     failure_kind: ScriptletFailureKind::ScriptExited,
                 })
             };
@@ -408,6 +457,122 @@ mod tests {
         }
     }
 
+    /// The #295 decision table, re-derived through the persisted typed class:
+    /// every pinned row of the RPM Scriptlet Failure Posture spec table lands
+    /// on its declared posture, with header promotion only where the table
+    /// allows it.
+    #[test]
+    fn persisted_typed_class_matches_the_pinned_decision_table() {
+        // Pinned rpm lib/rpmscript.cc scriptInfo[] deflags at
+        // a8f0192aee1c08bd1454ed2ac6ebaf506004b55c.
+        let package_slots = [
+            (
+                RpmScriptletSlot::PreTrans,
+                FailurePosture::AbortsTransaction,
+            ),
+            (RpmScriptletSlot::Pre, FailurePosture::AbortsTransaction),
+            (RpmScriptletSlot::Post, FailurePosture::WarnAndContinue),
+            (RpmScriptletSlot::PostTrans, FailurePosture::WarnAndContinue),
+            (
+                RpmScriptletSlot::PreUnTrans,
+                FailurePosture::AbortsTransaction,
+            ),
+            (RpmScriptletSlot::PreUn, FailurePosture::AbortsTransaction),
+            (RpmScriptletSlot::PostUn, FailurePosture::WarnAndContinue),
+            (
+                RpmScriptletSlot::PostUnTrans,
+                FailurePosture::WarnAndContinue,
+            ),
+            (RpmScriptletSlot::Verify, FailurePosture::AbortsTransaction),
+            (
+                RpmScriptletSlot::Sysusers,
+                FailurePosture::AbortsTransaction,
+            ),
+        ];
+        for (slot, expected) in package_slots {
+            let class = RpmLifecycleClass::PackageSlot(slot);
+            assert_eq!(
+                FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
+                    source_format: SourceFormat::Rpm,
+                    rpm_class: Some(class),
+                    header_critical: false,
+                    failure_kind: ScriptletFailureKind::ScriptExited,
+                }),
+                expected,
+                "class {slot:?} without a header flag diverges from the pinned table"
+            );
+            assert_eq!(
+                FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
+                    source_format: SourceFormat::Rpm,
+                    rpm_class: Some(class),
+                    header_critical: true,
+                    failure_kind: ScriptletFailureKind::ScriptExited,
+                }),
+                FailurePosture::AbortsTransaction,
+                "a header CRITICAL flag on class {slot:?} must promote to fatal"
+            );
+        }
+        // Package triggers: %triggerprein and %triggerun abort; %triggerin and
+        // %triggerpostun warn and continue.
+        for (action, expected) in [
+            (
+                PersistedRpmTriggerAction::PreInstall,
+                FailurePosture::AbortsTransaction,
+            ),
+            (
+                PersistedRpmTriggerAction::Uninstall,
+                FailurePosture::AbortsTransaction,
+            ),
+            (
+                PersistedRpmTriggerAction::Install,
+                FailurePosture::WarnAndContinue,
+            ),
+            (
+                PersistedRpmTriggerAction::PostUninstall,
+                FailurePosture::WarnAndContinue,
+            ),
+        ] {
+            let class = RpmLifecycleClass::Trigger {
+                kind: RpmTriggerKind::Package,
+                action,
+            };
+            assert_eq!(
+                FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
+                    source_format: SourceFormat::Rpm,
+                    rpm_class: Some(class),
+                    header_critical: false,
+                    failure_kind: ScriptletFailureKind::ScriptExited,
+                }),
+                expected,
+                "package {action:?} trigger diverges from the pinned table"
+            );
+        }
+        // File and transaction-file triggers: CRITICAL is cleared, so no header
+        // flag can promote them; they never fail their transaction element.
+        for kind in [RpmTriggerKind::File, RpmTriggerKind::TransactionFile] {
+            for action in [
+                PersistedRpmTriggerAction::PreInstall,
+                PersistedRpmTriggerAction::Install,
+                PersistedRpmTriggerAction::Uninstall,
+                PersistedRpmTriggerAction::PostUninstall,
+            ] {
+                let class = RpmLifecycleClass::Trigger { kind, action };
+                for header_critical in [false, true] {
+                    assert_eq!(
+                        FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
+                            source_format: SourceFormat::Rpm,
+                            rpm_class: Some(class),
+                            header_critical,
+                            failure_kind: ScriptletFailureKind::ScriptExited,
+                        }),
+                        FailurePosture::WarnAndContinue,
+                        "a {kind:?} {action:?} trigger must never fail its transaction element"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn warn_and_continue_covers_only_source_program_results() {
         for failure_kind in [
@@ -416,7 +581,7 @@ mod tests {
         ] {
             assert_eq!(
                 FailurePosture::for_lifecycle_failure(rpm_class(
-                    RpmCriticality::WarningOnly,
+                    RpmLifecycleClass::PackageSlot(RpmScriptletSlot::Post),
                     failure_kind
                 )),
                 FailurePosture::WarnAndContinue
@@ -430,7 +595,7 @@ mod tests {
         ] {
             assert_eq!(
                 FailurePosture::for_lifecycle_failure(rpm_class(
-                    RpmCriticality::WarningOnly,
+                    RpmLifecycleClass::PackageSlot(RpmScriptletSlot::Post),
                     failure_kind
                 )),
                 FailurePosture::AbortsTransaction,
@@ -445,7 +610,8 @@ mod tests {
             assert_eq!(
                 FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
                     source_format,
-                    rpm_criticality: None,
+                    rpm_class: None,
+                    header_critical: false,
                     failure_kind: ScriptletFailureKind::ScriptExited,
                 }),
                 FailurePosture::AbortsTransaction
@@ -454,7 +620,8 @@ mod tests {
         assert_eq!(
             FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
                 source_format: SourceFormat::Rpm,
-                rpm_criticality: None,
+                rpm_class: None,
+                header_critical: false,
                 failure_kind: ScriptletFailureKind::ScriptExited,
             }),
             FailurePosture::AbortsTransaction
