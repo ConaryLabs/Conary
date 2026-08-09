@@ -84,8 +84,7 @@ pub use trust::{
 };
 
 pub use chunk_fetcher::{
-    ChunkData, ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher, HttpChunkFetcher,
-    LocalCacheFetcher,
+    ChunkData, ChunkFetcher, CompositeChunkFetcher, HttpChunkFetcher, LocalCacheFetcher,
 };
 
 #[cfg(test)]
