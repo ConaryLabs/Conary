@@ -5,7 +5,7 @@ use rmcp::{ErrorData as McpError, model::*};
 
 pub fn contract_tool_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let text = crate::contract_json_text(value)?;
-    Ok(CallToolResult::success(vec![Content::text(text)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
 #[cfg(test)]

@@ -135,9 +135,17 @@ pub(crate) mod test_helpers {
         std::fs::create_dir_all(&config.chunk_dir).unwrap();
         std::fs::create_dir_all(&config.cache_dir).unwrap();
 
-        let state = Arc::new(RwLock::new(
-            crate::server::ServerState::new(config).expect("test server state"),
-        ));
+        let mut server_state = crate::server::ServerState::new(config).expect("test server state");
+        // ServerState::with_options points test_db_path at the production
+        // /conary/test-data.db; every fixture-backed handler must stay inside
+        // the tempdir.
+        server_state.test_db_path = Some(
+            tmp.path()
+                .join("test-data.db")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let state = Arc::new(RwLock::new(server_state));
 
         // Build the external admin router (includes auth middleware)
         let app = crate::server::routes::create_external_admin_router(state, None);
@@ -169,9 +177,16 @@ pub(crate) mod test_helpers {
             release_publish: test_release_publish(db_path.parent().unwrap()),
             ..Default::default()
         };
-        let state = Arc::new(tokio::sync::RwLock::new(
-            crate::server::ServerState::new(config).expect("test server state"),
-        ));
+        let mut server_state = crate::server::ServerState::new(config).expect("test server state");
+        server_state.test_db_path = Some(
+            db_path
+                .parent()
+                .unwrap()
+                .join("test-data.db")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let state = Arc::new(tokio::sync::RwLock::new(server_state));
         crate::server::routes::create_external_admin_router(state, None)
     }
 

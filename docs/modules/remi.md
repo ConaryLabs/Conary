@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-08
-revision: 18
+revision: 19
 summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -442,3 +442,25 @@ MCP tool `chunk_gc` is the agent surface, and `POST /v1/admin/chunk-gc` on the
 external admin router is the operator surface; both require the `admin` scope.
 Deletion requires an explicit `dry_run: false`, so an omitted body, an omitted
 field, or an absent MCP parameter previews the run instead of deleting.
+
+## MCP
+
+The external admin `/mcp` endpoint is a modern-only, stateless Streamable HTTP
+surface using rmcp 3.1.2 and protocol revision `2026-07-28`. Every POST carries
+the protocol version and client metadata in `_meta`; Remi does not negotiate an
+`initialize` session, issue `Mcp-Session-Id`, retain session state, or serve the
+MCP GET and DELETE operations. The per-request handler shares Remi's state
+through the existing `Arc<RwLock<ServerState>>`, and every request remains
+behind the admin Bearer-token middleware.
+
+Origin validation permits `http://localhost` and `http://127.0.0.1`, including
+the default internal `8081` and external `8082` admin-port variants. The
+allowlist is fixed at these defaults; an operator who moves the admin ports in
+`remi.toml` must extend it in `create_mcp_router` (browser origins on other
+ports are rejected; CLI and curl clients send no `Origin` and are
+unaffected). A
+missing `Origin` is accepted for CLI and curl clients. Host validation keeps
+rmcp's default loopback allowlist; public hostnames are intentionally not added
+without a separately reviewed exposure decision. Changes to this MCP contract
+must update this module's frontmatter `revision` and its router-level protocol
+tests together.
