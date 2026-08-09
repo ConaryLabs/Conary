@@ -547,7 +547,12 @@ fn assert_conversion_preserves_native_entries(
                     entry.id
                 )
             });
-        assert_eq!(bundle_entry.native_slot, entry.native_slot);
+        assert_eq!(
+            bundle_entry.native_slot,
+            conary_core::packages::native_abi::RpmScriptletSlot::from_tag(&entry.native_slot),
+            "bundle slot must be the typed projection of parser tag {}",
+            entry.native_slot
+        );
         assert_eq!(bundle_entry.body_sha256, entry.body.sha256);
         assert_eq!(
             bundle_entry.kind,

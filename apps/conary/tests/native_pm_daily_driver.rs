@@ -164,7 +164,7 @@ fn missing_interpreter_remove_bundle(package: &str, version: &str) -> NativeLife
     let body = "exit 0\n".to_string();
     let entry = NativeLifecycleEntry {
         id: "rpm:%preun".to_string(),
-        native_slot: "%preun".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PreUn),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreRemove,
         lifecycle_paths: vec![LifecyclePath::PreRemove.as_str().to_string()],
@@ -187,7 +187,6 @@ fn missing_interpreter_remove_bundle(package: &str, version: &str) -> NativeLife
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::External,
             body_transforms: Vec::new(),
-            critical: true,
             criticality: RpmCriticality::SlotDefault,
             raw_flags: 0,
             unknown_flags: 0,

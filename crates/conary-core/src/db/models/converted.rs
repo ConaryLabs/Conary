@@ -17,9 +17,12 @@ use strum_macros::{AsRefStr, Display, EnumString};
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// Revision 15 drops the duplicated path from every path-owning capability
-/// provenance, so a converted artifact states each owned path exactly once.
-pub const CONVERSION_VERSION: i32 = 15;
+/// Revision 16 cuts the persisted CCS scriptlet contract: the redundant
+/// `RpmRuntimeMetadata.critical` boolean leaves the contract entirely
+/// (`deny_unknown_fields` rejects old manifests naming it), and
+/// `NativeLifecycleEntry.native_slot` persists the typed `RpmScriptletSlot`
+/// class with exact wire strings instead of a free string.
+pub const CONVERSION_VERSION: i32 = 16;
 /// Canonical digest of an empty repository-provide projection.
 pub const EMPTY_REPOSITORY_PROVIDES_DIGEST: &str =
     "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";

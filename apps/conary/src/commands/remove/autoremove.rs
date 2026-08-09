@@ -490,7 +490,7 @@ marker:close()
 "#;
         NativeLifecycleEntry {
             id: "rpm:%postun".to_string(),
-            native_slot: "%postun".to_string(),
+            native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PostUn),
             kind: NativeLifecycleEntryKind::Executable,
             phase: LifecyclePath::PostRemove,
             lifecycle_paths: vec!["remove:post".to_string()],
@@ -521,7 +521,6 @@ marker:close()
             rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
                 program: conary_core::ccs::native_lifecycle::RpmProgram::EmbeddedLua,
                 body_transforms: Vec::new(),
-                critical: false,
                 criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,
                 raw_flags: 0,
                 unknown_flags: 0,

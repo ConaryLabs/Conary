@@ -10,6 +10,7 @@ use crate::ccs::native_lifecycle::{
     RpmTriggerKind, RpmTriggerMetadata, RpmTriggerTargetConstraint, ScriptletFidelity,
     SourceFormat, TransactionOrder, VersionScheme,
 };
+use crate::packages::native_abi::RpmScriptletSlot;
 use std::collections::BTreeSet;
 
 #[path = "tests/arch_deconfiguration.rs"]
@@ -27,7 +28,6 @@ fn bundle(format: SourceFormat, entries: Vec<NativeLifecycleEntry>) -> NativeLif
             entry.rpm_runtime.get_or_insert_with(|| RpmRuntimeMetadata {
                 program: RpmProgram::External,
                 body_transforms: Vec::new(),
-                critical: true,
                 criticality: RpmCriticality::SlotDefault,
                 raw_flags: 0,
                 unknown_flags: 0,
@@ -36,6 +36,12 @@ fn bundle(format: SourceFormat, entries: Vec<NativeLifecycleEntry>) -> NativeLif
                 header_context: Default::default(),
                 package_rpm_version: None,
             });
+            // Keep the stamp consistent with the entry's typed class
+            // authority, exactly as conversion would stamp it.
+            let entry_class = entry.rpm_class();
+            if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+                runtime.criticality = class.effective_criticality(false);
+            }
         }
     }
     NativeLifecycleBundle {
@@ -63,7 +69,7 @@ fn entry(id: &str) -> NativeLifecycleEntry {
     let body = "exit 0\n".to_string();
     NativeLifecycleEntry {
         id: id.to_string(),
-        native_slot: id.to_string(),
+        native_slot: slot_from_id(id),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::Trigger,
         lifecycle_paths: vec!["trigger".to_string()],
@@ -97,6 +103,14 @@ fn lifecycle_entry(id: &str, phase: LifecyclePath) -> NativeLifecycleEntry {
     entry.phase = phase;
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry
+}
+
+/// The typed slot class of a fixture entry id: `rpm:%post` and the bare
+/// `rpm:transfiletriggerin` form both project onto their class; non-RPM ids
+/// carry no persisted slot.
+fn slot_from_id(id: &str) -> Option<RpmScriptletSlot> {
+    let suffix = id.strip_prefix("rpm:")?;
+    RpmScriptletSlot::from_tag(suffix).or_else(|| RpmScriptletSlot::from_tag(&format!("%{suffix}")))
 }
 
 fn deb_entry(

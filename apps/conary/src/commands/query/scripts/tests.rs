@@ -43,9 +43,11 @@ mod query_scripts {
     }
 
     fn entry_fixture(id: &str, body: &str) -> NativeLifecycleEntry {
-        NativeLifecycleEntry {
+        let mut entry = NativeLifecycleEntry {
             id: id.to_string(),
-            native_slot: id.split(':').nth(1).unwrap_or("%post").to_string(),
+            native_slot: conary_core::packages::native_abi::RpmScriptletSlot::from_tag(
+                id.split(':').nth(1).unwrap_or("%post"),
+            ),
             kind: NativeLifecycleEntryKind::Executable,
             phase: if id.ends_with("%preun") {
                 LifecyclePath::PreRemove
@@ -81,7 +83,6 @@ mod query_scripts {
             rpm_runtime: Some(conary_core::ccs::native_lifecycle::RpmRuntimeMetadata {
                 program: conary_core::ccs::native_lifecycle::RpmProgram::External,
                 body_transforms: Vec::new(),
-                critical: false,
                 criticality: conary_core::ccs::native_lifecycle::RpmCriticality::WarningOnly,
                 raw_flags: 0,
                 unknown_flags: 0,
@@ -95,7 +96,13 @@ mod query_scripts {
             arch_install: None,
             arch_hook: None,
             residual_lifecycle: None,
+        };
+        // Keep the persisted stamp consistent with the typed class authority.
+        let entry_class = entry.rpm_class();
+        if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+            runtime.criticality = class.effective_criticality(false);
         }
+        entry
     }
 
     fn package_identity() -> PackageQueryIdentity {

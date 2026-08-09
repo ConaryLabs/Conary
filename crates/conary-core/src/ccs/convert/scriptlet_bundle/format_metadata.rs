@@ -114,7 +114,6 @@ fn project_rpm_metadata(
         .into_iter()
         .flatten()
         .collect(),
-        critical: metadata.runtime.flags.criticality.is_critical(),
         criticality: metadata.runtime.flags.criticality.persisted(),
         raw_flags: metadata.runtime.flags.raw_bits,
         unknown_flags: metadata.runtime.flags.unknown_bits,

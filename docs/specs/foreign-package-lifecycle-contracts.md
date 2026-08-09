@@ -288,7 +288,7 @@ validation prove the replacement complete for every control-flow path. That is
 a new schema contract, not a partial suppression marker or a mixture of guessed
 diagnostics and partial source-program execution.
 
-Current native lifecycle schema revision 19 has no replacement marker,
+Current native lifecycle schema revision 20 has no replacement marker,
 arbitrary extension map, reason code, effect projection, unknown-command
 evidence, diagnostic-class list/count, adapter-registry digest, publication
 policy, or parallel security-policy intent. Every source entry carries an exact
@@ -300,9 +300,17 @@ artifact and requires an exact one-to-one match. Entry presence is the exact
 lifecycle authority; there is no single-value decision tag or duplicated
 preserved-entry counter. Only actual executed argv captured at the provider
 process boundary can become selected-root or generation mutation authority.
-Revision 18 accepts neither earlier nor unknown revisions: pre-alpha artifacts
-and installed rows must be reconverted, rebuilt, or discarded instead of
-migrated. Every executable source entry remains preserved; adding a lowering
+Revision 20 cuts the persisted scriptlet contract: `RpmRuntimeMetadata`
+carries no `critical` boolean (its effective `criticality` projection is the
+only stamp, and `deny_unknown_fields` rejects a manifest that still names the
+deleted field), and `native_slot` is the typed `RpmScriptletSlot` class with
+exact RPM scriptlet tag strings instead of a free string. Formats without a
+declared class table persist no slot: their class authority lives in their
+typed format metadata, and every RPM entry persists its typed class so the
+install runtime is told the class it needs.
+Revision 19 and earlier accept neither earlier nor unknown revisions: pre-alpha
+artifacts and installed rows must be reconverted, rebuilt, or discarded instead
+of migrated. Every executable source entry remains preserved; adding a lowering
 requires a later typed schema contract with its own execution proof.
 
 Revision 18 also names the exact package-origin authority `source_profile`.
@@ -973,8 +981,13 @@ the entry's name, body, or apparent importance.
 The table below is the declared authority. `conary-core`'s
 `scriptlet::failure_policy` module is its single implementation: conversion
 consults it to stamp each entry's effective criticality, and the install runtime
-consults it to decide whether a failed entry aborts its transaction. Neither
-side matches a scriptlet name at decision time.
+consults it to decide whether a failed entry aborts its transaction. The
+runtime is told the entry's typed class by the persisted contract (`native_slot`
+carries the typed `RpmScriptletSlot`, and a trigger entry carries its exact
+family and action) plus the persisted raw header flag word; it re-derives the
+posture through the current table at failure time, so a posture correction
+applies to already-converted artifacts without reconversion. Neither side
+matches a scriptlet name at decision time.
 
 #### RPM Scriptlet Failure Posture
 

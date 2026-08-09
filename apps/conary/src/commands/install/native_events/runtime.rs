@@ -4,7 +4,7 @@
 
 use super::{NativeBundleOwner, debian_runtime};
 use anyhow::{Context, Result};
-use conary_core::ccs::native_lifecycle::NativeLifecycleEntry;
+use conary_core::ccs::native_lifecycle::{NativeLifecycleEntry, RPM_SCRIPTLET_FLAG_CRITICAL};
 use conary_core::scriptlet::{
     ExecutionMode, FailurePosture, LifecycleFailureClass, NativeInterpreterAvailability,
     NativeInvocationRuntime, NativeLifecycleExecution, ScriptletExecutor, ScriptletFailureOutcome,
@@ -79,11 +79,18 @@ pub(super) fn execute_entry(
             .map_err(anyhow::Error::from);
     };
     // The source format's own per-scriptlet-class table decides this, never the
-    // entry's name. See docs/specs/foreign-package-lifecycle-contracts.md,
-    // "RPM Scriptlet Failure Posture".
+    // entry's name. The runtime is told the typed class by the persisted
+    // contract and consults the current table through it, so posture
+    // corrections apply to already-converted artifacts without reconversion.
+    // See docs/specs/foreign-package-lifecycle-contracts.md, "RPM Scriptlet
+    // Failure Posture".
     let posture = FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
         source_format: owner.bundle.source_format,
-        rpm_criticality: entry.rpm_runtime.as_ref().map(|rpm| rpm.criticality),
+        rpm_class: entry.rpm_class(),
+        header_critical: entry
+            .rpm_runtime
+            .as_ref()
+            .is_some_and(|rpm| rpm.raw_flags & RPM_SCRIPTLET_FLAG_CRITICAL != 0),
         failure_kind: failure.failure_kind,
     });
     match posture {

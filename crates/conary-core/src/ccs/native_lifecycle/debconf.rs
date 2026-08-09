@@ -6,9 +6,7 @@ use super::{
     LifecyclePath, NativeLifecycleBundle, NativeLifecycleEntry, NativeLifecycleEntryKind,
     SourceFormat,
 };
-use crate::packages::native_abi::{
-    DEBCONF_TEMPLATES_ENTRY_ID, DEBCONF_TEMPLATES_NATIVE_SLOT, DebconfTemplateRecord,
-};
+use crate::packages::native_abi::{DEBCONF_TEMPLATES_ENTRY_ID, DebconfTemplateRecord};
 use anyhow::{Result, bail};
 
 /// Exact package association and byte-preserving authority for a Debian
@@ -76,14 +74,19 @@ impl NativeLifecycleBundle {
 }
 
 pub(super) fn is_debconf_templates_candidate(entry: &NativeLifecycleEntry) -> bool {
-    entry.id == DEBCONF_TEMPLATES_ENTRY_ID || entry.native_slot == DEBCONF_TEMPLATES_NATIVE_SLOT
+    entry.id == DEBCONF_TEMPLATES_ENTRY_ID
 }
 
 fn validate_debconf_templates_entry(entry: &NativeLifecycleEntry) -> Result<()> {
-    if entry.id != DEBCONF_TEMPLATES_ENTRY_ID || entry.native_slot != DEBCONF_TEMPLATES_NATIVE_SLOT
-    {
+    if entry.id != DEBCONF_TEMPLATES_ENTRY_ID {
         bail!(
             "entry '{}' is an ambiguous partial declaration of debconf templates authority",
+            entry.id
+        );
+    }
+    if entry.native_slot.is_some() {
+        bail!(
+            "entry '{}' debconf templates artifact carries an RPM slot class",
             entry.id
         );
     }
@@ -145,7 +148,7 @@ mod tests {
     fn entry() -> NativeLifecycleEntry {
         NativeLifecycleEntry {
             id: DEBCONF_TEMPLATES_ENTRY_ID.to_string(),
-            native_slot: DEBCONF_TEMPLATES_NATIVE_SLOT.to_string(),
+            native_slot: None,
             kind: NativeLifecycleEntryKind::ControlArtifact,
             phase: LifecyclePath::PackageControl,
             lifecycle_paths: vec!["package-control".to_string()],

@@ -279,7 +279,9 @@ mod tests {
     fn fixture_entry(id: &str, body: &str) -> NativeLifecycleEntry {
         NativeLifecycleEntry {
             id: id.to_string(),
-            native_slot: "%post".to_string(),
+            native_slot: crate::packages::native_abi::RpmScriptletSlot::from_tag(
+                id.strip_prefix("rpm:").expect("fixture id"),
+            ),
             kind: NativeLifecycleEntryKind::Executable,
             phase: LifecyclePath::PostInstall,
             lifecycle_paths: vec!["install:last".to_string()],
@@ -307,7 +309,6 @@ mod tests {
             rpm_runtime: Some(crate::ccs::native_lifecycle::RpmRuntimeMetadata {
                 program: crate::ccs::native_lifecycle::RpmProgram::External,
                 body_transforms: Vec::new(),
-                critical: false,
                 criticality: crate::ccs::native_lifecycle::RpmCriticality::WarningOnly,
                 raw_flags: 0,
                 unknown_flags: 0,

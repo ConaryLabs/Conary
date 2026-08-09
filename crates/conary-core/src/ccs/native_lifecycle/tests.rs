@@ -1,15 +1,18 @@
 // conary-core/src/ccs/native_lifecycle/tests.rs
 
 use super::*;
+use crate::packages::native_abi::RpmScriptletSlot;
+use crate::scriptlet::ScriptletFailureKind;
+use crate::scriptlet::{FailurePosture, LifecycleFailureClass};
 
 fn sha256_prefixed(body: &str) -> String {
     crate::hash::sha256_prefixed(body.as_bytes())
 }
 
 fn sample_entry(id: &str, body: &str) -> NativeLifecycleEntry {
-    NativeLifecycleEntry {
+    let mut entry = NativeLifecycleEntry {
         id: id.to_string(),
-        native_slot: "%post".to_string(),
+        native_slot: id.strip_prefix("rpm:").and_then(RpmScriptletSlot::from_tag),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PostInstall,
         lifecycle_paths: vec!["install:first".to_string()],
@@ -44,7 +47,6 @@ fn sample_entry(id: &str, body: &str) -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::External,
             body_transforms: Vec::new(),
-            critical: false,
             criticality: RpmCriticality::WarningOnly,
             raw_flags: 0,
             unknown_flags: 0,
@@ -58,7 +60,14 @@ fn sample_entry(id: &str, body: &str) -> NativeLifecycleEntry {
         arch_install: None,
         arch_hook: None,
         residual_lifecycle: None,
+    };
+    // Keep the persisted criticality stamp consistent with the typed class
+    // authority, exactly as conversion would stamp it.
+    let entry_class = entry.rpm_class();
+    if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+        runtime.criticality = class.effective_criticality(false);
     }
+    entry
 }
 
 fn sample_bundle() -> NativeLifecycleBundle {
@@ -154,6 +163,8 @@ fn native_lifecycle_bundle_round_trips_core_fields() {
 fn native_lifecycle_bundle_round_trips_reserved_metadata() {
     let mut bundle = sample_bundle();
     let entry = bundle.entries.first_mut().expect("fixture entry");
+    entry.id = "rpm:%filetriggerin:0".to_string();
+    entry.native_slot = Some(RpmScriptletSlot::Trigger);
     entry.rpm_trigger = Some(RpmTriggerMetadata {
         kind: RpmTriggerKind::File,
         target_constraints: vec![RpmTriggerTargetConstraint {
@@ -166,6 +177,10 @@ fn native_lifecycle_bundle_round_trips_reserved_metadata() {
         priority: Some(100),
         path_prefixes: vec!["/usr/lib/systemd/system".to_string()],
     });
+    let entry_class = entry.rpm_class();
+    if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+        runtime.criticality = class.effective_criticality(false);
+    }
     entry.residual_lifecycle = Some(ResidualLifecycleMetadata {
         superseded_effect_kinds: vec!["ldconfig".to_string()],
         wrapper_strategy: Some("source-and-suppress".to_string()),
@@ -500,4 +515,267 @@ fn native_lifecycle_entry_body_bytes_rejects_unknown_encoding() {
     let error = entry.body_bytes().expect_err("unknown encoding must fail");
 
     assert!(error.to_string().contains("body_encoding"));
+}
+
+/// Cut 1 conformance: the redundant `critical` boolean left the persisted
+/// contract entirely. `deny_unknown_fields` means a manifest still carrying it
+/// is rejected, naming the unknown field.
+#[test]
+fn manifest_carrying_the_deleted_critical_bool_is_rejected_naming_the_field() {
+    let encoded = toml::to_string_pretty(&sample_bundle()).expect("serialize bundle");
+    let with_bool = encoded.replacen(
+        "program = \"external\"",
+        "program = \"external\"\ncritical = false",
+        1,
+    );
+
+    let error = toml::from_str::<NativeLifecycleBundle>(&with_bool)
+        .expect_err("the deleted critical bool must fail deserialization");
+    assert!(
+        error.to_string().contains("unknown field `critical`"),
+        "the rejection must name the deleted field, got: {error}"
+    );
+}
+
+/// Cut 2 conformance: the typed slot persists with exact wire strings. Every
+/// class round-trips through serialize/deserialize byte-identically and no
+/// free string survives.
+#[test]
+fn typed_slot_round_trips_with_exact_wire_strings() {
+    for slot in [
+        RpmScriptletSlot::Pre,
+        RpmScriptletSlot::Post,
+        RpmScriptletSlot::PreUn,
+        RpmScriptletSlot::PostUn,
+        RpmScriptletSlot::PreTrans,
+        RpmScriptletSlot::PostTrans,
+        RpmScriptletSlot::PreUnTrans,
+        RpmScriptletSlot::PostUnTrans,
+        RpmScriptletSlot::Verify,
+        RpmScriptletSlot::Trigger,
+        RpmScriptletSlot::Sysusers,
+    ] {
+        let mut entry = sample_entry("rpm:%post", "exit 0\n");
+        entry.native_slot = Some(slot);
+
+        let encoded = toml::to_string_pretty(&entry).expect("serialize entry");
+        assert!(
+            encoded.contains(&format!("native_slot = \"{}\"", slot.as_str())),
+            "slot {slot:?} must persist as the exact string '{}', got:\n{encoded}",
+            slot.as_str()
+        );
+
+        let decoded: NativeLifecycleEntry = toml::from_str(&encoded).expect("deserialize entry");
+        assert_eq!(
+            decoded.native_slot,
+            Some(slot),
+            "slot {slot:?} must round-trip through the persisted contract"
+        );
+    }
+}
+
+/// Cut 2 conformance: unknown slot values and the retired per-trigger tag
+/// strings are rejected by the closed persisted enum; only the exact class
+/// strings parse.
+#[test]
+fn unknown_or_retired_slot_values_are_rejected() {
+    let encoded = toml::to_string_pretty(&sample_bundle()).expect("serialize bundle");
+
+    for unknown in ["%posst", "%triggerprein", "post", "rpm:%post"] {
+        let with_unknown = encoded.replacen(
+            "native_slot = \"%post\"",
+            &format!("native_slot = \"{unknown}\""),
+            1,
+        );
+        let error = toml::from_str::<NativeLifecycleBundle>(&with_unknown)
+            .expect_err("unknown slot values must fail deserialization");
+        assert!(
+            error.to_string().contains("unknown variant"),
+            "slot value {unknown:?} must be rejected as an unknown variant, got: {error}"
+        );
+    }
+}
+
+/// Every RPM trigger tag the parser can produce projects onto the Trigger
+/// class; the class persists as its canonical tag.
+#[test]
+fn every_parser_trigger_tag_projects_onto_the_trigger_class() {
+    for tag in [
+        "%triggerprein",
+        "%triggerin",
+        "%triggerun",
+        "%triggerpostun",
+        "%filetriggerin",
+        "%filetriggerun",
+        "%filetriggerpostun",
+        "%transfiletriggerin",
+        "%transfiletriggerun",
+        "%transfiletriggerpostun",
+    ] {
+        assert_eq!(
+            RpmScriptletSlot::from_tag(tag),
+            Some(RpmScriptletSlot::Trigger),
+            "tag {tag} must project onto the Trigger class"
+        );
+    }
+    assert_eq!(RpmScriptletSlot::Trigger.as_str(), "%triggerin");
+}
+
+/// The criticality stamp is evidence: an installed-style load (shape
+/// validation) accepts a stamp that disagrees with the current posture-table
+/// derivation, and the runtime derives posture from the typed class and
+/// header flag word alone -- the stale stamp is ignored.
+#[test]
+fn installed_style_load_accepts_a_stale_criticality_stamp_and_runtime_ignores_it() {
+    let mut bundle = sample_bundle();
+    let entry = bundle
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == "rpm:%post")
+        .expect("fixture post entry");
+    let class = entry.rpm_class().expect("typed class");
+    // A %post without the header flag derives warning-only; stamp it with a
+    // value the current table would never produce for this class.
+    assert_eq!(
+        class.effective_criticality(false),
+        RpmCriticality::WarningOnly
+    );
+    let runtime = entry.rpm_runtime.as_mut().expect("rpm runtime");
+    runtime.criticality = RpmCriticality::Header;
+
+    bundle
+        .validate()
+        .expect("an installed-style load must accept the stale stamp as evidence");
+
+    let posture = FailurePosture::for_lifecycle_failure(LifecycleFailureClass {
+        source_format: SourceFormat::Rpm,
+        rpm_class: Some(class),
+        header_critical: false,
+        failure_kind: ScriptletFailureKind::ScriptExited,
+    });
+    assert_eq!(
+        posture,
+        FailurePosture::WarnAndContinue,
+        "the runtime must derive posture from class + header flag, ignoring the stale stamp \
+         (the stamped Header value would abort the transaction)"
+    );
+}
+
+/// The converter/publication path additionally enforces stamp agreement: a
+/// criticality that disagrees with the typed class authority is rejected
+/// there, so nothing Conary produces can carry a stale or disagreeing stamp.
+#[test]
+fn criticality_stamp_must_agree_with_the_typed_class_on_the_conversion_path() {
+    let mut bundle = sample_bundle();
+    let entry = bundle.entries.first_mut().expect("fixture entry");
+    entry.rpm_runtime.as_mut().expect("rpm runtime").criticality = RpmCriticality::WarningOnly;
+
+    bundle
+        .validate()
+        .expect("shape validation treats the stamp as evidence only");
+
+    let error = bundle
+        .validate_as_conversion_output()
+        .expect_err("a criticality that disagrees with the class authority must fail conversion");
+    assert!(
+        error
+            .to_string()
+            .contains("disagrees with its typed class authority"),
+        "unexpected error: {error}"
+    );
+}
+
+/// RPM declares one action per trigger scriptlet entry. Validation must reject
+/// a persisted entry whose target constraints mix actions, naming the entry
+/// and both actions -- otherwise the class projection (which reads the first
+/// constraint) would be constraint-order-dependent and a publisher could
+/// smuggle one posture past validation with one ordering and get a different
+/// posture with the other.
+#[test]
+fn mixed_action_trigger_constraints_are_rejected_naming_both_actions() {
+    let constraint = |action| RpmTriggerTargetConstraint {
+        package: "owner-package".to_string(),
+        action,
+        operator: None,
+        version: None,
+        raw_flags: 0,
+    };
+    // The same constraint set in both orders must fail identically; with the
+    // rejection removed, one order would derive a warning class and the other
+    // a fatal class from the same persisted entry.
+    for constraints in [
+        vec![
+            constraint(RpmTriggerAction::Install),
+            constraint(RpmTriggerAction::PreInstall),
+        ],
+        vec![
+            constraint(RpmTriggerAction::PreInstall),
+            constraint(RpmTriggerAction::Install),
+        ],
+    ] {
+        let mut bundle = sample_bundle();
+        let entry = bundle.entries.first_mut().expect("fixture entry");
+        entry.id = "rpm:%triggerin:0".to_string();
+        entry.native_slot = Some(RpmScriptletSlot::Trigger);
+        entry.rpm_trigger = Some(RpmTriggerMetadata {
+            kind: RpmTriggerKind::Package,
+            target_constraints: constraints,
+            priority: None,
+            path_prefixes: Vec::new(),
+        });
+
+        let error = bundle
+            .validate()
+            .expect_err("mixed trigger actions must be rejected at validation");
+        let message = error.to_string();
+        assert!(message.contains("rpm:%triggerin:0"), "{message}");
+        assert!(message.contains("'install'"), "{message}");
+        assert!(message.contains("'pre-install'"), "{message}");
+    }
+}
+
+/// A trigger entry whose target constraints carry one uniform action
+/// validates, and the class projection is the same in either constraint
+/// order -- the class is never order-dependent for uniform sets.
+#[test]
+fn uniform_action_trigger_constraints_validate_in_any_order() {
+    let constraint = |package: &str, action| RpmTriggerTargetConstraint {
+        package: package.to_string(),
+        action,
+        operator: None,
+        version: None,
+        raw_flags: 0,
+    };
+    // The same two-constraint set in both orders: one action, two targets.
+    let order_flips = [
+        vec![
+            constraint("owner-a", RpmTriggerAction::Install),
+            constraint("owner-b", RpmTriggerAction::Install),
+        ],
+        vec![
+            constraint("owner-b", RpmTriggerAction::Install),
+            constraint("owner-a", RpmTriggerAction::Install),
+        ],
+    ];
+    for constraints in order_flips {
+        let mut bundle = sample_bundle();
+        let entry = bundle.entries.first_mut().expect("fixture entry");
+        entry.id = "rpm:%triggerin:0".to_string();
+        entry.native_slot = Some(RpmScriptletSlot::Trigger);
+        entry.rpm_trigger = Some(RpmTriggerMetadata {
+            kind: RpmTriggerKind::Package,
+            target_constraints: constraints,
+            priority: None,
+            path_prefixes: Vec::new(),
+        });
+
+        bundle.validate().expect("uniform actions validate");
+        assert_eq!(
+            bundle.entries[0].rpm_class(),
+            Some(RpmLifecycleClass::Trigger {
+                kind: RpmTriggerKind::Package,
+                action: RpmTriggerAction::Install,
+            })
+        );
+    }
 }
