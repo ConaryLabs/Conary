@@ -5,7 +5,38 @@
 use super::*;
 use std::collections::HashSet;
 
+/// The exact relation facts of one batch, in transaction-element order.
+///
+/// Relation planning is asked two different questions -- which installed
+/// packages leave (before ordering, by [`super::witness_universe`]) and where
+/// each removal is sequenced (here, after ordering) -- and both must present
+/// the batch the same way.
+pub(super) fn incoming_relation_facts(
+    packages: &[PreparedPackage],
+) -> Vec<conary_core::transaction::IncomingPackageRelations<'_>> {
+    packages
+        .iter()
+        .map(
+            |package| conary_core::transaction::IncomingPackageRelations {
+                name: &package.name,
+                version: &package.version,
+                architecture: package.architecture.as_deref(),
+                version_scheme: package.semantics.version_scheme,
+                provides: &package.provides,
+                relations: &package.relations,
+            },
+        )
+        .collect()
+}
+
 impl BatchInstaller<'_> {
+    /// Plan the negative-relation effects of the ordered batch.
+    ///
+    /// This runs after ordering because the transaction index each removal
+    /// carries is its sequencing point: the removal runs immediately before that
+    /// incoming element, and a package that conflicts with the removed one must
+    /// never be unpacked before it. Only the ordered batch knows which of
+    /// several triggering elements comes first.
     pub(super) fn plan_package_relations_for_batch(
         &self,
         conn: &Connection,
@@ -18,19 +49,7 @@ impl BatchInstaller<'_> {
             .into_iter()
             .flatten()
             .collect::<HashSet<_>>();
-        let incoming = packages
-            .iter()
-            .map(
-                |package| conary_core::transaction::IncomingPackageRelations {
-                    name: &package.name,
-                    version: &package.version,
-                    architecture: package.architecture.as_deref(),
-                    version_scheme: package.semantics.version_scheme,
-                    provides: &package.provides,
-                    relations: &package.relations,
-                },
-            )
-            .collect::<Vec<_>>();
+        let incoming = incoming_relation_facts(packages);
         let plan = conary_core::transaction::plan_package_relation_batch_facts(conn, &incoming)?;
 
         if let Some(removal) = plan

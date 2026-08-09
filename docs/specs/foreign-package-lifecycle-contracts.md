@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-08
-revision: 41
+revision: 42
 summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -762,6 +762,50 @@ native-upgrade rollback schema or mutate a host root and compensate afterward.
 Once SQLite commits, the exact selected-root candidate and typed publication
 debt are the retry authority. Config auxiliary ownership remains defined by the
 documented suffix grammar and the forward `GenerationConfigTransaction`.
+
+### Ordering Witness Universe
+
+A transaction certifies its dependency edges against a set of package
+identities. That set is the transaction's end state, not the installed database
+as it stands while planning runs. An identity the transaction itself deletes
+cannot witness an edge the transaction relies on: the capability is gone at
+commit, so the edge was certified against something that never coexists with
+the packages it was certified for.
+
+The admitted universe is `(installed - outgoing) + incoming`, where `outgoing`
+is every installed trove this transaction deletes:
+
+- the pre-upgrade trove each incoming package supersedes, whose ordinary
+  provides and promised paths the incoming version is free to drop; and
+- every installed trove an incoming negative relation removes.
+
+Outgoing identities are named by exact installed trove identity, never by
+package name: parallel-installed identities can share a name, and only the
+trove this transaction deletes is leaving. Withholding an outgoing identity
+never costs a correct transaction an edge. A capability the incoming version
+carries forward is admitted as an incoming identity instead, and the edge it
+certifies then also orders the provider before its dependent, which the stale
+installed identity had been silently excusing.
+
+Which installed packages leave is a property of the batch's composition and the
+installed state, so relation planning answers that question before the batch is
+ordered. Where each removal is sequenced is a different question with a
+different answer: a removal runs immediately before the earliest incoming
+element that triggers it, and "earliest" exists only once the transaction has an
+execution order, so relation planning answers that one against the ordered
+batch.
+
+Withholding an identity must never make a transaction quieter than admitting it
+would have been. Where the universe is computed, every `Depends`/`PreDepends`
+requirement of every incoming package is certified against it, and a requirement
+the end state cannot satisfy fails the transaction with one typed diagnostic --
+including a batch of one package, which has no edges to order but can still be
+the transaction that removes the sole provider of its own requirement. Nothing
+downstream would report that case: with no holder left there is no promised-path
+obligation to record, so the post-condition below would have nothing to re-ask.
+
+The promised-path post-condition plans and re-evaluates against this same
+universe.
 
 ### Promised-Path Post-Condition
 
