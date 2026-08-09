@@ -326,14 +326,14 @@ fn test_provides_index_cross_source() {
     )
     .unwrap();
 
-    let index = ProvidesIndex::build(&conn).unwrap();
+    let mut index = ProvidesIndex::build(&conn).unwrap();
 
     // Repo provide found
-    assert_eq!(index.find_providers("libssl.so.3").len(), 1);
+    assert_eq!(index.find_providers("libssl.so.3").unwrap().len(), 1);
     // AppStream provide found
-    assert_eq!(index.find_providers("libcrypto.so.3").len(), 1);
+    assert_eq!(index.find_providers("libcrypto.so.3").unwrap().len(), 1);
     // Unknown not found
-    assert!(index.find_providers("libfoo.so.1").is_empty());
+    assert!(index.find_providers("libfoo.so.1").unwrap().is_empty());
 }
 
 #[test]

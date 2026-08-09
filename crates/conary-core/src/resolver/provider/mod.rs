@@ -22,7 +22,7 @@ use crate::repository::dependency_model::ProvideVersionRelation;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use crate::repository::versioning::{VersionScheme, validate_repo_version};
 use crate::resolver::identity::PackageIdentity;
-use crate::resolver::provides_index::ProvidesIndex;
+use crate::resolver::provides_index::{ProviderEntry, ProvidesIndex};
 use resolvo::{
     Condition, ConditionalRequirement, DenseIndex, NameId, SolvableId, StringId, VersionSetId,
     VersionSetUnionId,
@@ -111,9 +111,10 @@ pub struct ConaryProvider<'db> {
     /// Pre-loaded as a HashMap for O(1) lookup in the hot path.
     canonical_equivalents: HashMap<String, Vec<String>>,
 
-    /// Pre-built capability-to-provider index (modeled after libsolv's whatprovides).
-    /// Built once at resolution start via `build_provides_index()`.
-    provides_index: Option<ProvidesIndex>,
+    /// Demand-driven capability-to-provider cache (modeled after libsolv's
+    /// whatprovides). Initialized empty at resolution start via
+    /// `build_provides_index()` and populated during pre-solve loading.
+    provides_index: Option<ProvidesIndex<'db>>,
 
     /// Source-selection policy that should influence SAT candidate ordering.
     policy: ResolutionPolicy,
@@ -500,86 +501,98 @@ impl<'db> ConaryProvider<'db> {
         Ok(())
     }
 
-    /// Build the `ProvidesIndex` from the database.
+    /// Initialize the demand-driven `ProvidesIndex` from the database.
     ///
     /// Should be called once after `load_installed_packages()` and before
-    /// resolution begins. The index enables O(1) capability-to-provider
-    /// lookups, replacing per-dep DB queries.
+    /// resolution begins. Capability rows are fetched only when the
+    /// transitive pre-solve loader names that capability; no provider table is
+    /// traversed here.
     pub fn build_provides_index(&mut self) -> Result<()> {
         self.provides_index = Some(ProvidesIndex::build(self.conn)?);
         Ok(())
     }
 
     fn find_repo_providers(
-        &self,
+        &mut self,
         capability: &str,
     ) -> Result<Vec<crate::repository::selector::PackageWithRepo>> {
         use crate::repository::selector::PackageWithRepo;
 
         let mut providers = Vec::<PackageWithRepo>::new();
-        let normalized = RepositoryProvide::find_by_capability(self.conn, capability)?;
-        for provide in normalized {
-            let pkg = find_repo_package_by_id(self.conn, provide.repository_package_id)?
-                .ok_or_else(|| {
+        let entries = if let Some(index) = self.provides_index.as_mut() {
+            index.find_providers(capability)?
+        } else {
+            // Keep direct provider construction useful for callers that do
+            // not opt into the install builder. The normal SAT path always
+            // initializes the demand-driven index above.
+            RepositoryProvide::find_by_capability(self.conn, capability)?
+                .into_iter()
+                .map(|provide| ProviderEntry {
+                    repo_package_id: Some(provide.repository_package_id),
+                    installed_trove_id: None,
+                    canonical_id: None,
+                    provide_version: provide.version,
+                    version_relation: provide.version_relation,
+                    version_scheme: Some(provide.version_scheme),
+                })
+                .collect()
+        };
+
+        for entry in entries {
+            if let Some(pkg_id) = entry.repo_package_id {
+                let pkg = find_repo_package_by_id(self.conn, pkg_id)?.ok_or_else(|| {
                     Error::ConfigError(format!(
-                        "repository provide '{}' references missing package row {}",
-                        provide.capability, provide.repository_package_id
+                        "repository provide '{capability}' references missing package row {pkg_id}"
                     ))
                 })?;
-            let repo = crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
-                .ok_or_else(|| {
-                    Error::ConfigError(format!(
-                        "repository package '{}' references missing repository row {}",
-                        pkg.name, pkg.repository_id
-                    ))
-                })?;
-            if !repo.enabled {
+                let repo = crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
+                    .ok_or_else(|| {
+                        Error::ConfigError(format!(
+                            "repository package '{}' references missing repository row {}",
+                            pkg.name, pkg.repository_id
+                        ))
+                    })?;
+                if repo.enabled {
+                    providers.push(PackageWithRepo {
+                        package: pkg,
+                        repository: repo,
+                    });
+                }
                 continue;
             }
-            providers.push(PackageWithRepo {
-                package: pkg,
-                repository: repo,
-            });
-        }
 
-        // Also check AppStream cross-distro provides via ProvidesIndex.
-        // These have canonical_id but no direct repo_package_id, so we
-        // resolve canonical_id -> repository_packages to get real packages.
-        if let Some(ref index) = self.provides_index {
-            for entry in index.find_providers(capability) {
-                if let Some(cid) = entry.canonical_id {
-                    let mut cid_stmt = self.conn.prepare(
-                        "SELECT rp.id FROM repository_packages rp
-                         JOIN repositories r ON rp.repository_id = r.id
-                         WHERE rp.canonical_id = ?1 AND r.enabled = 1",
-                    )?;
-                    let pkg_ids = cid_stmt
-                        .query_map([cid], |row| row.get(0))?
-                        .collect::<rusqlite::Result<Vec<i64>>>()?;
-                    for pkg_id in pkg_ids {
-                        let pkg = find_repo_package_by_id(self.conn, pkg_id)?.ok_or_else(|| {
-                            Error::ConfigError(format!(
-                                "AppStream provider for canonical package {cid} references missing package row {pkg_id}"
-                            ))
-                        })?;
-                        let repo = crate::db::models::Repository::find_by_id(
-                            self.conn,
-                            pkg.repository_id,
-                        )?
-                        .ok_or_else(|| {
-                            Error::ConfigError(format!(
-                                "repository package '{}' references missing repository row {}",
-                                pkg.name, pkg.repository_id
-                            ))
-                        })?;
-                        let already = providers.iter().any(|p| p.package.id == pkg.id);
-                        if !already && repo.enabled {
-                            providers.push(PackageWithRepo {
-                                package: pkg,
-                                repository: repo,
-                            });
-                        }
-                    }
+            // AppStream entries have canonical_id but no direct repo package
+            // ID. Resolve the canonical package to enabled repository rows.
+            let Some(cid) = entry.canonical_id else {
+                continue;
+            };
+            let mut cid_stmt = self.conn.prepare(
+                "SELECT rp.id FROM repository_packages rp
+                 JOIN repositories r ON rp.repository_id = r.id
+                 WHERE rp.canonical_id = ?1 AND r.enabled = 1",
+            )?;
+            let pkg_ids = cid_stmt
+                .query_map([cid], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<i64>>>()?;
+            for pkg_id in pkg_ids {
+                let pkg = find_repo_package_by_id(self.conn, pkg_id)?.ok_or_else(|| {
+                    Error::ConfigError(format!(
+                        "AppStream provider for canonical package {cid} references missing package row {pkg_id}"
+                    ))
+                })?;
+                let repo = crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
+                    .ok_or_else(|| {
+                        Error::ConfigError(format!(
+                            "repository package '{}' references missing repository row {}",
+                            pkg.name, pkg.repository_id
+                        ))
+                    })?;
+                let already = providers.iter().any(|p| p.package.id == pkg.id);
+                if !already && repo.enabled {
+                    providers.push(PackageWithRepo {
+                        package: pkg,
+                        repository: repo,
+                    });
                 }
             }
         }
