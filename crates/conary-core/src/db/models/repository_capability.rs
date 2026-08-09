@@ -14,6 +14,104 @@ use rusqlite::{Connection, Row, params};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
+/// Every statement this module issues against `repository_provides`.
+///
+/// The SQL lives in named constants so the query-plan proof in this module's
+/// tests reads the same text the production path executes. `repository_provides`
+/// is the largest table Conary persists (10.07M rows on Fedora 44
+/// `Everything/x86_64` with `filelists.xml`), so which index each statement can
+/// seek through is a contract, not an implementation detail.
+const INSERT_PROVIDE_SQL: &str = "INSERT INTO repository_provides
+             (repository_package_id, capability, version, kind, raw, version_scheme,
+              version_relation, architecture_qualifier_kind, architecture, provenance)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+
+const SELECT_BY_PACKAGE_SQL: &str =
+    "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
+                    version_scheme, architecture_qualifier_kind, architecture, provenance
+             FROM repository_provides
+             WHERE repository_package_id = ?1
+             ORDER BY capability, version";
+
+const SELECT_CONVERSION_INPUTS_SQL: &str =
+    "SELECT p.id, p.repository_package_id, p.capability, p.version,
+                    p.version_relation, p.kind, p.raw, p.version_scheme,
+                    p.architecture_qualifier_kind, p.architecture, p.provenance,
+                    rp.id, rp.checksum
+             FROM repository_packages rp
+             JOIN repositories r ON r.id = rp.repository_id
+             LEFT JOIN repository_provides p ON p.repository_package_id = rp.id
+             WHERE r.enabled = 1
+               AND r.source_profile = ?1
+               AND rp.name = ?2
+               AND rp.version = ?3
+               AND rp.architecture = ?4
+               AND rp.size > 0
+             ORDER BY rp.id, p.id";
+
+/// `{placeholders}` is replaced with the bound package-id list for one batch.
+const SELECT_BY_PACKAGES_TEMPLATE: &str =
+    "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
+                        version_scheme, architecture_qualifier_kind, architecture, provenance
+                 FROM repository_provides
+                 WHERE repository_package_id IN ({placeholders})";
+
+const SELECT_BY_CAPABILITY_SQL: &str =
+    "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
+                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1 AND rp.capability = ?1
+             ORDER BY rp.capability, rp.version";
+
+const SELECT_BY_CLI_EXACT_QUERY_SQL: &str =
+    "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
+                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1
+               AND (
+                 rp.raw = ?1
+                 OR (
+                   (rp.raw IS NULL OR rp.raw = '')
+                   AND (rp.kind IS NULL OR rp.kind = '' OR rp.kind = 'package')
+                   AND rp.capability = ?1
+                 )
+               )
+             ORDER BY rp.capability, rp.version";
+
+const SELECT_BY_CAPABILITY_WITH_NAME_SQL: &str =
+    "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
+                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance, pkg.name
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1 AND rp.capability = ?1
+             ORDER BY rp.capability, rp.version";
+
+const SELECT_BY_CAPABILITY_AND_KIND_SQL: &str =
+    "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
+                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
+                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
+             FROM repository_provides rp
+             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             JOIN repositories repo ON repo.id = pkg.repository_id
+             WHERE repo.enabled = 1 AND rp.capability = ?1 AND rp.kind = ?2
+             ORDER BY rp.capability, rp.version";
+
+const DELETE_BY_PACKAGE_SQL: &str =
+    "DELETE FROM repository_provides WHERE repository_package_id = ?1";
+
+const DELETE_BY_REPOSITORY_SQL: &str = "DELETE FROM repository_provides
+             WHERE repository_package_id IN (
+                 SELECT id FROM repository_packages WHERE repository_id = ?1
+             )";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryProvide {
     pub id: Option<i64>,
@@ -82,10 +180,7 @@ impl RepositoryProvide {
         let (qualifier_kind, architecture) =
             architecture_qualifier_to_db(&self.architecture_qualifier);
         conn.execute(
-            "INSERT INTO repository_provides
-             (repository_package_id, capability, version, kind, raw, version_scheme,
-              version_relation, architecture_qualifier_kind, architecture, provenance)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            INSERT_PROVIDE_SQL,
             params![
                 self.repository_package_id,
                 &self.capability,
@@ -109,12 +204,7 @@ impl RepositoryProvide {
             return Ok(0);
         }
 
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO repository_provides
-             (repository_package_id, capability, version, kind, raw, version_scheme,
-              version_relation, architecture_qualifier_kind, architecture, provenance)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )?;
+        let mut stmt = conn.prepare_cached(INSERT_PROVIDE_SQL)?;
 
         for provide in provides {
             let (qualifier_kind, architecture) =
@@ -140,13 +230,7 @@ impl RepositoryProvide {
         conn: &Connection,
         repository_package_id: i64,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
-                    version_scheme, architecture_qualifier_kind, architecture, provenance
-             FROM repository_provides
-             WHERE repository_package_id = ?1
-             ORDER BY capability, version",
-        )?;
+        let mut stmt = conn.prepare(SELECT_BY_PACKAGE_SQL)?;
         let rows = stmt
             .query_map([repository_package_id], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -174,22 +258,7 @@ impl RepositoryProvide {
         package_version: &str,
         package_architecture: &str,
     ) -> Result<Vec<(String, String)>> {
-        let mut stmt = conn.prepare(
-            "SELECT p.id, p.repository_package_id, p.capability, p.version,
-                    p.version_relation, p.kind, p.raw, p.version_scheme,
-                    p.architecture_qualifier_kind, p.architecture, p.provenance,
-                    rp.id, rp.checksum
-             FROM repository_packages rp
-             JOIN repositories r ON r.id = rp.repository_id
-             LEFT JOIN repository_provides p ON p.repository_package_id = rp.id
-             WHERE r.enabled = 1
-               AND r.source_profile = ?1
-               AND rp.name = ?2
-               AND rp.version = ?3
-               AND rp.architecture = ?4
-               AND rp.size > 0
-             ORDER BY rp.id, p.id",
-        )?;
+        let mut stmt = conn.prepare(SELECT_CONVERSION_INPUTS_SQL)?;
         let rows = stmt
             .query_map(
                 params![
@@ -316,12 +385,7 @@ impl RepositoryProvide {
                 .map(|index| format!("?{index}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let sql = format!(
-                "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
-                        version_scheme, architecture_qualifier_kind, architecture, provenance
-                 FROM repository_provides
-                 WHERE repository_package_id IN ({placeholders})"
-            );
+            let sql = SELECT_BY_PACKAGES_TEMPLATE.replace("{placeholders}", &placeholders);
             let mut stmt = conn.prepare(&sql)?;
             rows.extend(
                 stmt.query_map(
@@ -342,16 +406,7 @@ impl RepositoryProvide {
     }
 
     pub fn find_by_capability(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
-                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
-             JOIN repositories repo ON repo.id = pkg.repository_id
-             WHERE repo.enabled = 1 AND rp.capability = ?1
-             ORDER BY rp.capability, rp.version",
-        )?;
+        let mut stmt = conn.prepare(SELECT_BY_CAPABILITY_SQL)?;
         let rows = stmt
             .query_map([capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -361,24 +416,7 @@ impl RepositoryProvide {
     /// Find rows that exactly match a CLI query without interpreting normalized
     /// typed capability rows as untyped user input.
     pub fn find_by_cli_exact_query(conn: &Connection, capability: &str) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
-                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
-             JOIN repositories repo ON repo.id = pkg.repository_id
-             WHERE repo.enabled = 1
-               AND (
-                 rp.raw = ?1
-                 OR (
-                   (rp.raw IS NULL OR rp.raw = '')
-                   AND (rp.kind IS NULL OR rp.kind = '' OR rp.kind = 'package')
-                   AND rp.capability = ?1
-                 )
-               )
-             ORDER BY rp.capability, rp.version",
-        )?;
+        let mut stmt = conn.prepare(SELECT_BY_CLI_EXACT_QUERY_SQL)?;
         let rows = stmt
             .query_map([capability], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -395,16 +433,7 @@ impl RepositoryProvide {
         conn: &Connection,
         capability: &str,
     ) -> Result<Vec<(Self, String)>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
-                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance, pkg.name
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
-             JOIN repositories repo ON repo.id = pkg.repository_id
-             WHERE repo.enabled = 1 AND rp.capability = ?1
-             ORDER BY rp.capability, rp.version",
-        )?;
+        let mut stmt = conn.prepare(SELECT_BY_CAPABILITY_WITH_NAME_SQL)?;
         let rows = stmt
             .query_map([capability], |row| {
                 let provide = Self {
@@ -432,16 +461,7 @@ impl RepositoryProvide {
         capability: &str,
         kind: &str,
     ) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
-                    rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
-                    rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
-             JOIN repositories repo ON repo.id = pkg.repository_id
-             WHERE repo.enabled = 1 AND rp.capability = ?1 AND rp.kind = ?2
-             ORDER BY rp.capability, rp.version",
-        )?;
+        let mut stmt = conn.prepare(SELECT_BY_CAPABILITY_AND_KIND_SQL)?;
         let rows = stmt
             .query_map(params![capability, kind], Self::from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -450,22 +470,13 @@ impl RepositoryProvide {
 
     /// Delete all provides for a specific repository package.
     pub fn delete_by_package(conn: &Connection, repository_package_id: i64) -> Result<()> {
-        conn.execute(
-            "DELETE FROM repository_provides WHERE repository_package_id = ?1",
-            [repository_package_id],
-        )?;
+        conn.execute(DELETE_BY_PACKAGE_SQL, [repository_package_id])?;
         Ok(())
     }
 
     /// Delete all provides for packages belonging to a repository.
     pub fn delete_by_repository(conn: &Connection, repository_id: i64) -> Result<()> {
-        conn.execute(
-            "DELETE FROM repository_provides
-             WHERE repository_package_id IN (
-                 SELECT id FROM repository_packages WHERE repository_id = ?1
-             )",
-            [repository_id],
-        )?;
+        conn.execute(DELETE_BY_REPOSITORY_SQL, [repository_id])?;
         Ok(())
     }
 
@@ -606,6 +617,127 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    /// Every statement this module issues against `repository_provides`, with
+    /// the batch template resolved to a bound list. The query-plan proof below
+    /// reads this list, so a statement added without a plan is a test failure,
+    /// not an unnoticed table scan.
+    fn owned_statements() -> Vec<(&'static str, String)> {
+        vec![
+            ("insert", INSERT_PROVIDE_SQL.to_string()),
+            (
+                "find_by_repository_package",
+                SELECT_BY_PACKAGE_SQL.to_string(),
+            ),
+            (
+                "conversion_inputs_for_source_identity",
+                SELECT_CONVERSION_INPUTS_SQL.to_string(),
+            ),
+            (
+                "find_by_repository_packages",
+                SELECT_BY_PACKAGES_TEMPLATE.replace("{placeholders}", "?1, ?2"),
+            ),
+            ("find_by_capability", SELECT_BY_CAPABILITY_SQL.to_string()),
+            (
+                "find_by_cli_exact_query",
+                SELECT_BY_CLI_EXACT_QUERY_SQL.to_string(),
+            ),
+            (
+                "find_by_capability_with_name",
+                SELECT_BY_CAPABILITY_WITH_NAME_SQL.to_string(),
+            ),
+            (
+                "find_by_capability_and_kind",
+                SELECT_BY_CAPABILITY_AND_KIND_SQL.to_string(),
+            ),
+            ("delete_by_package", DELETE_BY_PACKAGE_SQL.to_string()),
+            ("delete_by_repository", DELETE_BY_REPOSITORY_SQL.to_string()),
+        ]
+    }
+
+    fn query_plan(conn: &Connection, sql: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap_or_else(|error| panic!("prepare plan for {sql}: {error}"));
+        for index in 1..=stmt.parameter_count() {
+            stmt.raw_bind_parameter(index, rusqlite::types::Null)
+                .unwrap();
+        }
+        let mut rows = stmt.raw_query();
+        let mut plan = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            plan.push(row.get::<_, String>(3).unwrap());
+        }
+        plan
+    }
+
+    /// `repository_provides` is the largest table Conary persists, so its index
+    /// inventory is a contract. A `(kind, capability)` composite cannot serve a
+    /// capability-only seek, which is what every provider lookup issues, so
+    /// exactly two indexes are carried: the package key and the capability key.
+    #[test]
+    fn repository_provides_carries_exactly_the_package_and_capability_indexes() {
+        let conn = test_db();
+
+        let mut indexes = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index' AND tbl_name = 'repository_provides'
+                 ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        indexes.sort();
+
+        assert_eq!(
+            indexes,
+            vec![
+                "idx_repository_provides_capability".to_string(),
+                "idx_repository_provides_pkg".to_string(),
+            ],
+            "an index on repository_provides costs ~0.8 GB at filelists scale; \
+             adding one needs its own query-plan proof"
+        );
+    }
+
+    /// The property, not the instance: no statement this module owns may reach
+    /// `repository_provides` by scanning it, and every statement that filters
+    /// `capability` must seek the capability index -- including the one that
+    /// also filters `kind`, which no longer has a composite to seek.
+    #[test]
+    fn every_owned_statement_reaches_repository_provides_through_an_index() {
+        let conn = test_db();
+
+        for (label, sql) in owned_statements() {
+            let plan = query_plan(&conn, &sql);
+            for step in &plan {
+                assert!(
+                    !(step.starts_with("SCAN") && step.contains("repository_provides")),
+                    "{label} scans repository_provides: {plan:?}"
+                );
+            }
+        }
+
+        for label in [
+            "find_by_capability",
+            "find_by_capability_with_name",
+            "find_by_capability_and_kind",
+        ] {
+            let (_, sql) = owned_statements()
+                .into_iter()
+                .find(|(name, _)| *name == label)
+                .expect("statement is inventoried");
+            let plan = query_plan(&conn, &sql);
+            assert!(
+                plan.iter().any(|step| step
+                    == "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)"),
+                "{label} must seek the capability index: {plan:?}"
+            );
+        }
     }
 
     #[test]

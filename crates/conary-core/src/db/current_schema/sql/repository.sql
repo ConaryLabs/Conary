@@ -437,10 +437,12 @@ CREATE TABLE repository_provides (
         );
 CREATE INDEX idx_repository_provides_pkg
             ON repository_provides(repository_package_id);
+-- Capability is the only column any provider lookup seeks on. A
+-- (kind, capability) composite cannot serve a capability-only seek, and the one
+-- statement that also filters kind seeks this index and filters the rows one
+-- capability holds, so the composite is not carried.
 CREATE INDEX idx_repository_provides_capability
             ON repository_provides(capability);
-CREATE INDEX idx_repository_provides_kind_capability
-            ON repository_provides(kind, capability);
 CREATE TABLE repository_requirement_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_package_id INTEGER NOT NULL,
