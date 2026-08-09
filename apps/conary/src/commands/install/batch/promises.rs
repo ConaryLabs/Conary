@@ -27,9 +27,8 @@
 //! materialize.
 
 use super::*;
-use conary_core::db::models::ProvideEntry;
 use conary_core::repository::dependency_model::{
-    CapabilityProvenance, ProvidedCapability, RepositoryRequirementGroup, RepositoryRequirementKind,
+    ProvidedCapability, RepositoryRequirementGroup, RepositoryRequirementKind,
 };
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::resolver::identity::PackageIdentity;
@@ -104,12 +103,6 @@ pub(super) struct PromiseWitnessPlan {
     obligations: Vec<PromiseObligation>,
 }
 
-impl PromiseWitnessPlan {
-    pub(super) fn empty() -> Self {
-        Self::default()
-    }
-}
-
 /// The hard requirements a transaction must be able to certify.
 ///
 /// Shared with [`super::ordering`] so the edge validator and the promise
@@ -130,60 +123,6 @@ fn requirement_text(requirement: &RepositoryRequirementGroup) -> &str {
         .native_text
         .as_deref()
         .unwrap_or("<typed expression>")
-}
-
-/// Every capability name this batch names in a `Depends`/`PreDepends` atom.
-///
-/// This bounds which promises are even considered. It is exact data off the
-/// batch's own requirement expressions and decides nothing on its own: naming a
-/// path is not relying on it, which is what [`plan_promise_witnesses`] settles.
-pub(super) fn batch_requirement_atom_names(packages: &[PreparedPackage]) -> BTreeSet<String> {
-    let mut atoms = BTreeSet::new();
-    for package in packages {
-        for requirement in dependency_requirements(package) {
-            for clause in requirement.expression.atoms() {
-                atoms.insert(clause.name.clone());
-            }
-        }
-    }
-    atoms
-}
-
-/// Whether any package -- incoming or installed -- promises one of `atoms`.
-///
-/// A batch of two or more packages already loads the installed identity
-/// universe for ordering, so this exists for the single-package batch, which
-/// otherwise has no reason to load it at all. The incoming side is answered in
-/// memory; each installed probe is an indexed point lookup on
-/// `provides.capability` and the first hit ends the scan.
-pub(super) fn batch_requirements_can_lean_on_a_promise(
-    conn: &Connection,
-    packages: &[PreparedPackage],
-    atoms: &BTreeSet<String>,
-) -> Result<bool> {
-    let incoming = packages.iter().any(|package| {
-        package
-            .provides
-            .iter()
-            .any(|capability| capability.is_promised_path() && atoms.contains(&capability.name))
-    });
-    if incoming {
-        return Ok(true);
-    }
-    for atom in atoms {
-        let promised = ProvideEntry::find_all_by_capability(conn, atom)?
-            .iter()
-            .any(|entry| {
-                matches!(
-                    entry.provenance,
-                    CapabilityProvenance::SourcePromisedPath { .. }
-                )
-            });
-        if promised {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Decide which requirements this transaction cannot satisfy without a promise.
@@ -225,9 +164,12 @@ pub(super) fn plan_promise_witnesses(
                 native_architecture,
                 &universe,
             )? {
-                // The ordering validator owns an unsatisfiable edge. Inventing a
-                // promise failure here would replace its diagnostic with a worse
-                // one.
+                // Requirement certification owns an unsatisfiable edge for
+                // every batch size: the ordered path certifies each
+                // requirement against the whole batch, and the single-package
+                // path certifies it against the same end state, both through
+                // the one typed diagnostic. Inventing a promise failure here
+                // would replace that diagnostic with a worse one.
                 continue;
             }
 

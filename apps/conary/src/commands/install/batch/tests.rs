@@ -644,7 +644,23 @@ fn no_current_generation_batch_materializes_db_state_and_publishes_selected_root
     let db_path = temp.path().join("conary.db");
     std::fs::create_dir_all(&root).unwrap();
     conary_core::db::init(&db_path).unwrap();
-    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let seeded_trove = crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+
+    // The fixture requirement must be satisfiable: since #345, a single-package
+    // batch's requirements are certified against the end state like every other
+    // batch's, so the seeded runtime has to provide what the fixture depends
+    // on. The materialization assertions below are about batch state, not
+    // about requirement semantics, so the provider is seeded directly.
+    let conn = conary_core::db::open(&db_path).unwrap();
+    conary_core::db::models::ProvideEntry::new(
+        seeded_trove,
+        "libfixture".to_string(),
+        Some("2.0.0".to_string()),
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let mut package =
@@ -1057,6 +1073,85 @@ fn payload_file_provider_satisfies_an_exact_path_requirement_and_orders_provider
             .map(|package| package.name.as_str())
             .collect::<Vec<_>>(),
         vec!["bash", "systemd-udev"]
+    );
+}
+
+#[test]
+fn a_single_package_rejects_an_unsatisfiable_requirement_with_the_ordered_batches_diagnostic() {
+    let (_temp, conn) = empty_test_db();
+    let unsatisfiable = || {
+        let mut package = prepared_test_package("needy", "/usr/bin/needy", b"needy");
+        package.requirements = vec![depends_on("/usr/bin/never-provided")];
+        package
+    };
+
+    // The ordered path already fails this batch, naming the dependent and the
+    // exact requirement. A lone package must fail with the identical typed
+    // diagnostic: one owner for every batch size, so the two paths cannot
+    // drift. The solver never ran here -- the batch is prepared directly and
+    // handed to transaction validation, which is the only authority between
+    // the packages and the commit.
+    let mut ordered = vec![
+        unsatisfiable(),
+        prepared_test_package("other", "/usr/bin/other", b"other"),
+    ];
+    let ordered_error =
+        super::ordering::order_packages_for_transaction(&conn, &mut ordered).unwrap_err();
+    let mut lone = vec![unsatisfiable()];
+    let lone_error = super::ordering::order_packages_for_transaction(&conn, &mut lone).unwrap_err();
+
+    assert!(
+        ordered_error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for needy"
+        ),
+        "{ordered_error:#}"
+    );
+    assert!(
+        lone_error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for needy"
+        ),
+        "{lone_error:#}"
+    );
+    assert_eq!(
+        format!("{lone_error:#}"),
+        format!("{ordered_error:#}"),
+        "a single-package batch must fail with the same typed diagnostic as an ordered batch"
+    );
+}
+
+#[test]
+fn a_lone_package_install_batch_rejects_an_unsatisfiable_requirement_at_validation() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let mut package = prepared_test_package("lone-tool", "/usr/bin/lone-tool", b"tool");
+    package.requirements = vec![depends_on("/usr/bin/never-provided")];
+
+    // Nothing upstream (no solver, no repository) ran on this package: the
+    // batch installer is the first authority to see it, so this is exactly the
+    // single-package install the len<2 early return used to wave through.
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![package])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "selected package transaction does not satisfy exact depends requirement for lone-tool"
+        ),
+        "{message}"
+    );
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        conary_core::db::models::Changeset::list_all(&conn)
+            .unwrap()
+            .is_empty(),
+        "validation must fail before any changeset applies"
     );
 }
 
