@@ -321,7 +321,8 @@ and four shared crates.
 | `apps/conary-test/src/engine/` | Test suite, runner, assertions |
 | `apps/conary-test/src/container/` | ContainerBackend trait and container lifecycle |
 | `apps/conary-test/src/report/` | JSON output and SSE event streaming |
-| `apps/conary-test/src/server/` | Axum HTTP API and MCP server (rmcp) |
+| `apps/conary-test/src/remi_client.rs` | Remi test-data API client and retained result-streaming path |
+| `apps/conary-test/src/wal.rs` | Retained SQLite result buffer for the planned Remi streaming path |
 
 ## Development Workflow
 

@@ -1,4 +1,4 @@
-// conary-test/src/server/remi_client.rs
+// conary-test/src/remi_client.rs
 //! HTTP client for pushing test results to the Remi admin API.
 //!
 //! Configured via environment variables:

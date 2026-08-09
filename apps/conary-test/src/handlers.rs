@@ -6,15 +6,16 @@ use super::{
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use chrono::Utc;
+use conary_test::build_info::BuildInfo;
 use conary_test::deploy::manifest::load_rollout_manifest_from_file;
 use conary_test::deploy::orchestrator::{RolloutExecutor, execute_rollout};
 use conary_test::deploy::plan::{RolloutPlan, RolloutPlanRequest, build_rollout_plan};
 use conary_test::deploy::status::{
-    RolloutProvenance, RolloutStatus, evaluate_rollout_status, load_rollout_provenance,
-    write_rollout_provenance,
+    BinaryStatus, DeploymentStatus, RolloutProvenance, RolloutStatus, evaluate_rollout_status,
+    load_rollout_provenance, write_rollout_provenance,
 };
 use conary_test::paths;
-use conary_test::server::service::DeploymentStatus;
+use conary_test::remi_client::RemiClient;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -29,20 +30,17 @@ struct CheckoutStatus {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct DeployStatusOutput {
-    binary: Option<conary_test::server::service::BinaryStatus>,
-    runtime: Option<conary_test::server::service::RuntimeStatus>,
-    service: Option<conary_test::server::service::ServiceStatus>,
+    binary: BinaryStatus,
     rollout: Option<RolloutStatus>,
     checkout: CheckoutStatus,
-    checkout_matches_binary: Option<bool>,
-    degraded: bool,
+    checkout_matches_binary: bool,
     reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct HealthEnvelope {
     mode: String,
-    deploy_status: Option<DeploymentStatus>,
+    deploy_status: DeploymentStatus,
     remi: Option<Value>,
     reason: Option<String>,
 }
@@ -164,34 +162,37 @@ impl RolloutExecutor for HandlerRolloutExecutor {
     }
 }
 
-fn local_service_url(port: u16) -> String {
-    format!("http://127.0.0.1:{port}/v1/deploy/status")
-}
-
 fn combine_deploy_status(
-    deploy_status: Option<DeploymentStatus>,
+    deploy_status: DeploymentStatus,
     checkout: CheckoutStatus,
     reason: Option<String>,
 ) -> DeployStatusOutput {
-    let checkout_matches_binary = deploy_status
-        .as_ref()
-        .map(|status| status.binary.git_commit == checkout.git_commit);
+    let checkout_matches_binary = deploy_status.binary.git_commit == checkout.git_commit;
 
     DeployStatusOutput {
-        binary: deploy_status.as_ref().map(|status| status.binary.clone()),
-        runtime: deploy_status.as_ref().map(|status| status.runtime.clone()),
-        service: deploy_status.as_ref().map(|status| status.service.clone()),
+        binary: deploy_status.binary,
         rollout: None,
         checkout,
         checkout_matches_binary,
-        degraded: deploy_status.is_none(),
         reason,
+    }
+}
+
+fn local_deploy_status() -> DeploymentStatus {
+    let build_info = BuildInfo::current();
+    DeploymentStatus {
+        binary: BinaryStatus {
+            version: build_info.version,
+            git_commit: build_info.git_commit,
+            commit_timestamp: build_info.commit_timestamp,
+            build_timestamp: build_info.build_timestamp,
+        },
     }
 }
 
 fn build_health_envelope(
     mode: &str,
-    deploy_status: Option<DeploymentStatus>,
+    deploy_status: DeploymentStatus,
     remi: Option<Value>,
     reason: Option<String>,
 ) -> HealthEnvelope {
@@ -201,21 +202,6 @@ fn build_health_envelope(
         remi,
         reason,
     }
-}
-
-async fn fetch_local_deploy_status(port: u16) -> Result<DeploymentStatus> {
-    let response = reqwest::get(local_service_url(port))
-        .await
-        .with_context(|| format!("failed to reach local conary-test service on port {port}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        bail!("local conary-test service returned HTTP {status}");
-    }
-
-    response
-        .json::<DeploymentStatus>()
-        .await
-        .context("failed to parse local deployment status JSON")
 }
 
 async fn current_checkout_status() -> CheckoutStatus {
@@ -383,25 +369,14 @@ pub(super) async fn cmd_deploy_rollout(
     Ok(())
 }
 
-pub(super) async fn cmd_deploy_status(json: bool, port: u16) -> Result<()> {
+pub(super) async fn cmd_deploy_status(json: bool) -> Result<()> {
     let checkout = current_checkout_status().await;
-    let local_status = fetch_local_deploy_status(port).await;
-    let output = match local_status {
-        Ok(status) => combine_deploy_status(Some(status), checkout, None),
-        Err(error) => combine_deploy_status(
-            None,
-            checkout,
-            Some(format!("local deployment status unavailable: {error}")),
-        ),
-    };
+    let output = combine_deploy_status(local_deploy_status(), checkout, None);
     let rollout_path = paths::rollout_provenance_path();
     let output = match rollout_path {
         Ok(path) => match load_rollout_provenance(&path) {
             Ok(Some(rollout)) => {
-                let binary_commit = output
-                    .binary
-                    .as_ref()
-                    .map(|binary| binary.git_commit.as_str());
+                let binary_commit = Some(output.binary.git_commit.as_str());
                 let checkout_commit = Some(output.checkout.git_commit.as_str());
                 let rollout = evaluate_rollout_status(&rollout, binary_commit, checkout_commit);
                 attach_rollout_status(output, Some(rollout), None)
@@ -426,24 +401,8 @@ pub(super) async fn cmd_deploy_status(json: bool, port: u16) -> Result<()> {
     }
 
     println!("{}conary-test deployment status{}", BOLD, RESET);
-    if let Some(binary) = &output.binary {
-        println!("  Binary version: {}", binary.version);
-        println!("  Binary commit:  {}", binary.git_commit);
-    } else {
-        println!("  Binary:         {}", color("unavailable", YELLOW));
-    }
-    if let Some(runtime) = &output.runtime {
-        println!("  Uptime:         {}", runtime.uptime_human);
-        println!("  WAL pending:    {}", runtime.wal_pending);
-    }
-    if let Some(service) = &output.service {
-        let service_colored = if service.status == "running" {
-            color(&service.status, GREEN)
-        } else {
-            color(&service.status, YELLOW)
-        };
-        println!("  Service:        {service_colored}");
-    }
+    println!("  Binary version: {}", output.binary.version);
+    println!("  Binary commit:  {}", output.binary.git_commit);
     println!("  Checkout branch: {}", output.checkout.git_branch);
     println!("  Checkout commit: {}", output.checkout.git_commit);
     if let Some(rollout) = &output.rollout {
@@ -457,16 +416,16 @@ pub(super) async fn cmd_deploy_status(json: bool, port: u16) -> Result<()> {
         };
         println!("  Rollout drift:   {rollout_drift}");
     }
-    match output.checkout_matches_binary {
-        Some(true) => println!(
+    if output.checkout_matches_binary {
+        println!(
             "  Drift:          {}",
-            color("checkout matches running binary", GREEN)
-        ),
-        Some(false) => println!(
+            color("checkout matches local binary", GREEN)
+        );
+    } else {
+        println!(
             "  Drift:          {}",
-            color("checkout differs from running binary", YELLOW)
-        ),
-        None => println!("  Drift:          {}", color("unknown", YELLOW)),
+            color("checkout differs from local binary", YELLOW)
+        );
     }
     if let Some(reason) = &output.reason {
         println!("  Note:           {}", color(reason, YELLOW));
@@ -528,7 +487,7 @@ pub(super) async fn cmd_logs(
     stream: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let client = conary_test::server::remi_client::RemiClient::from_env()
+    let client = RemiClient::from_env()
         .context("logs command requires REMI_ADMIN_TOKEN and REMI_ADMIN_ENDPOINT to be set")?;
 
     let rid = run_id.context("--run is required for the logs command")?;
@@ -574,13 +533,14 @@ pub(super) async fn cmd_logs(
     Ok(())
 }
 
-pub(super) async fn cmd_health(json: bool, port: u16) -> Result<()> {
-    let local_status = fetch_local_deploy_status(port).await.ok();
+pub(super) async fn cmd_health(json: bool) -> Result<()> {
+    let local_status = local_deploy_status();
 
-    match conary_test::server::remi_client::RemiClient::from_env() {
+    match RemiClient::from_env() {
         Ok(client) => match client.health().await {
             Ok(data) => {
-                let envelope = build_health_envelope("remi", local_status, Some(data), None);
+                let envelope =
+                    build_health_envelope("remi", local_status.clone(), Some(data), None);
 
                 if json {
                     println!("{}", serde_json::to_string_pretty(&envelope)?);
@@ -601,14 +561,15 @@ pub(super) async fn cmd_health(json: bool, port: u16) -> Result<()> {
                         println!("{}", serde_json::to_string_pretty(remi)?);
                     }
                 }
-                if let Some(deploy_status) = &envelope.deploy_status {
-                    println!("  Local binary: {}", deploy_status.binary.git_commit);
-                }
+                println!(
+                    "  Local binary: {}",
+                    envelope.deploy_status.binary.git_commit
+                );
             }
             Err(error) => {
                 let envelope = build_health_envelope(
                     "local",
-                    local_status,
+                    local_status.clone(),
                     None,
                     Some(format!("failed to fetch health from Remi: {error}")),
                 );
@@ -622,9 +583,10 @@ pub(super) async fn cmd_health(json: bool, port: u16) -> Result<()> {
                 if let Some(reason) = &envelope.reason {
                     println!("  Note: {}", color(reason, YELLOW));
                 }
-                if let Some(deploy_status) = &envelope.deploy_status {
-                    println!("  Local binary: {}", deploy_status.binary.git_commit);
-                }
+                println!(
+                    "  Local binary: {}",
+                    envelope.deploy_status.binary.git_commit
+                );
             }
         },
         Err(_) => {
@@ -644,15 +606,11 @@ pub(super) async fn cmd_health(json: bool, port: u16) -> Result<()> {
                 "{}Local status{} (REMI_ADMIN_TOKEN or REMI_ADMIN_ENDPOINT not set)",
                 BOLD, RESET
             );
-            let deploy_output = combine_deploy_status(
-                envelope.deploy_status.clone(),
-                current_checkout_status().await,
-                envelope.reason.clone(),
+            println!(
+                "  Local binary: {}",
+                envelope.deploy_status.binary.git_commit
             );
-            if let Some(binary) = &deploy_output.binary {
-                println!("  Binary commit: {}", binary.git_commit);
-            }
-            if let Some(reason) = &deploy_output.reason {
+            if let Some(reason) = &envelope.reason {
                 println!("  Note: {}", color(reason, YELLOW));
             }
         }
@@ -871,8 +829,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use conary_test::deploy::manifest::load_rollout_manifest_from_str;
     use conary_test::deploy::plan::{RolloutPlanRequest, build_rollout_plan};
-    use conary_test::deploy::status::RolloutProvenance;
-    use conary_test::server::service::{BinaryStatus, RuntimeStatus, ServiceStatus};
+    use conary_test::deploy::status::{BinaryStatus, RolloutProvenance};
     use serde_json::json;
 
     fn sample_deploy_status(git_commit: &str) -> DeploymentStatus {
@@ -882,16 +839,6 @@ mod tests {
                 git_commit: git_commit.to_string(),
                 commit_timestamp: "2026-04-09T00:00:00Z".to_string(),
                 build_timestamp: None,
-            },
-            runtime: RuntimeStatus {
-                started_at: "2026-04-09T00:00:00Z".to_string(),
-                uptime_seconds: 42,
-                uptime_human: "0d 0h 0m 42s".to_string(),
-                wal_pending: 1,
-                active_runs: 0,
-            },
-            service: ServiceStatus {
-                status: "running".to_string(),
             },
         }
     }
@@ -933,7 +880,7 @@ units = ["conary_test"]
     #[test]
     fn combine_deploy_status_marks_binary_checkout_drift() {
         let output = combine_deploy_status(
-            Some(sample_deploy_status("abc123")),
+            sample_deploy_status("abc123"),
             CheckoutStatus {
                 git_branch: "main".to_string(),
                 git_commit: "def456".to_string(),
@@ -941,32 +888,33 @@ units = ["conary_test"]
             None,
         );
 
-        assert_eq!(output.checkout_matches_binary, Some(false));
-        assert!(!output.degraded);
-        assert_eq!(output.binary.unwrap().git_commit, "abc123");
+        assert!(!output.checkout_matches_binary);
+        assert_eq!(output.binary.git_commit, "abc123");
     }
 
     #[test]
-    fn combine_deploy_status_marks_degraded_output_when_service_is_unreachable() {
+    fn combine_deploy_status_has_no_server_runtime_or_degraded_fields() {
         let output = combine_deploy_status(
-            None,
+            sample_deploy_status("abc123"),
             CheckoutStatus {
                 git_branch: "main".to_string(),
-                git_commit: "def456".to_string(),
+                git_commit: "abc123".to_string(),
             },
-            Some("local deployment status unavailable".to_string()),
+            None,
         );
 
         let json = serde_json::to_value(output).unwrap();
-        assert_eq!(json["degraded"], true);
-        assert_eq!(json["reason"], "local deployment status unavailable");
-        assert!(json["binary"].is_null());
+        assert_eq!(json["binary"]["git_commit"], "abc123");
+        assert_eq!(json["checkout_matches_binary"], true);
+        assert!(json.get("degraded").is_none());
+        assert!(json.get("runtime").is_none());
+        assert!(json.get("service").is_none());
     }
 
     #[test]
     fn attach_rollout_status_includes_rollout_section_in_json_output() {
         let output = combine_deploy_status(
-            Some(sample_deploy_status("abc123")),
+            sample_deploy_status("abc123"),
             CheckoutStatus {
                 git_branch: "main".to_string(),
                 git_commit: "abc123".to_string(),
@@ -986,14 +934,14 @@ units = ["conary_test"]
     fn build_health_envelope_uses_one_normalized_json_shape() {
         let envelope = build_health_envelope(
             "local",
-            Some(sample_deploy_status("abc123")),
+            sample_deploy_status("abc123"),
             Some(json!({"status": "ok"})),
             Some("fallback".to_string()),
         );
 
         let value = serde_json::to_value(envelope).unwrap();
         assert_eq!(value["mode"], "local");
-        assert!(value.get("deploy_status").is_some());
+        assert_eq!(value["deploy_status"]["binary"]["git_commit"], "abc123");
         assert!(value.get("remi").is_some());
         assert_eq!(value["reason"], "fallback");
     }

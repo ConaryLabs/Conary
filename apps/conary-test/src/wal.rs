@@ -1,4 +1,4 @@
-// conary-test/src/server/wal.rs
+// conary-test/src/wal.rs
 //! SQLite-backed write-ahead log for buffering test results when Remi is
 //! unreachable.
 //!
@@ -139,21 +139,20 @@ impl Wal {
 ///
 /// Returns `(flushed_count, failed_count)`. Items with unparseable payloads
 /// are silently removed rather than retried indefinitely.
-pub async fn flush(wal: &Wal, client: &crate::server::remi_client::RemiClient) -> (u64, u64) {
+pub async fn flush(wal: &Wal, client: &crate::remi_client::RemiClient) -> (u64, u64) {
     let items = wal.pending_items().unwrap_or_default();
     let mut flushed = 0u64;
     let mut failed = 0u64;
 
     for item in items {
-        let data: crate::server::remi_client::PushResultData =
-            match serde_json::from_str(&item.payload) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("WAL item {} has invalid payload: {}", item.id, e);
-                    let _ = wal.remove(item.id);
-                    continue;
-                }
-            };
+        let data: crate::remi_client::PushResultData = match serde_json::from_str(&item.payload) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("WAL item {} has invalid payload: {}", item.id, e);
+                let _ = wal.remove(item.id);
+                continue;
+            }
+        };
 
         match client.push_result(item.run_id, &data).await {
             Ok(()) => {

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-29
-revision: 19
-summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
+last_updated: 2026-08-08
+revision: 20
+summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
 # Infrastructure Overview
@@ -30,14 +30,10 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
 
 ## Agent Operations And MCP
 
-Today, the live Remi MCP endpoint and the `conary-test` `/mcp` endpoint are
-session-based, tool-only surfaces. `conary-test` also exposes
-`/mcp/stateless` as a draft stateless preview route with `server/discover`,
-`resources/list`, and `resources/read` for
-`conary-local://bootstrap/status` and `conary-test://suites`. Those resources
-are read-only local bootstrap and suite-manifest state. The stateless preview
-does not expose live tools, prompts, resource templates, subscriptions, SSE
-streaming, mutations, or smoke execution.
+Remi's `/mcp` is the live MCP surface and is modern-only stateless Streamable
+HTTP. `conary-test` is a local CLI and integration-test engine; it no longer
+binds an HTTP or MCP listener. The framework-neutral compliance and raw-adapter
+proof remains in `crates/conary-mcp`, while Remi owns live MCP behavior.
 
 Prefer MCP resources for read-only state inspection and MCP tools for audited
 mutations. MCP is the adapter, not the durable product contract:
@@ -48,11 +44,8 @@ the stateless MCP adapter decision is satisfied.
 The transport-neutral contract lives in `crates/conary-agent-contract`;
 `crates/conary-mcp` remains MCP-specific adapter glue.
 
-Remi and the existing session-based MCP endpoints remain on that transport
-until stateless support is intentionally expanded for those services.
-
 - Remi admin and package-service operations
-- `conary-test` run control, deploy/restart flows, image management, and fixture publishing
+- `conary-test` local run control, deploy/restart flows, image management, and fixture publishing
 
 ### Local Packaging MCP
 
@@ -74,10 +67,8 @@ not cover the task or when you are debugging the underlying service path itself.
   origin access
 - Remi OpenAPI spec: `http://localhost:8082/v1/admin/openapi.json` via SSH
   tunnel or direct origin access
-- Forge-local `conary-test` health endpoint, when a replacement runner exists:
-  `http://127.0.0.1:9090/v1/health`
-- Forge-local `conary-test` deploy-status endpoint, when a replacement runner
-  exists: `http://127.0.0.1:9090/v1/deploy/status`
+- `conary-test` has no network endpoint. Use its local `health` and `deploy
+  status` CLI commands for local/Remi checks.
 
 ## Source Deploy Patterns
 
@@ -99,9 +90,10 @@ not cover the task or when you are debugging the underlying service path itself.
   the rsync boundary by syncing directly over the active Forge checkout before
   invoking the managed rollout there
 - Rollout groups live in `deploy/forge-rollouts.toml`
-- `conary-test deploy status --json` now reports both live binary truth and the
-  last successful managed rollout, including explicit drift flags
-- For supported control-plane verification, run `bash scripts/forge-smoke.sh`
+- `conary-test deploy status --json` reports local checkout and managed-rollout
+  provenance; the removed server is not a live binary-status authority
+- The former Forge smoke depended on the removed conary-test listener and is
+  retired. Use the local CLI suite/list proof and hosted Remi checks.
 - For trusted-runner runtime verification, run
   `bash scripts/forge-preflight.sh --mode container` before container suites
   and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites.
@@ -110,8 +102,6 @@ not cover the task or when you are debugging the underlying service path itself.
 - Container-heavy Forge validation should reclaim inactive rootless Podman
   storage with `bash scripts/forge-container-cleanup.sh`; scheduled deep/QEMU
   CI does this before starting the matrix.
-- Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
-  `9090`
 - Forge runtime repair should use
   `sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh`; this refreshes
   Podman/QEMU tooling and the rootless Podman socket without re-registering the
@@ -336,8 +326,8 @@ old process. That can fail with `Text file busy`.
   starting template
 - For suite layout, phase selection, and manifest-run behavior, use
   [`docs/INTEGRATION-TESTING.md`](../INTEGRATION-TESTING.md)
-- For supported Forge smoke validation, prefer `scripts/forge-smoke.sh` over
-  treating raw `cargo run -p conary-test -- run ...` as the main operator path
+- For conary-test validation, use `cargo run -p conary-test -- list` and the
+  focused `run` commands in `docs/INTEGRATION-TESTING.md`.
 - For assistant and contributor routing, use `AGENTS.md` and
   [`docs/llms/README.md`](../llms/README.md); Git history remains available for
   retired tool-specific context

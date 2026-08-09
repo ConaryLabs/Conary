@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-31
-revision: 43
+last_updated: 2026-08-09
+revision: 45
 summary: Document selected-generation lifecycle proof and the current Fedora supported-host generation export gates
 ---
 
@@ -246,11 +246,11 @@ Common conary-test operations have CLI equivalents for human use:
 | `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
 | `conary-test deploy rebuild` | Rebuild binaries from the currently deployed source checkout |
 | `conary-test deploy restart` | Restart the test service |
-| `conary-test deploy status [--port <port>]` | Show running-binary status separately from local checkout state and drift |
+| `conary-test deploy status` | Show local binary, checkout, and managed-rollout status |
 | `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
 | `conary-test fixtures publish` | Publish fixtures to Remi |
 | `conary-test logs <test-id> [--run <id>] [--step <N>]` | Retrieve test logs |
-| `conary-test health [--port <port>]` | Normalized health envelope with `mode`, `deploy_status`, optional `remi`, and optional `reason` |
+| `conary-test health` | Normalized local/Remi health envelope with local `deploy_status`, optional `remi`, and optional `reason` |
 | `conary-test images build --distro <name>` | Build a container image for a configured distro |
 | `conary-test images list` | List locally built container images |
 | `conary-test images prune [--keep <N>]` | Remove old container images |
@@ -606,16 +606,10 @@ Fresh Goal 3 evidence from May 19, 2026:
 - Fedora 44/RPM: `phase4-security-advisory-pipeline`, 7 passed, 0 failed, 0
   skipped, 0 cancelled.
 
-For supported Forge control-plane validation after a new runner is registered,
-prefer:
-
-```bash
-bash scripts/forge-smoke.sh
-```
-
-That path validates the local `conary-test` service contract (`/v1/health`,
-`/v1/deploy/status`, `health --json`, and `deploy status --json`) without
-pretending to be a full integration suite.
+The former Forge control-plane smoke depended on the removed conary-test
+network server and is no longer a validation path. Use the CLI run/list proof
+and the hosted Remi checks below; a future replacement runner needs its own
+explicit service contract before it can become release evidence.
 
 ## Release Evidence Block
 
@@ -654,11 +648,9 @@ FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_p
 
 ## Validation Modes
 
-- `merge-validation` is the trusted on-merge lane. It now runs the Forge
-  control-plane smoke against a freshly started `conary-test` server on a
-  dedicated test port before the package-manager smoke and Remi smoke. This
-  remote path is paused until a new KVM-capable runner is available; the
-  workflow currently runs hosted build/list/Remi smoke checks instead.
+- `merge-validation` is the trusted on-merge lane. The former Forge
+  control-plane server smoke is retired; the workflow currently runs hosted
+  build/list/Remi smoke checks instead.
 - `scheduled-ops` keeps hosted Remi health, audit, and manifest-inventory
   checks active. Forge-backed Phase 1-3 and QEMU jobs are paused rather than
   queued against a missing runner.
@@ -898,8 +890,9 @@ Override any config value via environment variables:
 | `RESULTS_DIR` | `[paths] results_dir` |
 | `DISTRO` | Which `[distros.*]` section to use |
 
-For admin-backed operations such as result streaming, log queries, and fixture
-publishing, also set:
+For admin-backed operations such as health checks, log queries, and fixture
+publishing, also set. The retained result-streaming path will use the same
+configuration once issue #354 wires it into local runs:
 
 | Variable | Purpose |
 |----------|---------|
@@ -939,30 +932,17 @@ Test results are written as JSON under
 }
 ```
 
-## Error Responses
-
-API and MCP errors include structured fields for programmatic handling:
-
-```json
-{
-  "error": "test_timeout",
-  "category": "infrastructure",
-  "message": "Test T142 timed out after 300s",
-  "transient": true,
-  "hint": "Try reducing concurrency or increasing timeout."
-}
-```
-
-Categories: `infrastructure` (transient), `assertion` (test logic), `config` (manifest/distro), `deployment` (build/service), `validation` (request).
-
 ## Result Persistence
 
-Test results are streamed to Remi's admin API as each test completes. If Remi is unreachable, results are buffered in a local SQLite write-ahead log (`/tmp/conary-test-wal.db`) and retried automatically with exponential backoff.
+The Remi result-streaming and SQLite WAL path (`/tmp/conary-test-wal.db`) is
+retained, but it is currently unconstructed for local CLI runs. Local runs
+write their JSON reports locally and do not stream results to Remi or populate
+the WAL. Wiring the streaming path is tracked in issue #354.
 
 ## CI Integration
 
-Trusted integration validation belongs to GitHub Actions, with Forge used as
-execution capacity rather than as an independent control plane. The PR gate
+Trusted integration validation belongs to GitHub Actions, with any runner used
+as execution capacity rather than as an independent control plane. The PR gate
 runs the focused native cross-source lifecycle on hosted Docker across all
 three distro images. The rest of the TOML inventory still requires a local or
 hosted container/QEMU-capable runner; do not describe a normal PR or merge run
@@ -977,23 +957,23 @@ the specific workflow run.
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
 
 `conary-test deploy status` is internal infrastructure state, not a product
-release identity. Operators should read it as commit/ref/build provenance for
-the harness that is currently running on Forge.
+release identity. Operators should read it as local checkout and managed-rollout
+provenance; the removed conary-test server no longer provides a live service
+identity.
 
 Current JSON semantics:
 
-- `conary-test deploy status --json` separates running binary state from local
-  checkout branch/commit and marks degraded output explicitly when the local
-  service is unreachable.
-- `conary-test health --json` always returns valid JSON. The top-level shape is
-  normalized to `mode`, `deploy_status`, optional `remi`, and optional
-  `reason`.
+- `conary-test deploy status --json` computes binary metadata from the local
+  invoking binary and reports checkout plus managed-rollout provenance. It has
+  no remote-runner or HTTP-degraded branch.
+- `conary-test health --json` always returns valid JSON with local
+  `deploy_status`, `mode`, optional `remi`, and optional `reason`.
 
 ## Adding Tests
 
 1. Create or edit a TOML manifest in `apps/conary/tests/integration/remi/manifests/`
 2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
-3. For supported Forge control-plane validation, run `bash scripts/forge-smoke.sh`
+3. For a local proof, run `cargo run -p conary-test -- list`
 4. For deeper manual debugging, run `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
 
 ## Adding Distros

@@ -6,12 +6,11 @@ edition = "2024"
 rust-version = "1.96"
 authors = ["Conary Contributors"]
 license = "MIT"
-description = "Test infrastructure for Conary — declarative TOML test engine with container management, HTTP API, and MCP interface"
+description = "Test infrastructure for Conary — declarative TOML test engine with container management"
 
 [dependencies]
 conary-core = { path = "../../crates/conary-core" }
 conary-agent-contract = { path = "../../crates/conary-agent-contract" }
-conary-mcp = { path = "../../crates/conary-mcp" }
 
 # Workspace shared
 anyhow.workspace = true
@@ -36,26 +35,12 @@ nix.workspace = true
 # SQLite (WAL buffer)
 rusqlite.workspace = true
 
-# Concurrency
-dashmap.workspace = true
-
-# Async utilities
-async-stream.workspace = true
-
 # Container management
 bollard = "0.21.0"
 bytes = "1"
 
-# HTTP server + client
-axum.workspace = true
+# HTTP client
 reqwest.workspace = true
-tower.workspace = true
-tower-http = { workspace = true, features = ["cors"] }
-tokio-stream.workspace = true
-
-# MCP
-rmcp = { workspace = true, features = ["server", "macros", "transport-streamable-http-server"] }
-schemars.workspace = true
 
 [[bin]]
 name = "conary-test"

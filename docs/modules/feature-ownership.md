@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 65
+last_updated: 2026-08-08
+revision: 66
 summary: Route feature ownership through typed database rebuilds, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -1321,7 +1321,8 @@ served artifacts, signatures, and live health independently.
 **Slug:** conary-test
 
 **Capability:** list, validate, and execute declarative integration suites,
-including slow QEMU/KVM proof when release evidence needs it.
+including slow QEMU/KVM proof when release evidence needs it. `conary-test` is
+a local CLI and engine; Remi owns networked test-data and MCP surfaces.
 
 **Start here:** `apps/conary-test/src/`;
 `apps/conary-test/src/suite_inventory.rs`;
@@ -1376,24 +1377,24 @@ never diagnostic text. The declared and emitted case counts must agree.
 **Slug:** agent-mcp
 
 **Capability:** expose transport-neutral operation vocabulary and MCP adapters
-for Conary, Remi, and `conary-test` automation.
+for Conary and Remi automation. `conary-test` no longer owns a network or MCP
+server.
 
 **Start here:** `crates/conary-agent-contract/src/`;
 `crates/conary-mcp/src/`; `apps/remi/src/server/mcp.rs`;
-`apps/conary-test/src/server/mcp.rs`; `docs/operations/infrastructure.md`.
+`docs/operations/infrastructure.md`.
 
-**Neighbor systems:** HTTP handlers, service-layer methods, operation risk
-labels, resource references, and authentication.
+**Neighbor systems:** Remi HTTP handlers, operation risk labels, resource
+references, and authentication.
 
 **Paths:** `crates/conary-agent-contract/*`;
-`crates/conary-mcp/*`; `apps/remi/src/server/mcp.rs`;
-`apps/conary-test/src/server/mcp.rs`.
+`crates/conary-mcp/*`; `apps/remi/src/server/mcp.rs`.
 
 **Focused proof:** `cargo test -p conary-agent-contract`;
 `cargo test -p conary-mcp`.
 
-**Interaction gate:** `cargo test -p remi`;
-`cargo test -p conary-test` when adapter changes call service behavior.
+**Interaction gate:** `cargo test -p remi` when adapter changes call service
+behavior.
 
 **Docs to update:** `docs/operations/infrastructure.md`;
 `docs/llms/README.md`; `docs/llms/subsystem-map.md`.

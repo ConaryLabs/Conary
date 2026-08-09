@@ -9,20 +9,6 @@ fn cwd_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn set_test_port_env(value: Option<&str>) {
-    // SAFETY: every caller holds `env_lock`, serializing mutation of this test
-    // variable for the duration of the read/restore sequence.
-    match value {
-        Some(value) => unsafe { std::env::set_var("CONARY_TEST_PORT", value) },
-        None => unsafe { std::env::remove_var("CONARY_TEST_PORT") },
-    }
-}
-
 #[test]
 fn default_manifest_dir_exists_under_workspace_root() {
     let root = PathBuf::from(project_dir().expect("project dir"));
@@ -92,47 +78,23 @@ fn images_build_accepts_an_explicit_native_package() {
 }
 
 #[test]
-fn deploy_status_port_defaults_to_9090() {
-    let _guard = env_lock().lock().expect("env lock");
-    set_test_port_env(None);
-
+fn deploy_status_and_health_have_no_server_port() {
     let cli = Cli::try_parse_from(["conary-test", "deploy", "status"]).unwrap();
     match cli.command {
         Commands::Deploy {
-            command: DeployCommands::Status { port },
-        } => assert_eq!(port, 9090),
+            command: DeployCommands::Status,
+        } => {}
         _ => panic!("unexpected command"),
     }
-}
 
-#[test]
-fn deploy_status_port_uses_env_when_flag_is_absent() {
-    let _guard = env_lock().lock().expect("env lock");
-    set_test_port_env(Some("9191"));
-
-    let cli = Cli::try_parse_from(["conary-test", "deploy", "status"]).unwrap();
-    set_test_port_env(None);
-
+    let cli = Cli::try_parse_from(["conary-test", "health"]).unwrap();
     match cli.command {
-        Commands::Deploy {
-            command: DeployCommands::Status { port },
-        } => assert_eq!(port, 9191),
+        Commands::Health => {}
         _ => panic!("unexpected command"),
     }
-}
 
-#[test]
-fn explicit_port_flag_overrides_env_for_health() {
-    let _guard = env_lock().lock().expect("env lock");
-    set_test_port_env(Some("9191"));
-
-    let cli = Cli::try_parse_from(["conary-test", "health", "--port", "8181"]).unwrap();
-    set_test_port_env(None);
-
-    match cli.command {
-        Commands::Health { port } => assert_eq!(port, 8181),
-        _ => panic!("unexpected command"),
-    }
+    assert!(Cli::try_parse_from(["conary-test", "health", "--port", "8181"]).is_err());
+    assert!(Cli::try_parse_from(["conary-test", "deploy", "status", "--port", "8181"]).is_err());
 }
 
 #[test]

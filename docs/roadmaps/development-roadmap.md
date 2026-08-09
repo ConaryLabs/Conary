@@ -427,8 +427,9 @@ authority owners.
 - **#67 and #62 already delegate.** #67's final ledger item hands the fixed
   three-entry repository feed catalog to #62. The `source_profile` schema
   `CHECK` constraint belongs with that handoff.
-- **#67 and #66 already coordinate.** The conary-test MCP dual mutation
-  authority item names #66 as its coordination point.
+- **#67 and #66 already coordinate.** The former conary-test MCP dual mutation
+  authority item was retired with the Forge server cut in #351; current live
+  MCP adapter ownership is Remi's.
 - **#62, #68, and #71 form one ecosystem cluster.** #68 depends on stable
   source and repository authority from #62; #71 adds a fourth source ABI and
   waits for both.
@@ -571,8 +572,8 @@ control-plane gateway, #73 agent-assisted contribution.
   harness; improve observability, migration, and recovery guidance.
 - #69, #65, and #66 all consume the daemon and operation contracts, so they
   follow conaryd's authorization and dry-run proof rather than running beside
-  it. #65 additionally depends on #63. #67's conary-test MCP ledger item is
-  explicitly coordinated with #66.
+  it. #65 additionally depends on #63. The former #67 conary-test MCP ledger
+  item was retired with the Forge server cut in #351.
 
 ### System Artifacts and Platform Breadth
 
