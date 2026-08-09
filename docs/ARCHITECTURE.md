@@ -33,7 +33,7 @@ crates/conary-core/
 Supporting workspace members
   apps/remi/         public/admin package service, search, federation, MCP
   apps/conaryd/      local daemon, auth, job queue, REST/SSE routes, package execution
-  apps/conary-test/  integration harness, HTTP API, MCP, container runners
+  apps/conary-test/  integration harness, CLI, Remi result client, container runners
   crates/conary-bootstrap/ shared tracing/runtime/exit helpers for workspace binaries
   crates/conary-agent-contract/ transport-neutral agent operation contract
   crates/conary-mcp/ shared MCP adapter helpers

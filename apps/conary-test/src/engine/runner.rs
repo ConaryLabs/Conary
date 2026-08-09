@@ -18,9 +18,9 @@ use crate::engine::executor::{ExecutionContext, StepAction, execute_step};
 use crate::engine::mock_server::start_mock_server;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 use crate::engine::variables;
+use crate::remi_client::{PushResultData, PushStepData, RemiClient};
 use crate::report::stream::TestEvent;
-use crate::server::remi_client::{PushResultData, PushStepData, RemiClient};
-use crate::server::wal::Wal;
+use crate::wal::Wal;
 
 /// Context for streaming test results to the Remi admin API.
 ///

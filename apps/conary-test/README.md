@@ -1,9 +1,10 @@
 # conary-test
 
 Declarative test infrastructure for Conary integration testing. Replaces the
-Python test runner with a Rust engine that reads TOML test manifests, manages
-containers via bollard, and exposes an HTTP API and MCP server for orchestration
-by CI pipelines and LLM agents.
+Python test runner with a Rust engine that reads TOML test manifests and
+manages containers via bollard. The Remi result-streaming and WAL path is
+retained for the planned run-path wiring; local CLI runs currently keep their
+results in local JSON files.
 
 ## Architecture
 
@@ -22,12 +23,9 @@ by CI pipelines and LLM agents.
 | `src/error.rs` | Typed ConaryTestError enum (Container, Timeout, Cancelled, etc.) |
 | `src/bootstrap.rs` | Local developer prerequisite and smoke-readiness inspection |
 | `src/suite_inventory.rs` | Suite manifest inventory for agent-facing read-only resources |
-| `src/report/` | JSON output, SSE event streaming |
-| `src/server/handlers.rs` | Axum HTTP handlers |
-| `src/server/routes.rs` | Router construction (HTTP + MCP) |
-| `src/server/service.rs` | Shared business logic for HTTP and MCP |
-| `src/server/state.rs` | AppState with DashMap for concurrent run tracking |
-| `src/server/mcp.rs` | MCP server via rmcp |
+| `src/report/` | JSON output and run-event streaming |
+| `src/remi_client.rs` | Remi test-data API client and retained result-streaming client |
+| `src/wal.rs` | Retained SQLite result buffer for the planned Remi streaming path |
 | `src/cli.rs` | Binary entrypoint |
 
 ## CLI Usage
@@ -48,16 +46,9 @@ cargo run -p conary-test -- run --distro fedora44 --phase 1
 # Run a specific suite on all configured distros
 cargo run -p conary-test -- run --suite phase1-core --all-distros --phase 1
 
-# Start the HTTP/MCP server
-cargo run -p conary-test -- serve --port 9090
-
-# Run a managed Forge rollout from a trusted GitHub ref after a replacement
+# Run a managed Forge rollout from a trusted GitHub ref when a replacement
 # Forge host exists
 cargo run -p conary-test -- deploy rollout --group control_plane --ref main
-
-# Run the supported Forge control-plane smoke after a replacement Forge host
-# exists
-bash scripts/forge-smoke.sh
 
 # List available test suites
 cargo run -p conary-test -- list
@@ -130,96 +121,24 @@ apps/conary/tests/integration/remi/manifests/
   phase4-security-advisory-pipeline.toml  # Trusted advisory ingestion and security update proof
 ```
 
-## HTTP API
+## Network surfaces
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/v1/health` | Server health check |
-| GET | `/v1/deploy/status` | Running binary/runtime status for the local service |
-| GET | `/v1/suites` | List available test suites |
-| POST | `/v1/runs` | Start a new test run |
-| GET | `/v1/runs` | List recent runs |
-| GET | `/v1/runs/{id}` | Get run details and results |
-| GET | `/v1/runs/{id}/stream` | SSE event stream for a run |
-| POST | `/v1/runs/{id}/cancel` | Cancel a running test run |
-| GET | `/v1/runs/{id}/artifacts` | Get run artifacts and summary |
-| POST | `/v1/runs/{id}/tests/{test_id}/rerun` | Re-run a single test |
-| GET | `/v1/runs/{id}/tests/{test_id}/logs` | Get test stdout/stderr logs |
-| GET | `/v1/distros` | List configured distros |
-| GET | `/v1/images` | List available container images |
-| POST | `/v1/images/build` | Build a container image |
-| POST | `/v1/cleanup` | Remove stopped containers |
-
-The legacy MCP endpoint is mounted at `/mcp` through `rmcp`'s session-based
-Streamable HTTP transport. The draft stateless preview endpoint is mounted at
-`/mcp/stateless` and supports `server/discover`, `resources/list`, and
-`resources/read` for two read-only resources:
-`conary-local://bootstrap/status` and `conary-test://suites`. Bootstrap status
-returns the same structured `InspectResult` used by
-`conary-test bootstrap check --json`. The suites resource returns a static
-manifest inventory from the server's configured manifest directory. The
-stateless preview does not expose live tools, prompts, resource templates,
-subscriptions, SSE streaming, mutations, or smoke execution.
-
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `list_suites` | List available test suite TOML manifests |
-| `start_run` | Start a new test run (suite, distro, phase) |
-| `get_run` | Get status and full results for a run |
-| `list_runs` | List recent runs with summary info |
-| `get_test` | Get a single test result by run ID and test ID |
-| `list_distros` | List all configured distros |
-| `cancel_run` | Cancel a running test run |
-| `rerun_test` | Re-run a single test from a previous run |
-| `get_test_logs` | Get stdout/stderr logs from all test attempts |
-| `get_run_artifacts` | Get artifact information and summary |
-| `build_image` | Build a container image for a distro |
-| `list_images` | List available container images |
-| `cleanup_containers` | Remove stopped conary-test containers |
-| `reload_manifests` | Reload TOML manifests from disk without restart |
-| `prune_images` | Remove old container images, keeping N most recent per distro |
-| `image_info` | Get details about a container image (tag, size, labels) |
-| `deploy_source` | Deploy source from git ref and rebuild on Forge |
-| `rebuild_binary` | Rebuild conary and conary-test binaries from source |
-| `restart_service` | Restart the conary-test systemd user service |
-| `build_fixtures` | Build test fixture CCS packages |
-| `publish_fixtures` | Publish test fixtures to Remi repository |
-| `deploy_status` | Get service-owned deployment status (binary provenance, runtime, WAL pending, service state) |
-| `flush_pending` | Flush pending WAL items to Remi |
-
-## CLI And MCP Surface Relationship
-
-The CLI and MCP surfaces intentionally overlap, but they are not mirrors. The
-CLI is the local human/operator entrypoint for `run`, `serve`, `list`,
-`bootstrap check`, `bootstrap smoke`, image lifecycle commands, deploy
-source/rebuild/restart/status/rollout commands, fixture build/publish, logs,
-health, and manifest reload.
-
-The MCP server is the remote/service orchestration surface. It overlaps with
-suite listing, run start, test logs, image lifecycle, deploy/rebuild/restart
-status, fixture build/publish, and manifest reload, but it also exposes
-server-state operations that do not have direct CLI commands:
-`get_run`, `list_runs`, `get_test`, `list_distros`, `cancel_run`,
-`rerun_test`, `get_run_artifacts`, `cleanup_containers`, and `flush_pending`.
-
-Conversely, `serve`, `bootstrap check`, `bootstrap smoke`, `deploy rollout`,
-and `health` remain CLI-only. When adding or renaming operations, update both
-surfaces only when the workflow needs both local-human and remote-agent access;
-otherwise document the intentional asymmetry here.
+`conary-test` is a local CLI and test engine. It does not bind an HTTP socket or
+provide an MCP server. Remi owns the live MCP and test-data service surfaces;
+the harness uses `REMI_ADMIN_ENDPOINT` and `REMI_ADMIN_TOKEN` for health, log
+queries, and fixture publication. The retained result-streaming/WAL path is
+currently unconstructed for local runs; issue #354 tracks its wiring.
 
 Remote Forge validation is temporarily paused while Conary replaces the old VPS
 runner with a KVM-capable host. Use `scripts/local-qemu-validation.sh` on a
 local KVM-capable development machine for temporary QEMU release evidence.
 
-`conary-test deploy status --json` now separates the running binary identity
-from the local checkout branch/commit and now also reports the last successful
-managed rollout plus explicit drift flags when the live binary or checkout no
-longer match that rollout. `conary-test deploy rollout` is the managed Forge
-deployment path for checked-in units/groups, with `--ref` as the trusted
-default and `--path` as explicit debug/local-snapshot mode. `conary-test
-health --json` always emits one normalized envelope with `mode`,
+`conary-test deploy status --json` reports the invoking binary's local build
+metadata, checkout state, and managed-rollout provenance. It does not query a
+remote runner or a local HTTP service. `conary-test deploy rollout` remains the
+managed Forge deployment path for checked-in units/groups, with `--ref` as the
+trusted default and `--path` as explicit debug/local-snapshot mode.
+`conary-test health --json` emits one normalized envelope with local
 `deploy_status`, optional `remi`, and optional `reason`.
 
 ## Configuration
@@ -232,7 +151,7 @@ Environment variables override values from
 | `CONARY_TEST_CONFIG` | Path to global config TOML |
 | `CONARY_TEST_MANIFESTS` | Path to manifest directory |
 | `REMI_ENDPOINT` | Remi server endpoint URL |
-| `REMI_ADMIN_ENDPOINT` | Remi admin REST base URL for result streaming and log queries |
+| `REMI_ADMIN_ENDPOINT` | Remi admin REST base URL for health, log queries, fixture publication, and the planned result-streaming path |
 | `REMI_ADMIN_TOKEN` | Bearer token for the Remi admin API |
 | `DB_PATH` | SQLite database path |
 | `CONARY_BIN` | Path to conary binary |
@@ -241,6 +160,7 @@ Environment variables override values from
 
 ## State Management
 
-Run state is stored in-memory using `DashMap` for lock-free concurrent access.
-Each run gets a unique monotonic ID and an optional cancellation flag. The server
-supports SSE streaming for live test progress events via `/v1/runs/{id}/stream`.
+The run engine owns suite execution and JSON result generation in the invoking
+CLI process. The Remi streaming/WAL delivery path is retained but currently
+has no production constructor, so local runs do not stream results or populate
+the WAL. Wiring that path is tracked in issue #354.

@@ -7,58 +7,9 @@ pub mod container;
 pub mod deploy;
 pub mod engine;
 pub mod error;
-pub mod error_taxonomy;
 pub mod paths;
+pub mod remi_client;
 pub mod report;
-pub mod server;
 pub(crate) mod static_binary;
 pub mod suite_inventory;
-
-#[cfg(test)]
-pub mod test_fixtures {
-    use crate::config::distro::*;
-    use crate::server::state::AppState;
-    use std::collections::HashMap;
-
-    /// Minimal GlobalConfig for unit tests (server modules).
-    pub fn test_global_config() -> GlobalConfig {
-        GlobalConfig {
-            remi: RemiConfig {
-                endpoint: "https://localhost".to_string(),
-            },
-            paths: PathsConfig {
-                db: "/tmp/test.db".to_string(),
-                conary_bin: "/usr/bin/conary".to_string(),
-                results_dir: "/tmp/results".to_string(),
-                fixture_dir: None,
-            },
-            setup: SetupConfig::default(),
-            distros: HashMap::new(),
-            fixtures: None,
-        }
-    }
-
-    /// GlobalConfig with a fedora44 distro entry.
-    pub fn test_global_config_with_fedora() -> GlobalConfig {
-        let mut config = test_global_config();
-        config.distros.insert(
-            "fedora44".to_string(),
-            DistroConfig {
-                remi_distro: "fedora-44".to_string(),
-                repo_name: "remi".to_string(),
-                build_context: DistroBuildContext::Binary,
-                containerfile: None,
-                test_packages: Vec::new(),
-            },
-        );
-        config
-    }
-
-    /// AppState with fedora44 distro and a temp manifest dir.
-    pub fn test_app_state() -> AppState {
-        AppState::new(
-            test_global_config_with_fedora(),
-            "/tmp/manifests".to_string(),
-        )
-    }
-}
+pub mod wal;

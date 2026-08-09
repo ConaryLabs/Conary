@@ -73,21 +73,6 @@ enum Commands {
         all_distros: bool,
     },
 
-    /// Start the HTTP + MCP server
-    Serve {
-        /// Port to listen on
-        #[arg(long, default_value = "9090")]
-        port: u16,
-        /// Bearer token for authentication. If not set, reads CONARY_TEST_TOKEN env var.
-        /// If neither is set, the server runs without auth.
-        #[arg(long)]
-        token: Option<String>,
-        /// Maximum number of test runs that execute concurrently. Additional
-        /// runs queue until a slot becomes available.
-        #[arg(long, default_value = "2")]
-        max_concurrent: usize,
-    },
-
     /// List available test suites
     List,
 
@@ -133,12 +118,8 @@ enum Commands {
         stream: Option<String>,
     },
 
-    /// Check service health and deployment status
-    Health {
-        /// Local conary-test service port
-        #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
-        port: u16,
-    },
+    /// Check local and Remi health
+    Health,
 
     /// Reload test manifests from disk
     Manifests {
@@ -216,12 +197,8 @@ enum DeployCommands {
     /// Restart the conary-test systemd user service
     Restart,
 
-    /// Show deployment status (version, uptime, service state)
-    Status {
-        /// Local conary-test service port
-        #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
-        port: u16,
-    },
+    /// Show local build, checkout, and rollout status
+    Status,
 
     /// Perform a managed Forge rollout from a Git ref or explicit local snapshot
     #[command(
@@ -698,28 +675,6 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Serve {
-            port,
-            token,
-            max_concurrent,
-        } => {
-            let token = token.or_else(|| std::env::var("CONARY_TEST_TOKEN").ok());
-            if token.is_some() {
-                tracing::info!("Bearer token authentication enabled");
-            } else {
-                tracing::warn!("No authentication token configured -- server is open");
-            }
-            let config = load_config()?;
-            let state = conary_test::server::AppState::with_max_concurrent(
-                config,
-                manifest_dir()?.display().to_string(),
-                max_concurrent,
-            );
-            tracing::info!(%port, max_concurrent, "Starting server");
-            tokio::runtime::Runtime::new()?
-                .block_on(conary_test::server::run_server(state, port, token))
-        }
-
         Commands::List => {
             let dir = manifest_dir()?;
             let dir_path = dir.as_path();
@@ -926,7 +881,7 @@ fn main() -> Result<()> {
                     rt.block_on(cmd_deploy_rebuild(crate_name.as_deref(), json))
                 }
                 DeployCommands::Restart => rt.block_on(cmd_deploy_restart(json)),
-                DeployCommands::Status { port } => rt.block_on(cmd_deploy_status(json, port)),
+                DeployCommands::Status => rt.block_on(cmd_deploy_status(json)),
                 DeployCommands::Rollout {
                     unit,
                     group,
@@ -954,9 +909,9 @@ fn main() -> Result<()> {
             rt.block_on(cmd_logs(&test_id, run, step, stream.as_deref(), json))
         }
 
-        Commands::Health { port } => {
+        Commands::Health => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_health(json, port))
+            rt.block_on(cmd_health(json))
         }
 
         Commands::Manifests { command } => match command {

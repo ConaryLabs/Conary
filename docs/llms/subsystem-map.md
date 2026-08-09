@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-06
-revision: 62
+last_updated: 2026-08-09
+revision: 64
 summary: Route typed database rebuilds, lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
@@ -12,7 +12,7 @@ summary: Route typed database rebuilds, lossless source authority, exact Remi si
 - `crates/conary-core/`: shared package-management domain, repository sync, resolver, trust, transaction, and CCS logic
 - `apps/remi/`: Remi package service, admin surface, MCP server, and federation
 - `apps/conaryd/`: local daemon, socket auth, job queue, and REST/SSE routes
-- `apps/conary-test/`: declarative integration-test engine, HTTP API, and MCP server
+- `apps/conary-test/`: declarative integration-test engine, CLI, Remi result client, and WAL buffering
 - `crates/conary-bootstrap/`: shared tracing, runtime, and error-exit helpers for workspace apps
 - `crates/conary-agent-contract/`: transport-neutral agent operation contract, resource refs, risk labels, and catalogs
 - `crates/conary-mcp/`: shared MCP adapter helpers used by workspace apps
@@ -46,7 +46,7 @@ commands.
 - `conaryd`: local daemon auth, package jobs, routes, and lifecycle events
 - `bootstrap`: bootstrap prerequisite, image, seed, run, and local QEMU validation
 - `release`: exact-tag construction, immutable publication, serialized deployment, and independent proof
-- `conary-test`: declarative integration suites, HTTP, MCP, and QEMU proof
+- `conary-test`: declarative integration suites, CLI, result delivery, and QEMU proof
 - `agent-mcp`: transport-neutral operation vocabulary and MCP adapters
 
 ## Canonical Detail Pointers
@@ -200,8 +200,9 @@ commands.
   older graph-based assumptions.
 - Keep shared operation vocabulary in `conary-core` and daemon-only request or
   execution policy in `conaryd`.
-- Remi and `conary-test` share service-layer patterns between HTTP handlers and
-  MCP tools; prefer those seams before duplicating handler logic.
+- Remi owns the live HTTP and MCP service-layer patterns. `conary-test` is a
+  local engine and CLI; its Remi client and WAL streaming path are retained but
+  currently unconstructed for local runs, with wiring tracked in issue #354.
 - Remi package-source and parser authority is the typed repository manifest;
   repository names, URLs, file extensions, and discovery indexes are not
   semantic authority.
