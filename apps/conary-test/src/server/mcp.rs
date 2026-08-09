@@ -279,7 +279,7 @@ impl TestMcpServer {
         })?;
 
         let text = to_json_text(&suites)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Start a new test run for a given suite, distro, and phase.
@@ -313,7 +313,7 @@ impl TestMcpServer {
             "phase": result.phase,
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get the status and results of a specific test run.
@@ -327,7 +327,7 @@ impl TestMcpServer {
             match client.get_run(params.run_id as i64).await {
                 Ok(data) => {
                     let text = to_json_text(&data)?;
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
                 Err(e) => {
                     tracing::debug!(
@@ -345,7 +345,7 @@ impl TestMcpServer {
             Some(entry) => {
                 let json_str = to_json_report(&entry)
                     .map_err(|e| McpError::internal_error(format!("Report error: {e}"), None))?;
-                Ok(CallToolResult::success(vec![Content::text(json_str)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(json_str)]))
             }
             None => Err(McpError::invalid_params(
                 format!("Run {} not found", params.run_id),
@@ -380,7 +380,7 @@ impl TestMcpServer {
             {
                 Ok(data) => {
                     let text = to_json_text(&data)?;
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
                 Err(e) => {
                     tracing::debug!("Remi proxy failed for list_runs, falling back to local: {e}");
@@ -392,7 +392,7 @@ impl TestMcpServer {
         let summaries = service::list_runs(&self.state, limit);
 
         let text = to_json_text(&summaries)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get the result of a single test within a run.
@@ -406,7 +406,7 @@ impl TestMcpServer {
             match client.get_test(params.run_id as i64, &params.test_id).await {
                 Ok(data) => {
                     let text = to_json_text(&data)?;
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
                 Err(e) => {
                     tracing::debug!(
@@ -438,7 +438,7 @@ impl TestMcpServer {
             })?;
 
         let text = to_json_text(test)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// List all configured distros with their Remi distro name and repo name.
@@ -448,7 +448,7 @@ impl TestMcpServer {
     async fn list_distros(&self) -> Result<CallToolResult, McpError> {
         let distros = service::list_distros(&self.state);
         let text = to_json_text(&distros)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Cancel a running test run by its run ID.
@@ -469,7 +469,7 @@ impl TestMcpServer {
             "status": "cancelled",
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Re-run a single test from a previous run.
@@ -502,7 +502,7 @@ impl TestMcpServer {
             "status": "pending",
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get stdout/stderr logs from all attempts of a test.
@@ -519,7 +519,7 @@ impl TestMcpServer {
             {
                 Ok(data) => {
                     let text = to_json_text(&data)?;
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
                 }
                 Err(e) => {
                     tracing::debug!(
@@ -536,7 +536,7 @@ impl TestMcpServer {
             .map_err(error_to_mcp)?;
 
         let text = to_json_text(&logs)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get artifact information and summary for a run.
@@ -549,7 +549,7 @@ impl TestMcpServer {
             service::get_run_artifacts(&self.state, params.run_id).map_err(error_to_mcp)?;
 
         let text = to_json_text(&artifacts)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Build a container image for a configured distro.
@@ -570,7 +570,7 @@ impl TestMcpServer {
             "status": "built",
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// List all available container images.
@@ -581,7 +581,7 @@ impl TestMcpServer {
             .map_err(anyhow_to_mcp)?;
 
         let text = to_json_text(&images)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Clean up stopped conary-test containers.
@@ -594,7 +594,7 @@ impl TestMcpServer {
             .map_err(anyhow_to_mcp)?;
 
         let text = to_json_text(&result)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     // -----------------------------------------------------------------------
@@ -623,7 +623,7 @@ impl TestMcpServer {
             "suites": suites,
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Remove old container images, keeping the N most recent per distro.
@@ -717,7 +717,7 @@ impl TestMcpServer {
             "errors": errors,
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get details about a container image: tag, creation date, size, and labels.
@@ -762,7 +762,7 @@ impl TestMcpServer {
                 .unwrap_or(serde_json::json!([])),
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     // -----------------------------------------------------------------------
@@ -790,7 +790,7 @@ impl TestMcpServer {
                 run_command("git", &["fetch", "--all"], Some(&dir)).await?;
             output.push_str(&format_command_output("git fetch", code, &stdout, &stderr));
             if code != 0 {
-                return Ok(CallToolResult::success(vec![Content::text(output)]));
+                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
             }
 
             let (code, stdout, stderr) =
@@ -802,13 +802,13 @@ impl TestMcpServer {
                 &stderr,
             ));
             if code != 0 {
-                return Ok(CallToolResult::success(vec![Content::text(output)]));
+                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
             }
         } else {
             let (code, stdout, stderr) = run_command("git", &["pull"], Some(&dir)).await?;
             output.push_str(&format_command_output("git pull", code, &stdout, &stderr));
             if code != 0 {
-                return Ok(CallToolResult::success(vec![Content::text(output)]));
+                return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
             }
         }
 
@@ -830,7 +830,7 @@ impl TestMcpServer {
             &stderr,
         ));
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     /// Rebuild conary and/or conary-test binaries from current source.
@@ -890,7 +890,7 @@ impl TestMcpServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     /// Restart the conary-test systemd user service.
@@ -916,7 +916,7 @@ impl TestMcpServer {
             "message": "Service restart scheduled in 1 second. The current process will be replaced.",
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Build test fixtures (CCS packages for integration tests).
@@ -958,7 +958,7 @@ impl TestMcpServer {
 
         let output =
             format_command_output(&format!("build-fixtures ({group})"), code, &stdout, &stderr);
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     /// Publish test fixtures to the Remi repository.
@@ -974,7 +974,7 @@ impl TestMcpServer {
         let (code, stdout, stderr) = run_command("bash", &[&script_path], Some(&dir)).await?;
 
         let output = format_command_output("publish-fixtures", code, &stdout, &stderr);
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     /// Get deployment status: binary version, uptime, WAL pending items,
@@ -985,7 +985,7 @@ impl TestMcpServer {
     async fn deploy_status(&self) -> Result<CallToolResult, McpError> {
         let status = service::deployment_status(&self.state).map_err(anyhow_to_mcp)?;
         let text = to_json_text(&status)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Flush pending WAL items to Remi.
@@ -1059,7 +1059,7 @@ impl TestMcpServer {
             "status": if failed == 0 { "ok" } else { "partial" },
         });
         let text = to_json_text(&value)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 
@@ -1093,7 +1093,7 @@ impl ServerHandler for TestMcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         let tool_context = ToolCallContext::new(self, request, context);
         async move { self.tool_router.call(tool_context).await }
     }

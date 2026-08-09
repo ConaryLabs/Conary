@@ -112,7 +112,7 @@ mdns-sd = "0.20.0"
 dashmap = "6.0"
 
 # MCP
-rmcp = "1.7.0"
+rmcp = "3.1.2"
 schemars = "1.0"
 
 # Other shared

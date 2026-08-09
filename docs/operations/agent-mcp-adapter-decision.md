@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 9
+last_updated: 2026-08-09
+revision: 10
 summary: Decision record for Conary's stateless MCP adapter path and its current code and test evidence
 ---
 
@@ -14,13 +14,14 @@ discovery behavior on the existing session-based `rmcp` path.
 
 ## Current State
 
-- Workspace requirement: `rmcp = "1.7.0"` in `Cargo.toml`
-- Resolved dependency: `rmcp 1.7.0` in `Cargo.lock`
-- Latest public `rmcp` docs checked on 2026-05-24 list `rmcp 1.7.0`, but still
-  document session/initialize-era types such as `LocalSessionManager` and
-  `InitializeResult`
-- Current Remi and conary-test wiring uses `RoleServer`, `ServerHandler`,
-  `StreamableHttpService`, and `LocalSessionManager`
+- Workspace requirement: `rmcp = "3.1.2"` in `Cargo.toml` (bumped by the
+  #306 stateless migration; resolved to `rmcp 3.1.2` in `Cargo.lock`)
+- Remi's `/mcp` is modern-only stateless Streamable HTTP (protocol revision
+  `2026-07-28`, `NeverSessionManager`, no legacy session mode); the
+  authoritative description is `docs/modules/remi.md`
+- conary-test wiring still uses `RoleServer`, `ServerHandler`,
+  `StreamableHttpService`, and `LocalSessionManager`; that server layer is
+  slated for deletion in the #306 follow-up slice
 - Current live MCP surfaces are tool-only from Conary's product perspective
 - `crates/conary-mcp::stateless` contains the non-live compliance harness for
   request validation, discovery result modeling, cacheable result modeling, and
