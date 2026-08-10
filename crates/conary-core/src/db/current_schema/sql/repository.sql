@@ -443,6 +443,9 @@ CREATE INDEX idx_repository_provides_pkg
 -- capability holds, so the composite is not carried.
 CREATE INDEX idx_repository_provides_capability
             ON repository_provides(capability);
+CREATE INDEX idx_repository_provides_raw
+            ON repository_provides(raw)
+            WHERE raw IS NOT NULL AND raw != '';
 CREATE TABLE repository_requirement_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_package_id INTEGER NOT NULL,
