@@ -1,8 +1,16 @@
 // conary-core/src/container/execution/root_setup.rs
 
 //! Selected-root, namespace, mount, and enforcement setup for sandboxed children.
+//!
+//! Everything below [`Sandbox::child_setup_and_execute`] runs after `fork()` and
+//! before `exec()`, in a process that inherited the parent's lock state. No
+//! `tracing` macro and no subprocess spawn may appear on that path: see
+//! [`crate::container::child_safety`] for why, and `child_fork_safety` in the
+//! container tests for the check that keeps it true.
 
 use super::*;
+use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
+use std::os::unix::ffi::OsStrExt;
 
 impl Sandbox {
     /// Set up the container filesystem with bind mounts.
@@ -66,10 +74,12 @@ impl Sandbox {
 
         if !flags_with_user.is_empty() {
             if let Err(userns_error) = unshare(flags_with_user) {
-                warn!(
-                    "User namespace isolation unavailable ({}); continuing with existing namespace isolation",
-                    userns_error
-                );
+                let mut digits = int_buffer();
+                child_diag(&[
+                    b"user namespace isolation unavailable (errno ",
+                    format_int(&mut digits, userns_error as i64),
+                    b"); continuing with existing namespace isolation",
+                ]);
                 unshare(flags).map_err(|e| sandbox_error(format!("Unshare failed: {e}")))?;
                 signal_parent_user_namespace_ready(userns_sync.as_ref(), false)?;
             } else {
@@ -100,12 +110,13 @@ impl Sandbox {
         }
 
         if self.config.isolate_network
-            && let Ok(status) = std::process::Command::new("ip")
-                .args(["link", "set", "lo", "up"])
-                .status()
-            && !status.success()
+            && let Err(errno) = bring_loopback_up()
         {
-            debug!("Failed to bring up loopback interface");
+            let mut digits = int_buffer();
+            child_diag(&[
+                b"failed to bring up loopback interface: errno ",
+                format_int(&mut digits, errno as i64),
+            ]);
         }
 
         if self.config.isolate_uts && !self.config.hostname.is_empty() {
@@ -116,7 +127,11 @@ impl Sandbox {
                 )
             })?;
             if let Err(err) = sethostname_syscall(&hostname, self.config.hostname.len()) {
-                warn!("sethostname failed: {err}");
+                let mut digits = int_buffer();
+                child_diag(&[
+                    b"sethostname failed: errno ",
+                    format_int(&mut digits, err.raw_os_error().unwrap_or(-1) as i64),
+                ]);
             }
         }
 
@@ -130,17 +145,12 @@ impl Sandbox {
             match enforcement::apply_enforcement(policy) {
                 Ok(report) => {
                     for warning in &report.warnings {
-                        warn!("Enforcement setup: {warning}");
-                    }
-                    if report.landlock_applied {
-                        debug!(
-                            connect_tcp = ?report.connect_tcp_rules,
-                            bind_tcp = ?report.bind_tcp_rules,
-                            "Landlock filesystem/network enforcement active"
-                        );
-                    }
-                    if report.seccomp_applied {
-                        debug!("Seccomp syscall enforcement active");
+                        child_diag(&[
+                            b"enforcement setup: [",
+                            warning.category.as_bytes(),
+                            b"] ",
+                            warning.message.as_bytes(),
+                        ]);
                     }
                 }
                 Err(error) => {
@@ -150,7 +160,7 @@ impl Sandbox {
                             format!("Capability enforcement failed: {error}"),
                         ));
                     }
-                    warn!("Capability enforcement skipped: {error}");
+                    child_diag(&[b"capability enforcement skipped"]);
                 }
             }
         }
@@ -192,10 +202,13 @@ impl Sandbox {
 
         for bind_mount in &self.config.bind_mounts {
             if !bind_mount.source.exists() {
-                debug!(
-                    "Skipping bind mount, source doesn't exist: {:?}",
-                    bind_mount.source
-                );
+                // The hot path: a missing optional bind source is ordinary, and
+                // this ran on essentially every sandbox start. It was the most
+                // frequently executed `tracing` call in the post-fork child.
+                child_diag(&[
+                    b"skipping bind mount, source does not exist: ",
+                    bind_mount.source.as_os_str().as_bytes(),
+                ]);
                 continue;
             }
 
@@ -224,10 +237,15 @@ impl Sandbox {
                 None,
             )
             .map_err(|e| {
-                debug!(
-                    "Bind mount {:?} -> {:?} failed: {}",
-                    bind_mount.source, target, e
-                );
+                let mut digits = int_buffer();
+                child_diag(&[
+                    b"bind mount ",
+                    bind_mount.source.as_os_str().as_bytes(),
+                    b" -> ",
+                    target.as_os_str().as_bytes(),
+                    b" failed: errno ",
+                    format_int(&mut digits, e as i64),
+                ]);
                 sandbox_error(format!("Bind mount failed: {e}"))
             })?;
 
@@ -260,10 +278,10 @@ impl Sandbox {
                     "pivot_root failed ({error}) and chroot fallback is not allowed in Enforce mode"
                 )));
             }
-            warn!(
-                "pivot_root failed ({error}), falling back to chroot. \
-                 This is less secure -- chroot can be escaped by a privileged process."
-            );
+            child_diag(&[
+                b"pivot_root failed, falling back to chroot. ",
+                b"This is less secure -- chroot can be escaped by a privileged process.",
+            ]);
             self.chroot_into(root)?;
         }
 
@@ -302,10 +320,11 @@ impl Sandbox {
         let mut permissions = fs::metadata(target)?.permissions();
         permissions.set_mode(0o444);
         fs::set_permissions(target, permissions)?;
-        warn!(
-            "Falling back to copied read-only {} inside sandbox",
-            target.display()
-        );
+        child_diag(&[
+            b"falling back to copied read-only ",
+            target.as_os_str().as_bytes(),
+            b" inside sandbox",
+        ]);
         Ok(true)
     }
 
@@ -321,7 +340,7 @@ impl Sandbox {
                 message,
             ));
         }
-        warn!("{message}");
+        child_diag(&[message.as_bytes()]);
         Ok(())
     }
 
