@@ -123,8 +123,18 @@ impl LockedRuntimeRoot {
                 return Err(error);
             }
         };
-        let transaction =
-            LiveRootTransaction::begin(runtime_root.root(), &selected_root, session_id, operation)?;
+        let transaction = match LiveRootTransaction::begin(
+            runtime_root.root(),
+            &selected_root,
+            session_id,
+            operation,
+        ) {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(error);
+            }
+        };
         Ok(SelectedRootSession {
             session_dir,
             selected_root,
