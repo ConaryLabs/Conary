@@ -92,11 +92,13 @@ pub(in crate::container) fn format_int(buffer: &mut IntBuffer, value: i64) -> &[
     &buffer[end..]
 }
 
-// Kernel ABI for the loopback interface. These are stable `ioctl` numbers and
-// flag bits; they are spelled out rather than taken from `libc` so the layout
-// this code depends on is visible at the point of use.
-const SIOCGIFFLAGS: libc::c_ulong = 0x8913;
-const SIOCSIFFLAGS: libc::c_ulong = 0x8914;
+// Kernel ABI for the loopback interface. The request numbers and flag bits are
+// stable and spelled out here so the layout this code depends on is visible at
+// the point of use. The request *type* is not stable across libcs -- glibc
+// takes `c_ulong`, musl takes `c_int` -- so it comes from `libc::Ioctl` rather
+// than being written out, which is what the static-musl release legs caught.
+const SIOCGIFFLAGS: libc::Ioctl = 0x8913;
+const SIOCSIFFLAGS: libc::Ioctl = 0x8914;
 const IFF_UP: libc::c_short = 0x1;
 const IFF_RUNNING: libc::c_short = 0x40;
 
