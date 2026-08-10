@@ -267,6 +267,23 @@ impl RemiClient {
     }
 }
 
+/// Result delivery seam used by the WAL replay path.
+///
+/// The production implementation is [`RemiClient`]. Keeping replay behind a
+/// small async trait also lets the WAL contract tests exercise success,
+/// failure, and retry-count behavior without a live Remi service.
+#[async_trait::async_trait]
+pub trait RemiResultPusher: Send + Sync {
+    async fn push_result(&self, run_id: i64, data: &PushResultData) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+impl RemiResultPusher for RemiClient {
+    async fn push_result(&self, run_id: i64, data: &PushResultData) -> Result<()> {
+        RemiClient::push_result(self, run_id, data).await
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -275,7 +292,7 @@ impl RemiClient {
 ///
 /// Matches the `PushTestResultData` type on the Remi server side
 /// (see `apps/remi/src/server/admin_service.rs`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushResultData {
     pub test_id: String,
     pub name: String,
@@ -289,7 +306,7 @@ pub struct PushResultData {
 /// A single step within a test result.
 ///
 /// Matches the `PushStepData` type on the Remi server side.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushStepData {
     pub step_type: String,
     pub command: Option<String>,
@@ -307,9 +324,7 @@ pub struct PushStepData {
 mod tests {
     use super::*;
     use std::ffi::OsString;
-    use std::sync::{LazyLock, Mutex, MutexGuard};
-
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    use std::sync::MutexGuard;
 
     struct EnvVarGuard {
         _lock: MutexGuard<'static, ()>,
@@ -321,9 +336,7 @@ mod tests {
     impl EnvVarGuard {
         fn new() -> Self {
             Self {
-                _lock: ENV_LOCK
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                _lock: crate::test_support::lock_env(),
                 admin_token: std::env::var_os("REMI_ADMIN_TOKEN"),
                 admin_endpoint: std::env::var_os("REMI_ADMIN_ENDPOINT"),
                 legacy_endpoint: std::env::var_os("REMI_ENDPOINT"),

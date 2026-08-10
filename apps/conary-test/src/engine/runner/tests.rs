@@ -634,3 +634,196 @@ async fn test_resource_scoped_flaky_retries_use_fresh_container() {
 }
 
 mod controls;
+
+#[tokio::test]
+async fn push_to_remi_buffers_failed_payload_that_round_trips() {
+    let wal = Arc::new(tokio::sync::Mutex::new(Wal::open(":memory:").unwrap()));
+    let data = build_push_result(
+        "T-BUFFER",
+        "buffer_failure",
+        TestStatus::Failed,
+        23,
+        Some("message\nwith é"),
+        Some(&ExecResult {
+            exit_code: 1,
+            stdout: "stdout\n多 byte".to_string(),
+            stderr: "stderr\nошибка".to_string(),
+        }),
+    );
+    let ctx = RemiStreamCtx {
+        remi_run_id: 41,
+        client: Arc::new(RemiClient::new(
+            "http://127.0.0.1:1".to_string(),
+            "test-token".to_string(),
+        )),
+        wal: Some(wal.clone()),
+    };
+
+    push_to_remi(&ctx, &data).await;
+
+    let wal_guard = wal.lock().await;
+    let items = wal_guard.pending_items().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].run_id, 41);
+    let stored: PushResultData = serde_json::from_str(&items[0].payload).unwrap();
+    assert_eq!(stored, data);
+}
+
+#[tokio::test]
+async fn remi_failure_does_not_change_exit_outcome_or_json_report() {
+    let manifest = make_manifest(vec![TestDef {
+        id: "T-ISOLATION".to_string(),
+        name: "failure_isolation".to_string(),
+        description: "streaming must be observational".to_string(),
+        timeout: 30,
+        flaky: None,
+        retries: None,
+        retry_delay_ms: None,
+        step: vec![simple_step_run(
+            "echo stable",
+            Some(make_assertion(Some(0), Some("stable"))),
+        )],
+        resources: None,
+        depends_on: None,
+        fatal: None,
+        group: None,
+        skip: None,
+        requires: Vec::new(),
+        corpus: None,
+    }]);
+
+    let no_remi_backend = MockBackend::new(vec![ExecResult {
+        exit_code: 0,
+        stdout: "stable".to_string(),
+        stderr: String::new(),
+    }]);
+    let mut no_remi_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let no_remi_suite = no_remi_runner
+        .run(
+            &manifest,
+            &no_remi_backend,
+            &"ctr-no-remi".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let remi_backend = MockBackend::new(vec![ExecResult {
+        exit_code: 0,
+        stdout: "stable".to_string(),
+        stderr: String::new(),
+    }]);
+    let wal = Arc::new(tokio::sync::Mutex::new(Wal::open(":memory:").unwrap()));
+    let ctx = RemiStreamCtx {
+        remi_run_id: 42,
+        client: Arc::new(RemiClient::new(
+            "http://127.0.0.1:1".to_string(),
+            "test-token".to_string(),
+        )),
+        wal: Some(wal.clone()),
+    };
+    let mut remi_runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let remi_suite = remi_runner
+        .run_with_cancel(
+            &manifest,
+            &remi_backend,
+            &"ctr-remi".to_string(),
+            None,
+            None,
+            None,
+            Some(&ctx),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        has_blocking_results(&no_remi_suite),
+        has_blocking_results(&remi_suite)
+    );
+    assert_eq!(
+        comparable_json_report(&no_remi_suite),
+        comparable_json_report(&remi_suite)
+    );
+    assert_eq!(wal.lock().await.pending_count().unwrap(), 1);
+}
+
+#[test]
+fn every_runner_push_shape_round_trips_through_the_wal() {
+    let wal = Wal::open(":memory:").unwrap();
+    let statuses = [
+        TestStatus::Passed,
+        TestStatus::Failed,
+        TestStatus::Skipped,
+        TestStatus::Cancelled,
+    ];
+
+    for (index, status) in statuses.into_iter().enumerate() {
+        let cases = [
+            build_push_result(
+                &format!("T-NONE-{index}"),
+                "without execution",
+                status,
+                0,
+                None,
+                None,
+            ),
+            build_push_result(
+                &format!("T-EXEC-{index}"),
+                "with execution",
+                status,
+                17,
+                Some("message\n多字节"),
+                Some(&ExecResult {
+                    exit_code: -1,
+                    stdout: "stdout\né\n行".to_string(),
+                    stderr: "stderr\nошибка".to_string(),
+                }),
+            ),
+        ];
+
+        for (offset, data) in cases.into_iter().enumerate() {
+            let run_id = i64::try_from(index * 2 + offset).unwrap();
+            wal.buffer(run_id, &serde_json::to_string(&data).unwrap())
+                .unwrap();
+            let item = wal.pending_items().unwrap().pop().unwrap();
+            let decoded: PushResultData = serde_json::from_str(&item.payload).unwrap();
+            assert_eq!(decoded, data);
+            wal.remove(item.id).unwrap();
+        }
+    }
+
+    let explicit_none = PushResultData {
+        test_id: "T-OPTIONALS".to_string(),
+        name: "all optional fields absent".to_string(),
+        status: "passed".to_string(),
+        duration_ms: None,
+        message: None,
+        attempt: None,
+        steps: Vec::new(),
+    };
+    wal.buffer(99, &serde_json::to_string(&explicit_none).unwrap())
+        .unwrap();
+    let item = wal.pending_items().unwrap().pop().unwrap();
+    let decoded: PushResultData = serde_json::from_str(&item.payload).unwrap();
+    assert_eq!(decoded, explicit_none);
+}
+
+fn has_blocking_results(suite: &TestSuite) -> bool {
+    suite.failed() > 0
+        || suite.skipped() > 0
+        || suite.cancelled() > 0
+        || !suite.corpus_all_completed()
+}
+
+fn comparable_json_report(suite: &TestSuite) -> serde_json::Value {
+    let mut report = crate::report::json::to_json_value(suite).unwrap();
+    if let Some(results) = report["results"].as_array_mut() {
+        for result in results {
+            result
+                .as_object_mut()
+                .expect("result is an object")
+                .remove("duration_ms");
+        }
+    }
+    report
+}

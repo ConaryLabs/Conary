@@ -2,11 +2,32 @@
 //! SQLite-backed write-ahead log for buffering test results when Remi is
 //! unreachable.
 //!
-//! Failed POST payloads are stored locally and replayed on the next flush
-//! cycle. Items that exceed a configurable retry limit are purged.
+//! Failed per-test result POST payloads are stored locally and replayed only
+//! by an invocation whose `create_run` call was acknowledged by Remi. A flush
+//! removes successful and unparseable rows, records failed attempts, and
+//! purges rows after [`MAX_FLUSH_ATTEMPTS`] failed flush attempts, logging each
+//! purged row with its retry context. Run-status updates are deliberately not
+//! WAL-buffered; they are best-effort updates made after the aggregate result
+//! flush.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use std::path::Path;
+use tracing::warn;
+
+use crate::remi_client::{PushResultData, RemiResultPusher};
+
+/// Number of failed flush attempts tolerated before a result is discarded.
+pub const MAX_FLUSH_ATTEMPTS: u32 = 5;
+
+/// Counts the work performed by one WAL replay pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FlushOutcome {
+    pub flushed: u64,
+    pub failed: u64,
+    pub discarded: u64,
+    pub purged: u64,
+}
 
 /// SQLite-backed buffer for test result payloads that failed to reach Remi.
 pub struct Wal {
@@ -21,6 +42,7 @@ pub struct PendingItem {
     pub payload: String,
     pub retry_count: u32,
     pub created_at: String,
+    pub last_error: Option<String>,
 }
 
 impl Wal {
@@ -28,7 +50,7 @@ impl Wal {
     ///
     /// Pass `":memory:"` for an ephemeral in-memory database (useful in
     /// tests).
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path).context("failed to open WAL database")?;
 
         conn.execute_batch(
@@ -73,7 +95,7 @@ impl Wal {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, run_id, payload, retry_count, created_at \
+                "SELECT id, run_id, payload, retry_count, created_at, last_error \
                  FROM pending_results ORDER BY id ASC",
             )
             .context("failed to prepare pending_items query")?;
@@ -86,6 +108,7 @@ impl Wal {
                     payload: row.get(2)?,
                     retry_count: row.get(3)?,
                     created_at: row.get(4)?,
+                    last_error: row.get(5)?,
                 })
             })
             .context("failed to query pending WAL items")?
@@ -122,8 +145,25 @@ impl Wal {
 
     /// Delete items whose retry count exceeds `max_retries`.
     ///
-    /// Returns the number of purged rows.
+    /// The doomed rows are read and logged before deletion so result loss is
+    /// observable rather than a silent retry cap.
     pub fn purge_dead(&self, max_retries: u32) -> Result<u64> {
+        let doomed = self
+            .pending_items()?
+            .into_iter()
+            .filter(|item| item.retry_count > max_retries)
+            .collect::<Vec<_>>();
+
+        for item in &doomed {
+            warn!(
+                id = item.id,
+                run_id = item.run_id,
+                retry_count = item.retry_count,
+                last_error = ?item.last_error,
+                "purging WAL result after retry limit"
+            );
+        }
+
         let deleted = self
             .conn
             .execute(
@@ -137,36 +177,66 @@ impl Wal {
 
 /// Attempt to flush all pending WAL items to Remi.
 ///
-/// Returns `(flushed_count, failed_count)`. Items with unparseable payloads
-/// are silently removed rather than retried indefinitely.
-pub async fn flush(wal: &Wal, client: &crate::remi_client::RemiClient) -> (u64, u64) {
-    let items = wal.pending_items().unwrap_or_default();
-    let mut flushed = 0u64;
-    let mut failed = 0u64;
+/// Items with unparseable payloads are removed and counted as discarded. After
+/// the replay pass, failed rows beyond the retry threshold are purged.
+pub async fn flush<C>(wal: &Wal, client: &C) -> FlushOutcome
+where
+    C: RemiResultPusher + ?Sized,
+{
+    let items = match wal.pending_items() {
+        Ok(items) => items,
+        Err(error) => {
+            warn!(error = %error, "failed to read WAL items for flush");
+            return FlushOutcome::default();
+        }
+    };
+    let mut outcome = FlushOutcome::default();
 
     for item in items {
-        let data: crate::remi_client::PushResultData = match serde_json::from_str(&item.payload) {
+        let data: PushResultData = match serde_json::from_str(&item.payload) {
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!("WAL item {} has invalid payload: {}", item.id, e);
-                let _ = wal.remove(item.id);
+                match wal.remove(item.id) {
+                    Ok(()) => outcome.discarded += 1,
+                    Err(remove_error) => warn!(
+                        id = item.id,
+                        error = %remove_error,
+                        "failed to discard invalid WAL item"
+                    ),
+                }
                 continue;
             }
         };
 
         match client.push_result(item.run_id, &data).await {
-            Ok(()) => {
-                let _ = wal.remove(item.id);
-                flushed += 1;
-            }
+            Ok(()) => match wal.remove(item.id) {
+                Ok(()) => outcome.flushed += 1,
+                Err(remove_error) => warn!(
+                    id = item.id,
+                    error = %remove_error,
+                    "failed to remove flushed WAL item"
+                ),
+            },
             Err(e) => {
-                let _ = wal.mark_retry(item.id, &e.to_string());
-                failed += 1;
+                outcome.failed += 1;
+                if let Err(mark_error) = wal.mark_retry(item.id, &e.to_string()) {
+                    warn!(
+                        id = item.id,
+                        error = %mark_error,
+                        "failed to record WAL retry"
+                    );
+                }
             }
         }
     }
 
-    (flushed, failed)
+    match wal.purge_dead(MAX_FLUSH_ATTEMPTS - 1) {
+        Ok(purged) => outcome.purged = purged,
+        Err(error) => warn!(error = %error, "failed to purge dead WAL items"),
+    }
+
+    outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +246,63 @@ pub async fn flush(wal: &Wal, client: &crate::remi_client::RemiClient) -> (u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remi_client::{PushStepData, RemiResultPusher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct FakePusher {
+        calls: AtomicU64,
+        fail: bool,
+    }
+
+    impl FakePusher {
+        fn working() -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                fail: false,
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                fail: true,
+            }
+        }
+
+        fn calls(&self) -> u64 {
+            self.calls.load(Ordering::Relaxed)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RemiResultPusher for FakePusher {
+        async fn push_result(&self, _run_id: i64, _data: &PushResultData) -> Result<()> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.fail {
+                anyhow::bail!("fake Remi unavailable");
+            }
+            Ok(())
+        }
+    }
+
+    fn push_data() -> PushResultData {
+        PushResultData {
+            test_id: "T-WAL".to_string(),
+            name: "wal_replay".to_string(),
+            status: "failed".to_string(),
+            duration_ms: Some(12),
+            message: Some("failed once".to_string()),
+            attempt: Some(1),
+            steps: vec![PushStepData {
+                step_type: "exec".to_string(),
+                command: Some("true".to_string()),
+                exit_code: Some(1),
+                duration_ms: Some(12),
+                stdout: Some(String::new()),
+                stderr: Some("failure".to_string()),
+            }],
+        }
+    }
 
     #[test]
     fn test_buffer_and_retrieve() {
@@ -208,6 +335,65 @@ mod tests {
 
         let items = wal.pending_items().unwrap();
         assert_eq!(items[0].retry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn flush_replays_buffered_result_and_removes_row() {
+        let wal = Wal::open(":memory:").unwrap();
+        let data = push_data();
+        wal.buffer(7, &serde_json::to_string(&data).unwrap())
+            .unwrap();
+        let client = FakePusher::working();
+
+        let outcome = flush(&wal, &client).await;
+
+        assert_eq!(outcome.flushed, 1);
+        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.discarded, 0);
+        assert_eq!(outcome.purged, 0);
+        assert_eq!(wal.pending_count().unwrap(), 0);
+        assert_eq!(client.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn flush_purges_after_five_failed_attempts() {
+        let wal = Wal::open(":memory:").unwrap();
+        let data = push_data();
+        wal.buffer(7, &serde_json::to_string(&data).unwrap())
+            .unwrap();
+        let client = FakePusher::failing();
+
+        for attempt in 1..=MAX_FLUSH_ATTEMPTS {
+            let outcome = flush(&wal, &client).await;
+            assert_eq!(outcome.failed, 1);
+            assert_eq!(outcome.flushed, 0);
+            assert_eq!(outcome.discarded, 0);
+            if attempt < MAX_FLUSH_ATTEMPTS {
+                assert_eq!(outcome.purged, 0);
+                assert_eq!(wal.pending_count().unwrap(), 1);
+            } else {
+                assert_eq!(outcome.purged, 1);
+                assert_eq!(wal.pending_count().unwrap(), 0);
+            }
+        }
+
+        assert_eq!(client.calls(), u64::from(MAX_FLUSH_ATTEMPTS));
+    }
+
+    #[tokio::test]
+    async fn flush_counts_and_removes_unparseable_payloads() {
+        let wal = Wal::open(":memory:").unwrap();
+        wal.buffer(7, "not-json").unwrap();
+        let client = FakePusher::working();
+
+        let outcome = flush(&wal, &client).await;
+
+        assert_eq!(outcome.discarded, 1);
+        assert_eq!(outcome.flushed, 0);
+        assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.purged, 0);
+        assert_eq!(wal.pending_count().unwrap(), 0);
+        assert_eq!(client.calls(), 0);
     }
 
     #[test]

@@ -459,9 +459,13 @@ fn run_single_distro(
         backend.start(&container_id).await?;
         tracing::info!(distro, id = %container_id, "Container started");
 
+        let aggregate_suite_name = format!("phase-{phase}");
         let mut aggregate_suite =
-            conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
+            conary_test::engine::suite::TestSuite::new(&aggregate_suite_name, phase);
         aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
+        let remi_run =
+            conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase)
+                .await;
 
         for manifest_path in &manifest_paths {
             let manifest = conary_test::config::load_manifest(manifest_path)
@@ -478,7 +482,15 @@ fn run_single_distro(
             let mut runner =
                 conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
             let suite = runner
-                .run(&manifest, &backend, &container_id, Some(&container_config))
+                .run_with_cancel(
+                    &manifest,
+                    &backend,
+                    &container_id,
+                    Some(&container_config),
+                    None,
+                    None,
+                    remi_run.as_ref().map(|run| run.context()),
+                )
                 .await?;
             aggregate_suite.expect_corpus_cases(suite.corpus_expected());
             for result in suite.results {
@@ -489,6 +501,9 @@ fn run_single_distro(
             }
         }
         aggregate_suite.finish();
+        if let Some(remi_run) = &remi_run {
+            remi_run.finish(&aggregate_suite).await;
+        }
 
         // Print JSON results.
         let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
@@ -548,9 +563,12 @@ async fn run_qemu_only_suite(
     let dummy_container_id: conary_test::container::ContainerId = "qemu-standalone".to_string();
     let dummy_config = conary_test::container::ContainerConfig::default();
 
+    let aggregate_suite_name = format!("phase-{phase}");
     let mut aggregate_suite =
-        conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
+        conary_test::engine::suite::TestSuite::new(&aggregate_suite_name, phase);
     aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
+    let remi_run =
+        conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase).await;
 
     for manifest_path in manifest_paths {
         let manifest = conary_test::config::load_manifest(manifest_path)
@@ -559,11 +577,14 @@ async fn run_qemu_only_suite(
         let mut runner =
             conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
         let suite = runner
-            .run(
+            .run_with_cancel(
                 &manifest,
                 &dummy_backend,
                 &dummy_container_id,
                 Some(&dummy_config),
+                None,
+                None,
+                remi_run.as_ref().map(|run| run.context()),
             )
             .await?;
         aggregate_suite.expect_corpus_cases(suite.corpus_expected());
@@ -575,6 +596,9 @@ async fn run_qemu_only_suite(
         }
     }
     aggregate_suite.finish();
+    if let Some(remi_run) = &remi_run {
+        remi_run.finish(&aggregate_suite).await;
+    }
 
     let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
     println!("{json}");
