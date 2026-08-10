@@ -162,6 +162,17 @@ impl TestSuite {
             && conary_core::corpus::aggregate_cases(&self.corpus_cases).all_completed()
     }
 
+    /// Whether anything in this suite blocks calling the run a success.
+    ///
+    /// One owner for a rule the CLI exit status, the QEMU-only path, and the
+    /// Remi run status all have to agree on.
+    pub fn has_blocking_results(&self) -> bool {
+        self.failed() > 0
+            || self.skipped() > 0
+            || self.cancelled() > 0
+            || !self.corpus_all_completed()
+    }
+
     pub fn finish(&mut self) {
         // Preserve Cancelled status when every test was cancelled (the run
         // was stopped via cancel flag, not because tests naturally finished).

@@ -31,7 +31,7 @@ pub struct RemiStreamCtx {
     /// Remi run ID returned by `create_run`.
     pub remi_run_id: i64,
     pub client: Arc<RemiClient>,
-    pub wal: Option<Arc<std::sync::Mutex<Wal>>>,
+    pub wal: Option<Arc<tokio::sync::Mutex<Wal>>>,
 }
 
 /// Executes tests from a manifest against a container.
@@ -800,12 +800,18 @@ async fn push_to_remi(ctx: &RemiStreamCtx, data: &PushResultData) {
                 error = %e,
                 "failed to push result to Remi, buffering to WAL"
             );
-            if let Some(ref wal) = ctx.wal
-                && let Ok(json) = serde_json::to_string(data)
-                && let Ok(wal_guard) = wal.lock()
-                && let Err(wal_err) = wal_guard.buffer(ctx.remi_run_id, &json)
-            {
-                warn!(error = %wal_err, "failed to buffer result in WAL");
+            if let Some(ref wal) = ctx.wal {
+                match serde_json::to_string(data) {
+                    Ok(json) => {
+                        let wal_guard = wal.lock().await;
+                        if let Err(wal_err) = wal_guard.buffer(ctx.remi_run_id, &json) {
+                            warn!(error = %wal_err, "failed to buffer result in WAL");
+                        }
+                    }
+                    Err(json_error) => {
+                        warn!(error = %json_error, "failed to serialize result for WAL");
+                    }
+                }
             }
         }
     }
