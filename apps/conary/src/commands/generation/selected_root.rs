@@ -32,6 +32,109 @@ pub(crate) struct SelectedRootSession {
     deferred_ima: DeferredImaAuthority,
 }
 
+/// The runtime mutation lock, held before any package authority is read.
+///
+/// [`SelectedRootSession::begin`] takes this lock and materializes the selected
+/// root in one step, which is what a caller whose planning is already complete
+/// wants. A caller that must certify a transaction against installed state --
+/// requirement satisfaction, promise reliance, negative relation effects --
+/// acquires this first and reads those facts with the lock already held, so
+/// nothing it certifies can change before it commits. Materialization is the
+/// expensive half, so keeping it separate also lets a rejected transaction fail
+/// without paying for a root it will never mutate.
+///
+/// Dropping without materializing releases the lock and leaves no session
+/// directory behind, because the directory is created by `materialize`.
+pub(crate) struct LockedRuntimeRoot {
+    runtime_root: ConaryRuntimeRoot,
+    session_dir: PathBuf,
+    session_id: String,
+    transaction_engine: TransactionEngine,
+}
+
+impl LockedRuntimeRoot {
+    /// Acquire the runtime mutation lock for the runtime root owning `db_path`.
+    pub(crate) fn acquire(db_path: &str) -> Result<Self> {
+        Self::acquire_for_runtime(ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path)))
+    }
+
+    fn acquire_for_runtime(runtime_root: ConaryRuntimeRoot) -> Result<Self> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_dir = runtime_root
+            .root()
+            .join("selected-root-sessions")
+            .join(&session_id);
+        Self::acquire_in_session_dir(runtime_root, session_dir, session_id)
+    }
+
+    fn acquire_in_session_dir(
+        runtime_root: ConaryRuntimeRoot,
+        session_dir: PathBuf,
+        session_id: String,
+    ) -> Result<Self> {
+        // The runtime transaction lock is acquired before reading either
+        // SQLite package authority or the selected generation. Holding it
+        // through candidate persistence and the caller-owned DB commit makes
+        // the materialized root a serializable mutation base.
+        let mut transaction_engine =
+            TransactionEngine::new(TransactionConfig::for_runtime_root(&runtime_root))?;
+        transaction_engine.begin()?;
+        Ok(Self {
+            runtime_root,
+            session_dir,
+            session_id,
+            transaction_engine,
+        })
+    }
+
+    /// Materialize installed package state into a writable selected root.
+    ///
+    /// Consumes the lock holder: the lock is not released here, it moves into
+    /// the returned session and is released when that session finishes.
+    pub(crate) fn materialize(
+        self,
+        conn: &rusqlite::Connection,
+        operation: impl Into<String>,
+    ) -> Result<SelectedRootSession> {
+        let Self {
+            runtime_root,
+            session_dir,
+            session_id,
+            transaction_engine,
+        } = self;
+        let selected_root = session_dir.join("root");
+        fs::create_dir_all(&selected_root).with_context(|| {
+            format!(
+                "failed to create selected generation root {}",
+                selected_root.display()
+            )
+        })?;
+        let materialized = match materialize_current_root(conn, &runtime_root, &selected_root) {
+            Ok(materialized) => materialized,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(error);
+            }
+        };
+        let deferred_ima = match DeferredImaAuthority::from_captured(&materialized) {
+            Ok(authority) => authority,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(error);
+            }
+        };
+        let transaction =
+            LiveRootTransaction::begin(runtime_root.root(), &selected_root, session_id, operation)?;
+        Ok(SelectedRootSession {
+            session_dir,
+            selected_root,
+            transaction: Some(transaction),
+            transaction_engine,
+            deferred_ima,
+        })
+    }
+}
+
 impl SelectedRootSession {
     pub(crate) fn begin(
         conn: &rusqlite::Connection,
@@ -79,43 +182,8 @@ impl SelectedRootSession {
         session_id: String,
         operation: impl Into<String>,
     ) -> Result<Self> {
-        // The runtime transaction lock is acquired before reading either
-        // SQLite package authority or the selected generation. Holding it
-        // through candidate persistence and the caller-owned DB commit makes
-        // the materialized root a serializable mutation base.
-        let mut transaction_engine =
-            TransactionEngine::new(TransactionConfig::for_runtime_root(runtime_root))?;
-        transaction_engine.begin()?;
-        let selected_root = session_dir.join("root");
-        fs::create_dir_all(&selected_root).with_context(|| {
-            format!(
-                "failed to create selected generation root {}",
-                selected_root.display()
-            )
-        })?;
-        let materialized = match materialize_current_root(conn, runtime_root, &selected_root) {
-            Ok(materialized) => materialized,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&session_dir);
-                return Err(error);
-            }
-        };
-        let deferred_ima = match DeferredImaAuthority::from_captured(&materialized) {
-            Ok(authority) => authority,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&session_dir);
-                return Err(error);
-            }
-        };
-        let transaction =
-            LiveRootTransaction::begin(runtime_root.root(), &selected_root, session_id, operation)?;
-        Ok(Self {
-            session_dir,
-            selected_root,
-            transaction: Some(transaction),
-            transaction_engine,
-            deferred_ima,
-        })
+        LockedRuntimeRoot::acquire_in_session_dir(runtime_root.clone(), session_dir, session_id)?
+            .materialize(conn, operation)
     }
 
     pub(crate) fn selected_root(&self) -> &Path {

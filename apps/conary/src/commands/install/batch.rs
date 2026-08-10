@@ -287,8 +287,6 @@ impl<'a> BatchInstaller<'a> {
 
         // Open database connection
         let mut conn = open_db(self.db_path)?;
-        let mut promise_plan = ordering::order_packages_for_transaction(&conn, &mut packages)?;
-        self.plan_package_relations_for_batch(&conn, &mut packages)?;
         // Build transaction description
         let tx_description = if package_count == 1 {
             format!("Install {}-{}", packages[0].name, packages[0].version)
@@ -299,12 +297,19 @@ impl<'a> BatchInstaller<'a> {
                 package_count - 1
             )
         };
-        let mut selected_root =
-            crate::commands::generation::selected_root::SelectedRootSession::begin(
-                &conn,
-                self.db_path,
-                &tx_description,
-            )?;
+
+        // Every fact this transaction certifies is read from installed state:
+        // requirement satisfaction against the end-state universe, promise
+        // reliance, and the negative relation effects of the incoming set. All
+        // of it is read with the runtime mutation lock already held. Certifying
+        // first and locking second would let another transaction remove a
+        // provider this certification relied on, and the database would commit
+        // an end state missing a capability the batch was admitted on.
+        let locked_root =
+            crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(self.db_path)?;
+        let mut promise_plan = ordering::order_packages_for_transaction(&conn, &mut packages)?;
+        self.plan_package_relations_for_batch(&conn, &mut packages)?;
+        let mut selected_root = locked_root.materialize(&conn, &tx_description)?;
         let selected_path = selected_root.selected_root().to_path_buf();
         for package in &mut packages {
             package.normalize_ccs_for_selected_root(&selected_path)?;
@@ -355,23 +360,6 @@ impl<'a> BatchInstaller<'a> {
         let cas = selected_root.cas().clone();
 
         info!("Started batch transaction for {}", tx_description);
-
-        // Planning began before we waited for the runtime mutation lock. The
-        // selected-root session now owns that lock, so revalidate every exact
-        // relation transition against the serialized database state.
-        for package in &packages {
-            conary_core::transaction::validate_package_relation_transitions(
-                &conn,
-                &package.relation_removals,
-                &package.relation_deconfigurations,
-            )
-            .with_context(|| {
-                format!(
-                    "package relation transaction preflight changed for {}",
-                    package.name
-                )
-            })?;
-        }
 
         // Phase 1: Unified planning across all packages
         // Collect all files and detect cross-package conflicts
