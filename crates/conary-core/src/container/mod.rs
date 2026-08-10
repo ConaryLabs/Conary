@@ -44,10 +44,15 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use tracing::{debug, warn};
+use tracing::warn;
 
 mod analysis;
+#[cfg(test)]
+mod child_fork_safety;
+mod child_safety;
 mod namespaces;
+
+use child_safety::set_rlimit;
 
 pub use analysis::{ScriptAnalysis, ScriptRisk, analyze_script};
 use namespaces::{
@@ -525,18 +530,6 @@ pub struct Sandbox {
 }
 
 mod execution;
-/// Set a resource limit if the value is non-zero
-fn set_rlimit(resource: RlimitResource, value: u64, name: &str) {
-    if value > 0 {
-        let limit = libc::rlimit {
-            rlim_cur: value,
-            rlim_max: value,
-        };
-        if let Err(err) = set_rlimit_syscall(resource, &limit) {
-            warn!("setrlimit {} failed: {}", name, err);
-        }
-    }
-}
 
 /// Check if namespace isolation is available
 pub fn isolation_available() -> bool {
