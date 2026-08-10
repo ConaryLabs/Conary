@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use crate::build_info::BuildInfo;
 use crate::engine::runner::RemiStreamCtx;
-use crate::engine::suite::TestSuite;
+use crate::engine::suite::{RunStatus, TestSuite};
 use crate::paths;
 use crate::remi_client::RemiClient;
 use crate::wal::{self, Wal};
@@ -68,13 +68,22 @@ impl LocalRemiRun {
         &self.context
     }
 
-    /// Flush this run's WAL before closing the acknowledged Remi run.
-    pub async fn finish(&self, suite: &TestSuite) {
-        // Do not mark a run terminal while its own failed result deliveries
-        // are still buffered.
+    /// Flush this run's WAL, then close the acknowledged Remi run.
+    ///
+    /// `aborted` marks an invocation that ended on an error before every
+    /// manifest ran. The run is still closed: an acknowledged run left at its
+    /// `pending` default is indistinguishable from one still in flight, which
+    /// is the opposite of what this surface exists to report.
+    ///
+    /// The flush runs first so a run is never marked terminal ahead of results
+    /// it could still have delivered. It is ordering, not a gate — the status
+    /// update is best-effort and proceeds whatever the flush outcome, because a
+    /// run left open forever is worse than one whose last results arrive on a
+    /// later flush.
+    pub async fn finish(&self, suite: &TestSuite, aborted: bool) {
         self.flush_wal("final").await;
 
-        let status = terminal_status(suite);
+        let status = terminal_status(suite, aborted);
         let total = count_as_u32(suite.total());
         let passed = count_as_u32(suite.passed());
         let failed = count_as_u32(suite.failed());
@@ -154,10 +163,22 @@ fn open_wal() -> Option<Arc<tokio::sync::Mutex<Wal>>> {
     }
 }
 
-fn terminal_status(suite: &TestSuite) -> &'static str {
-    if suite.cancelled() > 0 {
+/// Project a finished local suite onto Remi's run-status vocabulary.
+///
+/// An invocation that `aborted` never finished its manifests, so its counts
+/// describe only the part that ran and cannot say the run passed.
+///
+/// Whether a run counts as cancelled is [`TestSuite::finish`]'s decision, not a
+/// second rule here: it is deliberately narrower than "some test was
+/// cancelled", and two rules under one word would let the same run read
+/// `completed` locally and `cancelled` on Remi. What this function adds is the
+/// pass/fail judgement, which the local lifecycle status does not carry.
+fn terminal_status(suite: &TestSuite, aborted: bool) -> &'static str {
+    if aborted {
+        "failed"
+    } else if suite.status == RunStatus::Cancelled {
         "cancelled"
-    } else if suite.failed() > 0 || suite.skipped() > 0 || !suite.corpus_all_completed() {
+    } else if suite.has_blocking_results() {
         "failed"
     } else {
         "passed"
@@ -171,6 +192,7 @@ fn count_as_u32(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::suite::TestResult;
     use std::ffi::OsString;
 
     struct EnvGuard {
@@ -243,10 +265,79 @@ mod tests {
         assert!(!state_dir.join(WAL_FILENAME).exists());
     }
 
+    fn result(id: &str, status: crate::engine::suite::TestStatus) -> TestResult {
+        TestResult {
+            id: id.to_string(),
+            name: id.to_string(),
+            status,
+            duration_ms: 1,
+            message: None,
+            stdout: None,
+            stderr: None,
+            attempts: Vec::new(),
+        }
+    }
+
+    fn finished(results: Vec<TestResult>) -> TestSuite {
+        let mut suite = TestSuite::new("phase-1", 1);
+        for result in results {
+            suite.record(result);
+        }
+        suite.finish();
+        suite
+    }
+
     #[test]
     fn terminal_status_matches_cli_outcome_categories() {
-        let mut passed = TestSuite::new("phase-1", 1);
-        passed.finish();
-        assert_eq!(terminal_status(&passed), "passed");
+        use crate::engine::suite::TestStatus;
+
+        assert_eq!(terminal_status(&finished(Vec::new()), false), "passed");
+        assert_eq!(
+            terminal_status(&finished(vec![result("T1", TestStatus::Passed)]), false),
+            "passed"
+        );
+        assert_eq!(
+            terminal_status(&finished(vec![result("T1", TestStatus::Failed)]), false),
+            "failed"
+        );
+        assert_eq!(
+            terminal_status(&finished(vec![result("T1", TestStatus::Skipped)]), false),
+            "failed"
+        );
+    }
+
+    /// An invocation that died before running every manifest is closed as
+    /// failed, never left at the `pending` default where it is
+    /// indistinguishable from a run still in flight.
+    #[test]
+    fn an_aborted_invocation_is_closed_as_failed_whatever_ran() {
+        use crate::engine::suite::TestStatus;
+
+        let all_passed = finished(vec![result("T1", TestStatus::Passed)]);
+        assert_eq!(terminal_status(&all_passed, false), "passed");
+        assert_eq!(terminal_status(&all_passed, true), "failed");
+
+        let cancelled = finished(vec![result("T1", TestStatus::Cancelled)]);
+        assert_eq!(terminal_status(&cancelled, false), "cancelled");
+        assert_eq!(terminal_status(&cancelled, true), "failed");
+    }
+
+    /// A run is cancelled only when [`TestSuite::finish`] says so. Deriving
+    /// cancellation here from `cancelled() > 0` instead would report a run as
+    /// `cancelled` on Remi that the local report calls `completed`.
+    #[test]
+    fn a_partly_cancelled_run_is_not_reported_as_a_cancelled_run() {
+        use crate::engine::suite::{RunStatus, TestStatus};
+
+        let all_cancelled = finished(vec![result("T1", TestStatus::Cancelled)]);
+        assert_eq!(all_cancelled.status, RunStatus::Cancelled);
+        assert_eq!(terminal_status(&all_cancelled, false), "cancelled");
+
+        let partly_cancelled = finished(vec![
+            result("T1", TestStatus::Passed),
+            result("T2", TestStatus::Cancelled),
+        ]);
+        assert_eq!(partly_cancelled.status, RunStatus::Completed);
+        assert_eq!(terminal_status(&partly_cancelled, false), "failed");
     }
 }

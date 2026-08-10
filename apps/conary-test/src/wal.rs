@@ -13,12 +13,17 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
+use std::time::Duration;
 use tracing::warn;
 
 use crate::remi_client::{PushResultData, RemiResultPusher};
 
 /// Number of failed flush attempts tolerated before a result is discarded.
 pub const MAX_FLUSH_ATTEMPTS: u32 = 5;
+
+/// How long a writer waits for a concurrent `conary-test` process to release
+/// the shared WAL file before giving up.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Counts the work performed by one WAL replay pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -50,8 +55,15 @@ impl Wal {
     ///
     /// Pass `":memory:"` for an ephemeral in-memory database (useful in
     /// tests).
+    ///
+    /// The WAL path is shared by every `conary-test` process on the host, so a
+    /// second concurrent run would otherwise take an immediate `SQLITE_BUSY`
+    /// and drop the result it was trying to buffer. Waiting is always better
+    /// than losing the row this file exists to keep.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path).context("failed to open WAL database")?;
+        conn.busy_timeout(BUSY_TIMEOUT)
+            .context("failed to set WAL busy timeout")?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS pending_results (
@@ -302,6 +314,22 @@ mod tests {
                 stderr: Some("failure".to_string()),
             }],
         }
+    }
+
+    /// Every `conary-test` process on the host shares one WAL file, so a
+    /// writer must wait for a concurrent one rather than take an immediate
+    /// `SQLITE_BUSY` and drop the result it was buffering.
+    #[test]
+    fn open_configures_a_busy_timeout_for_concurrent_writers() {
+        let wal = Wal::open(":memory:").unwrap();
+
+        let configured: i64 = wal
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(configured, BUSY_TIMEOUT.as_millis() as i64);
+        assert!(configured > 0);
     }
 
     #[test]

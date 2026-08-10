@@ -737,8 +737,8 @@ async fn remi_failure_does_not_change_exit_outcome_or_json_report() {
         .unwrap();
 
     assert_eq!(
-        has_blocking_results(&no_remi_suite),
-        has_blocking_results(&remi_suite)
+        no_remi_suite.has_blocking_results(),
+        remi_suite.has_blocking_results()
     );
     assert_eq!(
         comparable_json_report(&no_remi_suite),
@@ -806,13 +806,6 @@ fn every_runner_push_shape_round_trips_through_the_wal() {
     let item = wal.pending_items().unwrap().pop().unwrap();
     let decoded: PushResultData = serde_json::from_str(&item.payload).unwrap();
     assert_eq!(decoded, explicit_none);
-}
-
-fn has_blocking_results(suite: &TestSuite) -> bool {
-    suite.failed() > 0
-        || suite.skipped() > 0
-        || suite.cancelled() > 0
-        || !suite.corpus_all_completed()
 }
 
 fn comparable_json_report(suite: &TestSuite) -> serde_json::Value {

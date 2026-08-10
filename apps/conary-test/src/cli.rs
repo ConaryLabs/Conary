@@ -467,43 +467,58 @@ fn run_single_distro(
             conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase)
                 .await;
 
-        for manifest_path in &manifest_paths {
-            let manifest = conary_test::config::load_manifest(manifest_path)
-                .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
-            initialize_container_state(
-                config,
-                distro,
-                manifest.suite.phase > 1,
-                &backend,
-                &container_id,
-            )
-            .await?;
-
-            let mut runner =
-                conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
-            let suite = runner
-                .run_with_cancel(
-                    &manifest,
+        // The manifest loop is fallible, and an acknowledged Remi run must be
+        // closed on that path too: a run left at its `pending` default reads as
+        // still in flight forever.
+        let manifest_outcome: Result<()> = async {
+            for manifest_path in &manifest_paths {
+                let manifest =
+                    conary_test::config::load_manifest(manifest_path).with_context(|| {
+                        format!("failed to load manifest: {}", manifest_path.display())
+                    })?;
+                initialize_container_state(
+                    config,
+                    distro,
+                    manifest.suite.phase > 1,
                     &backend,
                     &container_id,
-                    Some(&container_config),
-                    None,
-                    None,
-                    remi_run.as_ref().map(|run| run.context()),
                 )
                 .await?;
-            aggregate_suite.expect_corpus_cases(suite.corpus_expected());
-            for result in suite.results {
-                aggregate_suite.record(result);
+
+                let mut runner = conary_test::engine::runner::TestRunner::new(
+                    config.clone(),
+                    distro.to_string(),
+                );
+                let suite = runner
+                    .run_with_cancel(
+                        &manifest,
+                        &backend,
+                        &container_id,
+                        Some(&container_config),
+                        None,
+                        None,
+                        remi_run.as_ref().map(|run| run.context()),
+                    )
+                    .await?;
+                aggregate_suite.expect_corpus_cases(suite.corpus_expected());
+                for result in suite.results {
+                    aggregate_suite.record(result);
+                }
+                for case in suite.corpus_cases {
+                    aggregate_suite.record_corpus(case);
+                }
             }
-            for case in suite.corpus_cases {
-                aggregate_suite.record_corpus(case);
-            }
+            Ok(())
         }
+        .await;
+
         aggregate_suite.finish();
         if let Some(remi_run) = &remi_run {
-            remi_run.finish(&aggregate_suite).await;
+            remi_run
+                .finish(&aggregate_suite, manifest_outcome.is_err())
+                .await;
         }
+        manifest_outcome?;
 
         // Print JSON results.
         let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
@@ -514,10 +529,7 @@ fn run_single_distro(
         conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
         tracing::info!(path = %results_file.display(), "Results written");
 
-        let has_blocking_results = aggregate_suite.failed() > 0
-            || aggregate_suite.skipped() > 0
-            || aggregate_suite.cancelled() > 0
-            || !aggregate_suite.corpus_all_completed();
+        let has_blocking_results = aggregate_suite.has_blocking_results();
 
         // Cleanup container.
         let keep_container = std::env::var("CONARY_TEST_KEEP_CONTAINER")
@@ -570,35 +582,44 @@ async fn run_qemu_only_suite(
     let remi_run =
         conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase).await;
 
-    for manifest_path in manifest_paths {
-        let manifest = conary_test::config::load_manifest(manifest_path)
-            .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
+    // Fallible loop, closed run on both exits — see the container path.
+    let manifest_outcome: Result<()> = async {
+        for manifest_path in manifest_paths {
+            let manifest = conary_test::config::load_manifest(manifest_path)
+                .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
 
-        let mut runner =
-            conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
-        let suite = runner
-            .run_with_cancel(
-                &manifest,
-                &dummy_backend,
-                &dummy_container_id,
-                Some(&dummy_config),
-                None,
-                None,
-                remi_run.as_ref().map(|run| run.context()),
-            )
-            .await?;
-        aggregate_suite.expect_corpus_cases(suite.corpus_expected());
-        for result in suite.results {
-            aggregate_suite.record(result);
+            let mut runner =
+                conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
+            let suite = runner
+                .run_with_cancel(
+                    &manifest,
+                    &dummy_backend,
+                    &dummy_container_id,
+                    Some(&dummy_config),
+                    None,
+                    None,
+                    remi_run.as_ref().map(|run| run.context()),
+                )
+                .await?;
+            aggregate_suite.expect_corpus_cases(suite.corpus_expected());
+            for result in suite.results {
+                aggregate_suite.record(result);
+            }
+            for case in suite.corpus_cases {
+                aggregate_suite.record_corpus(case);
+            }
         }
-        for case in suite.corpus_cases {
-            aggregate_suite.record_corpus(case);
-        }
+        Ok(())
     }
+    .await;
+
     aggregate_suite.finish();
     if let Some(remi_run) = &remi_run {
-        remi_run.finish(&aggregate_suite).await;
+        remi_run
+            .finish(&aggregate_suite, manifest_outcome.is_err())
+            .await;
     }
+    manifest_outcome?;
 
     let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
     println!("{json}");
@@ -607,10 +628,7 @@ async fn run_qemu_only_suite(
     conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
     tracing::info!(path = %results_file.display(), "Results written");
 
-    Ok(aggregate_suite.failed() == 0
-        && aggregate_suite.skipped() == 0
-        && aggregate_suite.cancelled() == 0
-        && aggregate_suite.corpus_all_completed())
+    Ok(!aggregate_suite.has_blocking_results())
 }
 
 // ---------------------------------------------------------------------------
