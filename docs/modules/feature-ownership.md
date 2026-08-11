@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-08
-revision: 66
-summary: Route feature ownership through typed database rebuilds, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+last_updated: 2026-08-11
+revision: 67
+summary: Route feature ownership through typed database rebuilds, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -441,6 +441,7 @@ package transactions.
 **Start here:** `crates/conary-core/src/repository/trust.rs`;
 `crates/conary-core/src/repository/declarations/`;
 `docs/specs/native-repository-declarations.md`;
+`docs/specs/native-repository-trust-import.md`;
 `crates/conary-core/src/repository/trust/openpgp.rs`;
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
@@ -503,6 +504,8 @@ output changes.
 `docs/llms/subsystem-map.md`; `docs/ARCHITECTURE.md`;
 `docs/specs/native-repository-declarations.md` when declaration grammar,
 selected-root discovery, or its no-enrollment boundary changes;
+`docs/specs/native-repository-trust-import.md` when trust-import disposition,
+evidence, or selected-root key planning changes;
 `docs/specs/foreign-package-lifecycle-contracts.md` when native relation
 semantics change.
 

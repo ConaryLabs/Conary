@@ -15,6 +15,7 @@ pub mod apt;
 pub mod discovery;
 pub mod dnf;
 mod ini;
+pub mod trust_import;
 pub mod zypper;
 
 #[cfg(test)]

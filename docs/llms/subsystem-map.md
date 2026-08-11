@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-09
-revision: 64
-summary: Route typed database rebuilds, lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
+last_updated: 2026-08-11
+revision: 65
+summary: Route typed database rebuilds, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -117,7 +117,8 @@ commands.
   `docs/modules/feature-ownership.md` slug `resolution`, plus
   `docs/modules/source-selection.md`. Lossless selected-root declaration
   discovery starts in `crates/conary-core/src/repository/declarations/` and its
-  pinned contract is `docs/specs/native-repository-declarations.md`. Trust starts in
+  pinned contracts are `docs/specs/native-repository-declarations.md` and
+  `docs/specs/native-repository-trust-import.md`. Trust verification starts in
   `crates/conary-core/src/repository/trust.rs` and
   `crates/conary-core/src/repository/trust/openpgp.rs`, with ALPM keyring and
   package-signature semantics in
