@@ -1,0 +1,12 @@
+Types: deb deb-src
+URIs: https://apt.example
+Suites: stable updates
+Components: main contrib
+Architectures: amd64 arm64
+Architectures-Remove: i386
+Signed-By:
+ -----BEGIN PGP PUBLIC KEY BLOCK-----
+ .
+ -----END PGP PUBLIC KEY BLOCK-----
+Enabled: no
+X-Conary-Fixture: preserved annotation

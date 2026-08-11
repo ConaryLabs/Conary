@@ -1,0 +1,10 @@
+[vendor]
+name=Vendor service
+url=https://service.example/index
+enabled=1
+autorefresh=1
+ttl_sec=3600
+repo_1=vendor-stable
+repo_1_enabled=1
+repo_1_autorefresh=0
+repo_1_priority=90

@@ -112,10 +112,12 @@ commands.
 - Declarative models, source selection, and replatforming:
   `docs/modules/feature-ownership.md` slug `model`, plus
   `docs/modules/source-selection.md`.
-- Native repository trust, authenticated metadata/package intake, typed
+- Native repository declarations, trust, authenticated metadata/package intake, typed
   package relations, provider matching, and SAT selection:
   `docs/modules/feature-ownership.md` slug `resolution`, plus
-  `docs/modules/source-selection.md`. Trust starts in
+  `docs/modules/source-selection.md`. Lossless selected-root declaration
+  discovery starts in `crates/conary-core/src/repository/declarations/` and its
+  pinned contract is `docs/specs/native-repository-declarations.md`. Trust starts in
   `crates/conary-core/src/repository/trust.rs` and
   `crates/conary-core/src/repository/trust/openpgp.rs`, with ALPM keyring and
   package-signature semantics in
