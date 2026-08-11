@@ -359,6 +359,14 @@ fn install_ccs_package_transactionally_inner(
     let progress = InstallProgress::single("Installing");
     let semantics = install_semantics_for_ccs_manifest(pkg.manifest())?;
     enforce_ccs_scriptlet_capability_gate(pkg)?;
+    // A caller-owned selected root already owns the runtime mutation lock.
+    // Standalone real installs acquire it before resolving upgrade authority;
+    // dry runs remain read-only and do not serialize with mutations.
+    let locked_root = if !opts.dry_run && !caller_owned_selected_root {
+        Some(crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(opts.db_path)?)
+    } else {
+        None
+    };
     let upgrade = check_ccs_upgrade_status(
         conn,
         pkg,
@@ -383,17 +391,11 @@ fn install_ccs_package_transactionally_inner(
     };
     // Dry-run remains filesystem-read-only. Every real CCS mutation receives
     // either its caller-owned try root or a freshly materialized selected root.
-    let mut owned_selected_root = if !opts.dry_run && selected_root.is_none() {
-        Some(
-            crate::commands::generation::selected_root::SelectedRootSession::begin(
-                conn,
-                opts.db_path,
-                format!("Install {}-{}", pkg.name(), pkg.version()),
-            )?,
-        )
-    } else {
-        None
-    };
+    let mut owned_selected_root = locked_root
+        .map(|locked_root| {
+            locked_root.materialize(conn, format!("Install {}-{}", pkg.name(), pkg.version()))
+        })
+        .transpose()?;
     let selected_root = match selected_root {
         Some(selected_root) => Some(selected_root),
         None => owned_selected_root.as_mut(),
@@ -805,3 +807,7 @@ mod tests {
 #[cfg(test)]
 #[path = "ccs_transaction/converted_directory_tests.rs"]
 mod converted_directory_tests;
+
+#[cfg(test)]
+#[path = "ccs_transaction/mutation_lock_tests.rs"]
+mod mutation_lock_tests;

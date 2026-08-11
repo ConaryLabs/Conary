@@ -4,7 +4,7 @@
 
 use super::transaction::{commit_remove_db, prepare_remove};
 use super::types::{RemoveInnerResult, RemoveLifecycleOptions};
-use crate::commands::generation::selected_root::SelectedRootSession;
+use crate::commands::generation::selected_root::{LockedRuntimeRoot, SelectedRootSession};
 use crate::commands::install::native_events::PreparedNativeTransaction;
 use crate::commands::install::native_graph::{NativePayloadBoundary, drive_native_graph_with};
 use crate::commands::progress::{RemovePhase, RemoveProgress};
@@ -33,6 +33,7 @@ pub(crate) fn execute_installed_trove_remove_graph(
         .context("selected package has no installed trove id")?;
     let identity =
         NativePackageIdentity::new(&trove.name, &trove.version, trove.architecture.as_deref());
+    let locked_root = LockedRuntimeRoot::acquire(db_path)?;
     let ownership = super::PackagePayloadOwnership::load(conn, trove_id)?;
     let native_transaction = PreparedNativeTransaction::prepare_remove(
         conn,
@@ -42,11 +43,8 @@ pub(crate) fn execute_installed_trove_remove_graph(
         ownership.lifecycle_paths().to_vec(),
         lifecycle_options.purge_config_files,
     )?;
-    let selected = SelectedRootSession::begin(
-        conn,
-        db_path,
-        format!("Remove {}-{}", trove.name, trove.version),
-    )?;
+    let selected =
+        locked_root.materialize(conn, format!("Remove {}-{}", trove.name, trove.version))?;
     native_transaction.preflight(selected.selected_root(), &ExecutionMode::Remove)?;
 
     execute_selected_root_graph(
@@ -242,3 +240,7 @@ fn execute_selected_root_graph(
     }
     Ok(GraphRemoveResult { removal, stats })
 }
+
+#[cfg(test)]
+#[path = "native_graph_tests.rs"]
+mod tests;

@@ -152,6 +152,8 @@ fn preflight_autoremove_round(
                 trove.version
             );
         };
+        let locked_root =
+            crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(db_path)?;
         let paths = PackagePayloadOwnership::load(conn, trove_id)?
             .lifecycle_paths()
             .to_vec();
@@ -174,9 +176,8 @@ fn preflight_autoremove_round(
                 );
             }
         };
-        let selected = crate::commands::generation::selected_root::SelectedRootSession::begin(
+        let selected = locked_root.materialize(
             conn,
-            db_path,
             format!("Autoremove preflight {}-{}", trove.name, trove.version),
         )?;
         if let Err(error) =
@@ -425,6 +426,78 @@ mod tests {
                 .retrieve(&content.sha256)
                 .unwrap(),
             b"zz-native-orphan"
+        );
+    }
+
+    #[test]
+    fn autoremove_preflight_reads_package_identity_under_the_mutation_lock() {
+        let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("conary.db");
+        conary_core::db::init(&db_path).unwrap();
+        crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let trove_id = seed_dependency_trove(
+            &conn,
+            "autoremove-lock-fixture",
+            "1.0.0",
+            conary_core::repository::versioning::VersionScheme::Conary,
+        );
+        let trove = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+        drop(conn);
+
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let locked =
+            crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(&db_path_string)
+                .unwrap();
+        let (attempt_tx, attempt_rx) = std::sync::mpsc::sync_channel(0);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(0);
+        let waiter_db_path = db_path_string.clone();
+        let waiter = std::thread::spawn(move || {
+            let conn = conary_core::db::open(&waiter_db_path).unwrap();
+            attempt_tx.send(()).unwrap();
+            let result = preflight_autoremove_round(
+                &conn,
+                &[trove],
+                &waiter_db_path,
+                RemoveLifecycleOptions::new(SandboxMode::Always),
+            )
+            .map_err(|error| format!("{error:#}"));
+            result_tx.send(result).unwrap();
+        });
+
+        attempt_rx.recv().unwrap();
+        assert!(
+            matches!(
+                result_rx.recv_timeout(std::time::Duration::from_millis(250)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "autoremove preflight reached a verdict while another transaction held the mutation lock"
+        );
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        assert_eq!(
+            conn.execute(
+                "UPDATE troves SET version = '2.0.0' WHERE id = ?1",
+                [trove_id],
+            )
+            .unwrap(),
+            1
+        );
+        drop(conn);
+        drop(locked);
+
+        let error = result_rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("autoremove preflight must finish once the mutation lock is released")
+            .expect_err(
+                "autoremove preflight accepted a package identity changed before it locked",
+            );
+        waiter.join().unwrap();
+        assert!(
+            error.contains("identity changed during removal preparation"),
+            "{error}"
         );
     }
 
