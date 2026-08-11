@@ -1,6 +1,7 @@
 // conary-core/src/generation/builder/initramfs.rs
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use super::kernel::{kernel_module_dir, regular_file_exists};
 
@@ -94,18 +95,68 @@ pub(super) fn generate_runtime_initramfs(
 }
 
 fn ensure_initramfs_tool_available(tool: &Path, name: &str) -> crate::Result<()> {
-    match std::process::Command::new(tool).arg("--version").output() {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err(crate::error::Error::NotFound(format!(
-                "missing required initramfs tool {name} at {}; source images that build runtime generations must include the initramfs toolchain because dracut emits initramfs archives through {name}",
+    resolve_initramfs_tool(tool, std::env::var_os("PATH").as_deref()).map(|_| ()).map_err(
+        |error| {
+            crate::error::Error::NotFound(format!(
+                "missing required initramfs tool {name} at {}: {error}; source images that build runtime generations must include the initramfs toolchain because dracut emits initramfs archives through {name}",
                 tool.display()
-            )))
+            ))
+        },
+    )
+}
+
+fn resolve_initramfs_tool(tool: &Path, path: Option<&OsStr>) -> Result<PathBuf, String> {
+    let candidates = if tool.components().count() > 1 {
+        vec![tool.to_path_buf()]
+    } else {
+        path.map(std::env::split_paths)
+            .into_iter()
+            .flatten()
+            .map(|directory| directory.join(tool))
+            .collect::<Vec<_>>()
+    };
+
+    let mut rejected = Vec::new();
+    for candidate in candidates {
+        match std::fs::metadata(&candidate) {
+            Ok(metadata) if executable_regular_file(&metadata) => return Ok(candidate),
+            Ok(metadata) if !metadata.is_file() => {
+                rejected.push(format!("{} is not a regular file", candidate.display()));
+            }
+            Ok(_) => {
+                rejected.push(format!("{} is not executable", candidate.display()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                rejected.push(format!(
+                    "failed to inspect {}: {error}",
+                    candidate.display()
+                ));
+            }
         }
-        Err(e) => Err(crate::error::Error::IoError(format!(
-            "failed to check required initramfs tool {name} at {}: {e}",
-            tool.display()
-        ))),
+    }
+
+    if rejected.is_empty() {
+        Err("no executable candidate exists in the declared path".to_string())
+    } else {
+        Err(rejected.join("; "))
+    }
+}
+
+fn executable_regular_file(metadata: &std::fs::Metadata) -> bool {
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
     }
 }
 
@@ -227,6 +278,58 @@ mod tests {
 
     use super::*;
     use crate::ccs::convert::command_evidence::extract_invocations_from_shell_text;
+
+    #[cfg(unix)]
+    fn set_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initramfs_tool_preflight_does_not_execute_explicit_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let candidate = tmp.path().join("cpio");
+        std::fs::write(&candidate, b"not an executable image").unwrap();
+        set_executable(&candidate);
+
+        assert_eq!(resolve_initramfs_tool(&candidate, None).unwrap(), candidate);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initramfs_tool_preflight_follows_path_order_to_an_executable_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tmp.path().join("first");
+        let second = tmp.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(first.join("cpio"), b"not executable").unwrap();
+        let candidate = second.join("cpio");
+        std::fs::write(&candidate, b"still not an executable image").unwrap();
+        set_executable(&candidate);
+        let path = std::env::join_paths([&first, &second]).unwrap();
+
+        assert_eq!(
+            resolve_initramfs_tool(Path::new("cpio"), Some(&path)).unwrap(),
+            candidate
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initramfs_tool_preflight_rejects_non_executable_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let candidate = tmp.path().join("cpio");
+        std::fs::write(&candidate, b"not executable").unwrap();
+
+        let error = resolve_initramfs_tool(&candidate, None).unwrap_err();
+
+        assert!(error.contains("is not executable"), "{error}");
+    }
 
     #[test]
     fn conary_runtime_scripts_only_invoke_declared_module_tools() {
