@@ -12,7 +12,6 @@ use super::{EnforcementError, EnforcementMode};
 use crate::capability::SyscallCapabilities;
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
 use std::collections::{BTreeMap, HashSet};
-use tracing::{debug, warn};
 
 /// `conary capability run` uses this executor-owned launch contract.
 pub const CAPABILITY_RUN_EXECUTOR_ABI_V1: &str = "capability-run-v1";
@@ -142,28 +141,18 @@ pub fn apply_seccomp_filter(
                 feature: "seccomp".to_string(),
             });
         }
-        warn!("Seccomp not supported, skipping syscall enforcement");
         return Ok(());
     }
 
     let bpf = build_seccomp_filter(caps, mode)?;
 
-    // Ensure NO_NEW_PRIVS is set (required for unprivileged seccomp)
-    // This is idempotent — landlock's restrict_self() may have already set it
-    unsafe {
-        let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-        if ret != 0 {
-            return Err(EnforcementError::Seccomp(
-                "Failed to set PR_SET_NO_NEW_PRIVS".to_string(),
-            ));
-        }
-    }
+    install_seccomp_filter(&bpf)
+}
 
-    seccompiler::apply_filter(&bpf)
-        .map_err(|e| EnforcementError::Seccomp(format!("Failed to install filter: {e}")))?;
-
-    debug!("Seccomp filter applied in {} mode", mode);
-    Ok(())
+/// Install a filter already validated and compiled by the parent process.
+pub(super) fn install_seccomp_filter(bpf: &BpfProgram) -> Result<(), EnforcementError> {
+    seccompiler::apply_filter(bpf)
+        .map_err(|error| EnforcementError::Seccomp(format!("Failed to install filter: {error}")))
 }
 
 /// Resolve exact package-declared allow/deny inputs.
@@ -237,12 +226,6 @@ pub fn build_seccomp_filter(
             std::env::consts::ARCH
         ))
     })?;
-
-    debug!(
-        "Building seccomp filter: {} allowed syscalls, mode: {}",
-        allowed.len(),
-        mode
-    );
 
     let filter = SeccompFilter::new(
         rules,

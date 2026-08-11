@@ -2,7 +2,6 @@
 use super::namespaces::namespace_map_contents;
 use super::*;
 use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};
-use std::os::fd::IntoRawFd;
 
 #[test]
 fn test_script_analysis_safe() {
@@ -519,21 +518,6 @@ fn test_fork_process_returns_child_that_can_exit_cleanly() {
         }
         ForkResult::Child => std::process::exit(0),
     }
-}
-
-#[test]
-fn test_adopt_raw_fd_rejects_negative_fd() {
-    let err = adopt_raw_fd(-1).expect_err("negative fds should be rejected");
-    assert!(err.to_string().contains("invalid stdio fd"));
-}
-
-#[test]
-fn test_adopt_raw_fd_accepts_valid_fd() {
-    let (read_fd, write_fd) = nix::unistd::pipe().expect("pipe");
-    let raw_fd = write_fd.into_raw_fd();
-    let adopted = adopt_raw_fd(raw_fd).expect("valid pipe fd should be adoptable");
-    drop(adopted);
-    drop(read_fd);
 }
 
 #[test]

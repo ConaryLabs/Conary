@@ -21,7 +21,6 @@ use landlock::{
     ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, NetPort, Ruleset, RulesetAttr,
     RulesetCreatedAttr, RulesetStatus, path_beneath_rules,
 };
-use tracing::{debug, warn};
 
 /// Apply Landlock filesystem and exact TCP restrictions.
 ///
@@ -33,14 +32,22 @@ pub fn apply_landlock_rules(
     network: Option<&NetworkCapabilities>,
     mode: EnforcementMode,
 ) -> Result<(), EnforcementError> {
-    let has_network_rules =
-        network.is_some_and(|caps| !caps.connect_tcp.is_empty() || !caps.bind_tcp.is_empty());
-    let abi = if has_network_rules { ABI::V4 } else { ABI::V3 };
-
     if let Some(caps) = network {
         caps.validate()
             .map_err(|error| EnforcementError::Landlock(error.to_string()))?;
     }
+    apply_prepared_landlock_rules(filesystem, network, mode)
+}
+
+/// Apply rules whose declarations were validated by the parent before fork.
+pub(super) fn apply_prepared_landlock_rules(
+    filesystem: Option<&FilesystemCapabilities>,
+    network: Option<&NetworkCapabilities>,
+    mode: EnforcementMode,
+) -> Result<(), EnforcementError> {
+    let has_network_rules =
+        network.is_some_and(|caps| !caps.connect_tcp.is_empty() || !caps.bind_tcp.is_empty());
+    let abi = if has_network_rules { ABI::V4 } else { ABI::V3 };
 
     let read_paths = paths_for_rules(
         filesystem.map_or(&[], |caps| caps.read.as_slice()),
@@ -63,8 +70,6 @@ pub fn apply_landlock_rules(
         return Err(EnforcementError::DenyConflict {
             count: deny_conflicts,
         });
-    } else if let Some(caps) = filesystem.filter(|_| deny_conflicts > 0) {
-        check_deny_conflicts(caps);
     }
 
     let mut ruleset = Ruleset::default().set_compatibility(CompatLevel::HardRequirement);
@@ -126,8 +131,6 @@ pub fn apply_landlock_rules(
         .map_err(|e| EnforcementError::Landlock(format!("Failed to restrict self: {e}")))?;
 
     require_fully_enforced(status.ruleset)?;
-    debug!("Landlock fully enforced");
-
     Ok(())
 }
 
@@ -144,8 +147,6 @@ fn paths_for_rules<'a>(
             return Err(EnforcementError::Landlock(format!(
                 "declared {context} path does not exist: {path}"
             )));
-        } else {
-            debug!("Skipping non-existent {} path: {}", context, path);
         }
     }
     Ok(existing)
@@ -197,17 +198,6 @@ fn find_deny_conflicts(caps: &FilesystemCapabilities) -> Vec<(&str, &str, &'stat
         }
     }
     conflicts
-}
-
-/// Warn about deny paths that cannot be enforced due to overlapping allow rules
-fn check_deny_conflicts(caps: &FilesystemCapabilities) {
-    for (deny_path, allowed_path, access_type) in find_deny_conflicts(caps) {
-        warn!(
-            "Deny path '{}' is under allowed {} path '{}' - \
-             landlock cannot enforce sub-path denials (limitation)",
-            deny_path, access_type, allowed_path
-        );
-    }
 }
 
 /// Check if the kernel supports landlock

@@ -13,6 +13,47 @@ use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, 
 use std::os::unix::ffi::OsStrExt;
 
 impl Sandbox {
+    pub(super) fn run_forked_child(&self, child: ForkedChild<'_>) -> ! {
+        let ForkedChild {
+            stdin_fd,
+            stdout_read_fd,
+            stdout_write_fd,
+            stderr_read_fd,
+            stderr_write_fd,
+            userns_request_read_fd,
+            userns_ack_write_fd,
+            execution,
+        } = child;
+        drop(stdout_read_fd);
+        drop(stderr_read_fd);
+        drop(userns_request_read_fd);
+        drop(userns_ack_write_fd);
+
+        if unsafe { libc::dup2(stdin_fd, 0) } < 0 {
+            child_diag(&[b"failed to attach sandbox stdin"]);
+            unsafe { libc::_exit(127) };
+        }
+        if unsafe { libc::dup2(stdout_write_fd.as_raw_fd(), 1) } < 0 {
+            child_diag(&[b"failed to attach sandbox stdout"]);
+            unsafe { libc::_exit(127) };
+        }
+        if unsafe { libc::dup2(stderr_write_fd.as_raw_fd(), 2) } < 0 {
+            child_diag(&[b"failed to attach sandbox stderr"]);
+            unsafe { libc::_exit(127) };
+        }
+        drop(stdout_write_fd);
+        drop(stderr_write_fd);
+
+        match self.child_setup_and_execute(execution) {
+            Ok(code) => unsafe { libc::_exit(code) },
+            Err(error) => {
+                let message = error.to_string();
+                child_diag(&[message.as_bytes()]);
+                unsafe { libc::_exit(127) };
+            }
+        }
+    }
+
     /// Set up the container filesystem with bind mounts.
     pub(super) fn setup_container_fs(&self, root: &Path) -> Result<()> {
         for dir in &[
@@ -52,6 +93,8 @@ impl Sandbox {
             args,
             env,
             userns_sync,
+            deadline,
+            enforcement,
         } = execution;
         let script_in_container = script_path.map(|path| {
             path.strip_prefix(root)
@@ -92,7 +135,9 @@ impl Sandbox {
             match fork_process()
                 .map_err(|error| sandbox_error(format!("PID namespace fork failed: {error}")))?
             {
-                ForkResult::Parent { child } => return wait_for_pid_namespace_init(child),
+                ForkResult::Parent { child } => {
+                    return wait_for_pid_namespace_init(child, deadline);
+                }
                 ForkResult::Child => {
                     let parent = unsafe { libc::getppid() };
                     set_parent_death_signal(libc::SIGKILL).map_err(|error| {
@@ -141,8 +186,9 @@ impl Sandbox {
 
         self.apply_resource_limits()?;
 
-        if let Some(ref policy) = self.config.capability_policy {
-            match enforcement::apply_enforcement(policy) {
+        if let Some(prepared) = enforcement {
+            let mode = prepared.mode();
+            match enforcement::apply_prepared_enforcement(prepared) {
                 Ok(report) => {
                     for warning in &report.warnings {
                         child_diag(&[
@@ -154,7 +200,7 @@ impl Sandbox {
                     }
                 }
                 Err(error) => {
-                    if policy.mode == EnforcementMode::Enforce {
+                    if mode == EnforcementMode::Enforce {
                         return Err(execution_error(
                             ScriptletFailureKind::EnforcementSetupFailed,
                             format!("Capability enforcement failed: {error}"),
@@ -387,18 +433,16 @@ impl Sandbox {
     }
 }
 
-fn wait_for_pid_namespace_init(child: Pid) -> Result<i32> {
-    loop {
-        match waitpid(child, None) {
-            Ok(WaitStatus::Exited(_, code)) => return Ok(code),
-            Ok(WaitStatus::Signaled(_, signal, _)) => return Ok(128 + signal as i32),
-            Ok(_) => {}
-            Err(nix::errno::Errno::EINTR) => {}
-            Err(error) => {
-                return Err(sandbox_error(format!(
-                    "failed to wait for PID namespace init: {error}"
-                )));
-            }
-        }
+fn wait_for_pid_namespace_init(child: Pid, deadline: Instant) -> Result<i32> {
+    match wait_for_child_until(child, deadline) {
+        Ok(ChildWaitOutcome::Exited(code)) => Ok(code),
+        Ok(ChildWaitOutcome::Signaled(signal)) => Ok(128 + signal as i32),
+        Ok(ChildWaitOutcome::TimedOut) => Err(execution_error(
+            ScriptletFailureKind::ScriptTimedOut,
+            "PID namespace init timed out",
+        )),
+        Err(error) => Err(sandbox_error(format!(
+            "failed to wait for PID namespace init: {error}"
+        ))),
     }
 }
