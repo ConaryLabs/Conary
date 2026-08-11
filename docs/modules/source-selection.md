@@ -636,6 +636,13 @@ replatform transactions that are actually executable through the shared install
 path. Blocked transactions remain visible in the rendered plan and in follow-up
 warnings.
 
+`model apply --dry-run` resolves the complete incoming package set, downloads
+and authenticates its exact artifacts, and runs the same read-only batch
+ordering and relation planning that apply consumes. It stops before
+selected-root materialization, selected-root-relative payload normalization,
+lifecycle execution, CAS storage, or database mutation, and returns the same
+typed ordering error apply would return for an invalid prepared transaction.
+
 ### Replatform Planning
 
 `model/replatform.rs` uses the shared source-selection and package-selection

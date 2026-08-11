@@ -328,20 +328,29 @@ fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
 }
 
 pub(super) fn serve_test_file(file_path: PathBuf) -> (String, std::thread::JoinHandle<()>) {
+    serve_test_file_n(file_path, 1)
+}
+
+pub(super) fn serve_test_file_n(
+    file_path: PathBuf,
+    request_count: usize,
+) -> (String, std::thread::JoinHandle<()>) {
     let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
     let bytes = std::fs::read(&file_path).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 1024];
-        let _ = stream.read(&mut request);
-        let headers = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-            bytes.len()
-        );
-        stream.write_all(headers.as_bytes()).unwrap();
-        stream.write_all(&bytes).unwrap();
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.write_all(&bytes).unwrap();
+        }
     });
     (format!("http://{addr}/{filename}"), handle)
 }

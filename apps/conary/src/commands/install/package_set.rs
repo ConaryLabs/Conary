@@ -36,6 +36,31 @@ pub(crate) async fn install_package_set(
     sandbox_mode: SandboxMode,
     requests: Vec<PackageSetRequest>,
 ) -> Result<usize> {
+    process_package_set(
+        db_path,
+        requests,
+        PackageSetOperation::Install(sandbox_mode),
+    )
+    .await
+}
+
+pub(crate) async fn validate_package_set(
+    db_path: &str,
+    requests: Vec<PackageSetRequest>,
+) -> Result<usize> {
+    process_package_set(db_path, requests, PackageSetOperation::Validate).await
+}
+
+enum PackageSetOperation {
+    Validate,
+    Install(SandboxMode),
+}
+
+async fn process_package_set(
+    db_path: &str,
+    requests: Vec<PackageSetRequest>,
+    operation: PackageSetOperation,
+) -> Result<usize> {
     if requests.is_empty() {
         return Ok(0);
     }
@@ -108,11 +133,22 @@ pub(crate) async fn install_package_set(
         .collect();
     let prepared = prepare_repository_batch(db_path, selections).await?;
     let root_count = resolved_requests.len();
-    println!(
-        "Installing model package set ({} explicit roots)...",
-        root_count
-    );
-    prepared.install(BatchInstaller::new(db_path, sandbox_mode))?;
+    match operation {
+        PackageSetOperation::Validate => {
+            println!(
+                "Validating model package set ({} explicit roots)...",
+                root_count
+            );
+            prepared.validate(BatchInstaller::new(db_path, SandboxMode::Always))?;
+        }
+        PackageSetOperation::Install(sandbox_mode) => {
+            println!(
+                "Installing model package set ({} explicit roots)...",
+                root_count
+            );
+            prepared.install(BatchInstaller::new(db_path, sandbox_mode))?;
+        }
+    }
     Ok(root_count)
 }
 

@@ -24,7 +24,7 @@ use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, replatform_execution_plan};
 use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
 use derived::{build_derived_package, create_derived_from_model};
-use packages::apply_package_changes;
+use packages::{apply_package_changes, validate_package_changes};
 use rusqlite::Connection;
 #[cfg(test)]
 use std::cell::Cell;
@@ -141,6 +141,7 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     }
 
     if dry_run {
+        validate_package_changes(db_path, &actions).await?;
         println!("[Dry run - no changes made]");
         return Ok(());
     }
@@ -759,5 +760,7 @@ pub(super) fn apply_metadata_changes(
     (applied, errors)
 }
 
+#[cfg(test)]
+mod dry_run_tests;
 #[cfg(test)]
 mod tests;
