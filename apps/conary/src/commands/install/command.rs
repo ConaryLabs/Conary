@@ -13,6 +13,7 @@ use super::{
     extract_and_classify_files, finalize_install, preflight_extracted_file_ownership,
     resolve_canonical_name, show_dry_run_summary,
 };
+use crate::commands::generation::selected_root::LockedRuntimeRoot;
 use crate::commands::open_db;
 use anyhow::{Context, Result};
 use conary_core::components::parse_component_spec;
@@ -165,6 +166,15 @@ async fn cmd_install_with_intent(
         policy: &policy,
     };
     handle_dependencies(&dep_ctx).await?;
+
+    // Dry-run planning is read-only and does not participate in the runtime
+    // mutation serialization boundary. A real install takes that boundary
+    // before reading any installed authority its transaction will certify.
+    let locked_root = if dry_run {
+        None
+    } else {
+        Some(LockedRuntimeRoot::acquire(db_path)?)
+    };
     let relation_plan = plan_package_relations(&conn, pkg.as_ref(), semantics.version_scheme)
         .context("Failed to plan package conflicts and replacements")?;
     validate_package_relation_plan(&conn, &relation_plan)
@@ -233,11 +243,9 @@ async fn cmd_install_with_intent(
             .as_deref()
             .map(|trove| trove.version.as_str()),
     );
-    let mut selected_root = crate::commands::generation::selected_root::SelectedRootSession::begin(
-        &conn,
-        db_path,
-        format!("Install {}-{}", pkg.name(), pkg.version()),
-    )?;
+    let mut selected_root = locked_root
+        .context("real install has no locked runtime root")?
+        .materialize(&conn, format!("Install {}-{}", pkg.name(), pkg.version()))?;
     let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
     native_transaction.preflight(Path::new(&transaction_root), &native_execution_mode)?;
     let preflighted_ccs_removal_hooks =
@@ -293,3 +301,7 @@ fn show_relation_removals(plan: &conary_core::transaction::PackageRelationPlan) 
         );
     }
 }
+
+#[cfg(test)]
+#[path = "command_mutation_lock_tests.rs"]
+mod mutation_lock_tests;
