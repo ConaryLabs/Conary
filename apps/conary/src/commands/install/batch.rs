@@ -265,6 +265,28 @@ impl<'a> BatchInstaller<'a> {
         self.install_batch_with_result(packages).map(|_| ())
     }
 
+    /// Run the read-only dependency ordering and relation validation shared
+    /// with [`Self::install_batch`] without materializing a selected root or
+    /// executing lifecycle and payload mutation.
+    pub(crate) fn validate_batch(self, mut packages: Vec<PreparedPackage>) -> Result<()> {
+        if packages.is_empty() {
+            return Ok(());
+        }
+        let conn = open_db(self.db_path)?;
+        self.validate_batch_transaction(&conn, &mut packages)?;
+        Ok(())
+    }
+
+    fn validate_batch_transaction(
+        &self,
+        conn: &Connection,
+        packages: &mut Vec<PreparedPackage>,
+    ) -> Result<promises::PromiseWitnessPlan> {
+        let promise_plan = ordering::order_packages_for_transaction(conn, packages)?;
+        self.plan_package_relations_for_batch(conn, packages)?;
+        Ok(promise_plan)
+    }
+
     pub(crate) fn install_batch_with_result(
         self,
         mut packages: Vec<PreparedPackage>,
@@ -307,8 +329,7 @@ impl<'a> BatchInstaller<'a> {
         // an end state missing a capability the batch was admitted on.
         let locked_root =
             crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(self.db_path)?;
-        let mut promise_plan = ordering::order_packages_for_transaction(&conn, &mut packages)?;
-        self.plan_package_relations_for_batch(&conn, &mut packages)?;
+        let mut promise_plan = self.validate_batch_transaction(&conn, &mut packages)?;
         let mut selected_root = locked_root.materialize(&conn, &tx_description)?;
         let selected_path = selected_root.selected_root().to_path_buf();
         for package in &mut packages {
@@ -361,11 +382,9 @@ impl<'a> BatchInstaller<'a> {
 
         info!("Started batch transaction for {}", tx_description);
 
-        // Phase 1: Unified planning across all packages
-        // Collect all files and detect cross-package conflicts
+        // Phase 1: Unified planning across all packages after selected-root
+        // normalization. Collect all files and detect cross-package conflicts.
         let batch_plan = self.plan_batch(&packages, &conn)?;
-
-        // Check for conflicts
         if !batch_plan.conflicts.is_empty() {
             let conflict_msgs: Vec<String> =
                 batch_plan.conflicts.iter().map(|c| c.to_string()).collect();
@@ -374,12 +393,10 @@ impl<'a> BatchInstaller<'a> {
                 conflict_msgs.join("\n  ")
             ));
         }
-
         info!(
             "Batch plan: {} total files across {} packages",
             batch_plan.total_files, package_count
         );
-
         self.preflight_file_ownership_for_batch(&conn, &packages)?;
 
         // Phase 2: Run exact typed lifecycle events before payload mutation.

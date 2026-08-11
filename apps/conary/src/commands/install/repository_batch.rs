@@ -44,6 +44,10 @@ impl PreparedRepositoryBatch {
         installer.install_batch(self.packages)
     }
 
+    pub(super) fn validate(self, installer: BatchInstaller<'_>) -> Result<()> {
+        installer.validate_batch(self.packages)
+    }
+
     pub(super) fn install_with_result(
         self,
         installer: BatchInstaller<'_>,

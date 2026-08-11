@@ -5,7 +5,7 @@
 use anyhow::Result;
 use conary_core::model::DiffAction;
 
-use crate::commands::install::{PackageSetRequest, install_package_set};
+use crate::commands::install::{PackageSetRequest, install_package_set, validate_package_set};
 use crate::commands::{SandboxMode, cmd_remove};
 
 /// Apply removal actions, then one atomic install/update package set.
@@ -130,6 +130,19 @@ pub(super) async fn apply_package_changes(
     }
 
     Ok((applied, errors))
+}
+
+/// Resolve, authenticate, prepare, order, and relation-plan the complete
+/// incoming package set without executing lifecycle or payload mutation.
+pub(super) async fn validate_package_changes(db_path: &str, actions: &[&DiffAction]) -> Result<()> {
+    let requests = package_set_requests(actions);
+    if requests.is_empty() {
+        return Ok(());
+    }
+    validate_package_set(db_path, requests)
+        .await
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(model_package_set_error(&error)))
 }
 
 fn model_package_set_error(error: &anyhow::Error) -> String {
