@@ -200,8 +200,8 @@ cache paths under `/conary/dev/cache`, install Rust through rustup, and install
 the assistant CLIs without version pinning:
 
 ```bash
-rustup toolchain install 1.96.0 --profile default
-rustup default 1.96.0
+rustup toolchain install 1.97.1 --profile default
+rustup default 1.97.1
 npm install -g @openai/codex @anthropic-ai/claude-code
 ```
 

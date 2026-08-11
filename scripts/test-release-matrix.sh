@@ -697,7 +697,7 @@ test_check_release_matrix_rejects_unpinned_ccs_toolchain() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-build.yml" \
-        'toolchain: 1.96.0' \
+        'toolchain: 1.97.1' \
         'toolchain: stable'
 
     assert_check_release_matrix_fails "$repo" "release-build CCS builder pinned Rust toolchain"
@@ -708,7 +708,7 @@ test_check_release_matrix_rejects_unpinned_arch_toolchain() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-build.yml" \
-        'rustup default 1.96.0' \
+        'rustup default 1.97.1' \
         'rustup default stable'
 
     assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"

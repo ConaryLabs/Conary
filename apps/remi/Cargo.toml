@@ -2,7 +2,7 @@
 name = "remi"
 version = "0.12.1"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97.1"
 authors = ["Conary Contributors"]
 description = "Remi package server for Conary"
 license = "MIT"

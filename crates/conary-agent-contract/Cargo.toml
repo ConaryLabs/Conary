@@ -2,7 +2,7 @@
 name = "conary-agent-contract"
 version = "0.9.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97.1"
 authors = ["Conary Contributors"]
 description = "Transport-neutral agent operation contract for Conary"
 license = "MIT"

@@ -208,17 +208,17 @@ require_match "$rpm_spec" '^BuildRequires:[[:space:]]+systemd-rpm-macros$' 'RPM 
 require_job_match "$release_build" build-rpm 'dnf install -y[\s\S]*systemd-rpm-macros' 'release-build RPM systemd macro dependency'
 require_match "$rpm_containerfile" 'systemd-rpm-macros[\s\S]*rpm --eval '\''%\{_unitdir\}'\''[\s\S]*/usr/lib/systemd/system' 'RPM Containerfile systemd macro dependency and expansion proof'
 
-rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain 1\\.96\\.0 --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
+rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain 1\\.97\\.1 --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
 require_job_match "$release_build" build-rpm "$rustup_flow_pattern" 'release-build RPM builder checksum-pinned rustup-init flow'
 require_job_match "$release_build" build-deb "$rustup_flow_pattern" 'release-build DEB builder checksum-pinned rustup-init flow'
 require_match "$rpm_containerfile" "$rustup_flow_pattern" 'RPM Containerfile checksum-pinned rustup-init flow'
 require_match "$deb_containerfile" "$rustup_flow_pattern" 'DEB Containerfile checksum-pinned rustup-init flow'
-require_job_match "$release_build" build-ccs 'toolchain: 1\.96\.0' 'release-build CCS builder pinned Rust toolchain'
+require_job_match "$release_build" build-ccs 'toolchain: 1\.97\.1' 'release-build CCS builder pinned Rust toolchain'
 require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY: \$\{\{ secrets\.RELEASE_SIGNING_KEY \}\}[\s\S]*cargo build[\s\S]*--target-dir target[\s\S]*sign_hash --write-ccs-authority "\$authority_dir"[\s\S]*packaging/ccs/build\.sh[\s\S]*--version "\$VERSION"[\s\S]*--key "\$authority_dir/release\.private"' 'CCS build must derive embedded authority from the configured release seed'
 require_job_match "$release_build" build-ccs 'conary ccs verify[\s\S]*packaging/ccs/output/conary-\$\{VERSION\}\.ccs[\s\S]*--policy "\$authority_dir/trust-policy\.toml"' 'CCS build must verify its embedded release authority'
 require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY must be configured for embedded CCS release authority' 'live CCS build must fail without its release authority'
-require_job_match "$release_build" build-arch 'rustup default 1\.96\.0[\s\S]*runuser -u builder -- rustup default 1\.96\.0' 'release-build Arch builder pinned Rust toolchain'
-require_match "$arch_containerfile" '^RUN rustup default 1\.96\.0$' 'Arch Containerfile pinned Rust toolchain'
+require_job_match "$release_build" build-arch 'rustup default 1\.97\.1[\s\S]*runuser -u builder -- rustup default 1\.97\.1' 'release-build Arch builder pinned Rust toolchain'
+require_match "$arch_containerfile" '^RUN rustup default 1\.97\.1$' 'Arch Containerfile pinned Rust toolchain'
 require_literal_count "$release_build" 'uses: actions/upload-artifact@' 10 'release artifact upload actions'
 require_literal_count "$release_build" 'if-no-files-found: error' 10 'fail-closed release artifact uploads'
 require_job_match "$release_build" bundle-conary 'require_exact_asset CCS[\s\S]*release-packages/conary-\$\{VERSION\}\.ccs"[\s\S]*release-packages/\*\.ccs' 'exact version-matching CCS release asset assertion'

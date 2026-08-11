@@ -2,7 +2,7 @@
 name = "conary"
 version = "0.14.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97.1"
 authors = ["Conary Contributors"]
 description = "Early-preview Linux package manager with native-package adoption"
 repository = "https://github.com/ConaryLabs/Conary"

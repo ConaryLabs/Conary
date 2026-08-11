@@ -263,7 +263,7 @@
 					<h2>Build a debug binary from source</h2>
 					<p>
 						Use this path for development, not as a substitute for the packaged tester lane.
-						It requires Rust 1.96+, Git, and Linux; Conary does not currently build on macOS or Windows.
+						It requires Rust 1.97.1+, Git, and Linux; Conary does not currently build on macOS or Windows.
 					</p>
 				</div>
 

@@ -199,7 +199,7 @@ weight that a team's review would otherwise carry.
 
 | | |
 | --- | --- |
-| First-party Rust | 447,093 lines across 1,225 files, 8-crate workspace, edition 2024, Rust 1.96+ |
+| First-party Rust | 447,093 lines across 1,225 files, 8-crate workspace, edition 2024, Rust 1.97.1+ |
 | Unit tests | 5,499 `#[test]` and `#[tokio::test]` functions |
 | Integration tests | 324 tests in 29 suites across 4 phases |
 | Test targets | Real Fedora 44, Ubuntu 26.04 LTS, and Arch VMs driven by `apps/conary-test` |
@@ -222,7 +222,7 @@ Two of those deserve specific mention:
 
 ## Build From Source
 
-Conary requires Rust 1.96+ on Linux.
+Conary requires Rust 1.97.1+ on Linux.
 
 ```bash
 git clone https://github.com/ConaryLabs/Conary.git
