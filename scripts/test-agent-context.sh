@@ -377,6 +377,44 @@ grep -q 'command(s) passed for Alpha Feature' <<<"$run_out" \
 run_out="$("$script" --feature alpha --run gate --map "$fixture_map")"
 grep -q '^alpha-gate$' <<<"$run_out" || fail "--run gate did not execute the gate command"
 
+environment_map="$tmp/environment-map.md"
+cat > "$environment_map" <<'EOF'
+# Fixture Ownership Map
+
+## Environment Feature
+
+**Slug:** environment
+
+**Capability:** preserve caller command environments.
+
+**Start here:** `scripts/agent-context.sh`.
+
+**Neighbor systems:** shell startup configuration.
+
+**Paths:** `scripts/agent-context.sh`.
+
+**Focused proof:** `printf 'target=%s\n' "$CARGO_TARGET_DIR"`.
+
+**Interaction gate:** `true`.
+
+**Docs to update:** `docs/modules/feature-ownership.md`.
+
+**Safety notes:** caller-selected build isolation remains authoritative.
+EOF
+cat > "$tmp/login-reset.sh" <<'EOF'
+if shopt -q login_shell; then
+    export CARGO_TARGET_DIR=/shared/profile-target
+fi
+EOF
+isolated_target="$tmp/private-target"
+run_out="$(
+    CARGO_TARGET_DIR="$isolated_target" \
+        BASH_ENV="$tmp/login-reset.sh" \
+        "$script" --feature environment --run focused --map "$environment_map"
+)"
+grep -Fq "target=$isolated_target" <<<"$run_out" \
+    || fail "--run did not preserve the caller's CARGO_TARGET_DIR; got: $run_out"
+
 failing_map="$tmp/failing-map.md"
 write_fixture_map "$failing_map"
 sed -i 's/^\*\*Focused proof:\*\* `true`; `echo alpha-focused`\.$/**Focused proof:** `false`; `echo never-runs`./' "$failing_map"
