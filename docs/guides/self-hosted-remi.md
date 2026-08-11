@@ -16,7 +16,7 @@ single Remi service is enough for a private test host.
 
 ## Requirements
 
-- A Linux host with Rust 1.96+
+- A Linux host with Rust 1.97.1+
 - At least 8 GiB RAM for the default release build
 - Disk sized to the `[storage] max_cache_size` you choose
 - Outbound HTTPS access to distro mirrors

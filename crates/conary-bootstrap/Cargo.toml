@@ -2,7 +2,7 @@
 name = "conary-bootstrap"
 version = "0.14.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97.1"
 authors = ["Conary Contributors"]
 description = "Shared bootstrap helpers for Conary workspace binaries"
 license = "MIT"
