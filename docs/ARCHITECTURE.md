@@ -146,6 +146,7 @@ crates/conary-core/      Core library crate
     |   +-- conflict.rs  Conflict reporting and policy support
     |   +-- identity.rs  Dependency identity normalization
     +-- repository/      Remote package sources
+    |   +-- declarations/ Lossless selected-root APT, DNF5, libzypp, and ALPM declarations
     |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
     |   +-- trust.rs     Tagged Debian, RPM, and Arch repository authority contracts
     |   +-- trust/openpgp.rs Trust-role dispatch over the pinned and Arch keyring owners

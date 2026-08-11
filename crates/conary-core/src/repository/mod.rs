@@ -31,6 +31,7 @@ pub mod supported_profiles;
 mod sync;
 pub mod trust;
 
+pub mod declarations;
 pub mod dependency_model;
 pub mod effective_policy;
 pub mod package_relation;

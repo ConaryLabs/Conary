@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-08
-revision: 31
+last_updated: 2026-08-11
+revision: 32
 summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -52,6 +52,7 @@ system.toml [system]
 | `DependencyMixingPolicy` | `repository/resolution_policy.rs` | Closed `strict`/`guarded`/`permissive` dependency-mixing contract |
 | `ResolutionPolicy` | `repository/resolution_policy.rs` | Exact request scope, dependency mixing, and source allowlist used by the resolver |
 | `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Runtime policy assembled from DB state with one exact transaction profile |
+| `DiscoveredRepositoryDeclarations` | `repository/declarations/discovery.rs` | Lossless, source-located APT, DNF5, libzypp, and ALPM declarations confined to an explicit selected root |
 | `SystemAffinity` | `db/models/distro_pin.rs` | Informational installed-provenance measurement used for display and replatform estimates |
 | `ReplatformExecutionPlan` | `model/replatform.rs` | Executable and blocked replatform transactions derived from planned replacements |
 
@@ -214,6 +215,23 @@ disagreement rolls the whole snapshot back.
 There is no persisted per-package override table. Cross-profile movement is an
 explicit scoped request or replatform transaction, not a decorative ranking
 side channel.
+
+## Native Repository Declaration Discovery
+
+`crates/conary-core/src/repository/declarations/` owns the lossless declaration
+grammars that precede native repository enrollment. It reads APT one-line and
+deb822 sources, DNF5 repo files, libzypp repository and service files, and ALPM
+configuration with ordered includes from an explicit selected root. Documents
+retain exact source and expose typed source locations, disabled state,
+duplicates, variables, endpoint precedence, and include order. Unknown
+authority, invalid UTF-8, and root escapes fail closed; libzypp extras that
+upstream preserves are retained as uninterpreted evidence and refused by
+authoritative discovery.
+
+This layer is not trust, enrollment, persistence, or enablement authority. It
+does not invoke a native manager or read a native database. The exact upstream
+pins, grammar inventory, and consumer boundary are recorded in
+[`docs/specs/native-repository-declarations.md`](../specs/native-repository-declarations.md).
 
 ## Native Repository Authenticity
 
@@ -688,6 +706,9 @@ state requires an explicit scoped install, update, or replatform operation.
 - `crates/conary-core/src/repository/effective_policy.rs` for runtime policy loading
 - `crates/conary-core/src/repository/trust.rs` and
   `repository/trust/openpgp.rs` for native repository authority
+- `crates/conary-core/src/repository/declarations/` and
+  `docs/specs/native-repository-declarations.md` for lossless selected-root
+  declaration discovery before enrollment
 - `crates/conary-core/src/repository/parsers/` and
   `repository/download.rs` for authenticated metadata and package intake
 - `crates/conary-core/src/repository/supported_profiles/` for configured feed

@@ -439,6 +439,8 @@ providers through the SAT solver, and carry the selected relation graph into
 package transactions.
 
 **Start here:** `crates/conary-core/src/repository/trust.rs`;
+`crates/conary-core/src/repository/declarations/`;
+`docs/specs/native-repository-declarations.md`;
 `crates/conary-core/src/repository/trust/openpgp.rs`;
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
@@ -471,6 +473,7 @@ selection; installed package state; model replatform planning; Remi repository
 manifests, admin routes, and hosted feed configuration.
 
 **Paths:** `crates/conary-core/src/repository/*`;
+`crates/conary-core/tests/fixtures/repository_declarations/*`;
 `crates/conary-core/tests/fixtures/rpm/*`;
 `crates/conary-core/src/resolver/*`;
 `crates/conary-core/src/transaction/package_relations.rs`;
@@ -480,6 +483,7 @@ manifests, admin routes, and hosted feed configuration.
 `crates/conary-core/src/db/models/installed_requirement_group.rs`.
 
 **Focused proof:** `cargo test -p conary-core repository::trust`;
+`cargo test -p conary-core repository::declarations`;
 `cargo test -p conary-core repository::parsers`;
 `cargo test -p conary-core repository::download`;
 `cargo test -p conary-core repository::sync`;
@@ -497,6 +501,8 @@ output changes.
 
 **Docs to update:** `docs/modules/source-selection.md`;
 `docs/llms/subsystem-map.md`; `docs/ARCHITECTURE.md`;
+`docs/specs/native-repository-declarations.md` when declaration grammar,
+selected-root discovery, or its no-enrollment boundary changes;
 `docs/specs/foreign-package-lifecycle-contracts.md` when native relation
 semantics change.
 

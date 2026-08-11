@@ -1,0 +1,12 @@
+# DNF5 preserves comments and continuation lines.
+[vendor]
+name=Vendor $releasever - $basearch
+enabled=0
+baseurl=https://one.example/$basearch
+ https://two.example/$basearch
+mirrorlist=https://mirrors.example/list
+metalink=https://mirrors.example/meta
+gpgkey=file:///etc/pki/rpm-gpg/VENDOR
+exclude=old-*
+exclude=broken-*
+priority=20
