@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-11
-revision: 1
+revision: 2
 summary: Define deterministic fail-closed trust-import planning for selected-root APT, DNF5, libzypp, and ALPM repository declarations
 ---
 
@@ -51,19 +51,36 @@ or implicit authority.
 ## Ecosystem Rules
 
 APT `Signed-By` paths are resolved only below the selected root. Full
-fingerprint selectors filter the certificates and their key fingerprints in those
-exact sources; the trailing `!` exact-key restriction remains typed preview
+fingerprint selectors filter the combined certificate set from every exact
+source named by that entry, matching APT's role-global selector behavior; the
+trailing `!` exact-key restriction remains typed preview
 evidence, and a missing selector is an unsupported mismatch. Deb822 embedded
 key blocks are decoded with their dot-escaped blank lines and parsed directly.
 A fingerprint without a declared source still refers to global native trust and is ambiguous.
 `Trusted=yes` and insecure, weak, or downgrade allowances are unsupported.
 
-DNF and Zypper keep RPM metadata and package roles separate. Explicit strict
+DNF and Zypper keep RPM metadata and package roles separate. Repeated DNF
+`gpgkey` declarations append in declaration order and retain their individual
+locations. Explicit strict
 GPG checks plus selected-root `file:` key material can be imported for either
-role. An exact metalink may instead authenticate RPM metadata, but never package
-bytes. HTTPS key URLs are preserved as ambiguous evidence because their content
-does not pin its own certificate fingerprint. Missing inherited check policy is
-also ambiguous; an explicit false or permissive value is unsupported.
+role. An exact `https:` or `file:` metalink without credentials or a fragment
+may instead authenticate RPM metadata, but never package bytes; local metalink
+paths are confined below the selected root. A declared
+metalink satisfies that role even when inherited `gpgcheck_policy` could add a
+second native metadata check; an explicit `repo_gpgcheck=true` instead selects
+the declared OpenPGP keys. HTTPS key URLs are preserved as ambiguous evidence
+because their content does not pin its own certificate fingerprint. Missing
+inherited check policy is otherwise ambiguous; an explicit false or permissive
+value is unsupported.
+
+Enabled state retains each manager's native boolean grammar. In particular,
+libzypp treats its true tokens and nonzero integers as true and other values as
+false; the planner does not replace that upstream rule with a new grammar.
+
+Libzypp service declarations and repositories generated dynamically by those
+services are not trust-enrollment inputs in this slice. The later enrollment
+slice must surface them explicitly rather than treating an empty repository
+plan as complete.
 
 ALPM `Never`, `TrustAll`, and optional package signatures are unsupported.
 Strict `SigLevel` remains ambiguous until a later input binds the selected
@@ -87,9 +104,10 @@ and rejected by older consumers.
 ## Proof
 
 Focused tests generate real OpenPGP certificates and cover APT local and
-embedded keys, global and remote ambiguity, DNF metalink/package separation,
-Zypper metadata/package separation, ALPM strict and unsafe modes, unknown JSON,
-and selected-root symlink escape:
+embedded keys, global and remote ambiguity, repeated DNF key declarations,
+metalink/package separation and transport rejection, Zypper metadata/package
+separation, ALPM strict and unsafe modes, deterministic serialization, unknown
+JSON, and selected-root key and metalink symlink escape:
 
 ```bash
 cargo test -p conary-core repository::declarations::trust_import

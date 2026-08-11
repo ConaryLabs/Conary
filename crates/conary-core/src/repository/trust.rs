@@ -361,7 +361,7 @@ fn validate_fingerprint(fingerprint: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_https_or_file_url(value: &str, label: &str) -> Result<()> {
+pub(crate) fn validate_https_or_file_url(value: &str, label: &str) -> Result<()> {
     let parsed = Url::parse(value).map_err(|error| {
         Error::ConfigError(format!("{label} URL '{value}' is invalid: {error}"))
     })?;

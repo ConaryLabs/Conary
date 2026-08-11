@@ -5,6 +5,7 @@ use super::{
     NativeRepositoryTrustPlan, PlanFindings, TrustEvidenceSource, TrustImportEvidence,
     TrustImportFindingKind, dnf_reference, finding, zypper_reference,
 };
+use crate::filesystem::path::safe_join;
 use crate::repository::TrustRole;
 use crate::repository::declarations::DeclarationLocation;
 use crate::repository::declarations::dnf::{DnfEndpointKind, DnfOptionName, DnfRepository};
@@ -12,6 +13,7 @@ use crate::repository::declarations::zypper::{
     ZypperRepository, ZypperRepositoryOption, ZypperRepositoryOptionName,
 };
 use std::path::Path;
+use url::Url;
 
 pub(super) fn plan_dnf(
     selected_root: &Path,
@@ -54,15 +56,9 @@ pub(super) fn plan_dnf(
             .rev()
             .find(|option| option.name == DnfOptionName::Metalink)
             .map_or(&repository.location, |option| &option.location);
-        evidence.push(TrustImportEvidence {
-            role: TrustRole::RpmMetadata,
-            source: TrustEvidenceSource::RpmMetalink {
-                url: url.to_string(),
-            },
-            certificates: Vec::new(),
-            fingerprint_selectors: Vec::new(),
-            location: location.clone(),
-        });
+        if let Some(item) = metalink_evidence(selected_root, url, location, &mut findings) {
+            evidence.push(item);
+        }
     } else {
         require_verification(
             &metadata_check,
@@ -130,15 +126,9 @@ pub(super) fn plan_zypper(
     } else if let Some((url, location)) =
         zypper_last_value(repository, ZypperRepositoryOptionName::Metalink)
     {
-        evidence.push(TrustImportEvidence {
-            role: TrustRole::RpmMetadata,
-            source: TrustEvidenceSource::RpmMetalink {
-                url: url.trim().to_string(),
-            },
-            certificates: Vec::new(),
-            fingerprint_selectors: Vec::new(),
-            location: location.clone(),
-        });
+        if let Some(item) = metalink_evidence(selected_root, url.trim(), location, &mut findings) {
+            evidence.push(item);
+        }
     } else {
         require_verification(
             &metadata_check,
@@ -176,12 +166,12 @@ fn dnf_keys(
     role: TrustRole,
     findings: &mut PlanFindings,
 ) -> Vec<TrustImportEvidence> {
-    let Some(option) = repository
+    let options: Vec<_> = repository
         .options
         .iter()
-        .rev()
-        .find(|option| option.name == DnfOptionName::Gpgkey)
-    else {
+        .filter(|option| option.name == DnfOptionName::Gpgkey)
+        .collect();
+    if options.is_empty() {
         findings.ambiguous(finding(
             TrustImportFindingKind::MissingRequiredAuthority,
             Some(role),
@@ -189,15 +179,72 @@ fn dnf_keys(
             format!("DNF repository '{}' has no declared gpgkey", repository.id),
         ));
         return Vec::new();
-    };
-    collect_declared_roots(
-        selected_root,
-        role,
-        std::slice::from_ref(&option.raw_value),
-        &option.location,
-        findings,
-    )
-    .evidence
+    }
+    let mut evidence = Vec::new();
+    for option in options {
+        evidence.extend(
+            collect_declared_roots(
+                selected_root,
+                role,
+                std::slice::from_ref(&option.raw_value),
+                &option.location,
+                findings,
+            )
+            .evidence,
+        );
+    }
+    evidence
+}
+
+fn metalink_evidence(
+    selected_root: &Path,
+    value: &str,
+    location: &DeclarationLocation,
+    findings: &mut PlanFindings,
+) -> Option<TrustImportEvidence> {
+    if let Err(error) = crate::repository::trust::validate_https_or_file_url(value, "RPM metalink")
+    {
+        findings.unsupported(finding(
+            TrustImportFindingKind::UnsupportedTrustValue,
+            Some(TrustRole::RpmMetadata),
+            location,
+            error.to_string(),
+        ));
+        return None;
+    }
+    let url = Url::parse(value).expect("validated RPM metalink URL");
+    if url.scheme() == "file" {
+        let Ok(path) = url.to_file_path() else {
+            findings.unsupported(finding(
+                TrustImportFindingKind::UnsupportedTrustValue,
+                Some(TrustRole::RpmMetadata),
+                location,
+                format!("RPM metalink '{value}' is not a local file URL"),
+            ));
+            return None;
+        };
+        if let Err(error) = safe_join(selected_root, &path) {
+            findings.unsupported(finding(
+                TrustImportFindingKind::SelectedRootEscape,
+                Some(TrustRole::RpmMetadata),
+                location,
+                format!(
+                    "RPM metalink path '{}' escapes the selected root: {error}",
+                    path.display()
+                ),
+            ));
+            return None;
+        }
+    }
+    Some(TrustImportEvidence {
+        role: TrustRole::RpmMetadata,
+        source: TrustEvidenceSource::RpmMetalink {
+            url: value.to_string(),
+        },
+        certificates: Vec::new(),
+        fingerprint_selectors: Vec::new(),
+        location: location.clone(),
+    })
 }
 
 fn zypper_keys(
