@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-11
-revision: 32
-summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
+revision: 33
+summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native declaration and trust-import planning, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -53,6 +53,7 @@ system.toml [system]
 | `ResolutionPolicy` | `repository/resolution_policy.rs` | Exact request scope, dependency mixing, and source allowlist used by the resolver |
 | `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Runtime policy assembled from DB state with one exact transaction profile |
 | `DiscoveredRepositoryDeclarations` | `repository/declarations/discovery.rs` | Lossless, source-located APT, DNF5, libzypp, and ALPM declarations confined to an explicit selected root |
+| `NativeTrustImportPlan` | `repository/declarations/trust_import/` | Deterministic importable, ambiguous, or unsupported role-separated trust preview for discovered native repositories |
 | `SystemAffinity` | `db/models/distro_pin.rs` | Informational installed-provenance measurement used for display and replatform estimates |
 | `ReplatformExecutionPlan` | `model/replatform.rs` | Executable and blocked replatform transactions derived from planned replacements |
 
@@ -232,6 +233,25 @@ This layer is not trust, enrollment, persistence, or enablement authority. It
 does not invoke a native manager or read a native database. The exact upstream
 pins, grammar inventory, and consumer boundary are recorded in
 [`docs/specs/native-repository-declarations.md`](../specs/native-repository-declarations.md).
+
+## Native Trust-Import Planning
+
+`repository/declarations/trust_import/` consumes discovered declarations and
+reads only their explicit local key material below the same selected root. Its
+strict JSON preview retains native declaration identity, enabled state, source
+locations, exact certificate fingerprints, and separate Debian Release, RPM
+metadata, RPM package, ALPM database, and ALPM package roles. An exact RPM
+metalink can authenticate metadata but never substitutes for package-signing
+authority.
+
+The only dispositions are `importable`, `ambiguous`, and `unsupported`.
+Implicit global trust, unpinned remote key sources, and an unbound ALPM keyring
+are ambiguous. Disabled verification, permissive trust, optional package
+signatures, missing or malformed key material, selector mismatches, and
+selected-root escapes are unsupported. Neither status can silently become an
+enabled persisted repository. This slice does not fetch, persist, enable, or
+mutate; the pinned semantics and consumer boundary live in
+[`docs/specs/native-repository-trust-import.md`](../specs/native-repository-trust-import.md).
 
 ## Native Repository Authenticity
 
@@ -708,7 +728,9 @@ state requires an explicit scoped install, update, or replatform operation.
   `repository/trust/openpgp.rs` for native repository authority
 - `crates/conary-core/src/repository/declarations/` and
   `docs/specs/native-repository-declarations.md` for lossless selected-root
-  declaration discovery before enrollment
+  declaration discovery, then
+  `docs/specs/native-repository-trust-import.md` for fail-closed trust planning
+  before enrollment
 - `crates/conary-core/src/repository/parsers/` and
   `repository/download.rs` for authenticated metadata and package intake
 - `crates/conary-core/src/repository/supported_profiles/` for configured feed

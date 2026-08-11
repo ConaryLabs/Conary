@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-08
-revision: 42
-summary: Describe workspace architecture, source-authority projections, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+last_updated: 2026-08-11
+revision: 43
+summary: Describe workspace architecture, source-authority projections, native trust-import planning, repository verification, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -146,7 +146,7 @@ crates/conary-core/      Core library crate
     |   +-- conflict.rs  Conflict reporting and policy support
     |   +-- identity.rs  Dependency identity normalization
     +-- repository/      Remote package sources
-    |   +-- declarations/ Lossless selected-root APT, DNF5, libzypp, and ALPM declarations
+    |   +-- declarations/ Lossless selected-root declarations and fail-closed native trust-import preview
     |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
     |   +-- trust.rs     Tagged Debian, RPM, and Arch repository authority contracts
     |   +-- trust/openpgp.rs Trust-role dispatch over the pinned and Arch keyring owners
