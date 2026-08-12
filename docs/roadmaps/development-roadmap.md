@@ -492,8 +492,7 @@ accepted here.
 - **Outcome:** Conary enrolls native repositories transactionally and supports
   package ecosystems without a distro-name routing matrix.
 - **Execution status:** final conformance remains gated on W9. #62 is tracked as
-  bounded child slices: #377 and #379 are merged; #380 owns the active
-  policy/schema hard cut; #381 through #384 own takeover/projection,
+  bounded child slices: #377, #379, and #380 are merged; #381 through #384 own takeover/projection,
   lifecycle-enrollment, capability-compatibility, and distro-conformance work.
   #68 follows.
 - **Issues:** #62 as epic; #377 and #379-#384 as tracked children; #68 follows.
