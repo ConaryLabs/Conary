@@ -402,7 +402,7 @@ fn build_adoption_plan(
                     }
                     Err(error) => outcomes.push(PackagePlanOutcome::Unsupported {
                         requested: requested.clone(),
-                        reason: error.to_string(),
+                        reason: format!("{error:#}"),
                     }),
                 }
             }

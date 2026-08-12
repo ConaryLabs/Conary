@@ -14,6 +14,7 @@ use super::*;
 struct FixtureSource {
     lookups: HashMap<String, PackageLookup>,
     files: HashMap<String, Vec<FileInfoTuple>>,
+    file_errors: HashMap<String, String>,
     requirements: HashMap<String, Vec<RepositoryRequirementGroup>>,
     provides: HashMap<String, Vec<ProvidedCapability>>,
 }
@@ -96,6 +97,12 @@ impl FixtureSource {
         self.lookups.insert(requested.to_string(), lookup);
         self
     }
+
+    fn with_file_error(mut self, selector: &str, reason: &str) -> Self {
+        self.file_errors
+            .insert(selector.to_string(), reason.to_string());
+        self
+    }
 }
 
 impl NativePackageSource for FixtureSource {
@@ -113,6 +120,9 @@ impl NativePackageSource for FixtureSource {
     }
 
     fn query_files(&self, query_name: &str) -> Result<Vec<FileInfoTuple>> {
+        if let Some(reason) = self.file_errors.get(query_name) {
+            return Err(anyhow!(reason.clone()));
+        }
         Ok(self.files.get(query_name).cloned().unwrap_or_default())
     }
 
@@ -134,6 +144,36 @@ impl NativePackageSource for FixtureSource {
             .cloned()
             .unwrap_or_default())
     }
+}
+
+#[test]
+fn plan_preserves_the_native_file_query_error_chain() {
+    let (_temp, db_path) = temp_db();
+    let source = FixtureSource::default()
+        .with_ready(
+            "fixture",
+            "fixture",
+            file_tuple(Path::new("/missing"), 0o100644),
+        )
+        .with_file_error(
+            "fixture-1.2.3-4.x86_64",
+            "native package owns an absent required path",
+        );
+    let conn = db::open(&db_path).unwrap();
+
+    let plan = build_adoption_plan(
+        &conn,
+        &["fixture".to_string()],
+        AdoptionMode::Track,
+        &source,
+    )
+    .unwrap();
+
+    let PackagePlanOutcome::Unsupported { reason, .. } = &plan.outcomes[0] else {
+        panic!("file-query failure must be reported as unsupported");
+    };
+    assert!(reason.contains("could not inspect files for 'fixture-1.2.3-4.x86_64'"));
+    assert!(reason.contains("native package owns an absent required path"));
 }
 
 fn file_tuple(path: &Path, mode: i32) -> FileInfoTuple {
