@@ -164,13 +164,16 @@ impl NativePackageConverter {
             )));
         }
 
+        // Architecture is package identity authority for every foreign
+        // conversion. Validate it before format-specific lifecycle
+        // projections so an optional projection (such as an RPM repository
+        // declaration) cannot change the canonical identity failure.
+        let architecture = metadata.architecture().ok_or_else(|| {
+            ConversionError::BuildError("v3 package identity architecture is required".to_string())
+        })?;
+
         let mut manifest = self.build_manifest(&final_metadata, &Hooks::default())?;
         let repository_enrollments = if format == "rpm" {
-            let architecture = metadata.architecture().ok_or_else(|| {
-                ConversionError::ManifestError(
-                    "RPM repository enrollment requires source architecture authority".to_string(),
-                )
-            })?;
             crate::repository::enrollment::derive::derive_rpm_repository_enrollments(
                 files,
                 architecture,
