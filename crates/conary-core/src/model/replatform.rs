@@ -21,16 +21,16 @@ use crate::resolver::requirements::load_requirement_candidate_identities;
 use super::diff::{DiffAction, ReplatformEstimate};
 use super::state::SystemState;
 
-/// Visible package-level realignment candidates for a target distro.
+/// Visible package-level realignment candidates for an exact target source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisibleRealignmentCandidates {
-    pub target_distro: String,
+    pub target_source_identity: String,
     pub candidate_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcePolicyReplatformSnapshot {
-    pub target_distro: String,
+    pub target_source_identity: String,
     pub estimate: Option<ReplatformEstimate>,
     pub visible_realignment_candidates: usize,
     pub visible_realignment_proposals: Vec<VisibleRealignmentProposal>,
@@ -39,8 +39,8 @@ pub struct SourcePolicyReplatformSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisibleRealignmentProposal {
     pub package: String,
-    pub current_distro: Option<String>,
-    pub target_distro: String,
+    pub current_source_identity: Option<String>,
+    pub target_source_identity: String,
     pub target_version: String,
     pub architecture: Option<String>,
     pub target_repository: Option<String>,
@@ -55,8 +55,8 @@ pub struct ReplatformExecutionLeg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplatformExecutionTransaction {
     pub package: String,
-    pub current_distro: Option<String>,
-    pub target_distro: String,
+    pub current_source_identity: Option<String>,
+    pub target_source_identity: String,
     pub current_version: String,
     pub current_architecture: Option<String>,
     pub target_version: String,
@@ -105,14 +105,14 @@ struct PlannedInstallRoute {
 fn candidate_target_package(
     conn: &Connection,
     trove: &Trove,
-    target_distro: &str,
+    target_source_identity: &str,
 ) -> Result<Option<RepositoryPackage>> {
-    // Replatform planning is an explicit lookup in the desired profile. The
-    // current system pin describes the source state and must not remain the
-    // transaction authority while selecting the target replacement.
-    let mut effective_policy =
-        load_effective_policy(conn, RequestScope::DistroProfile(target_distro.to_string()))?;
-    effective_policy.resolution.allowed_distros = vec![target_distro.to_string()];
+    // Replatform planning is an explicit lookup in the desired exact source
+    // identity; package format and distro-name catalogs are not authority.
+    let effective_policy = load_effective_policy(
+        conn,
+        RequestScope::SourceIdentity(target_source_identity.to_string()),
+    )?;
 
     let options = SelectionOptions {
         architecture: trove.architecture.clone(),
@@ -175,7 +175,7 @@ fn install_route_for_target(
 
 pub fn replatform_estimate_from_affinities(
     affinities: &[SystemAffinity],
-    target_distro: &str,
+    target_source_identity: &str,
 ) -> Option<ReplatformEstimate> {
     if affinities.is_empty() {
         return None;
@@ -191,12 +191,12 @@ pub fn replatform_estimate_from_affinities(
 
     let aligned_packages = affinities
         .iter()
-        .find(|affinity| affinity.distro == target_distro)
+        .find(|affinity| affinity.source_identity == target_source_identity)
         .map(|affinity| affinity.package_count)
         .unwrap_or(0);
 
     Some(ReplatformEstimate {
-        target_distro: target_distro.to_string(),
+        target_source_identity: target_source_identity.to_string(),
         aligned_packages,
         packages_to_realign: total_packages.saturating_sub(aligned_packages),
         total_packages,
@@ -205,14 +205,15 @@ pub fn replatform_estimate_from_affinities(
 
 pub fn source_policy_replatform_snapshot(
     conn: &Connection,
-    target_distro: &str,
+    target_source_identity: &str,
 ) -> Result<SourcePolicyReplatformSnapshot> {
     let affinities = SystemAffinity::list(conn)?;
-    let visible_realignment_proposals = visible_realignment_proposals(conn, target_distro)?;
+    let visible_realignment_proposals =
+        visible_realignment_proposals(conn, target_source_identity)?;
 
     Ok(SourcePolicyReplatformSnapshot {
-        target_distro: target_distro.to_string(),
-        estimate: replatform_estimate_from_affinities(&affinities, target_distro),
+        target_source_identity: target_source_identity.to_string(),
+        estimate: replatform_estimate_from_affinities(&affinities, target_source_identity),
         visible_realignment_candidates: visible_realignment_proposals.len(),
         visible_realignment_proposals,
     })
@@ -244,8 +245,8 @@ pub fn planned_replatform_actions(
 
         actions.push(DiffAction::ReplatformReplace {
             package: proposal.package.clone(),
-            current_distro: proposal.current_distro.clone(),
-            target_distro: proposal.target_distro.clone(),
+            current_source_identity: proposal.current_source_identity.clone(),
+            target_source_identity: proposal.target_source_identity.clone(),
             current_version: installed.version.clone(),
             current_architecture: installed.architecture.clone(),
             target_version: proposal.target_version.clone(),
@@ -270,8 +271,8 @@ pub fn replatform_execution_plan(
     for action in actions {
         if let DiffAction::ReplatformReplace {
             package,
-            current_distro,
-            target_distro,
+            current_source_identity,
+            target_source_identity,
             current_version,
             current_architecture,
             target_version,
@@ -342,8 +343,8 @@ pub fn replatform_execution_plan(
             let blocked_reason = blocked_reasons.first().cloned();
             transactions.push(ReplatformExecutionTransaction {
                 package: package.clone(),
-                current_distro: current_distro.clone(),
-                target_distro: target_distro.clone(),
+                current_source_identity: current_source_identity.clone(),
+                target_source_identity: target_source_identity.clone(),
                 current_version: current_version.clone(),
                 current_architecture: current_architecture.clone(),
                 target_version: target_version.clone(),
@@ -479,48 +480,62 @@ fn requirement_group_label(
     }
 }
 
-fn current_package_distro(conn: &Connection, trove: &Trove) -> Result<Option<String>> {
+fn current_package_source_identity(conn: &Connection, trove: &Trove) -> Result<Option<String>> {
+    if let Some(repository_id) = trove.installed_from_repository_id
+        && let Some(repository) = Repository::find_by_id(conn, repository_id)?
+    {
+        return Ok(repository
+            .resolution_source_identity()?
+            .map(str::to_string)
+            .or_else(|| trove.source_profile.clone()));
+    }
     let Some(label_id) = trove.label_id else {
-        return Ok(None);
+        return Ok(trove.source_profile.clone());
     };
     let Some(label) = LabelEntry::find_by_id(conn, label_id)? else {
-        return Ok(None);
+        return Ok(trove.source_profile.clone());
     };
     let Some(repo_id) = label.repository_id else {
-        return Ok(None);
+        return Ok(trove.source_profile.clone());
     };
-    Ok(Repository::find_by_id(conn, repo_id)?.and_then(|repo| repo.source_profile))
+    let Some(repository) = Repository::find_by_id(conn, repo_id)? else {
+        return Ok(trove.source_profile.clone());
+    };
+    Ok(repository
+        .resolution_source_identity()?
+        .map(str::to_string)
+        .or_else(|| trove.source_profile.clone()))
 }
 
 pub fn visible_realignment_candidates(
     conn: &Connection,
-    target_distro: &str,
+    target_source_identity: &str,
 ) -> Result<VisibleRealignmentCandidates> {
-    let proposals = visible_realignment_proposals(conn, target_distro)?;
+    let proposals = visible_realignment_proposals(conn, target_source_identity)?;
     Ok(VisibleRealignmentCandidates {
-        target_distro: target_distro.to_string(),
+        target_source_identity: target_source_identity.to_string(),
         candidate_count: proposals.len(),
     })
 }
 
 pub fn visible_realignment_proposals(
     conn: &Connection,
-    target_distro: &str,
+    target_source_identity: &str,
 ) -> Result<Vec<VisibleRealignmentProposal>> {
     let troves = Trove::list_packages(conn)?;
     let mut proposals = Vec::new();
 
     for trove in troves.into_iter() {
-        let current_distro = current_package_distro(conn, &trove)?;
-        if current_distro.as_deref() == Some(target_distro) {
+        let current_source_identity = current_package_source_identity(conn, &trove)?;
+        if current_source_identity.as_deref() == Some(target_source_identity) {
             continue;
         }
 
-        if let Some(target_pkg) = candidate_target_package(conn, &trove, target_distro)? {
+        if let Some(target_pkg) = candidate_target_package(conn, &trove, target_source_identity)? {
             proposals.push(VisibleRealignmentProposal {
                 package: trove.name.clone(),
-                current_distro,
-                target_distro: target_distro.to_string(),
+                current_source_identity,
+                target_source_identity: target_source_identity.to_string(),
                 target_version: target_pkg.version,
                 architecture: target_pkg
                     .architecture

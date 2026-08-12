@@ -259,7 +259,7 @@ commands.
 - [`docs/roadmaps/development-roadmap.md`](../roadmaps/development-roadmap.md) for remaining generation-bundle trust, pristine validation, and platform-projection horizons
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
-- [`docs/modules/source-selection.md`](../modules/source-selection.md) for source-policy, ranking, and replatform behavior
+- [`docs/modules/source-selection.md`](../modules/source-selection.md) for repository source identity, ranking, and replatform behavior
 
 ## Drift Rule
 

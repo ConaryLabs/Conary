@@ -641,14 +641,6 @@ CREATE INDEX idx_pkg_impl_distro
             ON package_implementations(distro, distro_name);
 CREATE INDEX idx_pkg_impl_canonical
             ON package_implementations(canonical_id);
-CREATE TABLE distro_pin (
-            id INTEGER PRIMARY KEY,
-            distro TEXT NOT NULL
-                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
-            mixing_policy TEXT NOT NULL
-                CHECK(mixing_policy IN ('strict', 'guarded', 'permissive')),
-            created_at TEXT NOT NULL
-        );
 CREATE TABLE repository_provides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_package_id INTEGER NOT NULL,

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 43
+revision: 44
 summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -622,11 +622,13 @@ commits each package's files, payload claims, requirements, and provides
 atomically under `AdoptedTrack` or `AdoptedFull`; package names and partial
 warning paths are not ownership authority.
 
-Schema revision 26 is a pre-alpha hard cut: it retains revision 25's exact
-provider provenance, source-authority representation, and fail-closed trigger
-and derived-package states, and requires an explicit mixing policy for every
-persisted source pin. It does not migrate earlier databases. Operators rebuild
-disposable local state from authoritative package and repository inputs.
+Schema revision 34 is a pre-alpha hard cut: it retains exact provider
+provenance, source-authority representation, and fail-closed trigger and
+derived-package states while removing global distro-pin and allowlist
+authority. Repository-scoped opaque source identity owns selection; optional
+named feed profiles remain lifecycle projections only. It does not migrate
+earlier databases. Operators rebuild disposable local state from authoritative
+package and repository inputs.
 
 A complete unfiltered full-system adoption also performs one exact global
 selected-root capture after every native package capture succeeds. Existing

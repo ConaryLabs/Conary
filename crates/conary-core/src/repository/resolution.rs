@@ -145,6 +145,9 @@ pub enum RepositorySourceKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySourceMetadata {
     pub repository_id: i64,
+    /// Exact stream-bound source authority used for package selection.
+    pub source_identity: Option<String>,
+    /// Optional named feed projection preserved for lifecycle metadata.
     pub source_profile: Option<String>,
     pub version_scheme: VersionScheme,
     pub source_kind: RepositorySourceKind,
@@ -718,18 +721,23 @@ impl<'a> PackageResolver<'a> {
 
 fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> Result<RepositorySourceMetadata> {
     let version_scheme = resolve_package_version_scheme(&pkg_with_repo.package);
+    let source_identity = crate::repository::selector::candidate_source_identity(
+        &pkg_with_repo.package,
+        &pkg_with_repo.repository,
+    )?;
     let source_profile = crate::repository::selector::candidate_source_profile(
         &pkg_with_repo.package,
         &pkg_with_repo.repository,
     )?;
-    if source_profile.is_none() && version_scheme != VersionScheme::Conary {
+    if source_identity.is_none() && version_scheme != VersionScheme::Conary {
         return Err(Error::ConfigError(format!(
-            "selected repository package '{}-{}' has no exact source profile",
+            "selected repository package '{}-{}' has no exact source identity",
             pkg_with_repo.package.name, pkg_with_repo.package.version
         )));
     }
     Ok(RepositorySourceMetadata {
         repository_id: pkg_with_repo.package.repository_id,
+        source_identity: source_identity.map(str::to_string),
         source_profile: source_profile.map(str::to_string),
         version_scheme,
         source_kind: selected_repository_source_kind(pkg_with_repo),

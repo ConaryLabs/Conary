@@ -123,25 +123,22 @@ fn definition_from_dnf(
     architecture: &str,
     source_profile: Option<&str>,
 ) -> Result<(RepositoryDefinition, BTreeSet<String>)> {
-    let source_profile = source_profile.ok_or_else(|| {
-        Error::ConfigError(format!(
-            "DNF repository '{}' has no exact RPM source profile authority",
-            repository.id
-        ))
-    })?;
-    let profile = crate::repository::supported_profiles::profile_by_public_id(source_profile)
-        .ok_or_else(|| {
+    if let Some(source_profile) = source_profile {
+        let profile = crate::repository::supported_profiles::profile_by_public_id(source_profile)
+            .ok_or_else(|| {
             Error::ConfigError(format!(
-                "DNF repository '{}' declares unsupported source profile '{source_profile}'",
+                "DNF repository '{}' declares unknown feed projection '{source_profile}'",
                 repository.id
             ))
         })?;
-    if profile.package_format() != crate::repository::supported_profiles::ProfilePackageFormat::Rpm
-    {
-        return Err(Error::ConfigError(format!(
-            "DNF repository '{}' source profile '{source_profile}' does not own RPM semantics",
-            repository.id
-        )));
+        if profile.package_format()
+            != crate::repository::supported_profiles::ProfilePackageFormat::Rpm
+        {
+            return Err(Error::ConfigError(format!(
+                "DNF repository '{}' feed projection '{source_profile}' does not own RPM semantics",
+                repository.id
+            )));
+        }
     }
     let (endpoint_kind, endpoint_template) = repository.effective_endpoint().ok_or_else(|| {
         Error::ConfigError(format!(
@@ -215,7 +212,7 @@ fn definition_from_dnf(
             enabled,
             priority,
             metadata_expire,
-            source_profile: Some(source_profile.to_string()),
+            source_profile: source_profile.map(str::to_string),
         },
         key_paths,
     ))
@@ -542,15 +539,18 @@ mod tests {
     }
 
     #[test]
-    fn repository_payload_without_exact_source_profile_fails_closed() {
+    fn repository_payload_without_named_feed_projection_derives_exact_source_identity() {
         let declaration = b"[browser]\nbaseurl=https://repo.example/rpm\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/browser.gpg\n".to_vec();
         let payloads = vec![
             payload("etc/yum.repos.d/browser.repo", declaration),
             payload("etc/pki/rpm-gpg/browser.gpg", certificate()),
         ];
 
-        let error = derive_rpm_repository_enrollments(&payloads, "x86_64", None).unwrap_err();
+        let intents = derive_rpm_repository_enrollments(&payloads, "x86_64", None).unwrap();
 
-        assert!(error.to_string().contains("exact RPM source profile"));
+        assert_eq!(intents.len(), 1);
+        let repository = &intents[0].repositories[0];
+        assert_eq!(repository.source_profile, None);
+        assert!(repository.source_identity.starts_with("rpm-source-"));
     }
 }

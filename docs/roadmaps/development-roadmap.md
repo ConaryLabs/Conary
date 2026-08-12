@@ -521,7 +521,9 @@ accepted here.
   snapshot state in binding revision 31. #381 advances the current database
   schema to revision 32 for takeover and projection ownership. #382 advances
   the current database schema to revision 33 for package and retained
-  enrollment ownership. #380 removed the
+  enrollment ownership. #383 advances it to revision 34, removes global
+  distro-pin and allowlist state, and keys diagnostic affinity by source
+  identity. #380 removed the
   inline three-profile checks from repository and repository-package identity
   without growing a catalog. Target capability compatibility remains owned by #383.
   Pre-alpha rebuild and authoritative-input re-enrollment are explicit; no

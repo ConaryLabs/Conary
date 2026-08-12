@@ -56,9 +56,9 @@ fn insert_repository_requirement(
 #[test]
 fn test_planned_replatform_actions_use_installed_versions() {
     let snapshot = SourcePolicyReplatformSnapshot {
-        target_distro: "arch".to_string(),
+        target_source_identity: "arch".to_string(),
         estimate: Some(ReplatformEstimate {
-            target_distro: "arch".to_string(),
+            target_source_identity: "arch".to_string(),
             aligned_packages: 1,
             packages_to_realign: 1,
             total_packages: 2,
@@ -66,8 +66,8 @@ fn test_planned_replatform_actions_use_installed_versions() {
         visible_realignment_candidates: 1,
         visible_realignment_proposals: vec![VisibleRealignmentProposal {
             package: "vim".to_string(),
-            current_distro: Some("fedora-44".to_string()),
-            target_distro: "arch".to_string(),
+            current_source_identity: Some("fedora-44".to_string()),
+            target_source_identity: "arch".to_string(),
             target_version: "9.1.0".to_string(),
             architecture: Some("x86_64".to_string()),
             target_repository: Some("arch-core".to_string()),
@@ -94,8 +94,8 @@ fn test_planned_replatform_actions_use_installed_versions() {
         &actions[0],
         crate::model::DiffAction::ReplatformReplace {
             package,
-            current_distro,
-            target_distro,
+            current_source_identity,
+            target_source_identity,
             current_version,
             current_architecture,
             target_version,
@@ -103,8 +103,8 @@ fn test_planned_replatform_actions_use_installed_versions() {
             target_repository,
             target_repository_package_id,
         } if package == "vim"
-            && current_distro.as_deref() == Some("fedora-44")
-            && target_distro == "arch"
+            && current_source_identity.as_deref() == Some("fedora-44")
+            && target_source_identity == "arch"
             && current_version == "9.0.1"
             && current_architecture.as_deref() == Some("x86_64")
             && target_version == "9.1.0"
@@ -126,14 +126,10 @@ fn test_replatform_execution_plan_collects_replace_actions() {
     arch_repo.insert(&conn).unwrap();
 
     let actions = vec![
-        DiffAction::SetSourcePin {
-            distro: "arch".to_string(),
-            strength: crate::repository::resolution_policy::DependencyMixingPolicy::Strict,
-        },
         DiffAction::ReplatformReplace {
             package: "vim".to_string(),
-            current_distro: Some("fedora-44".to_string()),
-            target_distro: "arch".to_string(),
+            current_source_identity: Some("fedora-44".to_string()),
+            target_source_identity: "arch".to_string(),
             current_version: "9.0.1".to_string(),
             current_architecture: Some("x86_64".to_string()),
             target_version: "9.1.0".to_string(),
@@ -143,8 +139,8 @@ fn test_replatform_execution_plan_collects_replace_actions() {
         },
         DiffAction::ReplatformReplace {
             package: "bash".to_string(),
-            current_distro: Some("fedora-44".to_string()),
-            target_distro: "arch".to_string(),
+            current_source_identity: Some("fedora-44".to_string()),
+            target_source_identity: "arch".to_string(),
             current_version: "5.1.0".to_string(),
             current_architecture: Some("x86_64".to_string()),
             target_version: "5.2.0".to_string(),
@@ -188,8 +184,8 @@ fn test_replatform_execution_plan_reports_block_reason_when_repo_metadata_missin
     let (_temp, conn) = create_test_db();
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -221,8 +217,8 @@ fn test_replatform_execution_plan_reports_missing_versioned_install_route() {
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -263,8 +259,8 @@ fn test_replatform_execution_plan_reports_any_version_route_only() {
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -310,8 +306,8 @@ fn test_replatform_execution_plan_marks_transaction_executable_only_when_all_leg
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -344,8 +340,8 @@ fn test_replatform_execution_plan_marks_transaction_blocked_when_route_is_missin
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -393,8 +389,8 @@ fn test_replatform_execution_plan_marks_exact_version_resolution_executable() {
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -458,8 +454,8 @@ fn test_replatform_execution_plan_blocks_when_target_dependencies_are_missing() 
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -546,8 +542,8 @@ fn test_replatform_execution_plan_accepts_tracked_capability_provider_for_target
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -629,8 +625,8 @@ fn test_replatform_execution_plan_accepts_repo_metadata_provider_for_target_depe
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "kernel".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "6.19.5-1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "6.19.6-1".to_string(),
@@ -712,8 +708,8 @@ fn test_replatform_execution_plan_accepts_debian_repo_metadata_provider_for_targ
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "mailer".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "ubuntu-26.04".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "ubuntu-26.04".to_string(),
         current_version: "0.9-1".to_string(),
         current_architecture: Some("amd64".to_string()),
         target_version: "1.0-1".to_string(),
@@ -796,8 +792,8 @@ fn test_replatform_execution_plan_accepts_debian_normalized_provider_with_versio
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "mailer".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "ubuntu-26.04".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "ubuntu-26.04".to_string(),
         current_version: "0.9-1".to_string(),
         current_architecture: Some("amd64".to_string()),
         target_version: "1.0-1".to_string(),
@@ -879,8 +875,8 @@ fn test_replatform_execution_plan_accepts_arch_normalized_provider_for_target_de
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "mailer".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "0.9-1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "1.0-1".to_string(),
@@ -911,8 +907,8 @@ fn test_replatform_execution_plan_reports_architecture_mismatch() {
 
     let actions = vec![DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),

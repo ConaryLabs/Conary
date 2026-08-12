@@ -266,9 +266,7 @@ pub(super) fn install_inner_with_stored_files(
                      JOIN repositories r ON rp.repository_id = r.id
                      WHERE rp.name = ?1 AND rp.version = ?2
                        AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)
-                     ORDER BY
-                         (r.source_profile = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
-                         r.priority DESC, r.id ASC
+                     ORDER BY r.priority DESC, r.id ASC
                      LIMIT 1",
                     rusqlite::params![pkg.name(), pkg.version(), pkg.architecture()],
                     |row| row.get(0),

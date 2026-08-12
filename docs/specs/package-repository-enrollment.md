@@ -144,8 +144,8 @@ selection.
 
 ## Schema Hard Cut And Proof
 
-Schema revision 33 adds package/retained enrollment ownership and exact
-projection-owner bindings. Revision 32 is retired
+Schema revision 34 retains package/retained enrollment ownership and exact
+projection-owner bindings while removing global distro-pin authority. Revision 33 is retired
 pre-alpha state. Recovery is `conary system rebuild-db --discard-state --yes`
 followed by takeover and package reinstallation from authoritative inputs; no
 migration or legacy reader is retained.

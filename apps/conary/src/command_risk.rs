@@ -554,9 +554,6 @@ fn classify_distro(command: &cli::DistroCommands) -> CommandRiskPolicy {
         cli::DistroCommands::List { .. } | cli::DistroCommands::Info { .. } => {
             read_only("conary distro read-only command")
         }
-        cli::DistroCommands::Set { .. }
-        | cli::DistroCommands::Remove { .. }
-        | cli::DistroCommands::Mixing { .. } => local_state("conary distro"),
     }
 }
 

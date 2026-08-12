@@ -282,6 +282,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         component_names_by_path: None,
         repository_provenance: Some(RepositoryInstallProvenance {
             repository_id: 9,
+            source_identity: Some("arch".to_string()),
             source_profile: Some("arch".to_string()),
             version_scheme: conary_core::repository::versioning::VersionScheme::Arch,
             source_kind: conary_core::repository::RepositorySourceKind::Native,

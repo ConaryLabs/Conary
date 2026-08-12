@@ -8,10 +8,11 @@ use super::prepare::check_upgrade_status;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
 use super::{
     InstallIntent, InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
-    TransactionContext, UpgradeCheck, bind_transaction_source_profile, build_execution_mode,
-    build_resolution_policy, execute_install_transaction_in_selected_root,
-    extract_and_classify_files, finalize_install, preflight_extracted_file_ownership,
-    resolve_canonical_name, show_dry_run_summary,
+    TransactionContext, UpgradeCheck, bind_transaction_source_identity, build_execution_mode,
+    build_resolution_policy, effective_source_profile,
+    execute_install_transaction_in_selected_root, extract_and_classify_files, finalize_install,
+    preflight_extracted_file_ownership, resolve_canonical_name, show_dry_run_summary,
+    source_profile_projection,
 };
 use crate::commands::generation::selected_root::LockedRuntimeRoot;
 use crate::commands::open_db;
@@ -54,12 +55,12 @@ async fn cmd_install_with_intent(
         convert_to_ccs,
         ownership,
         yes,
-        from_profile,
+        from_source,
         repository_provenance: requested_repository_provenance,
     } = opts;
 
     // Hint if source policy is unconfigured (first-run guidance)
-    crate::commands::hint_unconfigured_source_policy();
+    crate::commands::hint_default_convergence();
 
     // Open the database once for all pre-install checks (canonical resolution,
     // adoption check, promotion check). This connection is later promoted to `mut`
@@ -80,16 +81,17 @@ async fn cmd_install_with_intent(
 
     let effective_source_policy =
         conary_core::repository::load_effective_policy(&conn, RequestScope::Any)?;
+    let requested_source_profile = from_source.as_deref().and_then(source_profile_projection);
     let policy = build_resolution_policy(
         &conn,
         effective_source_policy.resolution,
-        from_profile.as_deref(),
+        from_source.as_deref(),
         repo.as_deref(),
     )?;
     let resolved_name = resolve_canonical_name(
         &conn,
         &base_name_for_canonical,
-        from_profile.as_deref(),
+        from_source.as_deref(),
         &policy,
     )?;
     // If canonical resolution found a mapping, re-attach any component suffix
@@ -140,6 +142,7 @@ async fn cmd_install_with_intent(
         architecture.as_deref(),
         convert_to_ccs,
         &policy,
+        requested_source_profile,
         &ccs_install_opts,
     )
     .await?
@@ -147,7 +150,9 @@ async fn cmd_install_with_intent(
         // Already installed as CCS — no further processing needed.
         return Ok(());
     };
-    let policy = bind_transaction_source_profile(policy, repository_provenance.as_ref())?;
+    let policy = bind_transaction_source_identity(policy, repository_provenance.as_ref())?;
+    let source_profile =
+        effective_source_profile(repository_provenance.as_ref(), requested_source_profile);
     let semantics = InstallSemantics::native_package(format);
 
     // Promote the pre-install connection to mutable for the main install transaction
@@ -208,11 +213,8 @@ async fn cmd_install_with_intent(
             | UpgradeCheck::Downgrade(trove)
             | UpgradeCheck::Replatform(trove) => Some(trove),
         };
-    let native_lifecycle_state = NativeLifecycleInstallState::from_native_package(
-        pkg.as_ref(),
-        format,
-        policy.primary_profile(),
-    )?;
+    let native_lifecycle_state =
+        NativeLifecycleInstallState::from_native_package(pkg.as_ref(), format, source_profile)?;
     let repository_enrollments = if format == crate::commands::PackageFormatType::Rpm {
         let architecture = pkg.architecture().ok_or_else(|| {
             anyhow::anyhow!("RPM repository enrollment requires package architecture authority")
@@ -220,7 +222,7 @@ async fn cmd_install_with_intent(
         conary_core::repository::enrollment::derive::derive_rpm_repository_enrollments(
             &extraction.extracted_files,
             architecture,
-            policy.primary_profile(),
+            source_profile,
         )?
     } else {
         Vec::new()

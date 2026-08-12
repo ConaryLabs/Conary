@@ -778,6 +778,7 @@ fn install_inner_applies_repository_provenance_from_resolution() {
         defer_generation: false,
         repository_provenance: Some(RepositoryInstallProvenance {
             repository_id: repo_id,
+            source_identity: Some("fedora-44".to_string()),
             source_profile: Some("fedora-44".to_string()),
             version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
             source_kind: conary_core::repository::RepositorySourceKind::Native,

@@ -120,7 +120,7 @@ async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result
                     convert_to_ccs: false,
                     ownership: None,
                     yes: true,
-                    from_profile: None,
+                    from_source: None,
                     repository_provenance: None,
                 },
             )

@@ -299,7 +299,7 @@ pub async fn cmd_adopt(
         bail!("No packages specified");
     }
 
-    super::super::hint_unconfigured_source_policy();
+    super::super::hint_default_convergence();
 
     let manager = SystemPackageManager::resolve(requested_manager)?;
     if !manager.is_available() {
