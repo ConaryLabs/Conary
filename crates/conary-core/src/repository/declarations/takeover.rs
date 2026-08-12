@@ -4,7 +4,8 @@
 
 use super::trust_import::{
     NativeRepositoryReference, NativeRepositoryTrustPlan, NativeTrustImportPlan,
-    TrustEvidenceSource, TrustImportDisposition, TrustImportEvidence, plan_selected_root_trust,
+    TrustEvidenceSource, TrustImportDisposition, TrustImportEvidence, TrustImportFindingKind,
+    plan_selected_root_trust,
 };
 use super::{DiscoveredRepositoryDeclarations, discover_selected_root};
 use crate::db::models::{Repository, RepositoryOwnership};
@@ -516,5 +517,7 @@ fn selected_root_identity(selected_root: &Path) -> Result<String> {
         .ok_or_else(|| Error::ConfigError("selected root path is not valid UTF-8".to_string()))
 }
 
+#[cfg(test)]
+mod conformance_tests;
 #[cfg(test)]
 mod tests;
