@@ -1,0 +1,4 @@
+#!/sbin/openrc-run
+
+description="Conary foreign lifecycle OpenRC fixture"
+command="/bin/true"

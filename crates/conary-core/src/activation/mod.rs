@@ -8,10 +8,15 @@
 //! built from the transaction.
 
 mod invocation;
+mod openrc;
 mod security_policy;
 mod systemd;
 
 pub use invocation::RuntimeActivationInvocation;
+pub use openrc::{
+    OpenRcActivationAction, OpenRcActivationCondition, OpenRcActivationInvocation,
+    OpenRcActivationParseError, parse_openrc_activation_invocation,
+};
 pub use security_policy::{
     ActivationExecutableIdentity, ApparmorActivationAction, ApparmorActivationInvocation,
     ApparmorProgram, SecurityPolicyActivationInvocation, SecurityPolicyInvocationDisposition,

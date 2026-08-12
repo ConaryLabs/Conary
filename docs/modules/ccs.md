@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 59
+revision: 60
 summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -84,9 +84,9 @@ enable or disable, generic service actions, tmpfiles, sysctl, alternatives.
 All operations respect a target_root parameter for bootstrap/container use.
 `hooks/capabilities.rs` owns the typed host-inventory epoch. `conary
 system init` discovers and persists the active init interface plus exact
-`systemctl`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
+`systemctl`, `rc-service`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
 `ldconfig` executable interfaces in `system.host-capability-inventory`.
-The version-4 document also records the target `/usr` node's exact opaque
+The version-5 document also records the target `/usr` node's exact opaque
 `security.selinux` value when present. Generation artifacts authenticate that
 target fact separately from each logical composefs node and use it only for
 carrier CAS backing. `hooks/capabilities/filesystem_security.rs` owns its
@@ -108,14 +108,15 @@ installs pass the exact rendered declaration to that executable; offline-root
 installs write the same declaration under the target root for its own
 `systemd-tmpfiles` implementation to consume.
 
-Systemd enable and disable use the documented `systemctl` grammar on a live
-host and `systemctl --root=...` for an offline root. A generic service start,
-stop, or restart is valid only against a running typed service manager; it is
-not guessed or deferred for an offline root. A `[[hooks.systemd]]` entry with
-`enable = false` is an explicit disable operation. Author-declared systemd and
-service fields are pathless unit names; raw native lifecycle argv has a
-separate exact systemctl-operand contract and is not narrowed by this
-declarative safety envelope.
+Systemd enable and disable use the documented `systemctl` grammar against the
+selected root. OpenRC enable and disable own the exact `default` runlevel
+symlink and require an executable, nonsymlinked init script. Generic service
+start, stop, reload, or restart resolves through the typed active systemd or
+OpenRC interface and is deferred as generation activation work. A
+`[[hooks.systemd]]` entry with `enable = false` is an explicit disable
+operation. Author-declared systemd and service fields are pathless names; raw
+native lifecycle argv has a separate exact provider-operand contract and is
+not narrowed by this declarative safety envelope.
 
 SELinux/AppArmor conversion adapters record discovery evidence only. CCS has no
 parallel `SecurityPolicyIntent` mutation contract. During selected-root
@@ -226,7 +227,7 @@ lifecycle planning, database mutation, or transaction completion to `rpm`,
 `dpkg`, or `pacman`.
 Source format and target host are orthogonal: the running system exposes typed
 ABI/libc/loader, init, LSM, filesystem, boot/kernel, and helper capabilities.
-The implemented hook inventory currently records init/systemd, sysusers,
+The implemented hook inventory currently records init/systemd/OpenRC, sysusers,
 tmpfiles, sysctl, and ldconfig interfaces; the remaining capability families
 stay typed implementation work rather than distro-name fallbacks. Distro names
 do not select pairwise converters, compatibility profiles, or string gates.
@@ -277,7 +278,7 @@ family/route aliases are rejected.
 The typed Debian declaration list is the sole trigger authority: validation
 reparses the preserved control artifact and rejects parallel superseded
 trigger-body or trigger-name projections. Actual provider execution at the
-selected-root process boundary is systemd, SELinux, AppArmor, boot, and kernel
+selected-root process boundary is systemd, OpenRC, SELinux, AppArmor, boot, and kernel
 runtime authority; static script classifications are not persisted authority.
 Revision 18 is a hard cut: earlier artifacts and installed rows must be
 reconverted, rebuilt, or discarded with the pre-alpha database rather than

@@ -111,6 +111,7 @@ esac
             SystemdInterface::probe(systemctl, true)
                 .context("probe isolated systemctl contract")?,
         ),
+        openrc: None,
         sysusers: Some(
             ExecutableInterface::probe_sysusers(sysusers)
                 .context("probe isolated systemd-sysusers contract")?,

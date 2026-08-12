@@ -53,6 +53,16 @@ test_packages = [
     { package = "jq", binary = "/usr/bin/jq" },
 ]
 
+[distros.artix]
+remi_distro = "arch"
+repo_name = "remi-arch"
+build_context = "static-binary"
+test_packages = [
+    { package = "which", binary = "/usr/bin/which" },
+    { package = "tree", binary = "/usr/bin/tree" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
+
 # Default repos to remove after init (avoid slow syncs)
 [setup]
 remove_default_repos = [

@@ -9,12 +9,19 @@ timeout = 3600
 
 [distro_overrides.fedora44]
 native_lifecycle_oracle_format = "rpm"
+target_init_system = "systemd"
 
 [distro_overrides."ubuntu-26.04"]
 native_lifecycle_oracle_format = "deb"
+target_init_system = "systemd"
 
 [distro_overrides.arch]
 native_lifecycle_oracle_format = "arch"
+target_init_system = "systemd"
+
+[distro_overrides.artix]
+native_lifecycle_oracle_format = "arch"
+target_init_system = "openrc"
 
 [[test]]
 id = "TNPMX01R"
@@ -33,7 +40,7 @@ stages = ["installation", "update", "rollback", "removal"]
 
 [test.corpus.target]
 architecture = "x86_64"
-init_system = "systemd"
+init_system = "${target_init_system}"
 capabilities = ["native_lifecycle", "selected_root_generation"]
 
 [[test.step]]
@@ -59,7 +66,7 @@ stages = ["installation", "update", "rollback", "removal"]
 
 [test.corpus.target]
 architecture = "x86_64"
-init_system = "systemd"
+init_system = "${target_init_system}"
 capabilities = ["native_lifecycle", "selected_root_generation"]
 
 [[test.step]]
@@ -85,11 +92,25 @@ stages = ["installation", "update", "rollback", "removal"]
 
 [test.corpus.target]
 architecture = "x86_64"
-init_system = "systemd"
+init_system = "${target_init_system}"
 capabilities = ["native_lifecycle", "selected_root_generation"]
 
 [[test.step]]
 run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-arch.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} arch"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPMX02O"
+name = "openrc_selected_root_and_generation_activation"
+description = "The non-systemd lane resolves its current OpenRC provider, projects selected-root enablement, and persists typed generation activation"
+timeout = 900
+fatal = false
+group = "native-cross-source-lifecycle"
+
+[[test.step]]
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-openrc-service-lifecycle.sh ${target_init_system}"
 
 [test.step.assert]
 exit_code = 0

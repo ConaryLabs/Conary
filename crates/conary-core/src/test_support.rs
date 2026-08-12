@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub(crate) enum HostToolFixture {
     ExitSuccess,
     Ldconfig,
+    OpenRc,
     SshKeygen,
     Sysctl406,
     Sysctl407,
@@ -21,6 +22,7 @@ impl HostToolFixture {
         match self {
             Self::ExitSuccess => "exit-success",
             Self::Ldconfig => "ldconfig",
+            Self::OpenRc => "openrc",
             Self::SshKeygen => "ssh-keygen",
             Self::Sysctl406 => "sysctl-4.0.6",
             Self::Sysctl407 => "sysctl-4.0.7",

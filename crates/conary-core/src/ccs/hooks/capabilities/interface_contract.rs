@@ -19,6 +19,7 @@ const INTERFACE_PROBE_OUTPUT_LIMIT: u64 = 64 * 1024;
 #[serde(rename_all = "kebab-case")]
 pub enum HostExecutableContract {
     SystemdSystemctl,
+    OpenRcService,
     SystemdSysusers,
     SystemdTmpfiles,
     ProcpsSysctl,
@@ -29,6 +30,7 @@ pub enum HostExecutableContract {
 #[serde(rename_all = "kebab-case")]
 pub enum HostExecutableImplementation {
     Systemd,
+    OpenRc,
     ProcpsNg,
     Glibc,
 }
@@ -51,6 +53,10 @@ pub struct ExecutableInterface {
 impl ExecutableInterface {
     pub fn probe_systemctl(executable: PathBuf) -> Option<Self> {
         Self::probe_host(executable, HostExecutableContract::SystemdSystemctl)
+    }
+
+    pub fn probe_openrc_service(executable: PathBuf) -> Option<Self> {
+        Self::probe_host(executable, HostExecutableContract::OpenRcService)
     }
 
     pub fn probe_sysusers(executable: PathBuf) -> Option<Self> {
@@ -194,6 +200,16 @@ fn implementation_identity(
             valid_version(version)
                 .then(|| (HostExecutableImplementation::Systemd, version.to_string()))
         }
+        HostExecutableContract::OpenRcService => {
+            let version = first_line
+                .strip_prefix("rc-service (OpenRC")?
+                .split_once(") ")?
+                .1
+                .split_ascii_whitespace()
+                .next()?;
+            valid_version(version)
+                .then(|| (HostExecutableImplementation::OpenRc, version.to_string()))
+        }
         HostExecutableContract::ProcpsSysctl => {
             let version = first_line.strip_prefix("sysctl from procps-ng ")?;
             let version = version.split_ascii_whitespace().next()?;
@@ -215,6 +231,7 @@ fn expected_implementation(contract: HostExecutableContract) -> HostExecutableIm
         HostExecutableContract::SystemdSystemctl
         | HostExecutableContract::SystemdSysusers
         | HostExecutableContract::SystemdTmpfiles => HostExecutableImplementation::Systemd,
+        HostExecutableContract::OpenRcService => HostExecutableImplementation::OpenRc,
         HostExecutableContract::ProcpsSysctl => HostExecutableImplementation::ProcpsNg,
         HostExecutableContract::GlibcLdconfig => HostExecutableImplementation::Glibc,
     }
@@ -233,6 +250,16 @@ fn functional_handshake(executable: &Path, contract: HostExecutableContract) -> 
         HostExecutableContract::SystemdSystemctl => command_succeeds(
             executable,
             &["--root=/", "--no-pager", "--no-legend", "list-unit-files"],
+            None,
+        ),
+        HostExecutableContract::OpenRcService => command_succeeds(
+            executable,
+            &[
+                "--dry-run",
+                "--ifexists",
+                "conary-interface-probe",
+                "status",
+            ],
             None,
         ),
         HostExecutableContract::SystemdSysusers => sysusers_functional_handshake(executable),
@@ -441,6 +468,22 @@ mod tests {
     fn same_name_success_exit_is_not_an_interface_descriptor() {
         let (_directory, executable) = executable_fixture(HostToolFixture::ExitSuccess);
         assert!(ExecutableInterface::probe_systemctl(executable).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openrc_probe_requires_version_identity_and_functional_handshake() {
+        let (_directory, executable) = executable_fixture(HostToolFixture::OpenRc);
+        let descriptor = ExecutableInterface::probe_openrc_service(executable).unwrap();
+        assert_eq!(descriptor.contract, HostExecutableContract::OpenRcService);
+        assert_eq!(
+            descriptor.implementation,
+            HostExecutableImplementation::OpenRc
+        );
+        assert_eq!(descriptor.implementation_version, "0.62");
+
+        let (_directory, counterfeit) = executable_fixture(HostToolFixture::ExitSuccess);
+        assert!(ExecutableInterface::probe_openrc_service(counterfeit).is_none());
     }
 
     #[cfg(unix)]

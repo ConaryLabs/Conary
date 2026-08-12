@@ -522,7 +522,9 @@ accepted here.
   the current database schema to revision 33 for package and retained
   enrollment ownership. #383 advances it to revision 34, removes global
   distro-pin and allowlist state, and keys diagnostic affinity by source
-  identity. #380 removed the
+  identity. #68 advances it to revision 35 for exact installed-artifact
+  architecture authority, and #384 advances it to revision 36 for the distinct
+  captured-OpenRC activation source kind. #380 removed the
   inline three-profile checks from repository and repository-package identity
   without growing a catalog. Target capability compatibility remains owned by #383.
   Pre-alpha rebuild and authoritative-input re-enrollment are explicit; no

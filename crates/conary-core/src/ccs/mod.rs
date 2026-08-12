@@ -52,7 +52,7 @@ pub use hooks::{
     HostCapabilityInventoryError, HostCapabilityPreflightError, HostCapabilityRequirement,
     HostExecutableContract, HostExecutableImplementation, ImmutableBackingSecurity,
     ImmutableBackingSecurityError, ImmutableBackingSecurityMechanism, InitSystemCapability,
-    SystemdInterface, SystemdOperation, TmpfilesInterface,
+    OpenRcInterface, SystemdInterface, SystemdOperation, TmpfilesInterface,
 };
 pub use inspector::UntrustedPackageInspection;
 pub use manifest::CcsManifest;

@@ -774,7 +774,7 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
 
     let manifest = load_manifest(&path).expect("load focused native lifecycle manifest");
     assert_eq!(manifest.suite.phase, 4);
-    assert_eq!(manifest.test.len(), 3);
+    assert_eq!(manifest.test.len(), 4);
     for (test, expected_id, expected_profile, expected_format) in [
         (&manifest.test[0], "TNPMX01R", "fedora-44", "rpm"),
         (&manifest.test[1], "TNPMX01D", "ubuntu-26.04", "deb"),
@@ -810,10 +810,18 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
             );
         }
     }
-    for (distro, expected_format) in [
-        ("fedora44", "rpm"),
-        ("ubuntu-26.04", "deb"),
-        ("arch", "arch"),
+    let openrc = &manifest.test[3];
+    assert_eq!(openrc.id, "TNPMX02O");
+    assert_eq!(openrc.fatal, Some(false));
+    assert!(openrc.corpus.is_none());
+    assert!(
+        format!("{openrc:?}").contains("run-openrc-service-lifecycle.sh ${target_init_system}")
+    );
+    for (distro, expected_format, expected_init) in [
+        ("fedora44", "rpm", "systemd"),
+        ("ubuntu-26.04", "deb", "systemd"),
+        ("arch", "arch", "systemd"),
+        ("artix", "arch", "openrc"),
     ] {
         let overrides = manifest
             .distro_overrides
@@ -825,6 +833,11 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
                 .map(String::as_str),
             Some(expected_format),
             "{distro} must select its native lifecycle oracle explicitly"
+        );
+        assert_eq!(
+            overrides.get("target_init_system").map(String::as_str),
+            Some(expected_init),
+            "{distro} must declare its target init authority explicitly"
         );
     }
 }

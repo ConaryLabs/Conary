@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 45
+revision: 46
 summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -88,9 +88,9 @@ text. Supporting another Linux environment means satisfying or implementing
 the same capability contracts and proof fixtures, not creating
 RPM-to-that-distro, DEB-to-that-distro, or Arch-to-that-distro code paths.
 
-The current host-inventory schema is version 4 and is persisted under
+The current host-inventory schema is version 5 and is persisted under
 `system.host-capability-inventory` by `conary system init`. Its structural
-contract records the active init interface and exact `systemctl`,
+contract records the active init interface and exact `systemctl`, `rc-service`,
 `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and `ldconfig` command
 interfaces. Each executable descriptor carries the exact command/root grammar,
 parsed implementation family and version, absolute target path, and executable
@@ -101,11 +101,11 @@ for `--version` is not a capability. Probe processes receive a fixed sanitized
 environment, bounded output, a five-second deadline, and a private process
 group that Conary kills on timeout. Each inventory field accepts only its exact
 command contract, and the systemd operation set must be exactly the offline or
-live-manager shape discovered at initialization. The version-4 document also
+live-manager shape discovered at initialization. The version-5 document also
 records the opaque `security.selinux` value of the target `/usr` node when
 present, for use as immutable carrier-backing authority. It does not parse that
 value or derive one from a distro, path, policy name, source package manager, or
-pairwise compatibility selector. A version-3 inventory must be replaced by
+pairwise compatibility selector. A version-4 inventory must be replaced by
 rerunning `conary system init`.
 
 RPM sysusers planning emits a dedicated typed native event rather than a
@@ -128,12 +128,15 @@ reinterpret mode, identity, age, specifier, or argument semantics. The target
 against the exact declaration, while offline roots receive that declaration
 for the target executable at boot.
 
-CCS service preflight resolves generic service hooks through the typed init
-manager. Systemd-specific hooks resolve through the typed systemctl interface:
-unit-file enable/disable operations mutate only the selected root through
-systemctl's documented offline-root contract. `enable = false` means disable.
-Runtime service operations become generation activation intents; package
-installation never signals the host service manager.
+CCS service preflight resolves generic service hooks through the typed active
+init manager. Systemd-specific hooks resolve through the typed systemctl
+interface: unit-file enable/disable operations mutate only the selected root
+through systemctl's documented offline-root contract. OpenRC enable/disable
+projects the exact `default` runlevel symlink to an executable, nonsymlinked
+selected-root init script and rejects conflicting authority. `enable = false`
+means disable. Runtime service operations become typed systemd or OpenRC
+generation activation intents; package installation never signals the host
+service manager.
 
 Every successful typed Arch add, upgrade, or remove transaction evaluates
 libalpm's implicit ldconfig step exactly once after package post hooks and
@@ -147,13 +150,14 @@ the package transaction.
 
 Service-manager runtime work has two exact inputs. A declarative CCS service
 hook emits a typed operation directly. An arbitrary signed CCS hook or native
-RPM, Debian, or Arch lifecycle program is observed at the `systemctl` process
-boundary inside the isolated selected root: a private mount namespace places a
-capture proxy over the target executable, records the actual NUL-delimited
-argv, and suppresses a closed runtime action before it can reach any service
-manager. Non-runtime behavior is delegated to that same target executable with
-`SYSTEMD_OFFLINE=1`. Conary does not inspect script text to decide that a
-service action occurred.
+RPM, Debian, or Arch lifecycle program is observed at the `systemctl` or
+`rc-service` process boundary inside the isolated selected root: a private
+mount namespace places a capture proxy over the target executable, records the
+actual NUL-delimited argv, and prevents a live runtime action from reaching a
+service manager. Non-runtime systemd behavior is delegated to that same target
+executable with `SYSTEMD_OFFLINE=1`; OpenRC behavior is validated by the target
+provider with its documented `--dry-run` flag. Conary does not inspect script
+text to decide that a service action occurred.
 
 The closed action grammar follows systemd's
 [`unit_actions` table](https://github.com/systemd/systemd/blob/main/src/systemctl/systemctl-start-unit.c):
@@ -185,6 +189,16 @@ second shell-maintained command list. An option shape outside that closed table
 is suppressed before it can reach a live manager and becomes a typed contract
 error; `Ok(None)` is reserved for a positively parsed non-activation verb or
 explicit dry run.
+
+The OpenRC grammar is derived from `rc-service`'s current option and command
+contract. It preserves `start`, `stop`, `reload`, and `restart`, the six
+conditional execution flags, debug, dependency, color, verbosity, quietness,
+and trailing service-command arguments. Query/help/version modes and explicit
+dry runs create no activation work. Repeated idempotent condition flags are
+canonicalized; duplicate conditions in an already-typed persisted invocation,
+unknown options, invalid service names, and unsupported live target modes fail
+closed. Captured OpenRC argv has its own `captured-openrc` durable source kind;
+it cannot be misrepresented as captured systemctl work.
 
 SELinux and AppArmor use the same process-boundary authority: actual argv plus
 the selected root's exact provider executable. Private script-text diagnostics
@@ -233,9 +247,9 @@ and message. It does not synthesize an exit-code or stderr column absent from
 `ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy requests also retain the exact invoked path, canonical path,
 and executable SHA-256 observed inside that selected root. Current-only
-database schema revision 9 stores the tagged systemd/SELinux/AppArmor union;
-revision-8 databases must be rebuilt and no compatibility decoder or migration
-exists.
+database schema revision 36 stores the tagged systemd/OpenRC/SELinux/AppArmor
+union and distinct captured source kinds; revision-35 databases must be rebuilt
+and no compatibility decoder or migration exists.
 Every generation build projects all eligible requests through that
 generation's applied-changeset high-water mark into
 `generation_activation_intents`. Thus a request projected onto generation N
@@ -247,11 +261,11 @@ The packaged `conary-generation-activation.service` invokes the hidden
 native boot. A Conary boot must contain exactly one non-negative
 `conary.generation=N` kernel argument, a matching activatable artifact, and a
 matching database state. The consumer then loads only N's intents and
-revalidates the persisted live-systemd capability and exact `systemctl`
-executable identity before each sequence begins. If a legitimate generation
-upgrade changed that interface, the consumer structurally rediscovers and
-persists the booted generation's typed capability inventory instead of
-requiring operator reconciliation. A security-policy request instead requires
+revalidates the persisted active init capability and exact `systemctl` or
+`rc-service` executable identity before each sequence begins. If a legitimate
+generation upgrade changed that interface, the consumer structurally
+rediscovers and persists the booted generation's typed capability inventory
+instead of requiring operator reconciliation. A security-policy request instead requires
 the booted provider's invoked path to resolve to the captured canonical path
 with the captured executable SHA-256, then runs the exact captured arguments.
 A missing or changed provider is a durable failed request and remains
