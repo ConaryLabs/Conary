@@ -274,7 +274,7 @@ pub(crate) async fn prepare_install_for_restore(
         architecture,
         selection_reason,
         allow_downgrade,
-        from_profile,
+        from_source,
         ..
     } = opts;
 
@@ -285,10 +285,10 @@ pub(crate) async fn prepare_install_for_restore(
     let policy = build_resolution_policy(
         conn,
         effective_source_policy.resolution,
-        from_profile.as_deref(),
+        from_source.as_deref(),
         repo.as_deref(),
     )?;
-    let resolved_name = resolve_canonical_name(conn, package, from_profile.as_deref(), &policy)?;
+    let resolved_name = resolve_canonical_name(conn, package, from_source.as_deref(), &policy)?;
     let package_name = resolved_name.unwrap_or_else(|| package.to_string());
 
     let progress = InstallProgress::single("Restoring");

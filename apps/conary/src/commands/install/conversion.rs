@@ -305,7 +305,6 @@ pub async fn try_convert_to_ccs(
     package_path: &Path,
     format: PackageFormatType,
     db_path: &str,
-    _resolution_policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
     source_profile: Option<&str>,
 ) -> Result<ConversionResult> {
     info!("Converting {} to CCS format...", pkg.name());

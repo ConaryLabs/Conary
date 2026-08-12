@@ -389,7 +389,6 @@ async fn try_convert_to_ccs_does_not_guess_capability_policy() {
         &native_path,
         PackageFormatType::Rpm,
         db_path_str,
-        &test_resolution_policy(),
         None,
     )
     .await

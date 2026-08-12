@@ -61,7 +61,6 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         &native_path,
         PackageFormatType::Rpm,
         db_path_str,
-        &test_resolution_policy().with_primary_source_identity("fedora-44"),
         Some("fedora-44"),
     )
     .await

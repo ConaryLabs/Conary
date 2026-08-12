@@ -11,6 +11,7 @@ use super::resolve::{
 use super::{
     CcsEnvelopeAuthority, InstallIntent, InstallPhase, InstallProgress, PackageFormatType,
     RepositoryInstallProvenance, bind_transaction_source_identity, detect_package_format,
+    effective_source_profile,
 };
 use anyhow::{Context, Result};
 use conary_core::packages::PackageFormat;
@@ -50,6 +51,7 @@ pub(super) async fn resolve_and_parse_package(
     architecture: Option<&str>,
     convert_to_ccs: bool,
     policy: &ResolutionPolicy,
+    requested_source_profile: Option<&str>,
     ccs_opts: &CcsInstallParams<'_>,
 ) -> Result<
     Option<(
@@ -179,10 +181,7 @@ pub(super) async fn resolve_and_parse_package(
             &resolved.path,
             format,
             db_path,
-            &resolution_policy,
-            repository_provenance
-                .as_ref()
-                .and_then(|provenance| provenance.source_profile.as_deref()),
+            effective_source_profile(repository_provenance.as_ref(), requested_source_profile),
         )
         .await?
         {

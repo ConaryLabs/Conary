@@ -44,7 +44,7 @@ pub struct InstallOptions<'a> {
     /// Skip confirmation prompts
     pub yes: bool,
     /// Install from an exact source identity.
-    pub from_profile: Option<String>,
+    pub from_source: Option<String>,
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
     pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,

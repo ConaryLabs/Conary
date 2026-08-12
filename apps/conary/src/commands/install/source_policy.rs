@@ -110,7 +110,7 @@ pub(super) fn resolve_canonical_name(
             "--from source identity",
         )
         .map_err(anyhow::Error::msg)?;
-        let Some(profile_id) = canonical_projection_profile_id(target_source) else {
+        let Some(profile_id) = source_profile_projection(target_source) else {
             return Ok(None);
         };
         if let Some(canonical) =
@@ -172,9 +172,26 @@ pub(super) fn resolve_canonical_name(
     }
 }
 
-fn canonical_projection_profile_id(value: &str) -> Option<&'static str> {
+/// Project an opaque source identity onto a named feed profile only when the
+/// exact public ID is catalogued. The source identity remains the policy
+/// authority; this optional projection supplies source-format ABI details such
+/// as the Arch scriptlet shell.
+pub(super) fn source_profile_projection(value: &str) -> Option<&'static str> {
     conary_core::repository::supported_profiles::profile_by_public_id(value)
         .map(conary_core::repository::supported_profiles::SupportedProfile::id)
+}
+
+/// Select the optional source-format profile used for lifecycle ABI details.
+/// Repository provenance wins because it describes the exact selected
+/// artifact. A named `--from` identity supplies the profile for a local
+/// artifact; an uncatalogued identity deliberately supplies no projection.
+pub(super) fn effective_source_profile<'a>(
+    provenance: Option<&'a RepositoryInstallProvenance>,
+    requested_source_profile: Option<&'a str>,
+) -> Option<&'a str> {
+    provenance
+        .and_then(|provenance| provenance.source_profile.as_deref())
+        .or(requested_source_profile)
 }
 
 #[cfg(test)]
@@ -195,15 +212,12 @@ mod tests {
 
     #[test]
     fn named_feed_ids_enable_canonical_projection() {
+        assert_eq!(source_profile_projection("fedora-44"), Some("fedora-44"));
         assert_eq!(
-            canonical_projection_profile_id("fedora-44"),
-            Some("fedora-44")
-        );
-        assert_eq!(
-            canonical_projection_profile_id("ubuntu-26.04"),
+            source_profile_projection("ubuntu-26.04"),
             Some("ubuntu-26.04")
         );
-        assert_eq!(canonical_projection_profile_id("arch"), Some("arch"));
+        assert_eq!(source_profile_projection("arch"), Some("arch"));
     }
 
     #[test]
@@ -217,13 +231,24 @@ mod tests {
             "ubuntu-noble",
             "fedora-45",
         ] {
-            assert_eq!(canonical_projection_profile_id(name), None, "{name}");
+            assert_eq!(source_profile_projection(name), None, "{name}");
         }
     }
 
     #[test]
     fn unknown_source_identity_has_no_named_canonical_projection() {
-        assert_eq!(canonical_projection_profile_id("nixos"), None);
+        assert_eq!(source_profile_projection("nixos"), None);
+    }
+
+    #[test]
+    fn lifecycle_profile_uses_selected_artifact_then_named_request_projection() {
+        let selected = provenance(Some("fedora-44"));
+        assert_eq!(
+            effective_source_profile(Some(&selected), Some("arch")),
+            Some("fedora-44")
+        );
+        assert_eq!(effective_source_profile(None, Some("arch")), Some("arch"));
+        assert_eq!(effective_source_profile(None, None), None);
     }
 
     #[test]

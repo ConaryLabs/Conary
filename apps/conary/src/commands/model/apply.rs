@@ -314,7 +314,7 @@ pub(super) async fn apply_replatform_changes(
                 convert_to_ccs: false,
                 ownership: None,
                 yes: true,
-                from_profile: None,
+                from_source: None,
                 repository_provenance: None,
             },
         )

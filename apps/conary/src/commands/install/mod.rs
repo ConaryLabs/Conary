@@ -73,7 +73,8 @@ use prepare::check_upgrade_status;
 pub(crate) use semantics::InstallIntent;
 use semantics::{InstallSemantics, PreparedSourceKind, build_execution_mode};
 use source_policy::{
-    bind_transaction_source_identity, build_resolution_policy, resolve_canonical_name,
+    bind_transaction_source_identity, build_resolution_policy, effective_source_profile,
+    resolve_canonical_name, source_profile_projection,
 };
 use transaction::{
     InstallTransactionResult, TransactionContext, execute_install_transaction_in_selected_root,
