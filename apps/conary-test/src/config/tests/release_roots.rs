@@ -128,6 +128,7 @@ fn shared_derivative_containerfile_has_no_distro_name_branch() {
         "ARG DERIVATIVE_ROOT",
         "KEYRING_PACKAGE_SHA256",
         "IDENTITY_PACKAGE_SHA256",
+        "apt-get install -y --allow-downgrades --no-install-recommends /tmp/derivative-identity.deb",
         "EXPECTED_OS_ID",
         "REQUIRED_APT_URIS",
         "sha256sum --check --strict /tmp/derivative-root/apt.sha256",

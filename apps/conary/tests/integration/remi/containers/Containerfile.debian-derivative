@@ -43,7 +43,7 @@ RUN find /etc/apt/sources.list.d -maxdepth 1 -type f -delete \
     && curl --fail --location --retry 3 \
         --output /tmp/derivative-identity.deb "${IDENTITY_PACKAGE_URL}" \
     && echo "${IDENTITY_PACKAGE_SHA256}  /tmp/derivative-identity.deb" | sha256sum --check --strict \
-    && apt-get install -y --no-install-recommends /tmp/derivative-identity.deb \
+    && apt-get install -y --allow-downgrades --no-install-recommends /tmp/derivative-identity.deb \
     && test "$(dpkg-query --showformat='${Version}' --show "${IDENTITY_PACKAGE_NAME}")" = "${IDENTITY_PACKAGE_VERSION}" \
     && rm /tmp/derivative-identity.deb \
     && find /etc/apt/sources.list.d -maxdepth 1 -type f -delete \
