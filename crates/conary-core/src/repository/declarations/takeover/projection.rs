@@ -4,9 +4,11 @@
 
 use super::*;
 use crate::filesystem::durable::sync_parent_directory;
-use nix::fcntl::{RenameFlags, renameat2};
+use std::ffi::{CString, OsStr};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,15 +347,7 @@ fn exchange_paths(staged: &StagedProjection) -> Result<()> {
             staged.projection_path.display()
         ))
     })?;
-    let exchange = || {
-        renameat2(
-            &directory,
-            Path::new(temporary_name),
-            &directory,
-            Path::new(target_name),
-            RenameFlags::RENAME_EXCHANGE,
-        )
-    };
+    let exchange = || rename_exchange_at(&directory, temporary_name, target_name);
     exchange().map_err(|error| {
         Error::IoError(format!(
             "failed to atomically exchange native repository projection {}: {error}",
@@ -374,6 +368,35 @@ fn exchange_paths(staged: &StagedProjection) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn rename_exchange_at(
+    directory: &File,
+    source: &OsStr,
+    destination: &OsStr,
+) -> std::io::Result<()> {
+    let source = CString::new(source.as_bytes())
+        .map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
+    let destination = CString::new(destination.as_bytes())
+        .map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
+    // SAFETY: both path arguments are owned NUL-terminated byte strings, the
+    // directory descriptor remains open for the call, and renameat2 does not
+    // retain any pointer or descriptor after returning.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            directory.as_raw_fd(),
+            source.as_ptr(),
+            directory.as_raw_fd(),
+            destination.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 fn rollback_exchanged(exchanged: &mut Vec<(StagedProjection, ProjectionContent)>) -> Result<()> {
