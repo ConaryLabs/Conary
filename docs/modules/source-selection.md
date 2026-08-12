@@ -589,6 +589,17 @@ order is never transaction authority.
 
 ### Native Package Adoption
 
+Native repository takeover is a separate authority transition from package
+adoption. `conary system repository-takeover --dry-run --root <selected-root>
+--manifest <enrollment.json>` serializes the complete declaration, trust,
+identity, policy, and projection plan without mutation. Apply requires that
+exact preview SHA-256 and `--yes`; rollback restores the persisted prior
+projection bytes and removes only takeover-owned repository rows. Native
+declaration paths remain byte-identical compatibility projections, and any
+missing or changed path is reported as drift rather than becoming new
+authority. The exact contract is
+[`native-repository-takeover.md`](../specs/native-repository-takeover.md).
+
 `conary system adopt <pkg> --dry-run` builds the same package-specific plan
 that apply consumes. The preview opens an existing current-schema database
 read-only and never migrates it. Native discovery resolves the exact installed

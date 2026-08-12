@@ -43,7 +43,7 @@ CREATE TABLE repositories (
                 CHECK(package_format IN ('arch', 'deb', 'rpm', 'json', 'unspecified')),
             parser_config_json TEXT,
             managed_by TEXT NOT NULL DEFAULT 'operator'
-                CHECK(managed_by IN ('operator', 'remi-config')),
+                CHECK(managed_by IN ('operator', 'remi-config', 'native-projection')),
             source_policy_id INTEGER REFERENCES repository_source_policies(id) ON DELETE RESTRICT,
             repository_identity TEXT,
             stream_binding_sha256 TEXT,
@@ -108,6 +108,83 @@ BEGIN
           AND policy.update_mode = 'pin'
     ) THEN RAISE(ABORT, 'repository source pin requires pin update policy') END;
 END;
+CREATE TABLE native_repository_takeovers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            selected_root TEXT NOT NULL UNIQUE,
+            preview_sha256 TEXT NOT NULL,
+            preview_json TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(length(selected_root) > 0),
+            CHECK(length(preview_sha256) = 64 AND preview_sha256 NOT GLOB '*[^0-9a-f]*')
+        );
+CREATE TABLE native_repository_takeover_members (
+            takeover_id INTEGER NOT NULL REFERENCES native_repository_takeovers(id) ON DELETE CASCADE,
+            repository_id INTEGER NOT NULL UNIQUE REFERENCES repositories(id) ON DELETE RESTRICT,
+            PRIMARY KEY(takeover_id, repository_id)
+        );
+CREATE TRIGGER native_repository_takeover_members_require_owned_repository
+BEFORE INSERT ON native_repository_takeover_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repositories
+        WHERE id = NEW.repository_id AND managed_by = 'native-projection'
+    ) THEN RAISE(ABORT, 'native takeover member requires native-projection ownership') END;
+END;
+CREATE TRIGGER native_repository_takeover_members_preserve_owned_repository
+BEFORE UPDATE OF managed_by ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM native_repository_takeover_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN NEW.managed_by != 'native-projection'
+        THEN RAISE(ABORT, 'native takeover repository ownership is immutable') END;
+END;
+CREATE TRIGGER native_repository_takeover_members_preserve_repository_authority
+BEFORE UPDATE ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM native_repository_takeover_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN
+        NEW.name IS NOT OLD.name
+        OR NEW.url IS NOT OLD.url
+        OR NEW.content_url IS NOT OLD.content_url
+        OR NEW.enabled IS NOT OLD.enabled
+        OR NEW.priority IS NOT OLD.priority
+        OR NEW.trust_policy_json IS NOT OLD.trust_policy_json
+        OR NEW.metadata_expire IS NOT OLD.metadata_expire
+        OR NEW.default_strategy IS NOT OLD.default_strategy
+        OR NEW.default_strategy_endpoint IS NOT OLD.default_strategy_endpoint
+        OR NEW.source_profile IS NOT OLD.source_profile
+        OR NEW.tuf_enabled IS NOT OLD.tuf_enabled
+        OR NEW.tuf_root_version IS NOT OLD.tuf_root_version
+        OR NEW.tuf_root_url IS NOT OLD.tuf_root_url
+        OR NEW.security_advisory_support IS NOT OLD.security_advisory_support
+        OR NEW.package_format IS NOT OLD.package_format
+        OR NEW.parser_config_json IS NOT OLD.parser_config_json
+        OR NEW.managed_by IS NOT OLD.managed_by
+        OR NEW.source_policy_id IS NOT OLD.source_policy_id
+        OR NEW.repository_identity IS NOT OLD.repository_identity
+        OR NEW.stream_binding_sha256 IS NOT OLD.stream_binding_sha256
+        THEN RAISE(ABORT, 'native takeover repository authority changes require projection enrollment') END;
+END;
+CREATE TABLE native_repository_projections (
+            takeover_id INTEGER NOT NULL REFERENCES native_repository_takeovers(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            content BLOB NOT NULL,
+            sha256 TEXT NOT NULL,
+            mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 4095),
+            prior_existed INTEGER NOT NULL CHECK(prior_existed IN (0, 1)),
+            prior_content BLOB,
+            prior_mode INTEGER,
+            CHECK(length(path) > 1 AND substr(path, 1, 1) = '/'),
+            CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK((prior_existed = 1 AND prior_content IS NOT NULL AND prior_mode IS NOT NULL)
+                OR (prior_existed = 0 AND prior_content IS NULL AND prior_mode IS NULL)),
+            PRIMARY KEY(takeover_id, path)
+        );
 CREATE TABLE repository_packages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_id INTEGER NOT NULL,

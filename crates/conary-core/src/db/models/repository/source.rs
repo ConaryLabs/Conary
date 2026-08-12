@@ -49,6 +49,7 @@ pub enum RepositoryOwnership {
     #[default]
     Operator,
     RemiConfig,
+    NativeProjection,
 }
 
 impl RepositoryOwnership {
@@ -56,6 +57,7 @@ impl RepositoryOwnership {
         match self {
             Self::Operator => "operator",
             Self::RemiConfig => "remi-config",
+            Self::NativeProjection => "native-projection",
         }
     }
 
@@ -63,6 +65,7 @@ impl RepositoryOwnership {
         match value {
             "operator" => Ok(Self::Operator),
             "remi-config" => Ok(Self::RemiConfig),
+            "native-projection" => Ok(Self::NativeProjection),
             other => Err(format!("unknown persisted repository ownership '{other}'")),
         }
     }

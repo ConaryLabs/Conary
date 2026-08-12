@@ -16,7 +16,7 @@ pub mod rebuild;
 pub mod schema;
 
 use crate::error::{Error, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -33,6 +33,12 @@ const CONNECTION_PRAGMAS: &str = "\
     PRAGMA busy_timeout = 5000;\
 ";
 
+const READ_ONLY_CONNECTION_PRAGMAS: &str = "\
+    PRAGMA query_only = ON;\
+    PRAGMA foreign_keys = ON;\
+    PRAGMA busy_timeout = 5000;\
+";
+
 const SQLITE_WAL_HEADER_SIZE: u64 = 32;
 const SQLITE_WAL_MAGIC_BE: [u32; 2] = [0x377f0682, 0x377f0683];
 
@@ -42,16 +48,20 @@ fn configure(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn validate_wal_file(path: &Path) -> Result<()> {
+fn database_wal_path(path: &Path) -> std::path::PathBuf {
     // Construct WAL path: "foo.db" -> "foo.db-wal", "foo" -> "foo-wal"
-    let wal_path = match path.extension().and_then(|e| e.to_str()) {
+    match path.extension().and_then(|e| e.to_str()) {
         Some(ext) => path.with_extension(format!("{ext}-wal")),
         None => {
             let mut p = path.as_os_str().to_os_string();
             p.push("-wal");
             std::path::PathBuf::from(p)
         }
-    };
+    }
+}
+
+fn validate_wal_file(path: &Path) -> Result<()> {
+    let wal_path = database_wal_path(path);
     if !wal_path.exists() {
         return Ok(());
     }
@@ -135,6 +145,40 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Open and validate an existing current-schema database without mutation.
+pub fn open_read_only(path: impl AsRef<Path>) -> Result<Connection> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Err(Error::DatabaseNotFound(path.to_string_lossy().to_string()));
+    }
+
+    validate_wal_file(path)?;
+    let wal_path = database_wal_path(path);
+    if wal_path.metadata().is_ok_and(|metadata| metadata.len() > 0) {
+        return Err(Error::ConflictError(format!(
+            "read-only database inspection requires a checkpointed WAL; active frames remain in {}",
+            wal_path.display()
+        )));
+    }
+    let immutable_path = path.canonicalize()?;
+    let mut uri = url::Url::from_file_path(&immutable_path).map_err(|_| {
+        Error::ConfigError(format!(
+            "database path {} cannot be represented as an immutable SQLite URI",
+            immutable_path.display()
+        ))
+    })?;
+    uri.query_pairs_mut().append_pair("immutable", "1");
+    let conn = Connection::open_with_flags(
+        uri.as_str(),
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    conn.execute_batch(READ_ONLY_CONNECTION_PRAGMAS)?;
+    schema::require_current(&conn)?;
+    Ok(conn)
+}
+
 /// Open an existing Conary database without revalidating its schema epoch.
 ///
 /// This is identical to [`open`] but skips [`schema::ensure_current`], making
@@ -214,6 +258,23 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
+    fn directory_snapshot(path: &Path) -> Vec<(String, u64, String)> {
+        let mut entries = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let bytes = std::fs::read(entry.path()).unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    bytes.len() as u64,
+                    crate::hash::sha256(&bytes),
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     #[test]
     fn test_init_creates_database() {
         let temp_file = NamedTempFile::new().unwrap();
@@ -238,6 +299,31 @@ mod tests {
         // Then open
         let result = open(db_path);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn open_read_only_validates_current_schema_without_database_side_effects() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("conary.db");
+        init(&db_path).unwrap();
+        let before = directory_snapshot(directory.path());
+
+        let conn = open_read_only(&db_path).unwrap();
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, schema::SCHEMA_VERSION);
+        assert!(
+            conn.execute("INSERT INTO schema_version (version) VALUES (999)", [])
+                .is_err()
+        );
+        assert_eq!(directory_snapshot(directory.path()), before);
+        drop(conn);
+        assert_eq!(directory_snapshot(directory.path()), before);
     }
 
     #[test]

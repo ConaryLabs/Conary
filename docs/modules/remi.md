@@ -285,7 +285,7 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 31 retains
+schema rejects missing, empty, or malformed values. Schema revision 32 retains
 fail-closed source-authority state and adds exact native source/repository
 identities, normalized follow-or-pin policy, stream bindings, and authenticated
 snapshot state. It is a pre-alpha hard cut: prior databases are rebuilt and

@@ -560,6 +560,72 @@ fn system_init_has_no_host_distro_selector() {
 }
 
 #[test]
+fn repository_takeover_separates_preview_apply_and_rollback_intent() {
+    let preview = parse_cli([
+        "conary",
+        "system",
+        "repository-takeover",
+        "--root",
+        "/selected",
+        "--manifest",
+        "takeover.json",
+        "--dry-run",
+    ])
+    .unwrap();
+    match preview.command {
+        Some(Commands::System(SystemCommands::RepositoryTakeover {
+            common,
+            manifest,
+            dry_run,
+            rollback,
+            ..
+        })) => {
+            assert_eq!(common.root, "/selected");
+            assert_eq!(manifest.unwrap(), std::path::PathBuf::from("takeover.json"));
+            assert!(dry_run);
+            assert!(!rollback);
+        }
+        _ => panic!("expected repository takeover command"),
+    }
+
+    assert!(
+        parse_cli([
+            "conary",
+            "system",
+            "repository-takeover",
+            "--manifest",
+            "takeover.json",
+            "--yes",
+        ])
+        .is_err(),
+        "apply requires the exact preview digest"
+    );
+    assert!(
+        parse_cli([
+            "conary",
+            "system",
+            "repository-takeover",
+            "--manifest",
+            "takeover.json",
+            "--preview-sha256",
+            "00",
+        ])
+        .is_err(),
+        "apply requires explicit intent"
+    );
+    assert!(
+        parse_cli([
+            "conary",
+            "system",
+            "repository-takeover",
+            "--rollback",
+            "--yes",
+        ])
+        .is_ok()
+    );
+}
+
+#[test]
 fn install_defaults_to_always_sandbox() {
     let cli = parse_cli(["conary", "install", "bash"]).unwrap();
     match cli.command {

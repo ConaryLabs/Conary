@@ -586,7 +586,7 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 31 retains the fail-closed persisted-state constraints and
+Schema revision 32 retains the fail-closed persisted-state constraints and
 adds normalized native source policies, exact repository identities,
 revision-bound stream commitments, per-member pins, and admitted authenticated
 snapshot identity. Native repositories no longer use the fixed public-profile

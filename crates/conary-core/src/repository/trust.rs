@@ -14,6 +14,34 @@ use url::Url;
 
 pub mod openpgp;
 
+const MAX_EMBEDDED_OPENPGP_BYTES: usize = 4 * 1024 * 1024;
+const MAX_EMBEDDED_OPENPGP_BASE64: usize = MAX_EMBEDDED_OPENPGP_BYTES.div_ceil(3) * 4;
+
+pub(crate) fn decode_embedded_openpgp_source(source: &str) -> Option<Result<Vec<u8>>> {
+    let encoded = source.strip_prefix("data:application/pgp-keys;base64,")?;
+    Some((|| {
+        if encoded.is_empty() || encoded.len() > MAX_EMBEDDED_OPENPGP_BASE64 {
+            return Err(Error::ConfigError(format!(
+                "embedded OpenPGP trust root must encode 1 to {MAX_EMBEDDED_OPENPGP_BYTES} bytes"
+            )));
+        }
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| {
+                Error::ConfigError(format!(
+                    "embedded OpenPGP trust root is invalid base64: {error}"
+                ))
+            })?;
+        if bytes.is_empty() || bytes.len() > MAX_EMBEDDED_OPENPGP_BYTES {
+            return Err(Error::ConfigError(format!(
+                "embedded OpenPGP trust root must contain 1 to {MAX_EMBEDDED_OPENPGP_BYTES} bytes"
+            )));
+        }
+        Ok(bytes)
+    })())
+}
+
 /// One explicitly pinned OpenPGP certificate source.
 ///
 /// The downloaded object may be an OpenPGP keyring, but only the certificate
@@ -34,6 +62,17 @@ impl OpenPgpTrustRoot {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(bytes) = decode_embedded_openpgp_source(&self.url) {
+            bytes?;
+            let fingerprint = self.normalized_fingerprint()?;
+            if fingerprint != self.fingerprint {
+                return Err(Error::ConfigError(format!(
+                    "OpenPGP fingerprint '{}' must be uppercase hexadecimal without separators",
+                    self.fingerprint
+                )));
+            }
+            return Ok(());
+        }
         let parsed = Url::parse(&self.url).map_err(|error| {
             Error::ConfigError(format!(
                 "OpenPGP trust-root URL '{}' is invalid: {error}",
@@ -42,7 +81,7 @@ impl OpenPgpTrustRoot {
         })?;
         if !matches!(parsed.scheme(), "https" | "file") {
             return Err(Error::ConfigError(format!(
-                "OpenPGP trust-root URL '{}' must use https:// or file://",
+                "OpenPGP trust-root URL '{}' must use https://, file://, or an exact embedded application/pgp-keys data URL",
                 self.url
             )));
         }
@@ -392,6 +431,34 @@ mod tests {
             url: "https://keys.example.test/archive.asc".to_string(),
             fingerprint: "A".repeat(40),
         }
+    }
+
+    #[test]
+    fn bounded_embedded_openpgp_data_authority_is_exact() {
+        use base64::Engine;
+        let embedded = OpenPgpTrustRoot {
+            url: format!(
+                "data:application/pgp-keys;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(b"certificate bytes")
+            ),
+            fingerprint: "A".repeat(40),
+        };
+        embedded.validate().unwrap();
+
+        let malformed = OpenPgpTrustRoot {
+            url: "data:application/pgp-keys;base64,%%%".to_string(),
+            fingerprint: "A".repeat(40),
+        };
+        assert!(malformed.validate().is_err());
+
+        let oversized = OpenPgpTrustRoot {
+            url: format!(
+                "data:application/pgp-keys;base64,{}",
+                "A".repeat(MAX_EMBEDDED_OPENPGP_BASE64 + 1)
+            ),
+            fingerprint: "A".repeat(40),
+        };
+        assert!(oversized.validate().is_err());
     }
 
     #[test]

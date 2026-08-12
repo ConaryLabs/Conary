@@ -492,8 +492,7 @@ accepted here.
 - **Outcome:** Conary enrolls native repositories transactionally and supports
   package ecosystems without a distro-name routing matrix.
 - **Execution status:** final conformance remains gated on W9. #62 is tracked as
-  bounded child slices: #377 and #379 are merged; #380 owns the active
-  policy/schema hard cut; #381 through #384 own takeover/projection,
+  bounded child slices: #377, #379, and #380 are merged; #381 through #384 own takeover/projection,
   lifecycle-enrollment, capability-compatibility, and distro-conformance work.
   #68 follows.
 - **Issues:** #62 as epic; #377 and #379-#384 as tracked children; #68 follows.
@@ -516,12 +515,13 @@ accepted here.
     derivative, openSUSE Tumbleweed as an independent RPM ecosystem, and Artix
     as a non-systemd target-capability test. Named distributions are conformance
     proof, not runtime selectors.
-- **Schema prerequisite:** #380 replaces fixed `source_profile` membership with
+- **Schema prerequisite:** #380 replaced fixed `source_profile` membership with
   normalized source policy, distinct repository identity, typed ecosystem and
   version ordering, immutable stream binding, and authenticated follow-or-pin
-  snapshot state in current schema revision 31. It removes the inline
-  three-profile checks from repository and repository-package identity without
-  growing a catalog. Target capability compatibility remains owned by #383.
+  snapshot state in binding revision 31. #381 advances the current database
+  schema to revision 32 for takeover and projection ownership. #380 removed the
+  inline three-profile checks from repository and repository-package identity
+  without growing a catalog. Target capability compatibility remains owned by #383.
   Pre-alpha rebuild and authoritative-input re-enrollment are explicit; no
   compatibility migration is retained.
 
