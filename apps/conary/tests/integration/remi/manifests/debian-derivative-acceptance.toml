@@ -41,7 +41,25 @@ run = "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninter
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} system adopt jq --package-manager dpkg --db-path ${DB_PATH} --dry-run && ${CONARY_BIN} system adopt jq --package-manager dpkg --db-path ${DB_PATH} && ${CONARY_BIN} system adopt --status --db-path ${DB_PATH} && ${CONARY_BIN} system adopt --refresh --package-manager dpkg --db-path ${DB_PATH}"
+run = "${CONARY_BIN} system adopt jq --package-manager dpkg --db-path ${DB_PATH} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt jq --package-manager dpkg --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt --status --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt --refresh --package-manager dpkg --db-path ${DB_PATH}"
 
 [test.step.assert]
 exit_code = 0
@@ -53,7 +71,19 @@ run = "${CONARY_BIN} system takeover --package-manager dpkg --db-path ${DB_PATH}
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --dry-run && ${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --yes && DEBIAN_FRONTEND=noninteractive apt-get remove -y jq && ! dpkg --status jq 2>/dev/null | grep -q '^Status: install ok installed$'"
+run = "${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --yes"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "DEBIAN_FRONTEND=noninteractive apt-get remove -y jq && ! dpkg --status jq 2>/dev/null | grep -q '^Status: install ok installed$'"
 
 [test.step.assert]
 exit_code = 0

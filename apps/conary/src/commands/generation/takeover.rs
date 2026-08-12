@@ -179,7 +179,7 @@ pub async fn cmd_system_takeover(
     }
 
     // -- Pre-flight -----------------------------------------------------------
-    preflight_checks(matches!(level, TakeoverLevel::Generation))?;
+    preflight_checks(takeover_requires_composefs(level, dry_run))?;
 
     // -- Plan -----------------------------------------------------------------
     let pm = SystemPackageManager::resolve(requested_manager)?;
@@ -591,6 +591,10 @@ fn preflight_checks(check_composefs: bool) -> Result<()> {
     Ok(())
 }
 
+fn takeover_requires_composefs(level: TakeoverLevel, dry_run: bool) -> bool {
+    !dry_run && matches!(level, TakeoverLevel::Generation)
+}
+
 // ---------------------------------------------------------------------------
 // System PM query
 // ---------------------------------------------------------------------------
@@ -669,6 +673,20 @@ mod tests {
     fn test_takeover_level_default_is_generation() {
         let level = TakeoverLevel::default();
         assert!(matches!(level, TakeoverLevel::Generation));
+    }
+
+    #[test]
+    fn generation_takeover_dry_run_does_not_require_composefs() {
+        assert!(!takeover_requires_composefs(
+            TakeoverLevel::Generation,
+            true
+        ));
+        assert!(takeover_requires_composefs(
+            TakeoverLevel::Generation,
+            false
+        ));
+        assert!(!takeover_requires_composefs(TakeoverLevel::Cas, false));
+        assert!(!takeover_requires_composefs(TakeoverLevel::Owned, false));
     }
 
     #[test]
