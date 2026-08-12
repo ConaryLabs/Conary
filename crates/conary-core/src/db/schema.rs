@@ -12,13 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 31 of the current-only schema epoch.
+/// Revision 32 of the current-only schema epoch.
 ///
-/// Revision 31 replaces fixed-profile repository identity with exact native
-/// source/repository identities, shared follow-or-pin policy, immutable stream
-/// bindings, and authenticated snapshot state. Earlier pre-alpha databases must
-/// be rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 31;
+/// Revision 32 adds native repository takeover ownership and exact projection
+/// state. Earlier pre-alpha databases must be rebuilt; no compatibility
+/// migration is provided.
+pub const SCHEMA_VERSION: i32 = 32;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -80,6 +79,30 @@ pub fn get_schema_version(conn: &Connection) -> Result<i32> {
     .optional()
     .map(|version| version.unwrap_or(0))
     .map_err(Into::into)
+}
+
+/// Require the current schema epoch without creating or migrating any state.
+pub fn require_current(conn: &Connection) -> Result<()> {
+    let current_version = get_schema_version(conn)?;
+    match get_schema_identity(conn)? {
+        Some((epoch, revision)) if epoch == SCHEMA_EPOCH && revision == SCHEMA_VERSION => {
+            if current_version == SCHEMA_VERSION {
+                Ok(())
+            } else {
+                Err(rebuild_required(&format!(
+                    "schema epoch {epoch} with inconsistent version {current_version}"
+                )))
+            }
+        }
+        Some((epoch, revision)) => Err(rebuild_required(&format!(
+            "schema epoch {epoch} revision {revision}"
+        ))),
+        None if database_is_fresh(conn)? => Err(rebuild_required("fresh database")),
+        None if current_version == 0 => Err(rebuild_required("unversioned non-empty")),
+        None => Err(rebuild_required(&format!(
+            "retired migration-chain schema version {current_version}"
+        ))),
+    }
 }
 
 /// Initialize a fresh database or validate that it already uses this epoch.
@@ -214,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_30_requires_rebuild_for_revision_31() {
+    fn revision_31_requires_rebuild_for_revision_32() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -222,19 +245,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 30);
+                VALUES ('conary-current-v1', 31);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (30);",
+            INSERT INTO schema_version (version) VALUES (31);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 30; this pre-alpha build supports only schema epoch conary-current-v1 revision 31"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 31; this pre-alpha build supports only schema epoch conary-current-v1 revision 32"
         );
     }
 

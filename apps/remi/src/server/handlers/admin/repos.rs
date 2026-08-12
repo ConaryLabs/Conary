@@ -172,6 +172,7 @@ impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
             managed_by: match r.managed_by {
                 RepositoryOwnership::Operator => "operator",
                 RepositoryOwnership::RemiConfig => "remi-config",
+                RepositoryOwnership::NativeProjection => "native-projection",
             },
             native_source,
         })

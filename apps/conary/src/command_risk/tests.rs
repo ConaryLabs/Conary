@@ -114,6 +114,45 @@ fn classify_system_adopt_full_package_as_live_db_mutation() {
 }
 
 #[test]
+fn repository_takeover_preview_is_read_only_and_mutations_are_selected_root_scoped() {
+    let preview = policy(&[
+        "conary",
+        "system",
+        "repository-takeover",
+        "--manifest",
+        "takeover.json",
+        "--dry-run",
+    ]);
+    assert_eq!(preview.risk, CommandRisk::SelectedRootMutation);
+    assert!(preview.dry_run);
+    assert!(!preview.requires_ack());
+
+    let apply = policy(&[
+        "conary",
+        "system",
+        "repository-takeover",
+        "--manifest",
+        "takeover.json",
+        "--preview-sha256",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "--yes",
+    ]);
+    assert_eq!(apply.risk, CommandRisk::SelectedRootMutation);
+    assert!(!apply.dry_run);
+    assert!(apply.requires_ack());
+
+    let rollback = policy(&[
+        "conary",
+        "system",
+        "repository-takeover",
+        "--rollback",
+        "--yes",
+    ]);
+    assert_eq!(rollback.risk, CommandRisk::SelectedRootMutation);
+    assert!(rollback.requires_ack());
+}
+
+#[test]
 fn classify_installed_sync_hook_refresh_as_narrow_hook_refresh() {
     let policy = policy(&[
         "conary",

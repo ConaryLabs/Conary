@@ -436,13 +436,17 @@ gates.
 **Capability:** authenticate and parse native repository metadata into
 source-scheme-aware relations, persist exact requirement groups, resolve
 providers through the SAT solver, and carry the selected relation graph into
-package transactions.
+package transactions. Discover, preview, and transactionally take ownership of
+native repository declarations as drift-detected selected-root projections.
 
 **Start here:** `crates/conary-core/src/repository/trust.rs`;
 `crates/conary-core/src/repository/declarations/`;
 `docs/specs/native-repository-declarations.md`;
 `docs/specs/native-repository-trust-import.md`;
 `docs/specs/native-source-identity-policy.md`;
+`docs/specs/native-repository-takeover.md`;
+`crates/conary-core/src/repository/declarations/takeover.rs`;
+`apps/conary/src/commands/repository_takeover.rs`;
 `crates/conary-core/src/repository/trust/openpgp.rs`;
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
@@ -486,10 +490,12 @@ manifests, admin routes, and hosted feed configuration.
 `crates/conary-core/src/db/models/repository/source/*`;
 `crates/conary-core/src/db/models/repository/*`;
 `crates/conary-core/src/db/models/installed_requirement_atom.rs`;
-`crates/conary-core/src/db/models/installed_requirement_group.rs`.
+`crates/conary-core/src/db/models/installed_requirement_group.rs`;
+`apps/conary/src/commands/repository_takeover.rs`.
 
 **Focused proof:** `cargo test -p conary-core repository::trust`;
 `cargo test -p conary-core repository::declarations`;
+`cargo test -p conary-core repository::declarations::takeover`;
 `cargo test -p conary-core repository::parsers`;
 `cargo test -p conary-core repository::download`;
 `cargo test -p conary-core repository::sync`;
@@ -511,6 +517,8 @@ output changes.
 selected-root discovery, or its no-enrollment boundary changes;
 `docs/specs/native-repository-trust-import.md` when trust-import disposition,
 evidence, or selected-root key planning changes;
+`docs/specs/native-repository-takeover.md` when enrollment preview, projection
+ownership, drift, or rollback changes;
 `docs/specs/foreign-package-lifecycle-contracts.md` when native relation
 semantics change.
 

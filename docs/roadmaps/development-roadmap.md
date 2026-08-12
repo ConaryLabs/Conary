@@ -515,12 +515,13 @@ accepted here.
     derivative, openSUSE Tumbleweed as an independent RPM ecosystem, and Artix
     as a non-systemd target-capability test. Named distributions are conformance
     proof, not runtime selectors.
-- **Schema prerequisite:** #380 replaces fixed `source_profile` membership with
+- **Schema prerequisite:** #380 replaced fixed `source_profile` membership with
   normalized source policy, distinct repository identity, typed ecosystem and
   version ordering, immutable stream binding, and authenticated follow-or-pin
-  snapshot state in current schema revision 31. It removes the inline
-  three-profile checks from repository and repository-package identity without
-  growing a catalog. Target capability compatibility remains owned by #383.
+  snapshot state in binding revision 31. #381 advances the current database
+  schema to revision 32 for takeover and projection ownership. #380 removed the
+  inline three-profile checks from repository and repository-package identity
+  without growing a catalog. Target capability compatibility remains owned by #383.
   Pre-alpha rebuild and authoritative-input re-enrollment are explicit; no
   compatibility migration is retained.
 

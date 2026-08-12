@@ -27,6 +27,7 @@ impl MutationIntent {
 pub enum LiveMutationClass {
     AlwaysLive,
     LiveConaryState,
+    SelectedRootState,
     CurrentlyLiveEvenWithRootArguments,
 }
 
@@ -45,6 +46,10 @@ pub fn require_mutation_intent(request: &LiveMutationRequest) -> anyhow::Result<
     let mut message = match request.class {
         LiveMutationClass::LiveConaryState => format!(
             "command '{}' may update Conary DB or CAS metadata for this machine.",
+            request.command_label
+        ),
+        LiveMutationClass::SelectedRootState => format!(
+            "command '{}' may update Conary authority and files in the explicitly selected root.",
             request.command_label
         ),
         LiveMutationClass::CurrentlyLiveEvenWithRootArguments => format!(

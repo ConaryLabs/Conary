@@ -63,6 +63,38 @@ pub enum SystemCommands {
         yes: bool,
     },
 
+    /// Preview, apply, or roll back native repository authority takeover
+    #[command(name = "repository-takeover")]
+    RepositoryTakeover {
+        #[command(flatten)]
+        common: CommonArgs,
+
+        /// Versioned JSON enrollment manifest bound to discovered declarations
+        #[arg(long, required_unless_present = "rollback")]
+        manifest: Option<std::path::PathBuf>,
+
+        /// Digest printed by the exact dry-run preview being applied
+        #[arg(
+            long,
+            required_unless_present_any = ["dry_run", "rollback"],
+            requires = "yes",
+            conflicts_with_all = ["dry_run", "rollback"]
+        )]
+        preview_sha256: Option<String>,
+
+        /// Print the complete deterministic preview without mutation
+        #[arg(long, conflicts_with = "rollback")]
+        dry_run: bool,
+
+        /// Restore pre-takeover projection bytes and Conary authority
+        #[arg(long, conflicts_with_all = ["manifest", "preview_sha256", "dry_run"])]
+        rollback: bool,
+
+        /// Confirm applying or rolling back selected-root authority
+        #[arg(short, long, required_unless_present = "dry_run")]
+        yes: bool,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

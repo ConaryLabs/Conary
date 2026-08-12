@@ -122,7 +122,11 @@ commands.
   follow-or-pin persistence, stream binding, and authenticated-snapshot
   admission start in `crates/conary-core/src/db/models/repository/source.rs`,
   `crates/conary-core/src/db/models/repository/source/policy.rs`, and
-  `docs/specs/native-source-identity-policy.md`. Trust verification starts in
+  `docs/specs/native-source-identity-policy.md`. Native repository takeover,
+  selected-root projection ownership, drift, and rollback start in
+  `crates/conary-core/src/repository/declarations/takeover.rs`,
+  `apps/conary/src/commands/repository_takeover.rs`, and
+  `docs/specs/native-repository-takeover.md`. Trust verification starts in
   `crates/conary-core/src/repository/trust.rs` and
   `crates/conary-core/src/repository/trust/openpgp.rs`, with ALPM keyring and
   package-signature semantics in

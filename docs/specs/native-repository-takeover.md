@@ -45,23 +45,33 @@ suite and component combinations.
 Preview reads the current-schema database and selected root only. It does not
 write SQLite, stage files, invoke a native package manager, fetch metadata or
 keys, or inspect the live host when another selected root was requested.
+The CLI opens SQLite through an immutable read-only connection. If the database
+has uncheckpointed WAL frames, preview fails closed instead of creating SQLite
+sidecars or ignoring newer authority in the WAL.
 
 ## Apply And Projection Ownership
 
 Apply consumes the exact preview digest. Before mutation it repeats discovery
 and planning and refuses if the serialized preview changed. Projection content
 on first takeover is the exact UTF-8 declaration content already admitted by
-the lossless grammar. It is persisted beside its SHA-256 and prior path state;
+the lossless grammar. Selected-root key files referenced by importable trust
+evidence become owned projections too. APT embedded OpenPGP blocks remain in
+their exact declaration projection and are persisted as bounded exact
+`application/pgp-keys` data authority for Conary's pinned certificate loader.
+Projection content is persisted beside its SHA-256 and prior path state;
 subsequent operations render from that persisted Conary authority rather than
 scraping the filesystem into a second owner.
 
 Projection writes are staged in the destination directory, flushed, and
-atomically renamed. The database transaction persists repository authority,
-projection content and digests, and takeover membership. A failure restores
-every already-replaced path before the database transaction is abandoned.
-Existing projection state is checked before staging: a missing path or digest
-mismatch is reported with its exact guest path and expected and observed
-SHA-256 values. Drift is never accepted as a new declaration.
+atomically exchanged with the destination. Conary verifies the digest and mode
+of the displaced inode after the exchange; a mismatch is exchanged back before
+returning an error. If a later exchange or database operation fails, every
+earlier exchange is rolled back from its exact displaced bytes and mode before
+the database transaction is abandoned. The transaction persists repository
+authority, projection content and digests, and takeover membership. Existing
+projection state is checked before staging: a missing path, digest mismatch, or
+mode mismatch is reported with its exact guest path and expected and observed
+state. Drift is never accepted as a new declaration.
 
 Takeover-created repository rows use the closed `native-projection` ownership
 value. Apply refuses to overwrite an operator- or Remi-owned row. A repeated

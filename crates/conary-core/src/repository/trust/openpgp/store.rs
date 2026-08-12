@@ -22,9 +22,12 @@ use super::super::{OpenPgpTrustRoot, TrustRole};
 
 /// Downloads a configured trust source.
 ///
-/// Only `https://` and `file://` are representable; anything else is a typed
-/// configuration error rather than an opportunistic fallback.
+/// Only `https://`, `file://`, and the bounded exact embedded-key data form are
+/// representable; anything else is a typed configuration error.
 pub(super) async fn fetch_key_source(source: &str) -> Result<Vec<u8>> {
+    if let Some(bytes) = super::super::decode_embedded_openpgp_source(source) {
+        return bytes;
+    }
     let url = Url::parse(source)
         .map_err(|error| Error::ConfigError(format!("invalid trust-root URL: {error}")))?;
     match url.scheme() {

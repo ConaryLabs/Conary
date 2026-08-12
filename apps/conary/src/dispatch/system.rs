@@ -35,6 +35,30 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             commands::cmd_rebuild_database(&db.db_path).await
         }
 
+        cli::SystemCommands::RepositoryTakeover {
+            common,
+            manifest,
+            preview_sha256,
+            dry_run,
+            rollback,
+            yes,
+        } => {
+            require_live_mutation(
+                MutationIntent::from_apply_intent(yes),
+                Cow::Borrowed("conary system repository-takeover"),
+                LiveMutationClass::SelectedRootState,
+                dry_run,
+            )?;
+            commands::cmd_repository_takeover(
+                &common.db.db_path,
+                &common.root,
+                manifest.as_deref(),
+                preview_sha256.as_deref(),
+                dry_run,
+                rollback,
+            )
+        }
+
         cli::SystemCommands::Completions { shell } => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "conary", &mut io::stdout());

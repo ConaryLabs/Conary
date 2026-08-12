@@ -159,10 +159,12 @@ to a pin.
 
 ## Hard Cut And Recovery
 
-This change increments the current schema revision from 30 to 31 and replaces
+This change introduced schema revision 31 and replaced
 disposable pre-alpha state. There is no migration, compatibility reader,
 implicit default, or adapter for repositories that lack an exact source
-policy.
+policy. Native repository takeover subsequently advances the current database
+schema to revision 32 while retaining revision 31 as the stream-binding
+encoding identity.
 
 Recovery is `conary system rebuild-db --discard-state --yes`, followed by
 re-enrollment from authoritative native declarations, imported trust roots,
@@ -179,7 +181,8 @@ Focused proof covers:
 - first-party and uncatalogued third-party enrollment;
 - transactional follow advancement and pin mismatch rollback;
 - parser snapshot identity for ALPM, Debian, and RPM trust chains.
-- rejection of revision 30 plus documented rebuild recovery into revision 31;
+- rejection of retired revisions plus documented rebuild recovery into the
+  current schema;
 - CLI flag exclusivity, native replacement, and group reuse behavior;
 - stable revision-31 binding encoding and fail-closed encoding drift;
 - pin refusal leaving package rows, canonical links, converted-package

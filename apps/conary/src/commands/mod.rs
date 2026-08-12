@@ -52,6 +52,7 @@ mod remove;
 mod replatform_rendering;
 mod repo;
 mod repo_static;
+mod repository_takeover;
 mod restore;
 mod rollback_system_authority;
 mod self_update;
@@ -174,6 +175,7 @@ pub use repo::{
     cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use repo_static::cmd_repo_reset_trust;
+pub use repository_takeover::cmd_repository_takeover;
 pub use restore::{cmd_restore, cmd_restore_all};
 pub(crate) use rollback_system_authority::RollbackSystemAuthority;
 pub use self_update::{SelfUpdateOptions, cmd_self_update};
