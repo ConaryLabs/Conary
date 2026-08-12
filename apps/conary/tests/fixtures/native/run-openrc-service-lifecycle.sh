@@ -49,8 +49,9 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
     --no-deps \
     --yes
 
-test -L "${root}/etc/runlevels/default/conary-openrc-fixture"
-test "$(readlink "${root}/etc/runlevels/default/conary-openrc-fixture")" = "../../init.d/conary-openrc-fixture"
+selected_root="${root}/current"
+test -L "${selected_root}/etc/runlevels/default/conary-openrc-fixture"
+test "$(readlink "${selected_root}/etc/runlevels/default/conary-openrc-fixture")" = "../../init.d/conary-openrc-fixture"
 activation_count="$({
   sqlite3 "${db}" <<'SQL'
 SELECT COUNT(*)
