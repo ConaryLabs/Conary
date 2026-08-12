@@ -78,8 +78,8 @@ pub use query::QueryCommands;
 pub use redirect::RedirectCommands;
 pub use registry::RegistryCommands;
 pub use repo::{
-    CliArchDatabaseSignature, CliArchKeyringFormat, CliSecurityAdvisorySupport, RepoAddArgs,
-    RepoCommands,
+    CliArchDatabaseSignature, CliArchKeyringFormat, CliNativeStreamKind,
+    CliSecurityAdvisorySupport, RepoAddArgs, RepoCommands,
 };
 pub use state::StateCommands;
 pub use system::{

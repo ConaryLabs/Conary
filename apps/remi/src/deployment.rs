@@ -744,12 +744,17 @@ max_concurrent = 4
 
     fn repository_manifest() -> &'static str {
         r#"
-schema_version = 2
+schema_version = 3
 
 [[repositories]]
 name = "opaque-source"
 url = "https://packages.example.test/repository"
 profile = "fedora-44"
+source_identity = "example-publisher"
+repository_identity = "opaque-source-rpm-x86_64"
+stream_kind = "release"
+stream_identity = "44"
+update_mode = "follow"
 enabled = true
 priority = 100
 metadata_expire_seconds = 21600

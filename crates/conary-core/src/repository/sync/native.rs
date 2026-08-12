@@ -1,8 +1,8 @@
 // conary-core/src/repository/sync/native.rs
 
 use crate::db::models::{
-    ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
-    RepositoryRequirementGroup as DbRequirementGroup,
+    AuthenticatedSnapshotIdentity, ConvertedPackage, Repository, RepositoryPackage,
+    RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -19,6 +19,7 @@ pub(super) fn persist_native_sync_rows(
     conn: &Connection,
     repo: &mut Repository,
     synced_packages: Vec<SyncedPackageRow>,
+    snapshot: AuthenticatedSnapshotIdentity,
 ) -> Result<usize> {
     let repo_id = repo
         .id
@@ -27,6 +28,7 @@ pub(super) fn persist_native_sync_rows(
 
     let tx = conn.unchecked_transaction()?;
 
+    repo.admit_authenticated_snapshot(snapshot)?;
     persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     link_canonical_ids(&tx, repo_id)?;
     if let Some(source_profile) = repo.source_profile.as_deref() {
@@ -129,7 +131,7 @@ pub(super) fn append_synced_package_rows(
 /// package into persistable rows cannot drift apart.
 pub(in crate::repository) fn synced_package_row(
     repo_id: i64,
-    source_profile: &str,
+    source_profile: Option<&str>,
     repo_url: &str,
     content_url: Option<&str>,
     pkg_meta: PackageMetadata,
@@ -157,7 +159,7 @@ pub(in crate::repository) fn synced_package_row(
 
     // Persist the exact repository profile. Package format remains a separate
     // typed field and is never promoted to distro authority.
-    repo_pkg.source_profile = Some(source_profile.to_string());
+    repo_pkg.source_profile = source_profile.map(str::to_string);
 
     let (requirement_groups, requirement_group_clauses) =
         convert_requirement_groups(0, &pkg_meta.requirements);

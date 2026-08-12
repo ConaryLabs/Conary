@@ -27,6 +27,27 @@ pub(super) fn schemas() -> Map<String, Value> {
                 "database": { "type": "string" }
             }
         },
+        "NativeSourcePolicy": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Exact native source enrollment. Required for rpm, deb, and arch parsers; forbidden for json.",
+            "required": [
+                "source_identity",
+                "repository_identity",
+                "stream_kind",
+                "stream_identity",
+                "update_mode"
+            ],
+            "properties": {
+                "source_identity": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "repository_identity": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "stream_kind": { "type": "string", "enum": ["release", "channel", "rolling"] },
+                "stream_identity": { "type": "string", "minLength": 1, "maxLength": 255 },
+                "policy_group": { "type": ["string", "null"], "minLength": 1, "maxLength": 255 },
+                "update_mode": { "type": "string", "enum": ["follow", "pin"] },
+                "pinned_snapshot_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+            }
+        },
         "RepositoryTrustPolicy": {
             "oneOf": [
                 {

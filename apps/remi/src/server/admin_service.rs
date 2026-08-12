@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use conary_core::db::models::admin_token::AdminToken;
 use conary_core::db::models::audit_log::AuditEntry;
 use conary_core::db::models::federation_peer::FederationPeer;
-use conary_core::db::models::{Repository, RepositoryOwnership, RepositoryPackage};
+use conary_core::db::models::{Repository, RepositoryOwnership};
 use conary_core::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
@@ -27,6 +27,7 @@ use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
 
 mod refresh;
+mod repository_policy;
 mod test_data;
 
 pub use refresh::{
@@ -34,6 +35,8 @@ pub use refresh::{
     RepoRefreshResult,
 };
 use refresh::{RepoRefreshOutcome, collect_refresh_outcomes};
+pub use repository_policy::NativeSourcePolicyInput;
+use repository_policy::apply_native_source_contract;
 pub use test_data::{
     PushStepData, PushTestResultData, TestDetail, TestHealthSummary, TestRunDetail,
     TestStepWithLogs, create_test_run, get_test_detail, get_test_logs, get_test_run_detail,
@@ -584,6 +587,7 @@ pub struct CreateRepoInput {
     pub metadata_expire: i32,
     pub parser: RepositoryParserConfig,
     pub trust: Option<RepositoryTrustPolicy>,
+    pub native_source: Option<NativeSourcePolicyInput>,
 }
 
 /// Create a new repository.
@@ -611,6 +615,7 @@ pub async fn create_repo(
         repo.metadata_expire = input.metadata_expire;
         repo.set_parser_config(input.parser)?;
         repo.trust_policy = input.trust;
+        apply_native_source_contract(&mut repo, input.native_source)?;
         repo.insert(&conn)?;
         Ok(repo)
     })
@@ -626,6 +631,7 @@ pub struct UpdateRepoInput {
     pub metadata_expire: Option<i32>,
     pub parser: RepositoryParserConfig,
     pub trust: Option<RepositoryTrustPolicy>,
+    pub native_source: Option<NativeSourcePolicyInput>,
 }
 
 enum RepoRefreshPlan {
@@ -665,6 +671,7 @@ pub async fn update_repo(
                 repo.name
             )));
         }
+        let previous = repo.clone();
         let source_changed = repo.url != input.url
             || repo.content_url != input.content_url
             || repo.parser_config.as_ref() != Some(&input.parser)
@@ -682,15 +689,25 @@ pub async fn update_repo(
         }
         repo.set_parser_config(input.parser)?;
         repo.trust_policy = input.trust;
+        apply_native_source_contract(&mut repo, input.native_source)?;
+        let source_changed = source_changed
+            || repo.source_policy != previous.source_policy
+            || repo.repository_identity != previous.repository_identity
+            || repo.stream_binding_sha256 != previous.stream_binding_sha256
+            || repo.pinned_snapshot != previous.pinned_snapshot;
         let tx = conn.unchecked_transaction()?;
         if source_changed {
             let repository_id = repo
                 .id
                 .ok_or_else(|| conary_core::Error::MissingId("Repository has no ID".to_string()))?;
-            RepositoryPackage::delete_by_repository(&tx, repository_id)?;
+            Repository::delete(&tx, repository_id)?;
+            repo.id = None;
             repo.last_sync = None;
+            repo.created_at = None;
+            repo.insert(&tx)?;
+        } else {
+            repo.update(&tx)?;
         }
-        repo.update(&tx)?;
         tx.commit()?;
         Ok(Some(repo))
     })

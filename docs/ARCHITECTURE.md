@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-11
-revision: 43
-summary: Describe workspace architecture, source-authority projections, native trust-import planning, repository verification, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+revision: 44
+summary: Describe workspace architecture, exact native source identity and update policy, source-authority projections, native trust-import planning, repository verification, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -165,6 +165,9 @@ crates/conary-core/      Core library crate
     |   +-- versioning.rs Cross-distro version scheme awareness
     |   +-- resolution_policy.rs Exact source scope, mixing, and eligibility policy
     |   +-- effective_policy.rs Shared runtime source-policy loading from pins + settings
+    +-- db/models/repository/
+    |   +-- source.rs    Native repository identity, validation, policy, and snapshot persistence
+    |   +-- source/policy.rs Exact ecosystem, stream, scope, follow/pin, and drift binding
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
@@ -583,15 +586,14 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 29 retains revision 28's fail-closed persisted-state
-constraints, explicit `strict`, `guarded`, or `permissive` dependency-mixing
-policy on every persisted source pin, path-free capability provenance, and
-physical repository-provide index shape. It adds `lifecycle_events`, an
-ordered per-changeset table that records each typed warn-and-continue native
-lifecycle failure before the changeset can become applied. The event stores
-only fields carried by `ContinuedLifecycleFailure` and its
-`ScriptletFailureOutcome`; it does not infer an exit code or stderr field that
-the source type does not expose.
+Schema revision 31 retains the fail-closed persisted-state constraints and
+adds normalized native source policies, exact repository identities,
+revision-bound stream commitments, per-member pins, and admitted authenticated
+snapshot identity. Native repositories no longer use the fixed public-profile
+catalog as repository identity or refresh authority. This is a current-schema
+hard cut: revision 30 state must be rebuilt and native repositories re-enrolled
+from authoritative declarations, trust roots, source/repository identities,
+stream decisions, and pins.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the

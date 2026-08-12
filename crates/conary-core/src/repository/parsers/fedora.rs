@@ -13,7 +13,10 @@
 //! capabilities.
 
 use super::common::{self, MAX_PACKAGE_SIZE};
-use super::{ChecksumType, PackageMetadata, RepositoryParser};
+use super::{
+    AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
+    RepositoryParser,
+};
 use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -41,6 +44,10 @@ use relation::{
     RpmProvideConstraint, rpm_provide_constraint, rpm_relation_native_text, rpm_require_to_group,
 };
 use repomd::{RepoMdDocument, RepoMdIndex, RepoMdRecord};
+
+fn authenticated_repomd_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
+    AuthenticatedSnapshotIdentity::for_bytes(bytes)
+}
 
 /// Fedora/RPM repository parser
 pub struct FedoraParser {
@@ -104,7 +111,10 @@ impl FedoraParser {
     /// Download repomd.xml and admit the metadata records Conary reads.
     ///
     /// Uses RepositoryClient for HTTP.
-    async fn fetch_repomd_index(&self, repo_url: &str) -> Result<RepoMdIndex> {
+    async fn fetch_repomd_index(
+        &self,
+        repo_url: &str,
+    ) -> Result<(RepoMdIndex, AuthenticatedSnapshotIdentity)> {
         let repomd_url = format!("{}/repodata/repomd.xml", repo_url.trim_end_matches('/'));
         debug!("Downloading repomd.xml from: {}", repomd_url);
 
@@ -137,11 +147,12 @@ impl FedoraParser {
                 identity.verify(&xml_bytes)?;
             }
         }
+        let snapshot = authenticated_repomd_snapshot(&xml_bytes);
         let xml_content = String::from_utf8(xml_bytes)
             .map_err(|e| Error::ParseError(format!("Invalid UTF-8 in repomd.xml: {}", e)))?;
 
         // Parse repomd.xml into the records Conary reads.
-        repomd::parse_repomd(&xml_content)
+        Ok((repomd::parse_repomd(&xml_content)?, snapshot))
     }
 
     /// Download one metadata document and verify it against its signed record.
@@ -778,11 +789,11 @@ fn append_package_text(package: &mut PackageBuilder, tag: &str, text: &str) {
 }
 
 impl RepositoryParser for FedoraParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
         info!("Syncing Fedora repository for {}", self.architecture);
 
         // Admit the signed repomd.xml records Conary reads.
-        let repomd = self.fetch_repomd_index(repo_url).await?;
+        let (repomd, snapshot) = self.fetch_repomd_index(repo_url).await?;
 
         // Download, verify, and parse primary.xml.
         let primary_xml = self.download_primary_xml(repo_url, &repomd.primary).await?;
@@ -817,7 +828,7 @@ impl RepositoryParser for FedoraParser {
         }
 
         info!("Parsed {} packages from Fedora repository", packages.len());
-        Ok(packages)
+        Ok(AuthenticatedRepositoryMetadata { packages, snapshot })
     }
 }
 

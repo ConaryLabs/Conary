@@ -1,5 +1,139 @@
 // conary-core/src/repository/sync/tests/native.rs
 
+fn configure_native_test_repository(repo: &mut Repository, ecosystem: NativeSourceEcosystem) {
+    configure_native_test_repository_with_policy(
+        repo,
+        ecosystem,
+        RepositoryUpdateMode::Follow,
+        None,
+    );
+}
+
+fn configure_native_test_repository_with_policy(
+    repo: &mut Repository,
+    ecosystem: NativeSourceEcosystem,
+    update_mode: RepositoryUpdateMode,
+    pinned_snapshot: Option<AuthenticatedSnapshotIdentity>,
+) {
+    let root = OpenPgpTrustRoot {
+        url: "https://keys.example.test/repository.gpg".to_string(),
+        fingerprint: "A".repeat(40),
+    };
+    match ecosystem {
+        NativeSourceEcosystem::Rpm => {
+            repo.set_parser_config(RepositoryParserConfig::Rpm {
+                architecture: "x86_64".to_string(),
+            })
+            .unwrap();
+            repo.set_trust_policy(RepositoryTrustPolicy::Rpm {
+                metadata: RpmMetadataAuthority::OpenPgp {
+                    keys: vec![root.clone()],
+                },
+                package_keys: vec![root],
+            })
+            .unwrap();
+        }
+        NativeSourceEcosystem::Deb => {
+            repo.set_parser_config(RepositoryParserConfig::Deb {
+                distribution: "stable".to_string(),
+                component: "main".to_string(),
+                architecture: "amd64".to_string(),
+            })
+            .unwrap();
+            repo.set_trust_policy(RepositoryTrustPolicy::Debian {
+                release_keys: vec![root],
+            })
+            .unwrap();
+        }
+        NativeSourceEcosystem::Alpm => {
+            repo.set_parser_config(RepositoryParserConfig::Arch {
+                database: "core".to_string(),
+            })
+            .unwrap();
+            repo.set_trust_policy(RepositoryTrustPolicy::Arch {
+                keyring: ArchKeyringTrust {
+                    url: "https://keys.example.test/archlinux-keyring.pkg.tar.zst".to_string(),
+                    format: ArchKeyringFormat::AlpmPackageZstd,
+                    master_fingerprints: vec!["A".repeat(40)],
+                    packager_key_threshold: 1,
+                },
+                sig_level: ArchSigLevel::distribution_default(),
+            })
+            .unwrap();
+        }
+    }
+    let identity = format!("test:{}", repo.name);
+    let policy = RepositorySourcePolicy::new(
+        "test-source",
+        RepositoryPolicyScope::repository(identity.clone()).unwrap(),
+        ecosystem,
+        NativeSourceStream::channel("test").unwrap(),
+        update_mode,
+    )
+    .unwrap();
+    repo.set_native_source_policy(policy, identity, pinned_snapshot)
+        .unwrap();
+}
+
+fn authenticated_snapshot(value: &[u8]) -> AuthenticatedSnapshotIdentity {
+    AuthenticatedSnapshotIdentity::for_bytes(value)
+}
+
+#[test]
+fn pin_refusal_leaves_native_rows_and_sync_state_untouched() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let pinned = authenticated_snapshot(b"pinned-root");
+    let mut repo = Repository::new(
+        "pinned-rpm".to_string(),
+        "https://example.com/pinned-rpm".to_string(),
+    );
+    repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository_with_policy(
+        &mut repo,
+        NativeSourceEcosystem::Rpm,
+        RepositoryUpdateMode::Pin,
+        Some(pinned.clone()),
+    );
+    repo.insert(&conn).unwrap();
+    let repo_id = repo.id.unwrap();
+    let repository_url = repo.url.clone();
+    let package = |checksum: &str| {
+        synced_package_row(
+            repo_id,
+            Some("fedora-44"),
+            &repository_url,
+            None,
+            PackageMetadata::new(
+                "bash".to_string(),
+                "5.3-1".to_string(),
+                checksum.to_string(),
+                1,
+                "https://example.com/pinned-rpm/bash.rpm".to_string(),
+                RepositoryDependencyFlavor::Rpm,
+                VersionScheme::Rpm,
+            ),
+        )
+    };
+    persist_native_sync_rows(&conn, &mut repo, vec![package("old")], pinned.clone()).unwrap();
+    let before = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
+
+    let error = persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        vec![package("new")],
+        authenticated_snapshot(b"different-root"),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::TrustError(_)));
+    let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].checksum, "old");
+    let after = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
+    assert_eq!(after.last_sync, before.last_sync);
+    assert_eq!(after.authenticated_snapshot, before.authenticated_snapshot);
+}
+
 #[test]
 fn test_persist_native_sync_rows_writes_normalized_capabilities() {
     let conn = Connection::open_in_memory().unwrap();
@@ -9,6 +143,7 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
         "arch-core".to_string(),
         "https://example.com/arch".to_string(),
     );
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Alpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -61,7 +196,13 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
         requirement_groups,
         requirement_group_clauses,
     }];
-    let count = persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
+    let count = persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced_packages,
+        authenticated_snapshot(b"arch-capabilities"),
+    )
+    .unwrap();
     assert_eq!(count, 1);
 
     let stored_packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
@@ -112,6 +253,7 @@ fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassifi
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -153,7 +295,13 @@ fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassifi
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced_packages,
+        authenticated_snapshot(b"rpm-files"),
+    )
+    .unwrap();
 
     let package = RepositoryPackage::find_by_repository(&conn, repo_id)
         .unwrap()
@@ -180,6 +328,7 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -223,7 +372,13 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
         }
     };
 
-    persist_native_sync_rows(&conn, &mut repo, vec![synced_row(false)]).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        vec![synced_row(false)],
+        authenticated_snapshot(b"rpm-before"),
+    )
+    .unwrap();
     let repository_package_id = RepositoryPackage::find_by_repository(&conn, repo_id)
         .unwrap()
         .pop()
@@ -247,7 +402,13 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
     );
     converted.insert(&conn).unwrap();
 
-    persist_native_sync_rows(&conn, &mut repo, vec![synced_row(true)]).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        vec![synced_row(true)],
+        authenticated_snapshot(b"rpm-after"),
+    )
+    .unwrap();
 
     assert!(
         ConvertedPackage::find_repository_by_checksum(
@@ -588,6 +749,7 @@ fn test_sync_persists_distro_and_version_scheme() {
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -620,7 +782,13 @@ fn test_sync_persists_distro_and_version_scheme() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"rpm-origin"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -638,6 +806,7 @@ fn test_sync_persists_debian_origin_metadata() {
         "https://example.com/debian".to_string(),
     );
     repo.source_profile = Some("ubuntu-26.04".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Deb);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -670,7 +839,13 @@ fn test_sync_persists_debian_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"deb-origin"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -691,6 +866,7 @@ fn test_sync_persists_arch_origin_metadata() {
         "https://example.com/arch".to_string(),
     );
     repo.source_profile = Some("arch".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Alpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -723,7 +899,13 @@ fn test_sync_persists_arch_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"arch-origin"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -741,6 +923,7 @@ fn test_sync_persists_requirement_groups_with_alternatives() {
         "https://example.com/debian".to_string(),
     );
     repo.source_profile = Some("ubuntu-26.04".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Deb);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -794,7 +977,13 @@ fn test_sync_persists_requirement_groups_with_alternatives() {
         requirement_groups: req_groups,
         requirement_group_clauses: req_group_clauses,
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"deb-requirements"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -846,6 +1035,7 @@ fn test_sync_persists_conditional_requirement_behavior() {
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -892,7 +1082,13 @@ fn test_sync_persists_conditional_requirement_behavior() {
         requirement_groups: req_groups,
         requirement_group_clauses: req_group_clauses,
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"rpm-conditional"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     let pkg_id = stored[0].id.unwrap();

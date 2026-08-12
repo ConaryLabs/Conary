@@ -34,6 +34,24 @@ pub enum CliRepositoryFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CliNativeStreamKind {
+    Release,
+    Channel,
+    Rolling,
+}
+
+fn parse_sha256(value: &str) -> Result<String, String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("expected exactly 64 lowercase hexadecimal SHA-256 digits".to_string());
+    }
+    Ok(value.to_string())
+}
+
 impl From<CliRepositoryFormat> for conary_core::repository::RepositoryFormat {
     fn from(value: CliRepositoryFormat) -> Self {
         match value {
@@ -189,7 +207,7 @@ pub struct RepoAddArgs {
     #[arg(short = 'y', long)]
     pub yes: bool,
 
-    /// Replace an existing static repository trust pin and repository row
+    /// Replace an existing repository through explicit trust/policy re-enrollment
     #[arg(long)]
     pub replace: bool,
 
@@ -221,6 +239,39 @@ pub struct RepoAddArgs {
     /// Examples: fedora-44, ubuntu-26.04, arch
     #[arg(long, value_name = "PROFILE", value_parser = parse_public_profile_id)]
     pub source_profile: Option<String>,
+
+    /// Exact publisher/source identity for a native repository
+    #[arg(long, value_name = "SOURCE")]
+    pub source_id: Option<String>,
+
+    /// Exact opaque repository identity inside its native source
+    #[arg(long, value_name = "REPOSITORY")]
+    pub repository_id: Option<String>,
+
+    /// Declared native source stream kind
+    #[arg(long, value_enum)]
+    pub stream_kind: Option<CliNativeStreamKind>,
+
+    /// Exact release, channel, or rolling stream identity
+    #[arg(long, value_name = "STREAM")]
+    pub stream_id: Option<String>,
+
+    /// Exact shared policy-group identity; omission creates repository scope
+    #[arg(long, value_name = "GROUP")]
+    pub policy_group: Option<String>,
+
+    /// Follow authenticated metadata within the declared stream
+    #[arg(long, conflicts_with = "pin_snapshot_sha256")]
+    pub follow: bool,
+
+    /// Pin the native repository to one authenticated metadata-root SHA-256
+    #[arg(
+        long,
+        value_name = "SHA256",
+        value_parser = parse_sha256,
+        conflicts_with = "follow"
+    )]
+    pub pin_snapshot_sha256: Option<String>,
 
     /// Whether this repository publishes security-advisory metadata
     #[arg(long, value_enum, default_value_t = CliSecurityAdvisorySupport::Unknown)]

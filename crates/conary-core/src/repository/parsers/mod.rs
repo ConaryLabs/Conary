@@ -11,6 +11,9 @@ pub mod arch;
 pub mod common;
 pub mod debian;
 pub mod fedora;
+mod snapshot;
+
+pub use snapshot::{AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity};
 
 use crate::error::Result;
 use crate::repository::dependency_model::{
@@ -28,7 +31,7 @@ pub trait RepositoryParser {
     fn sync_metadata(
         &self,
         repo_url: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<PackageMetadata>>> + Send;
+    ) -> impl std::future::Future<Output = Result<AuthenticatedRepositoryMetadata>> + Send;
 }
 
 /// Package metadata extracted from repository

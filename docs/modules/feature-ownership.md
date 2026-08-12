@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-11
-revision: 67
-summary: Route feature ownership through typed database rebuilds, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+revision: 68
+summary: Route feature ownership through typed database rebuilds, exact native source identity and update policy, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -442,6 +442,7 @@ package transactions.
 `crates/conary-core/src/repository/declarations/`;
 `docs/specs/native-repository-declarations.md`;
 `docs/specs/native-repository-trust-import.md`;
+`docs/specs/native-source-identity-policy.md`;
 `crates/conary-core/src/repository/trust/openpgp.rs`;
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
@@ -464,6 +465,8 @@ package transactions.
 `crates/conary-core/src/resolver/sat.rs`;
 `crates/conary-core/src/resolver/sat/`;
 `crates/conary-core/src/transaction/package_relations.rs`;
+`crates/conary-core/src/db/models/repository/source.rs`;
+`crates/conary-core/src/db/models/repository/source/`;
 `crates/conary-core/src/db/models/repository/`;
 `crates/conary-core/src/db/models/installed_requirement_atom.rs`;
 `crates/conary-core/src/db/models/installed_requirement_group.rs`;
@@ -479,6 +482,8 @@ manifests, admin routes, and hosted feed configuration.
 `crates/conary-core/src/resolver/*`;
 `crates/conary-core/src/transaction/package_relations.rs`;
 `crates/conary-core/src/transaction/package_relations/*`;
+`crates/conary-core/src/db/models/repository/source.rs`;
+`crates/conary-core/src/db/models/repository/source/*`;
 `crates/conary-core/src/db/models/repository/*`;
 `crates/conary-core/src/db/models/installed_requirement_atom.rs`;
 `crates/conary-core/src/db/models/installed_requirement_group.rs`.

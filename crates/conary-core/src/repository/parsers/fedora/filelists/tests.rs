@@ -200,7 +200,7 @@ fn a_file_dependency_outside_the_primary_filter_resolves_after_filelists_ingest(
             .map(|package| {
                 crate::repository::sync::synced_package_row(
                     repository_id,
-                    "fedora-44",
+                    Some("fedora-44"),
                     "https://repo.test/fedora",
                     None,
                     package,

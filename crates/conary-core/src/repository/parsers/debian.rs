@@ -6,7 +6,10 @@
 //! (similar to email headers with key: value pairs).
 
 use super::common::{self, MAX_PACKAGE_SIZE};
-use super::{ChecksumType, PackageMetadata, RepositoryParser};
+use super::{
+    AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
+    RepositoryParser,
+};
 use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -20,6 +23,10 @@ use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use crate::repository::versioning::VersionScheme;
 use serde::Deserialize;
 use tracing::{debug, info};
+
+fn authenticated_release_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
+    AuthenticatedSnapshotIdentity::for_bytes(bytes)
+}
 
 /// Debian/Ubuntu repository parser
 pub struct DebianParser {
@@ -56,12 +63,16 @@ impl DebianParser {
     /// Download and decompress the Packages file
     ///
     /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
-    async fn download_packages_file(&self, repo_url: &str) -> Result<String> {
+    async fn download_packages_file(
+        &self,
+        repo_url: &str,
+    ) -> Result<(String, AuthenticatedSnapshotIdentity)> {
         let release_path = format!(
             "{}/binary-{}/Packages.gz",
             self.component, self.architecture
         );
         let release = self.download_authenticated_release(repo_url).await?;
+        let snapshot = authenticated_release_snapshot(&release);
         let authenticated = parse_release_sha256_entry(&release, &release_path)?;
         let packages_url = format!(
             "{}/dists/{}/{}",
@@ -99,7 +110,7 @@ impl DebianParser {
         })?;
 
         debug!("Decompressed Packages file: {} bytes", content.len());
-        Ok(content)
+        Ok((content, snapshot))
     }
 
     async fn download_authenticated_release(&self, repo_url: &str) -> Result<Vec<u8>> {
@@ -479,14 +490,14 @@ struct DebianPackageEntry {
 }
 
 impl RepositoryParser for DebianParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
         info!(
             "Syncing Debian repository: {}/{}/{}",
             self.distribution, self.component, self.architecture
         );
 
         // Download and decompress Packages file
-        let packages_content = self.download_packages_file(repo_url).await?;
+        let (packages_content, snapshot) = self.download_packages_file(repo_url).await?;
 
         // Parse RFC 822-like format
         let entries: Vec<DebianPackageEntry> = rfc822_like::from_str(&packages_content)
@@ -500,7 +511,7 @@ impl RepositoryParser for DebianParser {
         }
 
         info!("Parsed {} packages from Debian repository", packages.len());
-        Ok(packages)
+        Ok(AuthenticatedRepositoryMetadata { packages, snapshot })
     }
 }
 
@@ -939,6 +950,19 @@ mod tests {
         assert_eq!(
             pre_depends[0].alternatives[0].version_constraint.as_deref(),
             Some(">= 2.39")
+        );
+    }
+
+    #[test]
+    fn snapshot_identity_owns_the_verified_cleartext_release_payload() {
+        let release = b"Origin: Example\nSHA256:\n";
+        assert_eq!(
+            authenticated_release_snapshot(release),
+            AuthenticatedSnapshotIdentity::for_bytes(release)
+        );
+        assert_ne!(
+            authenticated_release_snapshot(release),
+            AuthenticatedSnapshotIdentity::for_bytes(b"armored InRelease envelope")
         );
     }
 }

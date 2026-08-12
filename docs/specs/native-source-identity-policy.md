@@ -159,9 +159,10 @@ to a pin.
 
 ## Hard Cut And Recovery
 
-This change increments the current schema revision from 30 to 31 and replaces disposable
-pre-alpha state. There is no migration, compatibility reader, implicit default,
-or adapter for repositories that lack an exact source policy.
+This change increments the current schema revision from 30 to 31 and replaces
+disposable pre-alpha state. There is no migration, compatibility reader,
+implicit default, or adapter for repositories that lack an exact source
+policy.
 
 Recovery is `conary system rebuild-db --discard-state --yes`, followed by
 re-enrollment from authoritative native declarations, imported trust roots,

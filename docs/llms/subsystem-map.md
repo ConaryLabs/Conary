@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-11
-revision: 65
-summary: Route typed database rebuilds, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
+revision: 66
+summary: Route typed database rebuilds, exact native source identity and update policy, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -118,7 +118,11 @@ commands.
   `docs/modules/source-selection.md`. Lossless selected-root declaration
   discovery starts in `crates/conary-core/src/repository/declarations/` and its
   pinned contracts are `docs/specs/native-repository-declarations.md` and
-  `docs/specs/native-repository-trust-import.md`. Trust verification starts in
+  `docs/specs/native-repository-trust-import.md`. Native source identity,
+  follow-or-pin persistence, stream binding, and authenticated-snapshot
+  admission start in `crates/conary-core/src/db/models/repository/source.rs`,
+  `crates/conary-core/src/db/models/repository/source/policy.rs`, and
+  `docs/specs/native-source-identity-policy.md`. Trust verification starts in
   `crates/conary-core/src/repository/trust.rs` and
   `crates/conary-core/src/repository/trust/openpgp.rs`, with ALPM keyring and
   package-signature semantics in
