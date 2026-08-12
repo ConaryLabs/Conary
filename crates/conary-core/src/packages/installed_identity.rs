@@ -3,7 +3,7 @@
 //! Typed identity for one exact native package-manager database record.
 
 use crate::error::{Error, Result};
-use crate::repository::dependency_model::SourcePackageFormat;
+use crate::repository::dependency_model::{DebianMultiArch, SourcePackageFormat};
 use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,7 @@ pub enum InstalledPackageIdentity {
         name: String,
         version: String,
         architecture: String,
+        multi_arch: DebianMultiArch,
     },
     Pacman {
         selector: String,
@@ -75,12 +76,14 @@ impl InstalledPackageIdentity {
         name: impl Into<String>,
         version: impl Into<String>,
         architecture: impl Into<String>,
+        multi_arch: DebianMultiArch,
     ) -> Result<Self> {
         Self::validated(Self::Dpkg {
             selector: selector.into(),
             name: name.into(),
             version: version.into(),
             architecture: architecture.into(),
+            multi_arch,
         })
     }
 
@@ -119,6 +122,7 @@ impl InstalledPackageIdentity {
                 name,
                 version,
                 architecture,
+                ..
             }
             | Self::Pacman {
                 selector,
@@ -221,6 +225,14 @@ impl InstalledPackageIdentity {
         }
     }
 
+    /// Exact Debian `Multi-Arch` behavior carried by a dpkg record.
+    pub const fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
+        match self {
+            Self::Dpkg { multi_arch, .. } => Some(*multi_arch),
+            Self::Rpm { .. } | Self::Pacman { .. } => None,
+        }
+    }
+
     /// Selector used by the native manager's install-reason authority.
     ///
     /// DNF records reason at the name/architecture package level, while dpkg
@@ -279,11 +291,18 @@ mod tests {
 
     #[test]
     fn dpkg_identity_preserves_multiarch_selector() {
-        let identity =
-            InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.41-12", "i386").unwrap();
+        let identity = InstalledPackageIdentity::dpkg(
+            "libc6:i386",
+            "libc6",
+            "2.41-12",
+            "i386",
+            DebianMultiArch::Same,
+        )
+        .unwrap();
 
         assert_eq!(identity.selector(), "libc6:i386");
         assert_eq!(identity.name(), "libc6");
+        assert_eq!(identity.debian_multi_arch(), Some(DebianMultiArch::Same));
     }
 
     #[test]
@@ -300,7 +319,16 @@ mod tests {
             InstalledPackageIdentity::rpm("other-1-1.x86_64", "fixture", None, "1", "1", "x86_64")
                 .is_err()
         );
-        assert!(InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.41-12", "i386").is_err());
+        assert!(
+            InstalledPackageIdentity::dpkg(
+                "libc6:amd64",
+                "libc6",
+                "2.41-12",
+                "i386",
+                DebianMultiArch::Same,
+            )
+            .is_err()
+        );
         assert!(InstalledPackageIdentity::pacman("bash-debug", "bash", "5.3-1", "x86_64").is_err());
     }
 

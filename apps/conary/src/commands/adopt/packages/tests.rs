@@ -12,8 +12,10 @@ use super::*;
 
 #[derive(Default)]
 struct FixtureSource {
+    manager: Option<SystemPackageManager>,
     lookups: HashMap<String, PackageLookup>,
     files: HashMap<String, Vec<FileInfoTuple>>,
+    file_errors: HashMap<String, String>,
     requirements: HashMap<String, Vec<RepositoryRequirementGroup>>,
     provides: HashMap<String, Vec<ProvidedCapability>>,
 }
@@ -96,11 +98,53 @@ impl FixtureSource {
         self.lookups.insert(requested.to_string(), lookup);
         self
     }
+
+    fn with_dpkg_ready(
+        mut self,
+        requested: &str,
+        file: FileInfoTuple,
+        multi_arch: conary_core::repository::dependency_model::DebianMultiArch,
+    ) -> Self {
+        self.manager = Some(SystemPackageManager::Dpkg);
+        self.lookups.insert(
+            requested.to_string(),
+            PackageLookup::Found(ResolvedNativePackage {
+                requested: requested.to_string(),
+                native: InstalledPackageIdentity::dpkg(
+                    requested, requested, "1.2.3-4", "amd64", multi_arch,
+                )
+                .unwrap(),
+                description: Some("Debian fixture package".to_string()),
+            }),
+        );
+        self.files.insert(requested.to_string(), vec![file]);
+        self.provides.insert(
+            requested.to_string(),
+            vec![ProvidedCapability {
+                kind: conary_core::repository::dependency_model::RepositoryCapabilityKind::PackageName,
+                name: requested.to_string(),
+                version: Some("1.2.3-4".to_string()),
+                version_relation: Some(
+                    conary_core::repository::dependency_model::ProvideVersionRelation::Equal,
+                ),
+                version_scheme: VersionScheme::Debian,
+                architecture_qualifier: conary_core::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+                provenance: conary_core::repository::dependency_model::CapabilityProvenance::ExactIdentity,
+            }],
+        );
+        self
+    }
+
+    fn with_file_error(mut self, selector: &str, reason: &str) -> Self {
+        self.file_errors
+            .insert(selector.to_string(), reason.to_string());
+        self
+    }
 }
 
 impl NativePackageSource for FixtureSource {
     fn manager(&self) -> SystemPackageManager {
-        SystemPackageManager::Rpm
+        self.manager.unwrap_or(SystemPackageManager::Rpm)
     }
 
     fn lookup(&self, requested: &str) -> PackageLookup {
@@ -113,6 +157,9 @@ impl NativePackageSource for FixtureSource {
     }
 
     fn query_files(&self, query_name: &str) -> Result<Vec<FileInfoTuple>> {
+        if let Some(reason) = self.file_errors.get(query_name) {
+            return Err(anyhow!(reason.clone()));
+        }
         Ok(self.files.get(query_name).cloned().unwrap_or_default())
     }
 
@@ -134,6 +181,64 @@ impl NativePackageSource for FixtureSource {
             .cloned()
             .unwrap_or_default())
     }
+}
+
+#[test]
+fn plan_preserves_the_native_file_query_error_chain() {
+    let (_temp, db_path) = temp_db();
+    let source = FixtureSource::default()
+        .with_ready(
+            "fixture",
+            "fixture",
+            file_tuple(Path::new("/missing"), 0o100644),
+        )
+        .with_file_error(
+            "fixture-1.2.3-4.x86_64",
+            "native package owns an absent required path",
+        );
+    let conn = db::open(&db_path).unwrap();
+
+    let plan = build_adoption_plan(
+        &conn,
+        &["fixture".to_string()],
+        AdoptionMode::Track,
+        &source,
+    )
+    .unwrap();
+
+    let PackagePlanOutcome::Unsupported { reason, .. } = &plan.outcomes[0] else {
+        panic!("file-query failure must be reported as unsupported");
+    };
+    assert!(reason.contains("could not inspect files for 'fixture-1.2.3-4.x86_64'"));
+    assert!(reason.contains("native package owns an absent required path"));
+}
+
+#[test]
+fn dpkg_adoption_persists_exact_multi_arch_authority() {
+    let (temp, db_path) = temp_db();
+    let payload = temp.path().join("dpkg-fixture");
+    fs::write(&payload, b"fixture").unwrap();
+    let source = FixtureSource::default().with_dpkg_ready(
+        "fixture",
+        file_tuple(&payload, 0o100644),
+        conary_core::repository::dependency_model::DebianMultiArch::Foreign,
+    );
+
+    cmd_adopt_with_source(&["fixture".to_string()], &db_path, false, false, &source).unwrap();
+
+    let conn = db::open(&db_path).unwrap();
+    let trove = Trove::find_by_name(&conn, "fixture").unwrap().remove(0);
+    assert_eq!(
+        trove.debian_multi_arch,
+        Some(conary_core::repository::dependency_model::DebianMultiArch::Foreign)
+    );
+    assert_eq!(
+        trove
+            .native_package_identity
+            .as_ref()
+            .and_then(InstalledPackageIdentity::debian_multi_arch),
+        trove.debian_multi_arch
+    );
 }
 
 fn file_tuple(path: &Path, mode: i32) -> FileInfoTuple {

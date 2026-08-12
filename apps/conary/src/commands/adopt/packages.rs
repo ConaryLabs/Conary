@@ -402,7 +402,7 @@ fn build_adoption_plan(
                     }
                     Err(error) => outcomes.push(PackagePlanOutcome::Unsupported {
                         requested: requested.clone(),
-                        reason: error.to_string(),
+                        reason: format!("{error:#}"),
                     }),
                 }
             }
@@ -856,6 +856,7 @@ fn execute_adoption_plan(
                 plan.version_scheme,
             );
             trove.architecture = Some(identity.native.architecture().to_string());
+            trove.debian_multi_arch = identity.native.debian_multi_arch();
             trove.description = identity.description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
             trove.selection_reason = Some("Adopted from the native package manager".to_string());

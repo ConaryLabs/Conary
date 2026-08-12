@@ -1,15 +1,16 @@
 ---
 last_updated: 2026-08-12
-revision: 3
-summary: Define deterministic native repository takeover, owned projections, drift detection, and rollback
+revision: 4
+summary: Define deterministic native repository takeover, exact legacy APT trust binding, owned projections, drift detection, and rollback
 ---
 
 # Native Repository Takeover And Projections
 
 ## Status And Boundary
 
-Issue #381 established the fourth bounded W10 slice. Issue #384 extends its
-conformance boundary. Takeover consumes lossless selected-root
+Issue #381 established the fourth bounded W10 slice. Issue #384 extended its
+model conformance boundary; issue #396 owns execution on authentic Linux Mint
+and Pop!_OS roots. Takeover consumes lossless selected-root
 declarations, their trust-import dispositions, and an explicit versioned
 enrollment manifest. It produces a complete preview before mutation and can
 then make Conary the sole repository authority while preserving the native
@@ -33,8 +34,8 @@ The takeover preview is versioned, serializable, and deterministic. It records:
 - every projected path with its exact SHA-256 and ownership transition; and
 - closed blockers, including ambiguous or unsupported enabled trust,
   dynamically generated libzypp service repositories, missing or duplicate
-enrollment bindings, conflicting existing Conary authority, and projection
-drift.
+  enrollment bindings, conflicting existing Conary authority, and projection
+  drift.
 
 For ALPM only, an enrollment manifest may resolve the single typed
 `AlpmKeyringBindingMissing` ambiguity by supplying Conary's exact Arch keyring
@@ -61,6 +62,19 @@ The CLI opens SQLite through an immutable read-only connection. If the database
 has uncheckpointed WAL frames, preview fails closed instead of creating SQLite
 sidecars or ignoring newer authority in the WAL.
 
+The CLI emits a versioned preview envelope containing both the complete typed
+preview and its exact SHA-256. Apply consumes that typed digest; diagnostic
+field rendering is not mutation or aggregation authority.
+
+APT declarations without `Signed-By` retain a typed
+`ImplicitGlobalAuthority` ambiguity. An enrollment manifest may resolve only
+that ambiguity by binding exact primary certificate fingerprints to regular
+native keyring files at `/etc/apt/trusted.gpg` or directly under
+`/etc/apt/trusted.gpg.d/`. The file URL must resolve below the selected root,
+the named certificate must exist in those exact bytes, and every other trust
+finding remains non-overridable. This preserves legacy distro declarations
+without treating the whole global keyring or a filename as repository trust.
+
 ## Apply And Projection Ownership
 
 Apply consumes the exact preview digest. Before mutation it repeats discovery
@@ -70,6 +84,8 @@ the lossless grammar. Selected-root key files referenced by importable trust
 evidence become owned projections too. APT embedded OpenPGP blocks remain in
 their exact declaration projection and are persisted as bounded exact
 `application/pgp-keys` data authority for Conary's pinned certificate loader.
+Exact native global-keyring files admitted by an explicit legacy APT binding
+also become owned projections.
 Projection content is persisted beside its SHA-256 and prior path state;
 subsequent operations render from that persisted Conary authority rather than
 scraping the filesystem into a second owner.
@@ -136,8 +152,9 @@ authority and prior projection bytes. The adoption interaction gate, workspace
 Clippy, formatting, current-schema rejection/rebuild proof, and documentation
 truth checks remain required.
 
-The named derivative conformance corpus additionally proves Mint and MX through
-APT, Manjaro/CachyOS/Artix through the shared ALPM path, and Tumbleweed through
-Zypper. It exercises follow advancement, exact-pin refusal and explicit
-re-enrollment, preserved repository fields, and the OpenRC lifecycle boundary
-without using a distro-name selector in product code.
+The model conformance corpus covers APT, ALPM, and Zypper derivative shapes.
+Authentic Linux Mint and Pop!_OS execution is a separate target gate: it must
+retain release-owned declaration and signing-root bytes, exercise typed
+preview/apply/repeat/rollback, and must not use a distro-name selector in
+product code. A configured lane is not verified evidence until its exact-head
+hosted result passes.

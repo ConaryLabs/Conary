@@ -4,6 +4,10 @@
 
 use super::*;
 use base64::Engine;
+use openpgp::cert::CertParser;
+use openpgp::parse::Parse;
+use sequoia_openpgp as openpgp;
+use std::collections::BTreeSet;
 
 pub(super) fn expected_trust_policy(
     selected_root: &Path,
@@ -60,6 +64,76 @@ pub(super) fn expected_trust_policy(
             "native repository takeover requires an Arch, Debian, or RPM parser".to_string(),
         )),
     }
+}
+
+/// Resolve only APT's legacy global-keyring ambiguity through exact manifest
+/// roots. The manifest must bind primary fingerprints to native APT global
+/// keyring files below the selected root; no filename selects a repository or
+/// certificate implicitly.
+pub(super) fn explicit_apt_global_trust_paths(
+    selected_root: &Path,
+    plan: &NativeRepositoryTrustPlan,
+    trust: &RepositoryTrustPolicy,
+) -> Option<Vec<PathBuf>> {
+    let TrustImportDisposition::Ambiguous { findings } = &plan.disposition else {
+        return None;
+    };
+    if findings.is_empty()
+        || findings
+            .iter()
+            .any(|finding| finding.kind != TrustImportFindingKind::ImplicitGlobalAuthority)
+    {
+        return None;
+    }
+    let RepositoryTrustPolicy::Debian { release_keys } = trust else {
+        return None;
+    };
+    if release_keys.is_empty() {
+        return None;
+    }
+
+    let mut paths = BTreeSet::new();
+    for root in release_keys {
+        root.validate().ok()?;
+        let url = url::Url::parse(&root.url).ok()?;
+        if url.scheme() != "file" {
+            return None;
+        }
+        let host_path = url.to_file_path().ok()?;
+        let relative = host_path.strip_prefix(selected_root).ok()?;
+        let guest_path = Path::new("/").join(relative);
+        if !is_apt_global_trust_path(&guest_path)
+            || safe_join(selected_root, &guest_path).ok()? != host_path
+        {
+            return None;
+        }
+        let bytes = fs::read(&host_path).ok()?;
+        let parser = CertParser::from_bytes(&bytes).ok()?;
+        let mut matched = false;
+        for certificate in parser {
+            let certificate = certificate.ok()?;
+            if certificate.fingerprint().to_hex() == root.fingerprint {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return None;
+        }
+        paths.insert(guest_path);
+    }
+    Some(paths.into_iter().collect())
+}
+
+fn is_apt_global_trust_path(path: &Path) -> bool {
+    if path == Path::new("/etc/apt/trusted.gpg") {
+        return true;
+    }
+    path.parent() == Some(Path::new("/etc/apt/trusted.gpg.d"))
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "gpg" | "asc"))
 }
 
 fn roots_for_role(

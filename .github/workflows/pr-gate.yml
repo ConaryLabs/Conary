@@ -146,7 +146,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: [fedora44, ubuntu-26.04, arch, artix]
+        distro: [fedora44, ubuntu-26.04, arch, artix, linux-mint-22.3, pop-os-24.04]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
@@ -174,6 +174,54 @@ jobs:
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
           bash scripts/check-conary-test-result-gate.sh "$result"
           bash scripts/check-conary-corpus-result-gate.sh "$result"
+      - name: Prove authentic Debian derivative state and native APT behavior
+        if: ${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}
+        env:
+          CONARY_TEST_REUSE_IMAGE: "1"
+        run: >-
+          cargo run -p conary-test --
+          run
+          --distro "${{ matrix.distro }}"
+          --phase 4
+          --suite debian-derivative-acceptance
+      - name: Verify Debian derivative evidence
+        if: ${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}
+        run: |
+          result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
+          bash scripts/check-conary-test-result-gate.sh "$result"
+          jq -e '
+            .target_release.schema_version == 1 and
+            .target_release.target_profile == "${{ matrix.distro }}" and
+            .target_release.checkout_commit == "${{ github.sha }}" and
+            .target_release.checkout_dirty == false and
+            (.target_release.stages | all(.passed == true)) and
+            ([.target_release.stages[].stage] == [
+              "release_identity",
+              "package_identity",
+              "repository_declarations",
+              "conary_runtime"
+            ]) and
+            ([.target_release.artifacts[].role] |
+              index("base_image") != null and
+              index("release_media") != null and
+              index("keyring_package") != null and
+              index("identity_package") != null and
+              index("apt_declaration") != null and
+              index("signing_root") != null and
+              index("conary_executable") != null) and
+            ([.target_release.artifacts[] |
+              select(.role == "signing_root") |
+              (.digest_source == "running_target_bytes" and
+               (.fingerprints | length > 0))] | all) and
+            ([.target_release.artifacts[] |
+              select(.role == "release_media") |
+              .digest_source] == ["pinned_release_authority"]) and
+            ([.target_release.artifacts[] |
+              select(.role == "base_image" or
+                     .role == "keyring_package" or
+                     .role == "identity_package") |
+              .digest_source] | all(. == "pinned_build_input"))
+          ' "$result"
 
   native-cross-source-lifecycle-gate:
     name: native-cross-source-lifecycle

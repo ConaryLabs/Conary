@@ -7,6 +7,7 @@ pub mod corpus;
 pub mod executor;
 pub mod mock_server;
 pub mod qemu;
+pub mod release_root;
 pub mod runner;
 pub mod suite;
 pub mod variables;

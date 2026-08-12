@@ -10,7 +10,7 @@ description: >-
   Containerfile is deliberately re-pinned (issue #323).
 inputs:
   distro:
-    description: Test distro slug (fedora44, ubuntu-26.04, arch, artix).
+    description: Test distro slug from the typed conary-test configuration.
     required: true
 runs:
   using: composite
@@ -21,15 +21,9 @@ runs:
       run: |
         set -euo pipefail
 
-        containerfile="apps/conary/tests/integration/remi/containers/Containerfile.${{ inputs.distro }}"
-        [[ -f "$containerfile" ]] || {
-          echo "no Containerfile for distro ${{ inputs.distro }}: $containerfile" >&2
-          exit 1
-        }
-
-        ref="$(grep -m1 '^FROM ' "$containerfile" | awk '{print $2}')"
+        ref="$(target/debug/conary-test images base-ref --distro '${{ inputs.distro }}')"
         [[ "$ref" == *@sha256:* ]] || {
-          echo "FROM line in $containerfile is not digest-pinned: $ref" >&2
+          echo "configured base image for ${{ inputs.distro }} is not digest-pinned: $ref" >&2
           exit 1
         }
 

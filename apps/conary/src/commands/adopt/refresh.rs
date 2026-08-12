@@ -516,15 +516,19 @@ fn replace_refresh_children_for_package(
         let native_identity_json = serde_json::to_string(native_identity)?;
         tx.execute(
             "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
-             installed_by_changeset_id = ?4, native_package_identity_json = ?5
-             WHERE id = ?6",
+             installed_by_changeset_id = ?4, native_package_identity_json = ?5,
+             debian_multi_arch = ?6
+             WHERE id = ?7",
             rusqlite::params![
                 sys_ver,
                 sys_arch,
                 sys_desc,
                 changeset_id,
                 native_identity_json,
-                trove_id
+                native_identity
+                    .debian_multi_arch()
+                    .map(conary_core::repository::dependency_model::DebianMultiArch::as_str),
+                trove_id,
             ],
         )?;
 
@@ -802,21 +806,43 @@ mod tests {
             VersionScheme::Debian,
         );
         trove.architecture = Some(architecture.to_string());
-        trove.native_package_identity =
-            Some(InstalledPackageIdentity::dpkg(selector, "libc6", version, architecture).unwrap());
+        trove.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::Same);
+        trove.native_package_identity = Some(
+            InstalledPackageIdentity::dpkg(
+                selector,
+                "libc6",
+                version,
+                architecture,
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )
+            .unwrap(),
+        );
         trove
     }
 
     #[test]
     fn multiarch_refresh_matches_the_intended_native_variant() {
         let amd64 = CurrentNativePackage {
-            identity: InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64")
-                .unwrap(),
+            identity: InstalledPackageIdentity::dpkg(
+                "libc6:amd64",
+                "libc6",
+                "2.42-1",
+                "amd64",
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )
+            .unwrap(),
             description: None,
         };
         let i386 = CurrentNativePackage {
-            identity: InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.41-1", "i386")
-                .unwrap(),
+            identity: InstalledPackageIdentity::dpkg(
+                "libc6:i386",
+                "libc6",
+                "2.41-1",
+                "i386",
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )
+            .unwrap(),
             description: None,
         };
         let current = vec![amd64, i386];

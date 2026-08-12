@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 38
-summary: Document opaque native source identity, repository-scoped follow or pin authority, exact adopted-artifact conversion, capability-driven targets, Remi feed presets, and lifecycle handoff
+revision: 39
+summary: Document opaque native source identity, exact native trust takeover, capability-driven targets, Remi feed presets, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -577,7 +577,10 @@ exact preview SHA-256 and `--yes`; rollback restores the persisted prior
 projection bytes and removes only takeover-owned repository rows. Native
 declaration paths remain byte-identical compatibility projections, and any
 missing or changed path is reported as drift rather than becoming new
-authority. The exact contract is
+authority. Legacy APT declarations without `Signed-By` can proceed only when
+the enrollment manifest binds exact primary fingerprints to native global
+keyring bytes below the selected root; the keyring files then join the owned,
+rollback-safe projection set. The exact contract is
 [`native-repository-takeover.md`](../specs/native-repository-takeover.md).
 
 After takeover, repository declarations and trust roots installed by a package

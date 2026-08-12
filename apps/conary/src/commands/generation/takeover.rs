@@ -179,7 +179,7 @@ pub async fn cmd_system_takeover(
     }
 
     // -- Pre-flight -----------------------------------------------------------
-    preflight_checks(matches!(level, TakeoverLevel::Generation))?;
+    preflight_checks(takeover_requires_composefs(level, dry_run))?;
 
     // -- Plan -----------------------------------------------------------------
     let pm = SystemPackageManager::resolve(requested_manager)?;
@@ -591,6 +591,10 @@ fn preflight_checks(check_composefs: bool) -> Result<()> {
     Ok(())
 }
 
+fn takeover_requires_composefs(level: TakeoverLevel, dry_run: bool) -> bool {
+    !dry_run && matches!(level, TakeoverLevel::Generation)
+}
+
 // ---------------------------------------------------------------------------
 // System PM query
 // ---------------------------------------------------------------------------
@@ -672,6 +676,20 @@ mod tests {
     }
 
     #[test]
+    fn generation_takeover_dry_run_does_not_require_composefs() {
+        assert!(!takeover_requires_composefs(
+            TakeoverLevel::Generation,
+            true
+        ));
+        assert!(takeover_requires_composefs(
+            TakeoverLevel::Generation,
+            false
+        ));
+        assert!(!takeover_requires_composefs(TakeoverLevel::Cas, false));
+        assert!(!takeover_requires_composefs(TakeoverLevel::Owned, false));
+    }
+
+    #[test]
     fn incomplete_bulk_adoption_cannot_cross_pm_removal_boundary() {
         let outcome = BulkAdoptionOutcome {
             failures: vec![BulkAdoptionFailure::new(
@@ -699,9 +717,22 @@ mod tests {
 
     #[test]
     fn takeover_inventory_preserves_both_multiarch_variants() {
-        let amd64 =
-            InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64").unwrap();
-        let i386 = InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.42-1", "i386").unwrap();
+        let amd64 = InstalledPackageIdentity::dpkg(
+            "libc6:amd64",
+            "libc6",
+            "2.42-1",
+            "amd64",
+            conary_core::repository::dependency_model::DebianMultiArch::Same,
+        )
+        .unwrap();
+        let i386 = InstalledPackageIdentity::dpkg(
+            "libc6:i386",
+            "libc6",
+            "2.42-1",
+            "i386",
+            conary_core::repository::dependency_model::DebianMultiArch::Same,
+        )
+        .unwrap();
         let tracked = HashMap::from([
             (amd64.selector().to_string(), InstallSource::AdoptedFull),
             (i386.selector().to_string(), InstallSource::AdoptedTrack),

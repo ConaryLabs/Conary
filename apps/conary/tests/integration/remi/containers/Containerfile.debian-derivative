@@ -1,0 +1,103 @@
+# tests/integration/remi/containers/Containerfile.debian-derivative
+#
+# Shared clean-room Debian-derivative lane. All release identity, package, and
+# repository differences arrive through typed config build arguments and exact
+# captured fixtures; this file contains no distro-name branch.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG DERIVATIVE_ROOT
+ARG KEYRING_PACKAGE_NAME
+ARG KEYRING_PACKAGE_VERSION
+ARG KEYRING_PACKAGE_URL
+ARG KEYRING_PACKAGE_SHA256
+ARG IDENTITY_PACKAGE_NAME
+ARG IDENTITY_PACKAGE_VERSION
+ARG IDENTITY_PACKAGE_URL
+ARG IDENTITY_PACKAGE_SHA256
+ARG EXPECTED_OS_ID
+ARG EXPECTED_VERSION_ID
+ARG EXPECTED_VERSION_CODENAME
+ARG EXPECTED_UBUNTU_CODENAME
+ARG REQUIRED_APT_URIS
+ARG REQUIRED_SIGNING_ROOTS
+ARG INSTALL_MODE=binary
+
+RUN echo "61159013263411a7c7a4157a6ddcd4eca3329ee698e508850070af11338098db  /etc/dpkg/dpkg.cfg.d/excludes" \
+        | sha256sum --check --strict \
+    && rm /etc/dpkg/dpkg.cfg.d/excludes \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --fail --location --retry 3 \
+        --output /tmp/derivative-keyring.deb "${KEYRING_PACKAGE_URL}" \
+    && echo "${KEYRING_PACKAGE_SHA256}  /tmp/derivative-keyring.deb" | sha256sum --check --strict \
+    && dpkg --install /tmp/derivative-keyring.deb \
+    && test "$(dpkg-query --showformat='${Version}' --show "${KEYRING_PACKAGE_NAME}")" = "${KEYRING_PACKAGE_VERSION}" \
+    && rm /tmp/derivative-keyring.deb
+
+COPY fixtures/distro-roots/${DERIVATIVE_ROOT}/ /tmp/derivative-root/
+
+RUN find /etc/apt/sources.list.d -maxdepth 1 -type f -delete \
+    && install -d /etc/apt/sources.list.d \
+    && cp -a /tmp/derivative-root/apt/. /etc/apt/ \
+    && apt-get update \
+    && curl --fail --location --retry 3 \
+        --output /tmp/derivative-identity.deb "${IDENTITY_PACKAGE_URL}" \
+    && echo "${IDENTITY_PACKAGE_SHA256}  /tmp/derivative-identity.deb" | sha256sum --check --strict \
+    && apt-get install -y --allow-downgrades --no-install-recommends /tmp/derivative-identity.deb \
+    && test "$(dpkg-query --showformat='${Version}' --show "${IDENTITY_PACKAGE_NAME}")" = "${IDENTITY_PACKAGE_VERSION}" \
+    && rm /tmp/derivative-identity.deb \
+    && find /etc/apt/sources.list.d -maxdepth 1 -type f -delete \
+    && cp -a /tmp/derivative-root/apt/. /etc/apt/ \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl diffutils libseccomp2 passwd python3 sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    test ! -e /etc/dpkg/dpkg.cfg.d/excludes; \
+    . /etc/os-release; \
+    test "${ID}" = "${EXPECTED_OS_ID}"; \
+    test "${VERSION_ID}" = "${EXPECTED_VERSION_ID}"; \
+    test "${VERSION_CODENAME}" = "${EXPECTED_VERSION_CODENAME}"; \
+    test "${UBUNTU_CODENAME}" = "${EXPECTED_UBUNTU_CODENAME}"; \
+    cd /etc/apt; \
+    sha256sum --check --strict /tmp/derivative-root/apt.sha256; \
+    for uri in ${REQUIRED_APT_URIS}; do \
+        grep -R -F -- "${uri}" /etc/apt/sources.list /etc/apt/sources.list.d >/dev/null; \
+    done; \
+    for identity in ${REQUIRED_SIGNING_ROOTS}; do \
+        digest="${identity%%=*}"; path="${identity#*=}"; \
+        echo "${digest}  ${path}" | sha256sum --check --strict; \
+    done; \
+    install -d /usr/lib/conary-test; \
+    cp /tmp/derivative-root/apt.sha256 /usr/lib/conary-test/apt.sha256
+
+COPY conary* /tmp/install/
+
+RUN if [ "${INSTALL_MODE}" = "package" ] && [ -f /tmp/install/conary-release.deb ]; then \
+        apt-get update && apt-get install -y /tmp/install/conary-release.deb && rm -rf /var/lib/apt/lists/*; \
+    elif [ -f /tmp/install/conary ]; then \
+        install -m 755 /tmp/install/conary /usr/bin/conary; \
+    else \
+        echo "No conary binary or package found in build context" >&2; exit 1; \
+    fi && rm -rf /tmp/install
+
+RUN /usr/bin/conary --version \
+    && command -v cmp \
+    && command -v diff \
+    && test -e /lib64/ld-linux-x86-64.so.2
+
+COPY config.toml /opt/remi-tests/config.toml
+COPY fixtures/ /opt/remi-tests/fixtures/
+
+RUN mkdir -p /var/lib/conary /results
+
+ENV DISTRO=${DERIVATIVE_ROOT}
+ENV DB_PATH=/var/lib/conary/conary.db
+ENV RESULTS_DIR=/results
+ENV CONARY_BIN=/usr/bin/conary
+
+CMD ["sleep", "infinity"]

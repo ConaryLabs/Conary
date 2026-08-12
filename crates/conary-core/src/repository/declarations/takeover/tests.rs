@@ -105,6 +105,23 @@ fn preview_is_deterministic_serializable_and_rejects_unknown_input() {
 }
 
 #[test]
+fn preview_envelope_binds_the_complete_typed_preview() {
+    let (root, conn, manifest) = fixture();
+    let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
+    let expected_sha256 = preview.sha256().unwrap();
+    let envelope = NativeRepositoryTakeoverPreviewEnvelope::new(preview.clone()).unwrap();
+
+    assert_eq!(envelope.schema, TAKEOVER_PREVIEW_ENVELOPE_SCHEMA);
+    assert_eq!(envelope.preview_sha256, expected_sha256);
+    assert_eq!(envelope.preview, preview);
+
+    let encoded = serde_json::to_vec(&envelope).unwrap();
+    let decoded: NativeRepositoryTakeoverPreviewEnvelope =
+        serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, envelope);
+}
+
+#[test]
 fn ambiguous_enabled_trust_blocks_without_database_or_filesystem_changes() {
     let (root, conn, mut manifest) = fixture();
     let declaration_path = root.path().join("etc/yum.repos.d/vendor.repo");

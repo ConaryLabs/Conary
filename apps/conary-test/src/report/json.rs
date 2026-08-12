@@ -14,6 +14,8 @@ struct JsonReport<'a> {
     results: &'a [crate::engine::suite::TestResult],
     #[serde(skip_serializing_if = "Option::is_none")]
     corpus: Option<crate::report::corpus::CorpusReport<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_release: Option<&'a crate::config::release_root::TargetReleaseEvidence>,
 }
 
 #[derive(Serialize)]
@@ -50,6 +52,7 @@ pub fn to_json_value(suite: &TestSuite) -> Result<serde_json::Value> {
             &suite.corpus_cases,
             suite.corpus_expected(),
         ),
+        target_release: suite.target_release.as_ref(),
     };
     Ok(serde_json::to_value(report)?)
 }
@@ -64,6 +67,10 @@ pub fn write_json_report(suite: &TestSuite, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::release_root::{
+        ExpectedOsRelease, TargetArtifactDigestSource, TargetArtifactIdentity, TargetArtifactRole,
+        TargetReleaseEvidence, TargetReleaseStage, TargetReleaseStageResult,
+    };
     use crate::engine::suite::{TestResult, TestStatus, TestSuite};
     use conary_core::corpus::{
         ConversionStage, CorpusCaseResult, SourceArtifactDigestSource, SourceArtifactIdentity,
@@ -99,6 +106,57 @@ mod tests {
         assert_eq!(parsed["results"][0]["id"], "T01");
         assert_eq!(parsed["results"][0]["status"], "passed");
         assert!(parsed.get("corpus").is_none());
+        assert!(parsed.get("target_release").is_none());
+    }
+
+    #[test]
+    fn target_release_report_keeps_artifact_and_stage_authority_typed() {
+        let mut suite = TestSuite::new("derivative", 4);
+        suite.target_release = Some(TargetReleaseEvidence {
+            schema_version: 1,
+            target_profile: "linux-mint-22.3".into(),
+            release: ExpectedOsRelease {
+                id: "linuxmint".into(),
+                version_id: "22.3".into(),
+                version_codename: "zena".into(),
+                ubuntu_codename: "noble".into(),
+            },
+            checkout_commit: "a".repeat(40),
+            checkout_dirty: false,
+            conary_version: "conary 0.14.0".into(),
+            artifacts: vec![TargetArtifactIdentity {
+                role: TargetArtifactRole::SigningRoot,
+                digest_source: TargetArtifactDigestSource::RunningTargetBytes,
+                identity: "/etc/apt/trusted.gpg.d/linuxmint-keyring.gpg".into(),
+                sha256: "b".repeat(64),
+                fingerprints: vec!["C".repeat(40)],
+            }],
+            stages: vec![TargetReleaseStageResult {
+                stage: TargetReleaseStage::RepositoryDeclarations,
+                passed: true,
+            }],
+        });
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&to_json_report(&suite).unwrap()).unwrap();
+        assert_eq!(parsed["target_release"]["schema_version"], 1);
+        assert_eq!(
+            parsed["target_release"]["artifacts"][0]["role"],
+            "signing_root"
+        );
+        assert_eq!(
+            parsed["target_release"]["artifacts"][0]["digest_source"],
+            "running_target_bytes"
+        );
+        assert_eq!(
+            parsed["target_release"]["artifacts"][0]["fingerprints"][0],
+            "C".repeat(40)
+        );
+        assert_eq!(
+            parsed["target_release"]["stages"][0]["stage"],
+            "repository_declarations"
+        );
+        assert_eq!(parsed["target_release"]["stages"][0]["passed"], true);
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, 
 /// via `${VAR}` substitution in manifest fields.
 pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
+    vars.insert("DISTRO".to_string(), distro.to_string());
     vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
     vars.insert("DB_PATH".to_string(), config.paths.db.clone());
     vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
@@ -270,6 +271,7 @@ mod tests {
                     package: "conary-test-fixture".to_string(),
                     binary: "/usr/bin/true".to_string(),
                 }],
+                release_root: None,
             },
         );
 
@@ -352,6 +354,7 @@ mod tests {
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
+        assert_eq!(vars["DISTRO"], "fedora44");
         assert_eq!(vars["REMI_DISTRO"], "fedora-44");
         assert_eq!(vars["REPO_NAME"], "remi-fedora-44");
         assert_eq!(vars["TEST_PACKAGE_1"], "conary-test-fixture");
@@ -393,9 +396,24 @@ mod tests {
 
         // Core fields still present.
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
+        assert_eq!(vars["DISTRO"], "unknown-distro");
         // Distro-specific fields absent.
         assert!(!vars.contains_key("REMI_DISTRO"));
         assert!(!vars.contains_key("TEST_PACKAGE_1"));
+    }
+
+    #[test]
+    fn distro_expands_inside_quoted_manifest_commands() {
+        let config = test_config();
+        let vars = build_variables(&config, "linux-mint-22.3");
+
+        assert_eq!(
+            expand_variables(
+                "python3 -c 'assert value[\"target_profile\"] == \"${DISTRO}\"'",
+                &vars,
+            ),
+            "python3 -c 'assert value[\"target_profile\"] == \"linux-mint-22.3\"'"
+        );
     }
 
     #[test]

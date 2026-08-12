@@ -71,6 +71,8 @@ pub struct TestSuite {
     pub results: Vec<TestResult>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub corpus_cases: Vec<conary_core::corpus::CorpusCaseResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_release: Option<crate::config::release_root::TargetReleaseEvidence>,
     #[serde(skip)]
     corpus_expected: usize,
     pub started_at: DateTime<Utc>,
@@ -88,6 +90,7 @@ impl TestSuite {
             status: RunStatus::Pending,
             results: Vec::new(),
             corpus_cases: Vec::new(),
+            target_release: None,
             corpus_expected: 0,
             started_at: Utc::now(),
             finished_at: None,

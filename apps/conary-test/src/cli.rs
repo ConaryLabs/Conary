@@ -8,9 +8,12 @@ use handlers::{
     cmd_deploy_status, cmd_fixtures_build, cmd_fixtures_publish, cmd_health, cmd_images_info,
     cmd_images_prune, cmd_logs, cmd_manifests_reload,
 };
+use image_config::{base_image_reference, containerfile_path};
 use std::path::{Path, PathBuf};
 
 mod handlers;
+#[path = "cli/image_config.rs"]
+mod image_config;
 
 // ---------------------------------------------------------------------------
 // ANSI color helpers
@@ -160,6 +163,13 @@ enum ImageCommands {
         native_package: Option<PathBuf>,
     },
 
+    /// Print the exact digest-pinned base image for a distro lane
+    BaseRef {
+        /// Distro whose configured base image should be resolved
+        #[arg(long)]
+        distro: String,
+    },
+
     /// List built images
     List,
 
@@ -267,26 +277,6 @@ fn load_manifest_entries(
     Ok(manifests)
 }
 
-/// Resolve the containerfile path for a distro.
-fn containerfile_path(
-    config: &conary_test::config::distro::GlobalConfig,
-    distro: &str,
-) -> Result<PathBuf> {
-    let dc = config
-        .distros
-        .get(distro)
-        .with_context(|| format!("unknown distro: {distro}"))?;
-
-    let default_name = format!("Containerfile.{distro}");
-    let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
-
-    let path = paths::default_container_dir()?.join(filename);
-    if !path.exists() {
-        bail!("containerfile not found: {}", path.display());
-    }
-    Ok(path)
-}
-
 fn host_results_dir() -> Result<PathBuf> {
     let path = std::env::var_os("CONARY_TEST_RESULTS_DIR")
         .map(PathBuf::from)
@@ -306,6 +296,41 @@ fn host_results_dir() -> Result<PathBuf> {
 /// executable until a directory containing `Cargo.toml` is found.
 fn project_dir() -> Result<String> {
     Ok(paths::project_dir()?.to_string_lossy().to_string())
+}
+
+fn checkout_identity() -> Result<(String, bool)> {
+    let root = paths::project_dir()?;
+    let revision = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .context("inspect checkout revision for target evidence")?;
+    if !revision.status.success() {
+        bail!(
+            "failed to inspect checkout revision: {}",
+            String::from_utf8_lossy(&revision.stderr).trim()
+        );
+    }
+    let commit = String::from_utf8(revision.stdout)
+        .context("checkout revision is not UTF-8")?
+        .trim()
+        .to_string();
+    if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("checkout revision is not an exact 40-digit Git object ID");
+    }
+
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(root)
+        .output()
+        .context("inspect checkout state for target evidence")?;
+    if !status.status.success() {
+        bail!(
+            "failed to inspect checkout state: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        );
+    }
+    Ok((commit, !status.stdout.is_empty()))
 }
 
 /// Run a shell command and return (exit_code, stdout, stderr).
@@ -430,14 +455,13 @@ fn run_single_distro(
 
         // Resolve and build the image.
         let cf_path = containerfile_path(config, distro)?;
-        let build_context = config
+        let distro_config = config
             .distros
             .get(distro)
-            .with_context(|| format!("unknown distro: {distro}"))?
-            .build_context;
+            .with_context(|| format!("unknown distro: {distro}"))?;
         tracing::info!(distro, containerfile = %cf_path.display(), "Building image");
         let image_tag =
-            conary_test::container::build_distro_image(&backend, &cf_path, distro, build_context)
+            conary_test::container::build_distro_image(&backend, &cf_path, distro, distro_config)
                 .await?;
         tracing::info!(distro, image = %image_tag, "Image built");
 
@@ -463,6 +487,20 @@ fn run_single_distro(
         let mut aggregate_suite =
             conary_test::engine::suite::TestSuite::new(&aggregate_suite_name, phase);
         aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
+        if let Some(release_root) = &distro_config.release_root {
+            let (checkout_commit, checkout_dirty) = checkout_identity()?;
+            aggregate_suite.target_release = Some(
+                conary_test::engine::release_root::capture_target_release_evidence(
+                    &backend,
+                    &container_id,
+                    distro,
+                    release_root,
+                    checkout_commit,
+                    checkout_dirty,
+                )
+                .await?,
+            );
+        }
         let remi_run =
             conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase)
                 .await;
@@ -778,6 +816,19 @@ fn main() -> Result<()> {
         Commands::Images { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
+                ImageCommands::BaseRef { distro } => {
+                    let config = load_config()?;
+                    let reference = base_image_reference(&config, &distro)?;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"distro": distro, "base_image": reference})
+                        );
+                    } else {
+                        println!("{reference}");
+                    }
+                    Ok(())
+                }
                 ImageCommands::Build {
                     distro,
                     native_package,
@@ -790,7 +841,6 @@ fn main() -> Result<()> {
                             .distros
                             .get(&distro)
                             .with_context(|| format!("unknown distro: {distro}"))?;
-                        let build_context = distro_config.build_context;
                         tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
                         let tag = match native_package {
                             Some(package) => {
@@ -807,7 +857,7 @@ fn main() -> Result<()> {
                                     &backend,
                                     &cf_path,
                                     &distro,
-                                    build_context,
+                                    distro_config,
                                     &package,
                                     profile.package_format(),
                                 )
@@ -818,7 +868,7 @@ fn main() -> Result<()> {
                                     &backend,
                                     &cf_path,
                                     &distro,
-                                    build_context,
+                                    distro_config,
                                 )
                                 .await?
                             }

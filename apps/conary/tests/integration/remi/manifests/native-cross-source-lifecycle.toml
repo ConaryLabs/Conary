@@ -23,6 +23,14 @@ target_init_system = "systemd"
 native_lifecycle_oracle_format = "arch"
 target_init_system = "openrc"
 
+[distro_overrides."linux-mint-22.3"]
+native_lifecycle_oracle_format = "deb"
+target_init_system = "systemd"
+
+[distro_overrides."pop-os-24.04"]
+native_lifecycle_oracle_format = "deb"
+target_init_system = "systemd"
+
 [[test]]
 id = "TNPMX01R"
 name = "rpm_source_install_update_rollback_remove"

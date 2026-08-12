@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 46
-summary: Document selected-generation lifecycle proof, exact adopted-artifact CCS lifecycle proof, and the current Fedora supported-host generation export gates
+revision: 48
+summary: Document authenticated derivative targets, transport normalization, typed release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -52,6 +52,10 @@ cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --dist
 
 # Run the focused RPM/DEB/Arch lifecycle contract on one target image
 cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4
+
+# Run authentic Debian-derivative repository and native APT acceptance
+cargo run -p conary-test -- run --suite debian-derivative-acceptance --distro linux-mint-22.3 --phase 4
+cargo run -p conary-test -- run --suite debian-derivative-acceptance --distro pop-os-24.04 --phase 4
 
 # Run all tests for a phase
 cargo run -p conary-test -- run --distro fedora44 --phase 1
@@ -571,15 +575,40 @@ and confirms the persisted native lifecycle bundle. The execution path uses
 only CCS operations after publication and therefore never consults a source
 package manager or its database at runtime.
 The `pr-gate` workflow builds each configured distro image first and then runs
-that focused manifest across `fedora44`, `ubuntu-26.04`, `arch`, and the OpenRC
-`artix` lane. Together, the required lanes authenticate all three checked-in
-source-ABI traces and run the full 4x3 Conary Cartesian product. Corpus target
+that focused manifest across `fedora44`, `ubuntu-26.04`, `arch`, the OpenRC
+`artix` lane, Linux Mint 22.3, and Pop!_OS 24.04. Together, the required lanes
+authenticate all three checked-in source-ABI traces and run the full 6x3
+Conary Cartesian product. Corpus target
 facts resolve from explicit per-lane manifest authority, so Artix records
 OpenRC rather than inheriting a systemd default. Missing native manager
 authority, container support, an exact trace match, or an image build fails its
 matrix job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
+
+The two Debian-derivative jobs also run `debian-derivative-acceptance`. Their
+shared Containerfile starts from one digest-pinned Ubuntu transport root, then
+installs exact release-owned identity and keyring packages and restores the
+actual APT declarations captured from authenticated release media. Before any
+release package is installed, the builder verifies and removes the pinned OCI
+transport's dpkg payload-exclusion policy; release-root package records must
+refer to materialized payload rather than Docker-reduced bytes. Build and
+runtime preflight require exact `/etc/os-release`, package versions,
+declaration bytes, signing-root bytes and fingerprints, and `conary --version`.
+Linux Mint's legacy global APT trust is resolved only by declaration-entry and
+fingerprint bindings in typed test configuration; Pop!_OS retains its explicit
+`Signed-By` declarations. The suite executes repository
+preview/apply/repeat/rollback plus native dpkg query, adoption, refresh,
+takeover preview, unadoption, and removal. Distro names select test data only;
+product trust and parser selection remain typed declaration authority.
+
+Successful derivative reports carry a `target_release` schema with the exact
+release-media, base-image, package, APT declaration, signing-root, checkout,
+and running Conary artifact identities plus typed preflight stages. Each
+artifact distinguishes pinned release authority, pinned build input, and bytes
+observed in the running target; configuration is not mislabeled as a runtime
+read. Merely configuring these lanes is not acceptance evidence; the first exact-head
+hosted runs remain required before public support claims.
 
 Published-release proof uses the same contract through
 `.github/workflows/release-artifact-proof.yml`. Its explicit
@@ -599,7 +628,7 @@ default so the matrix uses the current checkout; set `CONARY_TEST_REUSE_IMAGE=1`
 only for local iterative debugging where stale-image risk is acceptable.
 
 Evidence from the former 18-test, host-native-only matrix does not certify the
-current 19-test cross-source contract. Record new evidence only after all four
+current 19-test cross-source contract. Record new evidence only after all six
 current distro jobs pass the result gate.
 
 Focused Goal 3 security advisory pipeline proof:
@@ -671,6 +700,8 @@ available. Review the generated bundle before attaching it. It does not copy
 | `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `static-binary` |
 | `arch` | `Containerfile.arch` | Arch Linux (rolling) | `static-binary` |
 | `artix` | `Containerfile.artix` | Artix Linux (rolling, OpenRC) | `static-binary` |
+| `linux-mint-22.3` | `Containerfile.debian-derivative` | Linux Mint 22.3 release-owned root | `static-binary` |
+| `pop-os-24.04` | `Containerfile.debian-derivative` | Pop!_OS 24.04 release-owned root | `static-binary` |
 
 `build_context` is a required typed distro capability in `config.toml` that
 selects which Conary binary an image receives. Distro names do not select this
@@ -949,15 +980,16 @@ the WAL. Wiring the streaming path is tracked in issue #354.
 
 Trusted integration validation belongs to GitHub Actions, with any runner used
 as execution capacity rather than as an independent control plane. The PR gate
-runs the focused native cross-source lifecycle on hosted Docker across all
-four distro images. The rest of the TOML inventory still requires a local or
+runs the focused native cross-source lifecycle on hosted Docker across all six
+distro images and the derivative-specific APT gate on Mint and Pop!_OS. The
+rest of the TOML inventory still requires a local or
 hosted container/QEMU-capable runner; do not describe a normal PR or merge run
 as having executed all 324 manifest tests unless that runner path is present in
 the specific workflow run.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused four-distro native lifecycle matrix |
+| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused six-distro native lifecycle matrix and authentic derivative APT proof |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
@@ -985,9 +1017,13 @@ Current JSON semantics:
 ## Adding Distros
 
 1. Create `apps/conary/tests/integration/remi/containers/Containerfile.<name>`
+   or select a shared capability-driven Containerfile.
 2. Add `[distros.<name>]` to `config.toml` with an explicit typed
    `build_context = "static-binary"` or `build_context = "binary"`
-3. Add to CI workflow matrices
+3. For reconstructed derivative roots, declare the digest-pinned base,
+   authenticated media, exact identity/keyring packages, APT declaration
+   fixtures, signing roots, and exact legacy global-trust bindings when used.
+4. Add the target to CI workflow matrices and typed workflow tests.
 
 ## Troubleshooting
 
