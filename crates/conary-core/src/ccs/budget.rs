@@ -776,6 +776,21 @@ impl CcsStructuralBudget {
             .native_lifecycle
             .as_ref()
             .map_or(0, |bundle| bundle.entries.len() as u64);
+        let enrollment_entries =
+            lifecycle
+                .repository_enrollments
+                .iter()
+                .try_fold(0_u64, |count, intent| {
+                    sum(
+                        "lifecycle.repository_enrollments",
+                        [
+                            count,
+                            1,
+                            intent.repositories.len() as u64,
+                            intent.projections.len() as u64,
+                        ],
+                    )
+                })?;
         let entries = sum(
             "lifecycle",
             [
@@ -789,6 +804,7 @@ impl CcsStructuralBudget {
                 lifecycle.alternatives.len() as u64,
                 lifecycle.script_capabilities.len() as u64,
                 native_entries,
+                enrollment_entries,
             ],
         )?;
         admit(

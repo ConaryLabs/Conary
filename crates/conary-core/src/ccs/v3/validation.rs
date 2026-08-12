@@ -331,6 +331,15 @@ fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3
         );
     }
 
+    for enrollment in &lifecycle.repository_enrollments {
+        if let Err(error) = enrollment.validate() {
+            invalid(
+                "repository_enrollments",
+                format!("invalid package repository enrollment authority: {error}"),
+            );
+        }
+    }
+
     for user in &lifecycle.users {
         if let Err(error) = validate_username(&user.name) {
             invalid("users.name", format!("invalid lifecycle user: {error}"));

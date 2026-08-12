@@ -231,6 +231,12 @@ pub struct LifecycleAuthorityV3 {
     /// packages. This is signed install authority, not debug-TOML evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_lifecycle: Option<crate::ccs::native_lifecycle::NativeLifecycleBundle>,
+    /// Exact repository declarations and trust projections installed by this
+    /// package. These values are signed lifecycle authority and are applied in
+    /// the same transaction as the package payload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repository_enrollments:
+        Vec<crate::repository::enrollment::PackageRepositoryEnrollmentIntent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
