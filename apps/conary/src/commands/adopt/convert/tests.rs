@@ -206,9 +206,14 @@ fn identity_for(scheme: VersionScheme) -> InstalledPackageIdentity {
             "x86_64",
         )
         .unwrap(),
-        VersionScheme::Debian => {
-            InstalledPackageIdentity::dpkg("exact:x86_64", "exact", "1.2.3-4", "x86_64").unwrap()
-        }
+        VersionScheme::Debian => InstalledPackageIdentity::dpkg(
+            "exact:x86_64",
+            "exact",
+            "1.2.3-4",
+            "x86_64",
+            conary_core::repository::dependency_model::DebianMultiArch::No,
+        )
+        .unwrap(),
         VersionScheme::Arch => {
             InstalledPackageIdentity::pacman("exact", "exact", "1.2.3-4", "x86_64").unwrap()
         }

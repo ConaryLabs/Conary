@@ -509,6 +509,7 @@ pub async fn cmd_adopt_system(
                     version_scheme,
                 );
                 trove.architecture = Some(pkg.identity.architecture().to_string());
+                trove.debian_multi_arch = pkg.identity.debian_multi_arch();
                 trove.description = pkg.description.clone();
                 trove.installed_by_changeset_id = Some(changeset_id);
                 trove.native_package_identity = Some(pkg.identity.clone());

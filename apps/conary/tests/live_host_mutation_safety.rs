@@ -491,7 +491,7 @@ if [ \"$1\" = \"--version\" ]; then
 fi
 case \"$3\" in
     *Description*)
-        printf 'fixture\\036fixture\\0361.2.3\\036amd64\\036Fixture package\\036Test maintainer\\036\\036utils\\036optional\\0361\\037'
+        printf 'fixture\\036fixture\\0361.2.3\\036amd64\\036Fixture package\\036Test maintainer\\036\\036utils\\036optional\\0361\\036foreign\\037'
         ;;
     *Depends*)
         printf '\\036libc6 (>= 2.0)\\037'

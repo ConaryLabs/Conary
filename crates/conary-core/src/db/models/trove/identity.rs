@@ -58,6 +58,12 @@ pub(super) fn validated_native_identity_json(trove: &Trove) -> Result<Option<Str
                     trove.version_scheme.as_str()
                 )));
             }
+            if identity.debian_multi_arch() != trove.debian_multi_arch {
+                return Err(Error::ConfigError(format!(
+                    "{} {} native identity Multi-Arch authority does not match its trove projection",
+                    trove.name, trove.version
+                )));
+            }
             if identity.name() != trove.name {
                 return Err(Error::ConfigError(format!(
                     "{} {} native package identity names {}, not the owning trove",

@@ -64,6 +64,7 @@ fn lifecycle_identity(
             "exact-lifecycle",
             version,
             architecture,
+            conary_core::repository::dependency_model::DebianMultiArch::No,
         )
         .unwrap(),
         VersionScheme::Arch => InstalledPackageIdentity::pacman(

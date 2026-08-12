@@ -444,10 +444,20 @@ mod tests {
         let (amd64_id, i386_id, i386_identity) = db::transaction(&mut connection, |tx| {
             let mut changeset = Changeset::new("seed multiarch adoption".into());
             let changeset_id = changeset.insert(tx)?;
-            let amd64_identity =
-                InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64")?;
-            let i386_identity =
-                InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.42-1", "i386")?;
+            let amd64_identity = InstalledPackageIdentity::dpkg(
+                "libc6:amd64",
+                "libc6",
+                "2.42-1",
+                "amd64",
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )?;
+            let i386_identity = InstalledPackageIdentity::dpkg(
+                "libc6:i386",
+                "libc6",
+                "2.42-1",
+                "i386",
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )?;
 
             let mut amd64 = Trove::new_with_source(
                 "libc6".into(),

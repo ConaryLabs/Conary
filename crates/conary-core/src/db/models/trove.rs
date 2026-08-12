@@ -738,8 +738,14 @@ mod tests {
     #[test]
     fn native_owned_trove_identity_must_match_name_version_and_architecture() {
         let (_dir, conn) = setup_test_db();
-        let identity =
-            InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.41-12", "i386").unwrap();
+        let identity = InstalledPackageIdentity::dpkg(
+            "libc6:i386",
+            "libc6",
+            "2.41-12",
+            "i386",
+            DebianMultiArch::Same,
+        )
+        .unwrap();
 
         for (name, version, architecture, expected) in [
             (
@@ -766,12 +772,39 @@ mod tests {
             );
             trove.architecture = architecture.map(str::to_string);
             trove.debian_multi_arch =
-                Some(crate::repository::dependency_model::DebianMultiArch::No);
+                Some(crate::repository::dependency_model::DebianMultiArch::Same);
             trove.native_package_identity = Some(identity.clone());
 
             let error = trove.insert(&conn).unwrap_err().to_string();
             assert!(error.contains(expected), "{error}");
         }
+    }
+
+    #[test]
+    fn native_owned_trove_multi_arch_projection_must_match_identity() {
+        let (_dir, conn) = setup_test_db();
+        let mut trove = Trove::new_with_source(
+            "libc6".to_string(),
+            "2.41-12".to_string(),
+            TroveType::Package,
+            InstallSource::AdoptedTrack,
+            VersionScheme::Debian,
+        );
+        trove.architecture = Some("i386".to_string());
+        trove.debian_multi_arch = Some(DebianMultiArch::No);
+        trove.native_package_identity = Some(
+            InstalledPackageIdentity::dpkg(
+                "libc6:i386",
+                "libc6",
+                "2.41-12",
+                "i386",
+                DebianMultiArch::Same,
+            )
+            .unwrap(),
+        );
+
+        let error = trove.insert(&conn).unwrap_err().to_string();
+        assert!(error.contains("Multi-Arch authority"), "{error}");
     }
 
     #[test]
