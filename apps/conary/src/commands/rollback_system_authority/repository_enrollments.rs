@@ -69,7 +69,6 @@ const CONTRACTS: &[TableContract] = &[
             "priority",
             "trust_policy_json",
             "metadata_expire",
-            "last_sync",
             "created_at",
             "content_url",
             "default_strategy",
@@ -85,14 +84,13 @@ const CONTRACTS: &[TableContract] = &[
             "source_policy_id",
             "repository_identity",
             "stream_binding_sha256",
-            "authenticated_snapshot_sha256",
         ],
         select: "SELECT id, name, url, enabled, priority, trust_policy_json,
-                        metadata_expire, last_sync, created_at, content_url, default_strategy,
+                        metadata_expire, created_at, content_url, default_strategy,
                         default_strategy_endpoint, source_profile, tuf_enabled, tuf_root_version,
                         tuf_root_url, security_advisory_support, package_format,
                         parser_config_json, managed_by, source_policy_id, repository_identity,
-                        stream_binding_sha256, authenticated_snapshot_sha256
+                        stream_binding_sha256
                  FROM repositories WHERE managed_by = 'package-projection' ORDER BY id",
     },
     TableContract {
@@ -213,7 +211,7 @@ impl RepositoryEnrollmentSnapshot {
             .map(|row| integer(&row[0], "repositories.id"))
             .collect::<Result<BTreeSet<_>>>()?;
         for row in &repositories.rows {
-            if text(&row[19], "repositories.managed_by")? != "package-projection" {
+            if text(&row[18], "repositories.managed_by")? != "package-projection" {
                 bail!("rollback package repository snapshot contains non-package ownership");
             }
         }

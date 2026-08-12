@@ -124,7 +124,10 @@ and projection state in rollback system authority before mutation. System
 rollback restores that exact database state in the same transaction as package
 and lifecycle authority, while the captured selected-root manifest restores
 the exact files. A rollback never reparses a current projection or reconstructs
-an old intent from a newer package.
+an old intent from a newer package. Synced package rows, `last_sync`, and the
+last authenticated-snapshot observation are derived cache state rather than
+package rollback authority; restoring a package repository clears them and the
+next use performs a fresh authenticated sync.
 
 ## Later Update Proof
 

@@ -277,6 +277,28 @@ fn normalized_system_authority_restores_package_repository_owners() {
     )
     .unwrap();
     tx.commit().unwrap();
+    let repository_id =
+        conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
+            .unwrap()
+            .unwrap()
+            .id
+            .unwrap();
+    conn.execute(
+        "UPDATE repositories
+         SET last_sync = '2026-08-12T00:00:00Z', authenticated_snapshot_sha256 = ?1
+         WHERE id = ?2",
+        rusqlite::params!["b".repeat(64), repository_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repository_packages
+         (repository_id, name, version, architecture, checksum, size, download_url,
+          source_profile, version_scheme)
+         VALUES (?1, 'browser', '2-1', 'x86_64', ?2, 1,
+                 'https://repo.example/rpm/browser-2-1.rpm', 'fedora-44', 'rpm')",
+        rusqlite::params![repository_id, "c".repeat(64)],
+    )
+    .unwrap();
     let before = RollbackSystemAuthority::capture(&conn).unwrap();
 
     let tx = conn.transaction().unwrap();
@@ -293,9 +315,14 @@ fn normalized_system_authority_restores_package_repository_owners() {
     tx.commit().unwrap();
 
     assert_eq!(RollbackSystemAuthority::capture(&conn).unwrap(), before);
+    let restored = conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
+        .unwrap()
+        .unwrap();
+    assert!(restored.last_sync.is_none());
+    assert!(restored.authenticated_snapshot.is_none());
     assert!(
-        conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
+        conary_core::db::models::RepositoryPackage::find_by_repository(&conn, repository_id)
             .unwrap()
-            .is_some()
+            .is_empty()
     );
 }
