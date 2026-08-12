@@ -10,6 +10,7 @@ RUN zypper --non-interactive install --no-recommends \
         ca-certificates \
         diffutils \
         findutils \
+        gawk \
         libseccomp2 \
         python3 \
         shadow \
@@ -27,6 +28,7 @@ RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.rpm ]
     fi && rm -rf /tmp/install
 
 RUN /usr/bin/conary --version \
+    && command -v awk \
     && command -v cmp \
     && command -v diff \
     && command -v find \
