@@ -53,6 +53,46 @@ test_packages = [
     { package = "jq", binary = "/usr/bin/jq" },
 ]
 
+[distros.cachyos]
+remi_distro = "arch"
+repo_name = "remi-arch"
+build_context = "static-binary"
+test_packages = [
+    { package = "which", binary = "/usr/bin/which" },
+    { package = "tree", binary = "/usr/bin/tree" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
+
+[distros.cachyos.target_root]
+base_image = "docker.io/cachyos/cachyos:latest@sha256:c589a66edda145d183c421a1d6f24293dd13088efa65451bb426a3614fc65a71"
+package_query = "pacman"
+identity_packages = [
+    { name = "cachyos-keyring", version = "20240331-1" },
+    { name = "cachyos-mirrorlist", version = "27-1" },
+    { name = "archlinux-keyring", version = "1:20260727-1" },
+    { name = "pacman", version = "20260610-1" },
+]
+repository_declarations = [
+    { path = "/etc/pacman.conf", sha256 = "ba79096e0f0dda0f275d809acb0ab5bd1ddceb526f4797a8fcf568a6993a3ad8", fingerprints = [] },
+    { path = "/etc/pacman.d/cachyos-mirrorlist", sha256 = "3f7547a9c5a5769d970b4bbfbb2a8cf5c6a5fb27d27649e3a26abcc1f996c1cc", fingerprints = [] },
+    { path = "/etc/pacman.d/mirrorlist", sha256 = "2a2f89c3f48e80f626bb5e6eb7e5f13ee36b3938048b3634f53dfbedbd944b2f", fingerprints = [] },
+]
+signing_roots = [
+    { path = "/usr/share/pacman/keyrings/cachyos.gpg", sha256 = "7f17cd0469e2b986d6c11ad8481a67705a20c5f968b198321a603567c4005576", fingerprints = ["882DCFE48E2051D48E2562ABF3B607488DB35A47"] },
+]
+repository_trust = [
+    { ecosystem = "arch", repository = "cachyos", metadata_url = "https://cdn77.cachyos.org/repo/x86_64/cachyos", keyring_url = "https://cdn77.cachyos.org/repo/x86_64/cachyos/cachyos-keyring-20240331-1-any.pkg.tar.zst", master_fingerprints = ["882DCFE48E2051D48E2562ABF3B607488DB35A47"], packager_key_threshold = 1 },
+    { ecosystem = "arch", repository = "core", metadata_url = "https://fastly.mirror.pkgbuild.com/core/os/x86_64", keyring_url = "https://archive.archlinux.org/packages/a/archlinux-keyring/archlinux-keyring-20260727-1-any.pkg.tar.zst", master_fingerprints = ["2AC0A42EFB0B5CBC7A0402ED4DC95B6D7BE9892E", "3572FA2A1B067F22C58AF155F8B821B42A6FDCD7", "69E6471E3AE065297529832E6BA0F5A2037F4F41", "99B6618472A3B3B814185BAED7D3D823B88BDB9B", "D8AFDDA07A5B6EDFA7D8CCDAD6D055F927843F1C"], packager_key_threshold = 3 },
+    { ecosystem = "arch", repository = "extra", metadata_url = "https://fastly.mirror.pkgbuild.com/extra/os/x86_64", keyring_url = "https://archive.archlinux.org/packages/a/archlinux-keyring/archlinux-keyring-20260727-1-any.pkg.tar.zst", master_fingerprints = ["2AC0A42EFB0B5CBC7A0402ED4DC95B6D7BE9892E", "3572FA2A1B067F22C58AF155F8B821B42A6FDCD7", "69E6471E3AE065297529832E6BA0F5A2037F4F41", "99B6618472A3B3B814185BAED7D3D823B88BDB9B", "D8AFDDA07A5B6EDFA7D8CCDAD6D055F927843F1C"], packager_key_threshold = 3 },
+    { ecosystem = "arch", repository = "multilib", metadata_url = "https://fastly.mirror.pkgbuild.com/multilib/os/x86_64", keyring_url = "https://archive.archlinux.org/packages/a/archlinux-keyring/archlinux-keyring-20260727-1-any.pkg.tar.zst", master_fingerprints = ["2AC0A42EFB0B5CBC7A0402ED4DC95B6D7BE9892E", "3572FA2A1B067F22C58AF155F8B821B42A6FDCD7", "69E6471E3AE065297529832E6BA0F5A2037F4F41", "99B6618472A3B3B814185BAED7D3D823B88BDB9B", "D8AFDDA07A5B6EDFA7D8CCDAD6D055F927843F1C"], packager_key_threshold = 3 },
+]
+
+[distros.cachyos.target_root.expected_os_release]
+id = "cachyos"
+version_id = "20260809.0.570793"
+id_like = "arch"
+build_id = "rolling"
+
 [distros.artix]
 remi_distro = "arch"
 repo_name = "remi-arch"
@@ -62,6 +102,54 @@ test_packages = [
     { package = "tree", binary = "/usr/bin/tree" },
     { package = "jq", binary = "/usr/bin/jq" },
 ]
+
+[distros."opensuse-tumbleweed"]
+remi_distro = "fedora-44"
+repo_name = "remi-fedora-44"
+build_context = "static-binary"
+test_packages = [
+    { package = "which", binary = "/usr/bin/which" },
+    { package = "tree", binary = "/usr/bin/tree" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
+
+[distros."opensuse-tumbleweed".target_root]
+base_image = "registry.opensuse.org/opensuse/tumbleweed:latest@sha256:ed1053df8889aa5a6191aa19f9af9593d1c783674e8ca1dbb55d6c75e75dc306"
+package_query = "rpm"
+identity_packages = [
+    { name = "openSUSE-release", version = "20260811-4247.1" },
+    { name = "libzypp", version = "17.38.14-1.2" },
+    { name = "zypper", version = "1.14.98-1.3" },
+    { name = "rpm", version = "4.20.1-9.2" },
+]
+repository_declarations = [
+    { path = "/etc/zypp/repos.d/repo-debug.repo", sha256 = "a634cb148a3e870c6fa86735e41ce36ae9be7970c73c3a8d14cec1a9e7093865", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-non-oss.repo", sha256 = "593619efa17fb8b0e69bdb3f5000327faa92e91d104ef741b14e2991003e6ebc", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-openh264.repo", sha256 = "76c43eb1357746bf9214c4101c49db437b394b245103d90e1b97ccb4a5320ebd", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-oss.repo", sha256 = "2530d649a42c140f7ec0d16edb4538494d66de01ad3eabe2f884ac08eb928f2c", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-source.repo", sha256 = "2dddf51cd4a794237599512cbf33c522e9a86c5248660e02f0f7a5b9f5962e98", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-update.repo", sha256 = "d3bbf288d0abee4e53c20514ba0c61d1f42d512d5c49fd6878a13cd52b734277", fingerprints = [] },
+]
+signing_roots = [
+    { path = "/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", sha256 = "dece9365f3c78139c0aa6df9c263db2fe7898526162af8d1c1a68cd46136d30c", fingerprints = ["1C59D66FCD52563A16933DBCFEC28EAF09D9EA69"] },
+    { path = "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", sha256 = "8f57411f86db33c398928ad7b2e28769c659532770c57194587ad5c514fce6e3", fingerprints = ["BF3F9A67D3A2FF98A73F5E07488C583D287A0027"] },
+    { path = "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", sha256 = "b5745739ebfb95b25b8e810f9bcb847fe750ccda598bd85f02f0e974599a6d7e", fingerprints = ["AD485664E901B867051AB15F35A2F86E29B700A4"] },
+    { path = "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", sha256 = "21ebd74ac3f50f892f0c7038d534a645d0468ce741f3cc8633d66ae01abef9a7", fingerprints = ["FEAB502539D846DB2C0961CA70AF9E8139DB7C82"] },
+    { path = "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc", sha256 = "3c5ce29fa98ff886911741d28195269df401099c70acbf84da575422df8523d9", fingerprints = ["7F009157B127B994D5CFBE76F74F09BC3FA1D6CE"] },
+]
+repository_trust = [
+    { ecosystem = "rpm-global", repository = "repo-debug", signing_root_paths = ["/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc"] },
+    { ecosystem = "rpm-global", repository = "repo-non-oss", signing_root_paths = ["/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc"] },
+    { ecosystem = "rpm-global", repository = "repo-openh264", signing_root_paths = ["/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc"] },
+    { ecosystem = "rpm-global", repository = "repo-oss", signing_root_paths = ["/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc"] },
+    { ecosystem = "rpm-global", repository = "repo-source", signing_root_paths = ["/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc"] },
+    { ecosystem = "rpm-global", repository = "repo-update", signing_root_paths = ["/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-287a0027-682477e3.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-29b700a4-6a17fa38.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-39db7c82-66c5d91a.asc", "/usr/lib/rpm/gnupg/keys/gpg-pubkey-3fa1d6ce-67c856ee.asc"] },
+]
+
+[distros."opensuse-tumbleweed".target_root.expected_os_release]
+id = "opensuse-tumbleweed"
+version_id = "20260811"
+id_like = "opensuse suse"
 
 [distros."linux-mint-22.3"]
 remi_distro = "ubuntu-26.04"

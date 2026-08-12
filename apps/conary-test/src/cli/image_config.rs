@@ -37,6 +37,10 @@ pub(super) fn base_image_reference(config: &GlobalConfig, distro: &str) -> Resul
         release_root.validate()?;
         return Ok(release_root.base_image.clone());
     }
+    if let Some(target_root) = &distro_config.target_root {
+        target_root.validate()?;
+        return Ok(target_root.base_image.clone());
+    }
 
     let containerfile = containerfile_path(config, distro)?;
     let source = std::fs::read_to_string(&containerfile)

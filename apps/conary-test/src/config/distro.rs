@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::release_root::DistroReleaseRoot;
+use super::release_root::{AuthenticatedTargetRoot, DistroReleaseRoot};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GlobalConfig {
@@ -75,6 +75,8 @@ pub struct DistroConfig {
     pub test_packages: Vec<TestPackage>,
     #[serde(default)]
     pub release_root: Option<DistroReleaseRoot>,
+    #[serde(default)]
+    pub target_root: Option<AuthenticatedTargetRoot>,
 }
 
 /// Which Conary binary a distro image build context stages.

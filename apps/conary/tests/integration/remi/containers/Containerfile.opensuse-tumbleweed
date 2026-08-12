@@ -1,0 +1,45 @@
+# tests/integration/remi/containers/Containerfile.opensuse-tumbleweed
+# Authentic openSUSE Tumbleweed rolling container for package acceptance.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG INSTALL_MODE=binary
+
+RUN zypper --non-interactive install --no-recommends \
+        ca-certificates \
+        diffutils \
+        libseccomp2 \
+        python3 \
+        shadow \
+        sqlite3 \
+    && zypper clean --all
+
+COPY conary* /tmp/install/
+
+RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.rpm ]; then \
+        zypper --non-interactive install --allow-unsigned-rpm /tmp/install/conary-release.rpm; \
+    elif [ -f /tmp/install/conary ]; then \
+        install -m 755 /tmp/install/conary /usr/bin/conary; \
+    else \
+        echo "No conary binary or package found in build context" >&2; exit 1; \
+    fi && rm -rf /tmp/install
+
+RUN /usr/bin/conary --version \
+    && command -v cmp \
+    && command -v diff \
+    && command -v gpg \
+    && command -v python3 \
+    && test -e /lib64/ld-linux-x86-64.so.2
+
+COPY config.toml /opt/remi-tests/config.toml
+COPY fixtures/ /opt/remi-tests/fixtures/
+
+RUN mkdir -p /var/lib/conary /results
+
+ENV DISTRO=opensuse-tumbleweed
+ENV DB_PATH=/var/lib/conary/conary.db
+ENV RESULTS_DIR=/results
+ENV CONARY_BIN=/usr/bin/conary
+
+CMD ["sleep", "infinity"]

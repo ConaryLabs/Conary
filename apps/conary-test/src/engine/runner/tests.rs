@@ -27,6 +27,7 @@ fn test_config() -> GlobalConfig {
                 binary: "/usr/bin/true".to_string(),
             }],
             release_root: None,
+            target_root: None,
         },
     );
 

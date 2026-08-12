@@ -113,17 +113,20 @@ mod tests {
     fn target_release_report_keeps_artifact_and_stage_authority_typed() {
         let mut suite = TestSuite::new("derivative", 4);
         suite.target_release = Some(TargetReleaseEvidence {
-            schema_version: 1,
+            schema_version: 2,
             target_profile: "linux-mint-22.3".into(),
             release: ExpectedOsRelease {
                 id: "linuxmint".into(),
                 version_id: "22.3".into(),
-                version_codename: "zena".into(),
-                ubuntu_codename: "noble".into(),
+                version_codename: Some("zena".into()),
+                ubuntu_codename: Some("noble".into()),
+                id_like: None,
+                build_id: None,
             },
             checkout_commit: "a".repeat(40),
             checkout_dirty: false,
             conary_version: "conary 0.14.0".into(),
+            packages: Vec::new(),
             artifacts: vec![TargetArtifactIdentity {
                 role: TargetArtifactRole::SigningRoot,
                 digest_source: TargetArtifactDigestSource::RunningTargetBytes,
@@ -139,7 +142,7 @@ mod tests {
 
         let parsed: serde_json::Value =
             serde_json::from_str(&to_json_report(&suite).unwrap()).unwrap();
-        assert_eq!(parsed["target_release"]["schema_version"], 1);
+        assert_eq!(parsed["target_release"]["schema_version"], 2);
         assert_eq!(
             parsed["target_release"]["artifacts"][0]["role"],
             "signing_root"

@@ -165,6 +165,8 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
             "ubuntu-26.04",
             "arch",
             "artix",
+            "cachyos",
+            "opensuse-tumbleweed",
             "linux-mint-22.3",
             "pop-os-24.04",
         ]
@@ -242,6 +244,34 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
         assert!(
             evidence.run.as_deref().unwrap().contains(required),
             "derivative evidence gate must require {required}"
+        );
+    }
+
+    let rolling = named_step(
+        &job.steps,
+        "Prove authentic rolling derivative state and native repository behavior",
+    );
+    assert_eq!(
+        rolling.condition.as_deref(),
+        Some("${{ matrix.distro == 'cachyos' || matrix.distro == 'opensuse-tumbleweed' }}")
+    );
+    assert!(
+        rolling
+            .run
+            .as_deref()
+            .is_some_and(|command| command.contains("--suite rolling-derivative-acceptance"))
+    );
+    let rolling_evidence = named_step(&job.steps, "Verify rolling derivative evidence");
+    assert_eq!(rolling_evidence.condition, rolling.condition);
+    for required in [
+        ".target_release.packages",
+        "native_repository_declaration",
+        "running_target_bytes",
+        "fingerprints",
+    ] {
+        assert!(
+            rolling_evidence.run.as_deref().unwrap().contains(required),
+            "rolling evidence gate must require {required}"
         );
     }
 }

@@ -125,6 +125,86 @@ pub(super) fn explicit_apt_global_trust_paths(
     Some(paths.into_iter().collect())
 }
 
+/// Resolve Zypper's documented global-on signature defaults through an exact
+/// manifest binding to the native RPM key store. This is intentionally valid
+/// only when no global zypp.conf overrides exist and every ambiguous finding
+/// is one of the two facts the manifest closes: inherited verification or an
+/// absent per-repository gpgkey.
+pub(super) fn explicit_zypper_global_trust_paths(
+    selected_root: &Path,
+    plan: &NativeRepositoryTrustPlan,
+    trust: &RepositoryTrustPolicy,
+) -> Option<Vec<PathBuf>> {
+    if !matches!(plan.repository, NativeRepositoryReference::Zypper { .. })
+        || safe_join(selected_root, Path::new("/etc/zypp/zypp.conf"))
+            .ok()?
+            .exists()
+    {
+        return None;
+    }
+    let TrustImportDisposition::Ambiguous { findings } = &plan.disposition else {
+        return None;
+    };
+    if findings.is_empty()
+        || findings
+            .iter()
+            .any(|finding| finding.kind != TrustImportFindingKind::MissingRequiredAuthority)
+    {
+        return None;
+    }
+    let RepositoryTrustPolicy::Rpm {
+        metadata: RpmMetadataAuthority::OpenPgp {
+            keys: metadata_keys,
+        },
+        package_keys,
+    } = trust
+    else {
+        return None;
+    };
+    if metadata_keys.is_empty() || metadata_keys != package_keys {
+        return None;
+    }
+
+    exact_native_rpm_key_paths(selected_root, metadata_keys)
+}
+
+fn exact_native_rpm_key_paths(
+    selected_root: &Path,
+    roots: &[OpenPgpTrustRoot],
+) -> Option<Vec<PathBuf>> {
+    let mut paths = BTreeSet::new();
+    for root in roots {
+        root.validate().ok()?;
+        let url = url::Url::parse(&root.url).ok()?;
+        if url.scheme() != "file" {
+            return None;
+        }
+        let host_path = url.to_file_path().ok()?;
+        let relative = host_path.strip_prefix(selected_root).ok()?;
+        let guest_path = Path::new("/").join(relative);
+        if guest_path.parent() != Some(Path::new("/usr/lib/rpm/gnupg/keys"))
+            || safe_join(selected_root, &guest_path).ok()? != host_path
+        {
+            return None;
+        }
+        let bytes = fs::read(&host_path).ok()?;
+        let parser = CertParser::from_bytes(&bytes).ok()?;
+        let mut matched = false;
+        for certificate in parser {
+            let certificate = certificate.ok()?;
+            if certificate.fingerprint().to_hex() == root.fingerprint {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return None;
+        }
+        paths.insert(guest_path);
+    }
+    Some(paths.into_iter().collect())
+}
+
 fn is_apt_global_trust_path(path: &Path) -> bool {
     if path == Path::new("/etc/apt/trusted.gpg") {
         return true;

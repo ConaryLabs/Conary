@@ -8,9 +8,10 @@ pub mod release_root;
 pub use distro::{DistroBuildContext, DistroConfig, GlobalConfig, TestPackage};
 pub use manifest::{Assertion, StepType, TestDef, TestManifest};
 pub use release_root::{
-    AptGlobalTrustBinding, DistroReleaseRoot, ExpectedOsRelease, PinnedTargetFile,
-    ReleaseMediaAuthority, TargetArtifactIdentity, TargetArtifactRole, TargetReleaseEvidence,
-    TargetReleaseStage, TargetReleaseStageResult,
+    AptGlobalTrustBinding, AuthenticatedTargetRoot, DistroReleaseRoot, ExpectedNativePackage,
+    ExpectedOsRelease, NativePackageQuery, NativeRepositoryTrustBinding, PinnedTargetFile,
+    ReleaseMediaAuthority, TargetArtifactIdentity, TargetArtifactRole, TargetPackageIdentity,
+    TargetReleaseEvidence, TargetReleaseStage, TargetReleaseStageResult,
 };
 
 use anyhow::{Result, bail};

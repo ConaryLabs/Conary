@@ -236,13 +236,14 @@ fn tumbleweed_fixture() -> (
 ) {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join("etc/zypp/repos.d")).unwrap();
-    fs::create_dir_all(root.path().join("etc/pki/rpm-gpg")).unwrap();
-    let (certificate, _) = certificate();
-    fs::write(root.path().join("etc/pki/rpm-gpg/TUMBLEWEED"), certificate).unwrap();
+    fs::create_dir_all(root.path().join("usr/lib/rpm/gnupg/keys")).unwrap();
+    let (certificate, fingerprint) = certificate();
+    let key_path = root.path().join("usr/lib/rpm/gnupg/keys/TUMBLEWEED");
+    fs::write(&key_path, certificate).unwrap();
     let declaration_path = root.path().join("etc/zypp/repos.d/tumbleweed.repo");
     fs::write(
         &declaration_path,
-        "[repo-oss]\nname=Main Repository (OSS)\nenabled=1\nautorefresh=1\nbaseurl=https://download.example/tumbleweed/repo/oss/\npriority=47\ngpgcheck=1\nrepo_gpgcheck=1\npkg_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/TUMBLEWEED\n",
+        "[repo-oss]\nname=Main Repository (OSS)\nenabled=1\nautorefresh=1\nbaseurl=https://download.example/tumbleweed/repo/oss/\npriority=47\n",
     )
     .unwrap();
     let db_path = root.path().join("conary.db");
@@ -251,14 +252,22 @@ fn tumbleweed_fixture() -> (
     let declarations = discover_selected_root(root.path()).unwrap();
     let trust = plan_selected_root_trust(&declarations);
     let reference = trust.repositories[0].repository.clone();
-    let policy = expected_trust_policy(
-        root.path(),
-        &declarations,
-        &trust.repositories[0],
-        RepositoryFormat::Fedora,
-    )
-    .unwrap()
-    .unwrap();
+    assert!(matches!(
+        trust.repositories[0].disposition,
+        TrustImportDisposition::Ambiguous { ref findings }
+            if findings.iter().all(|finding|
+                finding.kind == TrustImportFindingKind::MissingRequiredAuthority)
+    ));
+    let roots = vec![OpenPgpTrustRoot {
+        url: url::Url::from_file_path(&key_path).unwrap().to_string(),
+        fingerprint,
+    }];
+    let policy = RepositoryTrustPolicy::Rpm {
+        metadata: RpmMetadataAuthority::OpenPgp {
+            keys: roots.clone(),
+        },
+        package_keys: roots,
+    };
     let manifest = NativeRepositoryTakeoverManifest {
         schema: TAKEOVER_MANIFEST_SCHEMA,
         repositories: vec![TakeoverRepositoryInput {
@@ -493,6 +502,22 @@ fn tumbleweed_preserves_zypper_authority_and_advances_rolling_snapshots() {
         Some(second)
     );
     assert_eq!(fs::read(declaration_path).unwrap(), declaration_before);
+}
+
+#[test]
+fn tumbleweed_global_trust_binding_rejects_unmodeled_zypp_overrides() {
+    let (root, conn, manifest) = tumbleweed_fixture();
+    fs::write(
+        root.path().join("etc/zypp/zypp.conf"),
+        "[main]\ngpgcheck = off\n",
+    )
+    .unwrap();
+
+    let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
+    assert!(preview.blockers.iter().any(|blocker| matches!(
+        blocker,
+        TakeoverBlocker::EnabledTrust { .. } | TakeoverBlocker::TrustPolicyMismatch { .. }
+    )));
 }
 
 #[test]

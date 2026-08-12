@@ -414,9 +414,13 @@ async fn build_distro_image_inner(
         distro_config.build_context,
         native_package,
     )?;
-    let mut build_args = match &distro_config.release_root {
-        Some(release_root) => release_root.docker_build_args()?,
-        None => HashMap::new(),
+    let mut build_args = match (&distro_config.release_root, &distro_config.target_root) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("distro {distro} cannot declare both release_root and target_root")
+        }
+        (Some(release_root), None) => release_root.docker_build_args()?,
+        (None, Some(target_root)) => target_root.docker_build_args()?,
+        (None, None) => HashMap::new(),
     };
     if native_package.is_some() {
         build_args.insert("INSTALL_MODE".to_string(), "package".to_string());

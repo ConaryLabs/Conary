@@ -500,6 +500,19 @@ fn run_single_distro(
                 )
                 .await?,
             );
+        } else if let Some(target_root) = &distro_config.target_root {
+            let (checkout_commit, checkout_dirty) = checkout_identity()?;
+            aggregate_suite.target_release = Some(
+                conary_test::engine::release_root::capture_authenticated_target_evidence(
+                    &backend,
+                    &container_id,
+                    distro,
+                    target_root,
+                    checkout_commit,
+                    checkout_dirty,
+                )
+                .await?,
+            );
         }
         let remi_run =
             conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase)
