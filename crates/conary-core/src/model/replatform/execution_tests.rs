@@ -126,10 +126,6 @@ fn test_replatform_execution_plan_collects_replace_actions() {
     arch_repo.insert(&conn).unwrap();
 
     let actions = vec![
-        DiffAction::SetSourcePin {
-            distro: "arch".to_string(),
-            strength: crate::repository::resolution_policy::DependencyMixingPolicy::Strict,
-        },
         DiffAction::ReplatformReplace {
             package: "vim".to_string(),
             current_distro: Some("fedora-44".to_string()),

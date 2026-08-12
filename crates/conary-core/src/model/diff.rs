@@ -10,29 +10,13 @@ use std::collections::HashSet;
 
 use rusqlite::Connection;
 
-use super::parser::{SourcePinConfig, SystemModel};
+use super::parser::SystemModel;
 use super::state::SystemState;
 use super::{ResolvedModel, resolve_includes, resolve_includes_with_options};
-use crate::repository::resolution_policy::DependencyMixingPolicy;
 
 /// An action to take to reach the desired state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffAction {
-    /// Set or update the effective source pin
-    SetSourcePin {
-        distro: String,
-        strength: DependencyMixingPolicy,
-    },
-
-    /// Clear the effective source pin
-    ClearSourcePin,
-
-    /// Set or update the persisted allowed-distros mirror.
-    SetAllowedDistros { distros: Vec<String> },
-
-    /// Clear the persisted allowed-distros mirror.
-    ClearAllowedDistros,
-
     /// Replace an installed package with a target-distro implementation during replatforming
     ReplatformReplace {
         package: String,
@@ -136,10 +120,6 @@ impl DiffAction {
     /// Get the package name this action affects
     pub fn package(&self) -> &str {
         match self {
-            DiffAction::SetSourcePin { distro, .. } => distro,
-            DiffAction::ClearSourcePin => "<source-policy>",
-            DiffAction::SetAllowedDistros { .. } => "<source-policy>",
-            DiffAction::ClearAllowedDistros => "<source-policy>",
             DiffAction::ReplatformReplace { package, .. } => package,
             DiffAction::Install { package, .. } => package,
             DiffAction::Remove { package, .. } => package,
@@ -166,14 +146,6 @@ impl DiffAction {
     /// Get a human-readable description
     pub fn description(&self) -> String {
         match self {
-            DiffAction::SetSourcePin { distro, strength } => {
-                format!("Set source pin to {} ({})", distro, strength)
-            }
-            DiffAction::ClearSourcePin => "Clear source pin".to_string(),
-            DiffAction::SetAllowedDistros { distros } => {
-                format!("Set allowed distros to {}", distros.join(", "))
-            }
-            DiffAction::ClearAllowedDistros => "Clear allowed distros".to_string(),
             DiffAction::ReplatformReplace {
                 package,
                 current_distro,
@@ -370,15 +342,7 @@ impl ModelDiff {
     }
 
     pub fn has_source_policy_changes(&self) -> bool {
-        self.actions.iter().any(|action| {
-            matches!(
-                action,
-                DiffAction::SetSourcePin { .. }
-                    | DiffAction::ClearSourcePin
-                    | DiffAction::SetAllowedDistros { .. }
-                    | DiffAction::ClearAllowedDistros
-            )
-        })
+        false
     }
 
     pub fn replatform_status(&self) -> Option<ReplatformStatus> {
@@ -399,33 +363,13 @@ impl ModelDiff {
     }
 
     pub fn source_policy_change_count(&self) -> usize {
-        self.actions
-            .iter()
-            .filter(|action| {
-                matches!(
-                    action,
-                    DiffAction::SetSourcePin { .. }
-                        | DiffAction::ClearSourcePin
-                        | DiffAction::SetAllowedDistros { .. }
-                        | DiffAction::ClearAllowedDistros
-                )
-            })
-            .count()
+        0
     }
 
     pub fn other_change_count(&self) -> usize {
         self.actions
             .iter()
-            .filter(|action| {
-                !action.is_structural()
-                    && !matches!(
-                        action,
-                        DiffAction::SetSourcePin { .. }
-                            | DiffAction::ClearSourcePin
-                            | DiffAction::SetAllowedDistros { .. }
-                            | DiffAction::ClearAllowedDistros
-                    )
-            })
+            .filter(|action| !action.is_structural())
             .count()
     }
 
@@ -506,8 +450,6 @@ pub fn compute_diff_from_resolved(
             exclude: &resolved.exclude,
             pins: &resolved.pins,
             derive: &original.derive,
-            source_pin: original.system.effective_pin(),
-            allowed_distros: original.system.allowed_distros.clone(),
         },
         state,
     )
@@ -525,8 +467,6 @@ pub fn compute_diff(model: &SystemModel, state: &SystemState) -> ModelDiff {
             exclude: &model.config.exclude,
             pins: &model.pin,
             derive: &model.derive,
-            source_pin: model.system.effective_pin(),
-            allowed_distros: model.system.allowed_distros.clone(),
         },
         state,
     )
@@ -538,8 +478,6 @@ struct DesiredDiffState<'a> {
     exclude: &'a [String],
     pins: &'a std::collections::HashMap<String, String>,
     derive: &'a [super::parser::DerivedPackage],
-    source_pin: Option<SourcePinConfig>,
-    allowed_distros: Vec<String>,
 }
 
 /// Shared implementation for computing model-vs-state diffs.
@@ -553,8 +491,6 @@ fn compute_diff_inner(desired: DesiredDiffState<'_>, state: &SystemState) -> Mod
         exclude,
         pins,
         derive,
-        source_pin: desired_source_pin,
-        allowed_distros: desired_allowed_distros,
     } = desired;
     let mut diff = ModelDiff::new();
 
@@ -563,36 +499,6 @@ fn compute_diff_inner(desired: DesiredDiffState<'_>, state: &SystemState) -> Mod
     let model_optional: HashSet<&str> = optionals.iter().map(|s| s.as_str()).collect();
 
     let model_excluded: HashSet<&str> = exclude.iter().map(|s| s.as_str()).collect();
-
-    match (&state.source_pin, desired_source_pin.as_ref()) {
-        (Some(current), Some(desired)) if current != desired => {
-            diff.add_action(DiffAction::SetSourcePin {
-                distro: desired.distro.clone(),
-                strength: desired.strength,
-            });
-        }
-        (None, Some(desired)) => {
-            diff.add_action(DiffAction::SetSourcePin {
-                distro: desired.distro.clone(),
-                strength: desired.strength,
-            });
-        }
-        (Some(_), None) => {
-            diff.add_action(DiffAction::ClearSourcePin);
-        }
-        _ => {}
-    }
-
-    match (
-        state.allowed_distros.as_slice(),
-        desired_allowed_distros.as_slice(),
-    ) {
-        (current, desired) if current == desired => {}
-        (_, []) => diff.add_action(DiffAction::ClearAllowedDistros),
-        _ => diff.add_action(DiffAction::SetAllowedDistros {
-            distros: desired_allowed_distros,
-        }),
-    }
 
     // Check what needs to be installed
     for package in &model_packages {

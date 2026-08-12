@@ -10,7 +10,7 @@ use super::resolve::{
 };
 use super::{
     CcsEnvelopeAuthority, InstallIntent, InstallPhase, InstallProgress, PackageFormatType,
-    RepositoryInstallProvenance, bind_transaction_source_profile, detect_package_format,
+    RepositoryInstallProvenance, bind_transaction_source_identity, detect_package_format,
 };
 use anyhow::{Context, Result};
 use conary_core::packages::PackageFormat;
@@ -102,7 +102,7 @@ pub(super) async fn resolve_and_parse_package(
     let repository_provenance = install_provenance_from_resolved(&resolved)
         .or_else(|| ccs_opts.repository_provenance.clone());
     let resolution_policy =
-        bind_transaction_source_profile(policy.clone(), repository_provenance.as_ref())?;
+        bind_transaction_source_identity(policy.clone(), repository_provenance.as_ref())?;
 
     // Repository-resolved CCS artifacts are already in installable form.
     if resolved.source_type == ResolvedSourceType::Ccs {
@@ -180,6 +180,9 @@ pub(super) async fn resolve_and_parse_package(
             format,
             db_path,
             &resolution_policy,
+            repository_provenance
+                .as_ref()
+                .and_then(|provenance| provenance.source_profile.as_deref()),
         )
         .await?
         {
@@ -240,6 +243,7 @@ pub(super) fn install_provenance_from_resolved(
         .as_ref()
         .map(|provenance| RepositoryInstallProvenance {
             repository_id: provenance.repository_id,
+            source_identity: provenance.source_identity.clone(),
             source_profile: provenance.source_profile.clone(),
             version_scheme: provenance.version_scheme,
             source_kind: provenance.source_kind.clone(),
@@ -353,6 +357,7 @@ mod tests {
             source_type: ResolvedSourceType::Ccs,
             repository_provenance: Some(RepositorySourceMetadata {
                 repository_id: 77,
+                source_identity: Some("fedora-44".to_string()),
                 source_profile: Some("fedora-44".to_string()),
                 version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
                 source_kind: RepositorySourceKind::Static,

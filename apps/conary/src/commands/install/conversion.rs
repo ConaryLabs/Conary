@@ -305,7 +305,8 @@ pub async fn try_convert_to_ccs(
     package_path: &Path,
     format: PackageFormatType,
     db_path: &str,
-    resolution_policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
+    _resolution_policy: &conary_core::repository::resolution_policy::ResolutionPolicy,
+    source_profile: Option<&str>,
 ) -> Result<ConversionResult> {
     info!("Converting {} to CCS format...", pkg.name());
 
@@ -378,7 +379,7 @@ pub async fn try_convert_to_ccs(
 
     let conversion_key = std::sync::Arc::new(crate::commands::ccs::load_or_create_local_dev_key()?);
     let mut converter = NativePackageConverter::new(options).with_signing_key(conversion_key);
-    if let Some(profile) = resolution_policy.primary_profile() {
+    if let Some(profile) = source_profile {
         converter = converter.with_source_profile(profile);
     }
     let conversion_result = converter

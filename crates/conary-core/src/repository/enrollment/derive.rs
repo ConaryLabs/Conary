@@ -123,25 +123,22 @@ fn definition_from_dnf(
     architecture: &str,
     source_profile: Option<&str>,
 ) -> Result<(RepositoryDefinition, BTreeSet<String>)> {
-    let source_profile = source_profile.ok_or_else(|| {
-        Error::ConfigError(format!(
-            "DNF repository '{}' has no exact RPM source profile authority",
-            repository.id
-        ))
-    })?;
-    let profile = crate::repository::supported_profiles::profile_by_public_id(source_profile)
-        .ok_or_else(|| {
+    if let Some(source_profile) = source_profile {
+        let profile = crate::repository::supported_profiles::profile_by_public_id(source_profile)
+            .ok_or_else(|| {
             Error::ConfigError(format!(
-                "DNF repository '{}' declares unsupported source profile '{source_profile}'",
+                "DNF repository '{}' declares unknown feed projection '{source_profile}'",
                 repository.id
             ))
         })?;
-    if profile.package_format() != crate::repository::supported_profiles::ProfilePackageFormat::Rpm
-    {
-        return Err(Error::ConfigError(format!(
-            "DNF repository '{}' source profile '{source_profile}' does not own RPM semantics",
-            repository.id
-        )));
+        if profile.package_format()
+            != crate::repository::supported_profiles::ProfilePackageFormat::Rpm
+        {
+            return Err(Error::ConfigError(format!(
+                "DNF repository '{}' feed projection '{source_profile}' does not own RPM semantics",
+                repository.id
+            )));
+        }
     }
     let (endpoint_kind, endpoint_template) = repository.effective_endpoint().ok_or_else(|| {
         Error::ConfigError(format!(
@@ -215,7 +212,7 @@ fn definition_from_dnf(
             enabled,
             priority,
             metadata_expire,
-            source_profile: Some(source_profile.to_string()),
+            source_profile: source_profile.map(str::to_string),
         },
         key_paths,
     ))

@@ -434,6 +434,22 @@ impl Repository {
         self.require_source_profile().map(Some)
     }
 
+    /// Return the exact source identity used by dependency resolution.
+    ///
+    /// Native repositories derive this from their persisted, stream-bound
+    /// source policy. Static/Remi repositories may use an exact public feed
+    /// profile as a source identity projection, but the public profile catalog
+    /// never gates native repository eligibility.
+    pub fn resolution_source_identity(&self) -> Result<Option<&str>> {
+        if let Some(policy) = self.source_policy.as_ref() {
+            policy.validate()?;
+            return Ok(Some(policy.source_identity.as_str()));
+        }
+
+        self.resolution_source_profile()
+            .map(|profile| profile.map(SupportedProfile::id))
+    }
+
     fn parser_config_json(&self) -> Result<Option<String>> {
         self.parser_config
             .as_ref()

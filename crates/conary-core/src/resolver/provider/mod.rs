@@ -374,9 +374,10 @@ impl<'db> ConaryProvider<'db> {
     pub fn load_repo_packages_for_names(&mut self, names: &[String]) -> Result<()> {
         use crate::repository::selector::{ArchitectureScope, PackageSelector, SelectionOptions};
 
-        if self.policy.primary_profile().is_none() {
-            let primary_profile = policy_primary_profile(self.conn, &self.policy)?;
-            self.policy.set_primary_profile(primary_profile);
+        if self.policy.primary_source_identity().is_none() {
+            let primary_source_identity = policy_primary_source_identity(self.conn, &self.policy)?;
+            self.policy
+                .set_primary_source_identity(primary_source_identity);
         }
         for name in names {
             // Skip if we already have a repo package for this name (O(1) index lookup).
@@ -407,17 +408,13 @@ impl<'db> ConaryProvider<'db> {
             let is_root = self.root_request_names.contains(name);
             let mut virtual_providers = Vec::new();
             for candidate in self.find_repo_providers(name)? {
-                let candidate_profile = crate::repository::selector::candidate_source_profile(
+                let candidate_identity = crate::repository::selector::candidate_source_identity(
                     &candidate.package,
                     &candidate.repository,
                 )?;
-                if crate::repository::selector::candidate_matches_allowed_distros(
-                    &self.policy,
-                    &candidate.package,
-                    &candidate.repository,
-                )? && self.policy.accepts_candidate(
+                if self.policy.accepts_candidate(
                     &candidate.repository.name,
-                    candidate_profile,
+                    candidate_identity,
                     is_root,
                 ) {
                     virtual_providers.push(candidate);
@@ -960,41 +957,18 @@ impl<'db> ConaryProvider<'db> {
     }
 }
 
-fn policy_primary_profile(
+fn policy_primary_source_identity(
     conn: &rusqlite::Connection,
     policy: &ResolutionPolicy,
 ) -> Result<Option<String>> {
     match &policy.request_scope {
-        RequestScope::DistroProfile(profile_id) => {
-            let profile = crate::repository::supported_profiles::profile_by_public_id(profile_id)
-                .ok_or_else(|| {
-                Error::ConfigError(format!(
-                    "request scope contains unsupported source profile '{profile_id}'"
-                ))
-            })?;
-            Ok(Some(profile.id().to_string()))
-        }
+        RequestScope::SourceIdentity(source_identity) => Ok(Some(source_identity.clone())),
         RequestScope::Repository(name) => {
             let repository = crate::db::models::Repository::find_by_name(conn, name)?
                 .ok_or_else(|| Error::ConfigError(format!("repository '{name}' does not exist")))?;
-            Ok(repository
-                .resolution_source_profile()?
-                .map(|profile| profile.id().to_string()))
+            Ok(repository.resolution_source_identity()?.map(str::to_string))
         }
-        RequestScope::Any => {
-            let pin = crate::db::models::DistroPin::get_current(conn)?;
-            pin.map(|value| {
-                crate::repository::supported_profiles::profile_by_public_id(&value.distro)
-                    .map(|profile| profile.id().to_string())
-                    .ok_or_else(|| {
-                        Error::ConfigError(format!(
-                            "persisted system pin contains unsupported source profile '{}'",
-                            value.distro
-                        ))
-                    })
-            })
-            .transpose()
-        }
+        RequestScope::Any => Ok(None),
     }
 }
 

@@ -8,7 +8,7 @@ use super::prepare::check_upgrade_status;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
 use super::{
     InstallIntent, InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
-    TransactionContext, UpgradeCheck, bind_transaction_source_profile, build_execution_mode,
+    TransactionContext, UpgradeCheck, bind_transaction_source_identity, build_execution_mode,
     build_resolution_policy, execute_install_transaction_in_selected_root,
     extract_and_classify_files, finalize_install, preflight_extracted_file_ownership,
     resolve_canonical_name, show_dry_run_summary,
@@ -147,7 +147,7 @@ async fn cmd_install_with_intent(
         // Already installed as CCS — no further processing needed.
         return Ok(());
     };
-    let policy = bind_transaction_source_profile(policy, repository_provenance.as_ref())?;
+    let policy = bind_transaction_source_identity(policy, repository_provenance.as_ref())?;
     let semantics = InstallSemantics::native_package(format);
 
     // Promote the pre-install connection to mutable for the main install transaction
@@ -211,7 +211,9 @@ async fn cmd_install_with_intent(
     let native_lifecycle_state = NativeLifecycleInstallState::from_native_package(
         pkg.as_ref(),
         format,
-        policy.primary_profile(),
+        repository_provenance
+            .as_ref()
+            .and_then(|provenance| provenance.source_profile.as_deref()),
     )?;
     let repository_enrollments = if format == crate::commands::PackageFormatType::Rpm {
         let architecture = pkg.architecture().ok_or_else(|| {
@@ -220,7 +222,9 @@ async fn cmd_install_with_intent(
         conary_core::repository::enrollment::derive::derive_rpm_repository_enrollments(
             &extraction.extracted_files,
             architecture,
-            policy.primary_profile(),
+            repository_provenance
+                .as_ref()
+                .and_then(|provenance| provenance.source_profile.as_deref()),
         )?
     } else {
         Vec::new()

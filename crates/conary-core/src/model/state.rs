@@ -8,12 +8,6 @@
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 
-use crate::db::models::{DistroPin, settings};
-use crate::model::parser::SourcePinConfig;
-use crate::repository::SETTINGS_KEY_ALLOWED_DISTROS;
-#[cfg(test)]
-use crate::repository::resolution_policy::DependencyMixingPolicy;
-
 use super::{ModelError, ModelResult};
 /// Represents the current state of the system
 #[derive(Debug, Clone)]
@@ -28,12 +22,6 @@ pub struct SystemState {
 
     /// Pinned packages
     pub pinned: HashSet<String>,
-
-    /// Effective source pin captured from runtime authority state.
-    pub source_pin: Option<SourcePinConfig>,
-
-    /// Persisted distro allowlist captured from runtime authority state.
-    pub allowed_distros: Vec<String>,
 }
 
 /// Information about an installed package
@@ -65,8 +53,6 @@ impl SystemState {
             installed: HashMap::new(),
             explicit: HashSet::new(),
             pinned: HashSet::new(),
-            source_pin: None,
-            allowed_distros: Vec::new(),
         }
     }
 
@@ -199,19 +185,6 @@ pub fn capture_current_state(conn: &Connection) -> ModelResult<SystemState> {
         state.add_package(name, pkg);
     }
 
-    state.source_pin = DistroPin::get_current(conn)
-        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
-        .map(|pin| pin.as_source_pin());
-
-    state.allowed_distros = settings::get(conn, SETTINGS_KEY_ALLOWED_DISTROS)
-        .map_err(|e| ModelError::DatabaseError(e.to_string()))?
-        .map(|raw| {
-            serde_json::from_str::<Vec<String>>(&raw)
-                .map_err(|e| ModelError::DatabaseError(e.to_string()))
-        })
-        .transpose()?
-        .unwrap_or_default();
-
     Ok(state)
 }
 
@@ -239,19 +212,12 @@ pub fn snapshot_to_model(state: &SystemState) -> super::SystemModel {
         }
     }
 
-    model.system.pin = state.source_pin.clone();
-    model.system.allowed_distros = state.allowed_distros.clone();
-
     model
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::DistroPin;
-    use crate::db::models::settings;
-    use crate::db::testing::create_test_db;
-    use crate::repository::SETTINGS_KEY_ALLOWED_DISTROS;
 
     #[test]
     fn test_empty_state() {
@@ -352,29 +318,5 @@ mod tests {
         // Snapshot preserves explicitness correctly
         let model = snapshot_to_model(&state);
         assert!(model.config.install.contains(&"glibc".to_string()));
-    }
-
-    #[test]
-    fn snapshot_to_model_captures_runtime_distro_pin_authority() {
-        let (_temp, conn) = create_test_db();
-        DistroPin::set(&conn, "arch", DependencyMixingPolicy::Strict).unwrap();
-
-        let state = capture_current_state(&conn).unwrap();
-        let model = snapshot_to_model(&state);
-
-        let effective_pin = model.system.effective_pin().unwrap();
-        assert_eq!(effective_pin.distro, "arch");
-        assert_eq!(effective_pin.strength, DependencyMixingPolicy::Strict);
-    }
-
-    #[test]
-    fn source_policy_snapshot_includes_allowed_distros_from_settings() {
-        let (_temp, conn) = create_test_db();
-        settings::set(&conn, SETTINGS_KEY_ALLOWED_DISTROS, "[\"arch\"]").unwrap();
-
-        let state = capture_current_state(&conn).unwrap();
-        let model = snapshot_to_model(&state);
-
-        assert_eq!(model.system.allowed_distros, vec!["arch".to_string()]);
     }
 }

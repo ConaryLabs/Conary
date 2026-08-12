@@ -689,7 +689,9 @@ CREATE INDEX idx_subpackage_component ON subpackage_relationships(component_type
 CREATE INDEX idx_troves_orphan_since ON troves(orphan_since)
             WHERE orphan_since IS NOT NULL;
 CREATE TABLE system_affinity (
-            distro TEXT PRIMARY KEY,
+            source_identity TEXT PRIMARY KEY
+                CHECK(length(source_identity) BETWEEN 1 AND 255
+                    AND trim(source_identity) = source_identity),
             package_count INTEGER NOT NULL DEFAULT 0,
             percentage REAL NOT NULL DEFAULT 0.0,
             updated_at TEXT NOT NULL

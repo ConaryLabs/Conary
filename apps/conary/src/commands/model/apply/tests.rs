@@ -9,11 +9,9 @@ use super::super::test_support::{
 };
 use super::*;
 use crate::commands::test_helpers::create_test_db;
-use conary_core::db::models::{DistroPin, InstalledNativeLifecycleBundle, settings};
+use conary_core::db::models::InstalledNativeLifecycleBundle;
 use conary_core::model::capture_current_state;
 use conary_core::model::parser::SystemModel;
-use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
-use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use tempfile::tempdir;
 
 fn published_or_pending_generation_has_path(db_path: &std::path::Path, path: &str) -> bool {
@@ -134,81 +132,6 @@ fn replatform_absent_architecture_fails_closed_on_multiple_variants() {
 }
 
 #[tokio::test]
-async fn test_model_apply_updates_source_policy_without_package_changes() {
-    let (_temp_file, db_path) = create_test_db();
-    let model_dir = tempdir().unwrap();
-    let model_path = model_dir.path().join("system.toml");
-    std::fs::write(
-        &model_path,
-        r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-    )
-    .unwrap();
-
-    cmd_model_apply(ApplyOptions {
-        model_path: model_path.to_str().unwrap(),
-        db_path: &db_path,
-        root: "/",
-        dry_run: false,
-        skip_optional: false,
-        strict: false,
-        autoremove: false,
-        offline: true,
-    })
-    .await
-    .unwrap();
-
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    let pin = DistroPin::get_current(&conn).unwrap().unwrap();
-    assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.mixing_policy, DependencyMixingPolicy::Strict);
-}
-
-#[tokio::test]
-async fn test_model_apply_updates_allowed_distros_without_package_changes() {
-    let (_temp_file, db_path) = create_test_db();
-    let model_dir = tempdir().unwrap();
-    let model_path = model_dir.path().join("system.toml");
-    std::fs::write(
-        &model_path,
-        r#"
-[model]
-version = 1
-
-[system]
-allowed_distros = ["arch"]
-"#,
-    )
-    .unwrap();
-
-    cmd_model_apply(ApplyOptions {
-        model_path: model_path.to_str().unwrap(),
-        db_path: &db_path,
-        root: "/",
-        dry_run: false,
-        skip_optional: false,
-        strict: false,
-        autoremove: false,
-        offline: true,
-    })
-    .await
-    .unwrap();
-
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    assert_eq!(
-        settings::get(&conn, SETTINGS_KEY_ALLOWED_DISTROS).unwrap(),
-        Some("[\"arch\"]".to_string())
-    );
-    assert!(DistroPin::get_current(&conn).unwrap().is_none());
-}
-
-#[tokio::test]
 async fn test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction() {
     const TEST_NAME: &str = "commands::model::apply::tests::test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction";
     if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
@@ -276,7 +199,6 @@ async fn test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction()
     let (provider_url, _provider_server) = serve_test_file(provider_path.clone());
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Strict).unwrap();
     let repository_id = insert_test_static_ccs_repository(
         &conn,
         "fedora",
@@ -398,7 +320,7 @@ async fn test_model_apply_executes_replatform_replacement_when_route_is_executab
     }
 
     use conary_core::db::models::{
-        DistroPin, InstallSource, LabelEntry, Repository, RepositoryPackage, Trove, TroveType,
+        InstallSource, LabelEntry, Repository, RepositoryPackage, Trove, TroveType,
     };
 
     let (_temp_file, db_path) = create_test_db();
@@ -417,8 +339,6 @@ async fn test_model_apply_executes_replatform_replacement_when_route_is_executab
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Strict).unwrap();
-
     let mut fedora_repo = Repository::new(
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
@@ -514,10 +434,6 @@ strength = "strict"
         installed.selection_reason.as_deref(),
         Some("Replatformed from fedora-44 to arch by model apply")
     );
-    assert_eq!(
-        DistroPin::get_current(&conn).unwrap().unwrap().distro,
-        "arch"
-    );
 }
 
 #[tokio::test]
@@ -548,8 +464,6 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    DistroPin::set(&conn, "arch", DependencyMixingPolicy::Strict).unwrap();
-
     let mut arch_repo =
         Repository::new("arch".to_string(), "https://example.test/arch".to_string());
     arch_repo.source_profile = Some("arch".to_string());
@@ -607,24 +521,18 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
         "9.1.0",
     );
 
-    let model: SystemModel = toml::from_str(
-        r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "fedora-44"
-strength = "strict"
-"#,
-    )
-    .unwrap();
-
-    let state = capture_current_state(&conn).unwrap();
-    let diff = compute_model_diff(&model, &state, &conn, true, false)
-        .await
-        .unwrap();
-    let action_refs = diff.actions.iter().collect::<Vec<_>>();
-    apply_source_policy_changes(&conn, &action_refs).unwrap();
+    let actions = vec![DiffAction::ReplatformReplace {
+        package: "vim".to_string(),
+        current_distro: Some("arch".to_string()),
+        target_distro: "fedora-44".to_string(),
+        current_version: "9.0.1".to_string(),
+        current_architecture: Some("x86_64".to_string()),
+        target_version: "9.1.0".to_string(),
+        architecture: Some("x86_64".to_string()),
+        target_repository: Some("fedora".to_string()),
+        target_repository_package_id: Some(fedora_package_id),
+    }];
+    let action_refs = actions.iter().collect::<Vec<_>>();
     drop(conn);
 
     let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();

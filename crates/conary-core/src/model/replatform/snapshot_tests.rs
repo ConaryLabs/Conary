@@ -3,14 +3,8 @@
 use super::*;
 
 #[test]
-fn replatform_target_lookup_overrides_the_current_strict_profile() {
+fn replatform_target_lookup_uses_the_explicit_target_source() {
     let (_temp, conn) = create_test_db();
-    crate::db::models::DistroPin::set(
-        &conn,
-        "fedora-44",
-        crate::repository::resolution_policy::DependencyMixingPolicy::Strict,
-    )
-    .unwrap();
 
     let mut repository = Repository::new(
         "arch-core".to_string(),
@@ -106,12 +100,12 @@ fn test_visible_realignment_candidates_counts_same_name_target_impls() {
 fn test_replatform_estimate_from_affinities_uses_target_counts() {
     let affinities = vec![
         SystemAffinity {
-            distro: "fedora-44".to_string(),
+            source_identity: "fedora-44".to_string(),
             package_count: 9,
             percentage: 75.0,
         },
         SystemAffinity {
-            distro: "arch".to_string(),
+            source_identity: "arch".to_string(),
             package_count: 3,
             percentage: 25.0,
         },
@@ -176,7 +170,7 @@ fn test_source_policy_replatform_snapshot_combines_estimate_and_candidates() {
     arch_pkg.insert(&conn).unwrap();
 
     conn.execute(
-        "INSERT INTO system_affinity (distro, package_count, percentage, updated_at)
+        "INSERT INTO system_affinity (source_identity, package_count, percentage, updated_at)
              VALUES (?1, ?2, ?3, datetime('now'))",
         ("fedora-44", 1_i64, 100.0_f64),
     )

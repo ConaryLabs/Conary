@@ -43,7 +43,7 @@ pub struct InstallOptions<'a> {
     pub ownership: Option<OwnershipMode>,
     /// Skip confirmation prompts
     pub yes: bool,
-    /// Install from an exact supported source profile.
+    /// Install from an exact source identity.
     pub from_profile: Option<String>,
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
@@ -53,6 +53,7 @@ pub struct InstallOptions<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepositoryInstallProvenance {
     pub repository_id: i64,
+    pub source_identity: Option<String>,
     pub source_profile: Option<String>,
     pub version_scheme: conary_core::repository::versioning::VersionScheme,
     pub source_kind: RepositorySourceKind,
@@ -78,14 +79,17 @@ pub(crate) fn repository_install_provenance_from_package(
         .id
         .ok_or_else(|| anyhow::anyhow!("Selected repository has no database ID"))?;
     let version_scheme = resolve_package_version_scheme(package);
+    let source_identity =
+        conary_core::repository::selector::candidate_source_identity(package, repository)?
+            .map(str::to_string);
     let source_profile =
         conary_core::repository::selector::candidate_source_profile(package, repository)?
             .map(str::to_string);
-    if source_profile.is_none()
+    if source_identity.is_none()
         && version_scheme != conary_core::repository::versioning::VersionScheme::Conary
     {
         anyhow::bail!(
-            "selected repository package '{}-{}' has no exact source profile",
+            "selected repository package '{}-{}' has no exact source identity",
             package.name,
             package.version
         );
@@ -93,6 +97,7 @@ pub(crate) fn repository_install_provenance_from_package(
 
     Ok(RepositoryInstallProvenance {
         repository_id,
+        source_identity,
         source_profile,
         version_scheme,
         source_kind: match repository.default_strategy.as_deref() {

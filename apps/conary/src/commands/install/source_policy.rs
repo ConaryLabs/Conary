@@ -9,30 +9,28 @@ use tracing::{info, warn};
 
 /// Overlay install-specific request scope from CLI flags onto the effective policy.
 ///
-/// The `--from` flag constrains the root request to an exact supported profile;
+/// The `--from` flag constrains the root request to an exact source identity;
 /// `--repo` constrains to a specific repository. Both apply to the
 /// root request only (transitive deps are governed by the mixing policy).
 pub(super) fn build_resolution_policy(
     conn: &rusqlite::Connection,
     mut policy: ResolutionPolicy,
-    from_profile: Option<&str>,
+    from_source: Option<&str>,
     repo: Option<&str>,
 ) -> Result<ResolutionPolicy> {
-    let scope = if let Some(target_profile) = from_profile {
-        let profile_id = exact_profile_id(target_profile).ok_or_else(|| {
-            anyhow::anyhow!(
-                "unsupported source profile '{target_profile}'; --from requires an exact supported profile ID"
-            )
-        })?;
-        policy.set_primary_profile(Some(profile_id.to_string()));
-        RequestScope::DistroProfile(profile_id.to_string())
+    let scope = if let Some(source_identity) = from_source {
+        conary_core::repository::resolution_policy::validate_source_identity(
+            source_identity,
+            "--from source identity",
+        )
+        .map_err(anyhow::Error::msg)?;
+        policy.set_primary_source_identity(Some(source_identity.to_string()));
+        RequestScope::SourceIdentity(source_identity.to_string())
     } else if let Some(r) = repo {
         let repository = conary_core::db::models::Repository::find_by_name(conn, r)?
             .ok_or_else(|| anyhow::anyhow!("repository '{r}' does not exist"))?;
-        policy.set_primary_profile(
-            repository
-                .resolution_source_profile()?
-                .map(|profile| profile.id().to_string()),
+        policy.set_primary_source_identity(
+            repository.resolution_source_identity()?.map(str::to_string),
         );
         RequestScope::Repository(r.to_string())
     } else {
@@ -46,27 +44,17 @@ pub(super) fn build_resolution_policy(
 /// Bind dependency resolution to exact selected-root provenance.
 ///
 /// An explicit scope or persisted system pin already supplies a primary
-/// profile. Otherwise a repository-backed root establishes it from the
+/// source identity. Otherwise a repository-backed root establishes it from the
 /// selected package/repository contract. Local files do not manufacture that
 /// authority; strict dependency solving will require the user to pin or scope
 /// the transaction.
-pub(super) fn bind_transaction_source_profile(
+pub(super) fn bind_transaction_source_identity(
     mut policy: ResolutionPolicy,
     provenance: Option<&RepositoryInstallProvenance>,
 ) -> Result<ResolutionPolicy> {
     if let Some(provenance) = provenance {
-        let selected = match provenance.source_profile.as_deref() {
-            Some(selected) => Some(
-                conary_core::repository::supported_profiles::profile_by_public_id(selected)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "selected repository {} declares unsupported source profile '{}'",
-                            provenance.repository_id,
-                            selected
-                        )
-                    })?
-                    .id(),
-            ),
+        let selected = match provenance.source_identity.as_deref() {
+            Some(selected) => Some(selected),
             None if provenance.version_scheme
                 == conary_core::repository::versioning::VersionScheme::Conary =>
             {
@@ -74,30 +62,32 @@ pub(super) fn bind_transaction_source_profile(
             }
             None => {
                 return Err(anyhow::anyhow!(
-                    "selected repository {} has no exact source profile",
+                    "selected repository {} has no exact source identity",
                     provenance.repository_id
                 ));
             }
         };
 
         if let Some(selected) = selected {
-            match policy.primary_profile() {
+            match policy.primary_source_identity() {
                 Some(primary)
                     if policy.mixing == DependencyMixingPolicy::Strict && primary != selected =>
                 {
                     anyhow::bail!(
-                        "selected root profile '{}' conflicts with strict transaction profile '{}'",
+                        "selected root source identity '{}' conflicts with strict transaction source identity '{}'",
                         selected,
                         primary
                     );
                 }
                 Some(_) => {}
-                None => policy.set_primary_profile(Some(selected.to_string())),
+                None => policy.set_primary_source_identity(Some(selected.to_string())),
             }
         }
     }
 
-    policy.validate_profile_ids().map_err(anyhow::Error::msg)?;
+    policy
+        .validate_source_identities()
+        .map_err(anyhow::Error::msg)?;
     Ok(policy)
 }
 
@@ -110,15 +100,18 @@ pub(super) fn bind_transaction_source_profile(
 pub(super) fn resolve_canonical_name(
     conn: &rusqlite::Connection,
     package: &str,
-    from_profile: Option<&str>,
+    from_source: Option<&str>,
     policy: &ResolutionPolicy,
 ) -> Result<Option<String>> {
-    if let Some(target_profile) = from_profile {
-        let profile_id = exact_profile_id(target_profile).ok_or_else(|| {
-            anyhow::anyhow!(
-                "unsupported source profile '{target_profile}'; --from requires an exact supported profile ID"
-            )
-        })?;
+    if let Some(target_source) = from_source {
+        conary_core::repository::resolution_policy::validate_source_identity(
+            target_source,
+            "--from source identity",
+        )
+        .map_err(anyhow::Error::msg)?;
+        let Some(profile_id) = exact_profile_id(target_source) else {
+            return Ok(None);
+        };
         if let Some(canonical) =
             conary_core::db::models::CanonicalPackage::resolve_name(conn, package)?
         {
@@ -192,6 +185,7 @@ mod tests {
     fn provenance(profile: Option<&str>) -> RepositoryInstallProvenance {
         RepositoryInstallProvenance {
             repository_id: 7,
+            source_identity: profile.map(str::to_string),
             source_profile: profile.map(str::to_string),
             version_scheme: VersionScheme::Rpm,
             source_kind: RepositorySourceKind::Native,
@@ -227,18 +221,18 @@ mod tests {
 
     #[test]
     fn selected_root_binds_unscoped_transaction_profile() {
-        let policy = bind_transaction_source_profile(
+        let policy = bind_transaction_source_identity(
             ResolutionPolicy::new(),
             Some(&provenance(Some("fedora-44"))),
         )
         .unwrap();
-        assert_eq!(policy.primary_profile(), Some("fedora-44"));
+        assert_eq!(policy.primary_source_identity(), Some("fedora-44"));
     }
 
     #[test]
     fn strict_transaction_rejects_selected_root_profile_conflict() {
-        let error = bind_transaction_source_profile(
-            ResolutionPolicy::new().with_primary_profile("ubuntu-26.04"),
+        let error = bind_transaction_source_identity(
+            ResolutionPolicy::new().with_primary_source_identity("ubuntu-26.04"),
             Some(&provenance(Some("fedora-44"))),
         )
         .unwrap_err();
@@ -252,7 +246,7 @@ mod tests {
     fn selected_root_requires_exact_supported_profile() {
         for profile in [None, Some("fedora"), Some("rpm")] {
             assert!(
-                bind_transaction_source_profile(
+                bind_transaction_source_identity(
                     ResolutionPolicy::new(),
                     Some(&provenance(profile)),
                 )
@@ -266,24 +260,25 @@ mod tests {
     fn source_native_conary_package_does_not_invent_a_distro_profile() {
         let conary = RepositoryInstallProvenance {
             repository_id: 9,
+            source_identity: None,
             source_profile: None,
             version_scheme: VersionScheme::Conary,
             source_kind: RepositorySourceKind::Static,
         };
         let policy =
-            bind_transaction_source_profile(ResolutionPolicy::new(), Some(&conary)).unwrap();
-        assert_eq!(policy.primary_profile(), None);
+            bind_transaction_source_identity(ResolutionPolicy::new(), Some(&conary)).unwrap();
+        assert_eq!(policy.primary_source_identity(), None);
     }
 
     #[test]
     fn guarded_transaction_preserves_persisted_primary_profile() {
-        let policy = bind_transaction_source_profile(
+        let policy = bind_transaction_source_identity(
             ResolutionPolicy::new()
                 .with_mixing(DependencyMixingPolicy::Guarded)
-                .with_primary_profile("ubuntu-26.04"),
+                .with_primary_source_identity("ubuntu-26.04"),
             Some(&provenance(Some("fedora-44"))),
         )
         .unwrap();
-        assert_eq!(policy.primary_profile(), Some("ubuntu-26.04"));
+        assert_eq!(policy.primary_source_identity(), Some("ubuntu-26.04"));
     }
 }

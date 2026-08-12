@@ -6,12 +6,11 @@ use super::super::test_support::{
 };
 use super::*;
 use crate::commands::test_helpers::create_test_db;
-use conary_core::db::models::{DistroPin, RepositoryPackage};
+use conary_core::db::models::RepositoryPackage;
 use conary_core::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementClause, RepositoryRequirementGroup,
     RepositoryRequirementKind,
 };
-use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use tempfile::tempdir;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -117,7 +116,6 @@ async fn model_apply_dry_run_rejects_the_same_invalid_package_transaction_as_app
     let (package_url, _server) = serve_test_file_n(package_path.clone(), 2);
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
-    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Strict).unwrap();
     let repository_id = insert_test_static_ccs_repository(
         &conn,
         "fedora",

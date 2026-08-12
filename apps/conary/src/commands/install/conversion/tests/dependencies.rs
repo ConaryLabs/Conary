@@ -153,6 +153,7 @@ fn selected_rpm_dependency() -> SatPackage {
 fn selected_remi_provenance() -> RepositoryInstallProvenance {
     RepositoryInstallProvenance {
         repository_id: 7,
+        source_identity: Some("fedora-44".to_string()),
         source_profile: Some("fedora-44".to_string()),
         version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
         source_kind: RepositorySourceKind::Remi,
@@ -450,7 +451,7 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
-        resolution_policy: test_resolution_policy().with_primary_profile("fedora-44"),
+        resolution_policy: test_resolution_policy().with_primary_source_identity("fedora-44"),
     })
     .await
     .unwrap()

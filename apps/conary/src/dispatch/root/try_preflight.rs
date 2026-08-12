@@ -319,11 +319,7 @@ fn selected_config_db_path(command: &cli::ConfigCommands) -> &str {
 
 fn selected_distro_db_path(command: &cli::DistroCommands) -> &str {
     match command {
-        cli::DistroCommands::Set { db, .. }
-        | cli::DistroCommands::Remove { db, .. }
-        | cli::DistroCommands::List { db, .. }
-        | cli::DistroCommands::Info { db, .. }
-        | cli::DistroCommands::Mixing { db, .. } => &db.db_path,
+        cli::DistroCommands::List { db, .. } | cli::DistroCommands::Info { db, .. } => &db.db_path,
     }
 }
 

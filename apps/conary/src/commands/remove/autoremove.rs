@@ -357,12 +357,6 @@ mod tests {
         crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
 
         let conn = conary_core::db::open(&db_path).unwrap();
-        conary_core::db::models::DistroPin::set(
-            &conn,
-            "fedora-44",
-            conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
-        )
-        .unwrap();
         seed_dependency_trove(
             &conn,
             "aa-plain-orphan",

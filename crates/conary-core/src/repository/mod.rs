@@ -56,9 +56,7 @@ pub use download::{
     download_package_verified_with_progress, download_static_package_verified,
     download_static_package_verified_with_progress, verify_checksum,
 };
-pub use effective_policy::{
-    EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, load_effective_policy,
-};
+pub use effective_policy::{EffectiveSourcePolicy, load_effective_policy};
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
 pub use mirror_health::{MirrorHealth, MirrorHealthTracker};

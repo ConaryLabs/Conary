@@ -7,8 +7,7 @@ use std::path::Path;
 
 use super::context::load_model_and_diff;
 use super::presentation::{
-    is_replatform_action, is_source_policy_action, print_source_policy_and_replatform,
-    render_replatform_summary, source_policy_replatform_note, source_policy_summary,
+    is_replatform_action, print_source_policy_and_replatform, render_replatform_summary,
 };
 use crate::commands::install::cmd_install_replatform;
 use crate::commands::replatform_rendering::{
@@ -16,13 +15,10 @@ use crate::commands::replatform_rendering::{
 };
 use crate::commands::{InstallOptions, SandboxMode};
 use anyhow::{Context, Result, anyhow};
-use conary_core::db::models::{
-    DistroPin, Repository, RepositoryPackage, Trove, TroveType, settings,
-};
+use conary_core::db::models::{Repository, RepositoryPackage, Trove, TroveType};
 use conary_core::filesystem::CasStore;
 use conary_core::model::parser::SystemModel;
 use conary_core::model::{DiffAction, replatform_execution_plan};
-use conary_core::repository::SETTINGS_KEY_ALLOWED_DISTROS;
 use derived::{build_derived_package, create_derived_from_model};
 use packages::{apply_package_changes, validate_package_changes};
 use rusqlite::Connection;
@@ -97,22 +93,11 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
             DiffAction::Install { .. } => "+",
             DiffAction::Remove { .. } => "-",
             a if is_replatform_action(a) => ">",
-            a if is_source_policy_action(a) => "~",
             _ => "*",
         };
         println!("  {} {}", prefix, action.description());
     }
     println!();
-
-    if let Some(summary) = source_policy_summary(&diff) {
-        println!("{}", summary);
-        println!();
-    }
-
-    if let Some(estimate) = source_policy_replatform_note(&diff) {
-        println!("{}", estimate);
-        println!();
-    }
 
     if let Some(plan) = replatform_execution_plan(
         &conn,
@@ -160,24 +145,21 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     // Get model directory for resolving relative paths
     let model_dir = model_path.parent().unwrap_or(Path::new("."));
 
-    // Phase 1: source policy changes
-    apply_source_policy_changes(&conn, &actions)?;
-
-    // Phase 2: executable replatform replacements
+    // Phase 1: executable replatform replacements
     let (replatform_executed, replatform_errors) =
         apply_replatform_changes(db_path, root, &actions).await?;
 
-    // Phase 3: package changes (install/remove/update execution)
+    // Phase 2: package changes (install/remove/update execution)
     let (package_applied, package_errors) =
         apply_package_changes(db_path, root, &actions, strict).await?;
 
-    // Phase 4: derived packages
+    // Phase 3: derived packages
     let (derived_built, derived_rebuilt, mut errors) =
         apply_derived_packages(&conn, &actions, &model, model_dir, &cas);
     errors.extend(replatform_errors);
     errors.extend(package_errors);
 
-    // Phase 5: metadata changes (pin/unpin, mark explicit/dependency, update)
+    // Phase 4: metadata changes (pin/unpin, mark explicit/dependency, update)
     let (metadata_applied, metadata_errors) = apply_metadata_changes(&conn, &actions);
     errors.extend(metadata_errors);
 
@@ -213,12 +195,6 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     if metadata_applied > 0 {
         println!("  Metadata changes applied: {}", metadata_applied);
     }
-    if diff_summary.source_policy_changes > 0 {
-        println!(
-            "  Source policy changes applied: {}",
-            diff_summary.source_policy_changes
-        );
-    }
     if let Some(replatform) = render_replatform_summary(&diff_summary) {
         println!("{}", replatform);
     }
@@ -239,46 +215,6 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Apply source-policy actions from the filtered action list.
-///
-/// Returns the number of changes applied.
-pub(super) fn apply_source_policy_changes(
-    conn: &Connection,
-    actions: &[&DiffAction],
-) -> Result<usize> {
-    let mut count = 0;
-    for action in actions {
-        match action {
-            DiffAction::SetSourcePin { distro, strength } => {
-                DistroPin::set(conn, distro, *strength)?;
-                println!("Updated source policy pin: {} ({})", distro, strength);
-                count += 1;
-            }
-            DiffAction::ClearSourcePin => {
-                DistroPin::remove(conn)?;
-                println!("Cleared source policy pin");
-                count += 1;
-            }
-            DiffAction::SetAllowedDistros { distros } => {
-                settings::set(
-                    conn,
-                    SETTINGS_KEY_ALLOWED_DISTROS,
-                    &serde_json::to_string(distros)?,
-                )?;
-                println!("Updated allowed source profiles: {}", distros.join(", "));
-                count += 1;
-            }
-            DiffAction::ClearAllowedDistros => {
-                settings::delete(conn, SETTINGS_KEY_ALLOWED_DISTROS)?;
-                println!("Cleared allowed source profiles");
-                count += 1;
-            }
-            _ => {}
-        }
-    }
-    Ok(count)
 }
 
 /// Apply executable replatform transactions through the shared install path.

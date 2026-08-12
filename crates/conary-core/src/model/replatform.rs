@@ -107,12 +107,12 @@ fn candidate_target_package(
     trove: &Trove,
     target_distro: &str,
 ) -> Result<Option<RepositoryPackage>> {
-    // Replatform planning is an explicit lookup in the desired profile. The
-    // current system pin describes the source state and must not remain the
-    // transaction authority while selecting the target replacement.
-    let mut effective_policy =
-        load_effective_policy(conn, RequestScope::DistroProfile(target_distro.to_string()))?;
-    effective_policy.resolution.allowed_distros = vec![target_distro.to_string()];
+    // Replatform planning is an explicit lookup in the desired exact source
+    // identity; package format and distro-name catalogs are not authority.
+    let effective_policy = load_effective_policy(
+        conn,
+        RequestScope::SourceIdentity(target_distro.to_string()),
+    )?;
 
     let options = SelectionOptions {
         architecture: trove.architecture.clone(),
@@ -191,7 +191,7 @@ pub fn replatform_estimate_from_affinities(
 
     let aligned_packages = affinities
         .iter()
-        .find(|affinity| affinity.distro == target_distro)
+        .find(|affinity| affinity.source_identity == target_distro)
         .map(|affinity| affinity.package_count)
         .unwrap_or(0);
 
