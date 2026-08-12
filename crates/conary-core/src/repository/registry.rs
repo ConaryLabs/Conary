@@ -5,7 +5,7 @@
 //! Provides typed format identity and creation of repository parsers.
 
 use crate::error::{Error, Result};
-use crate::repository::parsers::{self, PackageMetadata, RepositoryParser};
+use crate::repository::parsers::{self, AuthenticatedRepositoryMetadata, RepositoryParser};
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ pub enum AnyParser {
 }
 
 impl AnyParser {
-    pub async fn sync_metadata(&self, repo_url: &str) -> Result<Vec<PackageMetadata>> {
+    pub async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
         match self {
             Self::Arch(p) => p.sync_metadata(repo_url).await,
             Self::Debian(p) => p.sync_metadata(repo_url).await,

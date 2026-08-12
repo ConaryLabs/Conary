@@ -1,8 +1,8 @@
 // conary-core/src/repository/sync/types.rs
 
 use crate::db::models::{
-    RepositoryPackage, RepositoryPackageKey, RepositoryProvide, RepositoryRequirement,
-    RepositoryRequirementGroup as DbRequirementGroup,
+    AuthenticatedSnapshotIdentity, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,
+    RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
 /// A single synced package row with all its normalized capability data.
 #[derive(Debug, Clone)]
@@ -16,7 +16,10 @@ pub(in crate::repository) struct SyncedPackageRow {
 /// Owned package metadata ready to persist for a repository sync.
 #[derive(Debug, Clone)]
 pub(in crate::repository) enum RepositorySyncSnapshot {
-    NativeRows(Vec<SyncedPackageRow>),
+    NativeRows {
+        packages: Vec<SyncedPackageRow>,
+        snapshot: AuthenticatedSnapshotIdentity,
+    },
     StaticRows {
         packages: Vec<SyncedPackageRow>,
         package_keys: Vec<RepositoryPackageKey>,

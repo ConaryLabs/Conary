@@ -229,6 +229,7 @@ pub async fn openapi_spec() -> Response {
                                 "priority": { "type": "integer", "description": "Lower values are preferred when resolving. Default: 0" },
                                 "parser": { "$ref": "#/components/schemas/RepositoryParser" },
                                 "trust": { "$ref": "#/components/schemas/RepositoryTrustPolicy", "description": "Required for rpm, deb, and arch parsers; forbidden for json." },
+                                "native_source": { "$ref": "#/components/schemas/NativeSourcePolicy" },
                                 "metadata_expire": { "type": "integer", "description": "Metadata cache lifetime in seconds. Default: 3600" }
                             }
                         }}}
@@ -265,6 +266,7 @@ pub async fn openapi_spec() -> Response {
                                 "priority": { "type": "integer", "description": "Lower values are preferred when resolving" },
                                 "parser": { "$ref": "#/components/schemas/RepositoryParser" },
                                 "trust": { "$ref": "#/components/schemas/RepositoryTrustPolicy", "description": "Required for rpm, deb, and arch parsers; forbidden for json." },
+                                "native_source": { "$ref": "#/components/schemas/NativeSourcePolicy" },
                                 "metadata_expire": { "type": "integer", "description": "Metadata cache lifetime in seconds" }
                             }
                         }}}

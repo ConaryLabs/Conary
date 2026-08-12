@@ -4,7 +4,9 @@
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{
-    Repository, RepositoryOwnership, RepositoryPackage, SecurityAdvisorySupport,
+    AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream, Repository,
+    RepositoryOwnership, RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode,
+    SecurityAdvisorySupport,
 };
 use conary_core::repository::supported_profiles::{ProfilePackageFormat, profile_by_public_id};
 use conary_core::repository::{
@@ -16,7 +18,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const REPOSITORY_MANIFEST_SCHEMA: u32 = 2;
+pub const REPOSITORY_MANIFEST_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +36,13 @@ pub struct RepositoryDefinition {
     pub content_url: Option<String>,
     pub parser: RepositoryParserConfig,
     pub profile: String,
+    pub source_identity: String,
+    pub repository_identity: String,
+    pub stream_kind: String,
+    pub stream_identity: String,
+    pub policy_group: Option<String>,
+    pub update_mode: String,
+    pub pinned_snapshot_sha256: Option<String>,
     pub enabled: bool,
     pub priority: i32,
     pub trust: RepositoryTrustPolicy,
@@ -101,15 +110,16 @@ impl RepositoryManifest {
                         );
                     }
 
-                    let source_changed = definition.source_differs(&existing);
-                    let changed = definition.differs(&existing);
+                    let source_changed = definition.source_differs(&existing)?;
+                    let changed = definition.differs(&existing)?;
                     if source_changed {
                         let repository_id = existing.id.context("repository row has no ID")?;
-                        RepositoryPackage::delete_by_repository(&tx, repository_id)?;
-                        existing.last_sync = None;
-                    }
-                    if changed {
-                        definition.apply_to(&mut existing);
+                        Repository::delete(&tx, repository_id)?;
+                        let mut replacement = definition.to_repository()?;
+                        replacement.insert(&tx)?;
+                        result.updated += 1;
+                    } else if changed {
+                        definition.apply_to(&mut existing)?;
                         existing.update(&tx)?;
                         result.updated += 1;
                     } else {
@@ -117,7 +127,7 @@ impl RepositoryManifest {
                     }
                 }
                 None => {
-                    let mut repository = definition.to_repository();
+                    let mut repository = definition.to_repository()?;
                     repository.insert(&tx)?;
                     result.inserted += 1;
                 }
@@ -156,7 +166,7 @@ impl RepositoryManifest {
                     definition.name
                 );
             }
-            if definition.differs(&repository) {
+            if definition.differs(&repository)? {
                 bail!(
                     "configured repository '{}' does not match the installed manifest",
                     definition.name
@@ -222,6 +232,7 @@ impl RepositoryDefinition {
                 self.parser.format().as_str()
             );
         }
+        self.native_policy()?;
         for root in trust_roots(&self.trust) {
             validate_https_url(
                 &root.url,
@@ -255,13 +266,14 @@ impl RepositoryDefinition {
         Ok(())
     }
 
-    fn to_repository(&self) -> Repository {
+    fn to_repository(&self) -> Result<Repository> {
         let mut repository = Repository::new(self.name.clone(), self.url.clone());
-        self.apply_to(&mut repository);
-        repository
+        self.apply_to(&mut repository)?;
+        Ok(repository)
     }
 
-    fn apply_to(&self, repository: &mut Repository) {
+    fn apply_to(&self, repository: &mut Repository) -> Result<()> {
+        let authenticated_snapshot = repository.authenticated_snapshot.clone();
         repository.url.clone_from(&self.url);
         repository.content_url.clone_from(&self.content_url);
         repository.enabled = self.enabled;
@@ -278,18 +290,33 @@ impl RepositoryDefinition {
         repository.package_format = self.parser.format();
         repository.parser_config = Some(self.parser.clone());
         repository.managed_by = RepositoryOwnership::RemiConfig;
+        let (policy, pinned_snapshot) = self.native_policy()?;
+        repository.set_native_source_policy(
+            policy,
+            self.repository_identity.clone(),
+            pinned_snapshot,
+        )?;
+        repository.authenticated_snapshot = authenticated_snapshot;
+        Ok(())
     }
 
-    fn source_differs(&self, repository: &Repository) -> bool {
-        repository.url != self.url
+    fn source_differs(&self, repository: &Repository) -> Result<bool> {
+        let expected = self.to_repository()?;
+        Ok(repository.url != self.url
             || repository.content_url != self.content_url
             || repository.parser_config.as_ref() != Some(&self.parser)
             || repository.trust_policy.as_ref() != Some(&self.trust)
             || repository.source_profile.as_deref() != Some(self.profile.as_str())
+            || repository.repository_identity.as_deref() != Some(self.repository_identity.as_str())
+            || !same_source_policy(
+                repository.source_policy.as_ref(),
+                expected.source_policy.as_ref(),
+            )
+            || repository.stream_binding_sha256 != expected.stream_binding_sha256)
     }
 
-    fn differs(&self, repository: &Repository) -> bool {
-        self.source_differs(repository)
+    fn differs(&self, repository: &Repository) -> Result<bool> {
+        Ok(self.source_differs(repository)?
             || repository.enabled != self.enabled
             || repository.priority != self.priority
             || repository.metadata_expire != self.metadata_expire_seconds
@@ -299,7 +326,79 @@ impl RepositoryDefinition {
             || repository.tuf_root_version.is_some()
             || repository.tuf_root_url.is_some()
             || repository.security_advisory_support != SecurityAdvisorySupport::Unknown
-            || repository.managed_by != RepositoryOwnership::RemiConfig
+            || repository.managed_by != RepositoryOwnership::RemiConfig)
+    }
+
+    fn native_policy(
+        &self,
+    ) -> Result<(
+        RepositorySourcePolicy,
+        Option<AuthenticatedSnapshotIdentity>,
+    )> {
+        let ecosystem = NativeSourceEcosystem::from_repository_format(self.parser.format())?;
+        let stream = match self.stream_kind.as_str() {
+            "release" => NativeSourceStream::release(self.stream_identity.clone())?,
+            "channel" => NativeSourceStream::channel(self.stream_identity.clone())?,
+            "rolling" => NativeSourceStream::rolling(self.stream_identity.clone())?,
+            other => bail!(
+                "repository '{}' has unknown stream kind '{other}'",
+                self.name
+            ),
+        };
+        let scope = match &self.policy_group {
+            Some(group) => RepositoryPolicyScope::group(group.clone())?,
+            None => RepositoryPolicyScope::repository(self.repository_identity.clone())?,
+        };
+        let (update_mode, pinned_snapshot) = match (
+            self.update_mode.as_str(),
+            self.pinned_snapshot_sha256.as_deref(),
+        ) {
+            ("follow", None) => (RepositoryUpdateMode::Follow, None),
+            ("pin", Some(sha256)) => (
+                RepositoryUpdateMode::Pin,
+                Some(AuthenticatedSnapshotIdentity::from_sha256(sha256)?),
+            ),
+            ("follow", Some(_)) => bail!(
+                "repository '{}' follow policy cannot declare pinned_snapshot_sha256",
+                self.name
+            ),
+            ("pin", None) => bail!(
+                "repository '{}' pin policy requires pinned_snapshot_sha256",
+                self.name
+            ),
+            (other, _) => bail!(
+                "repository '{}' has unknown update mode '{other}'",
+                self.name
+            ),
+        };
+        Ok((
+            RepositorySourcePolicy::new(
+                self.source_identity.clone(),
+                scope,
+                ecosystem,
+                stream,
+                update_mode,
+            )?,
+            pinned_snapshot,
+        ))
+    }
+}
+
+fn same_source_policy(
+    left: Option<&RepositorySourcePolicy>,
+    right: Option<&RepositorySourcePolicy>,
+) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            left.source_identity == right.source_identity
+                && left.scope == right.scope
+                && left.ecosystem == right.ecosystem
+                && left.version_scheme == right.version_scheme
+                && left.stream == right.stream
+                && left.update_mode == right.update_mode
+        }
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -349,6 +448,13 @@ mod tests {
                     architecture: "x86_64".to_string(),
                 },
                 profile: "fedora-44".to_string(),
+                source_identity: "fedora-project".to_string(),
+                repository_identity: "fedora-44-everything-x86_64".to_string(),
+                stream_kind: "release".to_string(),
+                stream_identity: "44".to_string(),
+                policy_group: None,
+                update_mode: "follow".to_string(),
+                pinned_snapshot_sha256: None,
                 enabled: true,
                 priority: 100,
                 trust: RepositoryTrustPolicy::Rpm {
@@ -419,19 +525,10 @@ mod tests {
     #[test]
     fn reconcile_does_not_take_over_operator_repository() {
         let (_temp, mut conn) = create_test_db();
-        let mut existing = Repository::new(
-            "opaque-source".to_string(),
-            "https://operator.example.test/repository".to_string(),
-        );
-        existing
-            .set_parser_config(RepositoryParserConfig::Rpm {
-                architecture: "x86_64".to_string(),
-            })
-            .unwrap();
-        existing.source_profile = Some("fedora-44".to_string());
-        existing
-            .set_trust_policy(manifest().repositories[0].trust.clone())
-            .unwrap();
+        let mut definition = manifest().repositories.remove(0);
+        definition.url = "https://operator.example.test/repository".to_string();
+        let mut existing = definition.to_repository().unwrap();
+        existing.managed_by = RepositoryOwnership::Operator;
         existing.insert(&conn).unwrap();
 
         let error = manifest().reconcile(&mut conn).unwrap_err().to_string();

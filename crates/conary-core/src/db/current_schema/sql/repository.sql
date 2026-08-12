@@ -1,6 +1,26 @@
 -- Current repository, federation, derivation, and TUF schema.
 -- Part of the current pre-alpha schema epoch.
 
+CREATE TABLE repository_source_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_identity TEXT NOT NULL,
+            scope_kind TEXT NOT NULL CHECK(scope_kind IN ('repository', 'group')),
+            scope_identity TEXT NOT NULL,
+            ecosystem TEXT NOT NULL CHECK(ecosystem IN ('rpm', 'deb', 'alpm')),
+            version_scheme TEXT NOT NULL CHECK(version_scheme IN ('rpm', 'debian', 'arch')),
+            stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
+            stream_identity TEXT NOT NULL,
+            update_mode TEXT NOT NULL CHECK(update_mode IN ('follow', 'pin')),
+            CHECK(length(source_identity) BETWEEN 1 AND 255 AND trim(source_identity) = source_identity),
+            CHECK(length(scope_identity) BETWEEN 1 AND 255 AND trim(scope_identity) = scope_identity),
+            CHECK(length(stream_identity) BETWEEN 1 AND 255 AND trim(stream_identity) = stream_identity),
+            CHECK(
+                (ecosystem = 'rpm' AND version_scheme = 'rpm')
+                OR (ecosystem = 'deb' AND version_scheme = 'debian')
+                OR (ecosystem = 'alpm' AND version_scheme = 'arch')
+            ),
+            UNIQUE(source_identity, scope_kind, scope_identity)
+        );
 CREATE TABLE repositories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
@@ -15,10 +35,7 @@ CREATE TABLE repositories (
             default_strategy TEXT
                 CHECK(default_strategy IS NULL OR default_strategy IN ('binary', 'remi', 'static')),
             default_strategy_endpoint TEXT,
-            source_profile TEXT
-                CHECK(source_profile IS NULL OR source_profile IN (
-                    'fedora-44', 'ubuntu-26.04', 'arch'
-                )),
+            source_profile TEXT,
             tuf_enabled INTEGER NOT NULL DEFAULT 0, tuf_root_version INTEGER, tuf_root_url TEXT,
             security_advisory_support TEXT NOT NULL DEFAULT 'unknown'
             CHECK(security_advisory_support IN ('unknown', 'unsupported', 'supported')),
@@ -27,13 +44,70 @@ CREATE TABLE repositories (
             parser_config_json TEXT,
             managed_by TEXT NOT NULL DEFAULT 'operator'
                 CHECK(managed_by IN ('operator', 'remi-config')),
+            source_policy_id INTEGER REFERENCES repository_source_policies(id) ON DELETE RESTRICT,
+            repository_identity TEXT,
+            stream_binding_sha256 TEXT,
+            authenticated_snapshot_sha256 TEXT,
             CHECK(
                 (package_format = 'unspecified' AND parser_config_json IS NULL)
                 OR (package_format != 'unspecified' AND parser_config_json IS NOT NULL)
-            ));
+            ),
+            CHECK(
+                (package_format IN ('arch', 'deb', 'rpm')
+                    AND source_policy_id IS NOT NULL
+                    AND repository_identity IS NOT NULL
+                    AND stream_binding_sha256 IS NOT NULL)
+                OR (package_format NOT IN ('arch', 'deb', 'rpm')
+                    AND source_policy_id IS NULL
+                    AND repository_identity IS NULL
+                    AND stream_binding_sha256 IS NULL
+                    AND authenticated_snapshot_sha256 IS NULL)
+            ),
+            CHECK(repository_identity IS NULL OR (length(repository_identity) BETWEEN 1 AND 255 AND trim(repository_identity) = repository_identity)),
+            CHECK(stream_binding_sha256 IS NULL OR (length(stream_binding_sha256) = 64 AND stream_binding_sha256 NOT GLOB '*[^0-9a-f]*')),
+            CHECK(authenticated_snapshot_sha256 IS NULL OR (length(authenticated_snapshot_sha256) = 64 AND authenticated_snapshot_sha256 NOT GLOB '*[^0-9a-f]*')),
+            UNIQUE(source_policy_id, repository_identity)
+        );
 CREATE INDEX idx_repositories_name ON repositories(name);
 CREATE INDEX idx_repositories_enabled ON repositories(enabled);
 CREATE INDEX idx_repositories_priority ON repositories(priority);
+CREATE TRIGGER repositories_validate_repository_scope_insert
+BEFORE INSERT ON repositories
+WHEN NEW.source_policy_id IS NOT NULL
+BEGIN
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM repository_source_policies policy
+        WHERE policy.id = NEW.source_policy_id
+          AND policy.scope_kind = 'repository'
+          AND policy.scope_identity != NEW.repository_identity
+    ) THEN RAISE(ABORT, 'repository-scope source policy identity mismatch') END;
+END;
+CREATE TRIGGER repositories_validate_repository_scope_update
+BEFORE UPDATE OF source_policy_id, repository_identity ON repositories
+WHEN NEW.source_policy_id IS NOT NULL
+BEGIN
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM repository_source_policies policy
+        WHERE policy.id = NEW.source_policy_id
+          AND policy.scope_kind = 'repository'
+          AND policy.scope_identity != NEW.repository_identity
+    ) THEN RAISE(ABORT, 'repository-scope source policy identity mismatch') END;
+END;
+CREATE TABLE repository_source_pins (
+            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            snapshot_sha256 TEXT NOT NULL,
+            CHECK(length(snapshot_sha256) = 64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*')
+        );
+CREATE TRIGGER repository_source_pins_require_pin_policy
+BEFORE INSERT ON repository_source_pins
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repositories repository
+        JOIN repository_source_policies policy ON policy.id = repository.source_policy_id
+        WHERE repository.id = NEW.repository_id
+          AND policy.update_mode = 'pin'
+    ) THEN RAISE(ABORT, 'repository source pin requires pin update policy') END;
+END;
 CREATE TABLE repository_packages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_id INTEGER NOT NULL,
@@ -48,7 +122,7 @@ CREATE TABLE repository_packages (
             download_url TEXT NOT NULL,
             metadata TEXT,
             synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_security_update INTEGER NOT NULL DEFAULT 0, severity TEXT, cve_ids TEXT, advisory_id TEXT, advisory_url TEXT,
-            source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+            source_profile TEXT,
             version_scheme TEXT NOT NULL
                 CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')), canonical_id INTEGER
             REFERENCES canonical_packages(id) ON DELETE SET NULL, package_release TEXT NOT NULL DEFAULT '',

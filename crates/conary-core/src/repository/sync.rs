@@ -50,11 +50,19 @@ async fn fetch_repository_native_snapshot(
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
     let parser_config = repo.require_parser_config()?;
-    let source_profile = repo.require_source_profile()?;
+    repo.validate_stream_binding()?;
+    let source_policy = repo.require_source_policy()?;
+    let repository_identity = repo.repository_identity.as_deref().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "repository '{}' has no exact repository identity",
+            repo.name
+        ))
+    })?;
     info!(
-        "Syncing repository {} for exact profile {} using exact {} parser configuration",
+        "Syncing repository {} as exact source {}/{} using exact {} parser configuration",
         repo.name,
-        source_profile.id(),
+        source_policy.source_identity,
+        repository_identity,
         parser_config.format().as_str()
     );
 
@@ -62,12 +70,11 @@ async fn fetch_repository_native_snapshot(
         PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?)
             .await?;
     let parser = registry::create_parser(parser_config, trust)?;
-    let packages = parser.sync_metadata(&repo.url).await?;
+    let metadata = parser.sync_metadata(&repo.url).await?;
 
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let source_profile_id = source_profile.id().to_string();
 
     if let Some(ref content_url) = repo.content_url {
         info!(
@@ -77,19 +84,23 @@ async fn fetch_repository_native_snapshot(
     }
 
     // Convert package metadata to repository rows plus normalized capability rows.
-    let synced_packages: Vec<SyncedPackageRow> = packages
+    let synced_packages: Vec<SyncedPackageRow> = metadata
+        .packages
         .into_iter()
         .map(|pkg_meta| {
             synced_package_row(
                 repo_id,
-                &source_profile_id,
+                repo.source_profile.as_deref(),
                 &repo.url,
                 repo.content_url.as_deref(),
                 pkg_meta,
             )
         })
         .collect();
-    Ok(RepositorySyncSnapshot::NativeRows(synced_packages))
+    Ok(RepositorySyncSnapshot::NativeRows {
+        packages: synced_packages,
+        snapshot: metadata.snapshot,
+    })
 }
 
 /// Synchronize repository using native metadata format parsers
@@ -665,8 +676,8 @@ fn persist_repository_sync_snapshot(
     snapshot: RepositorySyncSnapshot,
 ) -> Result<usize> {
     match snapshot {
-        RepositorySyncSnapshot::NativeRows(synced_packages) => {
-            persist_native_sync_rows(conn, repo, synced_packages)
+        RepositorySyncSnapshot::NativeRows { packages, snapshot } => {
+            persist_native_sync_rows(conn, repo, packages, snapshot)
         }
         RepositorySyncSnapshot::StaticRows {
             packages,

@@ -5,9 +5,11 @@ mod tests {
     use crate::ccs::signing::SigningKeyPair;
     use crate::repository::sync::native::normalized_repository_capabilities;
     use crate::db::models::{
-        ConvertedPackage, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,
-        RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
-        SecurityAdvisorySupport,
+        AuthenticatedSnapshotIdentity, ConvertedPackage, NativeSourceEcosystem,
+        NativeSourceStream, RepositoryPackage, RepositoryPackageKey, RepositoryPolicyScope,
+        RepositoryProvide, RepositoryRequirement,
+        RepositoryRequirementGroup as DbRequirementGroup, RepositorySourcePolicy,
+        RepositoryUpdateMode, SecurityAdvisorySupport,
     };
     use crate::db::schema::ensure_current;
     use crate::hash::sha256;
@@ -17,6 +19,10 @@ mod tests {
     };
     use crate::repository::metadata::RepositoryMetadata as JsonRepositoryMetadata;
     use crate::repository::parsers::PackageMetadata;
+    use crate::repository::{
+        ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, OpenPgpTrustRoot,
+        RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
+    };
     use crate::repository::remi_metadata::{
         RemiProvide, RemiRequirement, RemiRequirementGroup, RemiSparseResolutionVersionEntry,
     };

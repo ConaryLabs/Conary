@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-11
-revision: 33
-summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native declaration and trust-import planning, package identity, full-adoption root continuity, and lifecycle handoff
+revision: 34
+summary: Document exact native source identity and update policy, multi-root model authority, Remi CCS package authority, canonical map authority, native declaration and trust-import planning, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -54,6 +54,8 @@ system.toml [system]
 | `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Runtime policy assembled from DB state with one exact transaction profile |
 | `DiscoveredRepositoryDeclarations` | `repository/declarations/discovery.rs` | Lossless, source-located APT, DNF5, libzypp, and ALPM declarations confined to an explicit selected root |
 | `NativeTrustImportPlan` | `repository/declarations/trust_import/` | Deterministic importable, ambiguous, or unsupported role-separated trust preview for discovered native repositories |
+| `RepositorySourcePolicy` | `db/models/repository/source/policy.rs` | Exact native source, typed ecosystem/version ordering, stream, scope, and closed follow-or-pin decision |
+| `AuthenticatedSnapshotIdentity` | `repository/parsers/snapshot.rs` | SHA-256 identity of the exact top-level metadata bytes admitted by native trust |
 | `SystemAffinity` | `db/models/distro_pin.rs` | Informational installed-provenance measurement used for display and replatform estimates |
 | `ReplatformExecutionPlan` | `model/replatform.rs` | Executable and blocked replatform transactions derived from planned replacements |
 
@@ -125,11 +127,13 @@ previous offline-resolution snapshot. The page set is not yet pinned to one
 server revision; `docs/modules/remi.md` records that boundary and its tracked
 lease/revision fix. Sync never fetches the whole-distribution metadata
 document, retains a distribution-sized package vector, or issues one HTTP
-request per package. Persisted package identity requires the exact public ID;
-route slugs and generic `rpm`/`deb`/`arch` format labels are never accepted as
-source-identity aliases. Native repository sync writes the repository's exact
-profile into every package row and rejects a missing or conflicting profile.
-The superseded
+request per package. Persisted Remi package identity requires the exact public
+ID; route slugs and generic `rpm`/`deb`/`arch` format labels are never accepted
+as source-identity aliases. Native repository sync instead consumes the exact
+persisted native source policy described below. A configured public profile
+remains an optional feed preset during W10 and is copied into native package
+rows when present; it is not required for repository identity or refresh
+authority. The superseded
 `data/distros.toml` catalog was deleted in M4d.
 
 An accepted Remi conversion remains server-owned work until the typed job
@@ -252,6 +256,39 @@ selected-root escapes are unsupported. Neither status can silently become an
 enabled persisted repository. This slice does not fetch, persist, enable, or
 mutate; the pinned semantics and consumer boundary live in
 [`docs/specs/native-repository-trust-import.md`](../specs/native-repository-trust-import.md).
+
+## Native Source Identity And Update Policy
+
+After declaration and trust-import planning, a native RPM, Debian, or ALPM
+repository is enrolled with an exact source identity, a distinct repository
+identity, a typed release/channel/rolling stream, and one closed update mode.
+`RepositorySourcePolicy` is normalized in `repository_source_policies` and may
+be scoped to one repository or shared by an exact repository group. Each
+repository retains its own enabled state, priority, parser selectors, content
+URL, ownership, authenticated snapshot, and optional member pin.
+
+`crates/conary-core/src/db/models/repository/source.rs` owns repository
+validation and persistence;
+`crates/conary-core/src/db/models/repository/source/policy.rs` owns the typed
+policy and schema-revision-31 stream binding. The binding commits to the exact
+source/repository/stream identity, endpoints, parser configuration, and
+top-level metadata authority. Refresh recalculates it before network access,
+so an endpoint, parser selector, or metadata trust-root change requires
+explicit `repo add --replace` re-enrollment.
+
+Native parsers return package metadata together with the SHA-256 of the exact
+authenticated top-level bytes: ALPM's served compressed database, Debian's
+verified cleartext Release payload, or RPM's authenticated `repomd.xml`.
+`follow` admits a new authenticated identity only within the unchanged stream
+binding. `pin` additionally requires equality with the repository member's
+persisted digest. Admission and package-row replacement share one SQLite
+transaction, so refusal preserves the prior rows, snapshot, and `last_sync`.
+
+Public feed profiles remain presets and conformance fixtures, not native
+source identity. Native enrollment therefore works for uncatalogued
+third-party repositories without adding a profile. The complete persisted,
+CLI, hard-cut, and recovery contract is
+[`docs/specs/native-source-identity-policy.md`](../specs/native-source-identity-policy.md).
 
 ## Native Repository Authenticity
 

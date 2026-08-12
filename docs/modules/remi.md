@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-08
-revision: 19
-summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
+last_updated: 2026-08-11
+revision: 20
+summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
 # Remi
@@ -26,6 +26,15 @@ exact public profile and carries typed parser construction data: RPM declares
 architecture; Debian declares distribution, component, and architecture; Arch
 declares the repository database name; JSON is explicit when a source actually
 serves Conary JSON metadata.
+
+Repository manifest schema 3 also requires each native source's exact source
+identity, distinct repository identity, release/channel/rolling stream, and
+closed follow-or-pin policy. An optional policy group shares one normalized
+source policy while each repository retains its own authenticated snapshot and
+pin. Reconciliation replaces a repository transactionally when those source
+inputs change; ordinary enabled, priority, and expiry changes preserve the
+enrollment. The same contract is persisted by the core repository source model
+and is not inferred from the profile, URL, or display name.
 
 Every native source also carries the matching `RepositoryTrustPolicy`. Fedora
 uses its official metalink to authenticate the exact `repomd.xml` and a
@@ -276,14 +285,12 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 29 retains
-revision 28's source-authority, fail-closed state constraints, explicit mixing
-policy for every persisted source pin, path-free capability provenance, and
-physical `repository_provides` index shape, and adds ordered per-changeset
-`lifecycle_events` for typed continued lifecycle failures. It is a pre-alpha
-hard cut: prior databases are rebuilt and re-ingested from configured repository
-authority rather than migrated. Local conversion tracking is written only after
-the CCS install transaction commits.
+schema rejects missing, empty, or malformed values. Schema revision 31 retains
+fail-closed source-authority state and adds exact native source/repository
+identities, normalized follow-or-pin policy, stream bindings, and authenticated
+snapshot state. It is a pre-alpha hard cut: prior databases are rebuilt and
+re-ingested from configured repository authority rather than migrated. Local
+conversion tracking is written only after the CCS install transaction commits.
 
 Ready conversion means the artifact carries a source-independent Conary
 lifecycle contract. A client may install it on any target whose typed

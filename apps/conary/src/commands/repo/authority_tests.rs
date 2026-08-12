@@ -40,6 +40,13 @@ fn remi_repo_options(
         remi_endpoint: Some(endpoint.to_string()),
         ccs_package_keys,
         source_profile: Some(profile.to_string()),
+        source_id: None,
+        repository_id: None,
+        stream_kind: None,
+        stream_id: None,
+        policy_group: None,
+        follow: false,
+        pin_snapshot_sha256: None,
         security_advisory_support: SecurityAdvisorySupport::Unknown,
     }
 }

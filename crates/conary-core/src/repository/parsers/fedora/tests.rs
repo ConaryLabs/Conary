@@ -31,6 +31,19 @@ fn valid_builder() -> PackageBuilder {
     builder
 }
 
+#[test]
+fn snapshot_identity_owns_the_authenticated_repomd_bytes() {
+    let repomd = b"<repomd revision='one'/>";
+    assert_eq!(
+        authenticated_repomd_snapshot(repomd),
+        AuthenticatedSnapshotIdentity::for_bytes(repomd)
+    );
+    assert_ne!(
+        authenticated_repomd_snapshot(repomd),
+        AuthenticatedSnapshotIdentity::for_bytes(b"primary.xml bytes")
+    );
+}
+
 fn primary_package_with_format(format_body: &str) -> String {
     format!(
         r#"
