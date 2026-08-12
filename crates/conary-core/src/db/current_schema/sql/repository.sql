@@ -43,7 +43,7 @@ CREATE TABLE repositories (
                 CHECK(package_format IN ('arch', 'deb', 'rpm', 'json', 'unspecified')),
             parser_config_json TEXT,
             managed_by TEXT NOT NULL DEFAULT 'operator'
-                CHECK(managed_by IN ('operator', 'remi-config', 'native-projection')),
+                CHECK(managed_by IN ('operator', 'remi-config', 'native-projection', 'package-projection')),
             source_policy_id INTEGER REFERENCES repository_source_policies(id) ON DELETE RESTRICT,
             repository_identity TEXT,
             stream_binding_sha256 TEXT,
@@ -185,6 +185,99 @@ CREATE TABLE native_repository_projections (
                 OR (prior_existed = 0 AND prior_content IS NULL AND prior_mode IS NULL)),
             PRIMARY KEY(takeover_id, path)
         );
+CREATE TABLE package_repository_enrollments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trove_id INTEGER REFERENCES troves(id) ON DELETE CASCADE,
+            owner_kind TEXT NOT NULL CHECK(owner_kind IN ('package', 'retained')),
+            source_package TEXT NOT NULL,
+            source_version TEXT NOT NULL,
+            intent_id TEXT NOT NULL,
+            intent_sha256 TEXT NOT NULL,
+            intent_json TEXT NOT NULL,
+            last_owner TEXT NOT NULL CHECK(last_owner IN ('remove-when-unowned', 'retain')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(length(source_package) BETWEEN 1 AND 255),
+            CHECK(length(source_version) BETWEEN 1 AND 255),
+            CHECK(length(intent_id) BETWEEN 1 AND 255 AND trim(intent_id) = intent_id),
+            CHECK(length(intent_sha256) = 64 AND intent_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK((owner_kind = 'package' AND trove_id IS NOT NULL)
+                OR (owner_kind = 'retained' AND trove_id IS NULL)),
+            UNIQUE(trove_id, intent_id)
+        );
+CREATE INDEX idx_package_repository_enrollments_trove
+ON package_repository_enrollments(trove_id);
+CREATE TABLE package_repository_enrollment_members (
+            enrollment_id INTEGER NOT NULL REFERENCES package_repository_enrollments(id) ON DELETE CASCADE,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+            repository_name TEXT NOT NULL,
+            definition_sha256 TEXT NOT NULL,
+            CHECK(length(repository_name) BETWEEN 1 AND 255),
+            CHECK(length(definition_sha256) = 64 AND definition_sha256 NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(enrollment_id, repository_id),
+            UNIQUE(enrollment_id, repository_name)
+        );
+CREATE INDEX idx_package_repository_enrollment_members_repository
+ON package_repository_enrollment_members(repository_id);
+CREATE TABLE package_repository_projection_owners (
+            enrollment_id INTEGER NOT NULL REFERENCES package_repository_enrollments(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 4095),
+            role TEXT NOT NULL CHECK(role IN ('declaration', 'trust-root')),
+            CHECK(length(path) > 1 AND substr(path, 1, 1) = '/'),
+            CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(enrollment_id, path)
+        );
+CREATE INDEX idx_package_repository_projection_owners_path
+ON package_repository_projection_owners(path);
+CREATE TRIGGER package_repository_members_require_owned_repository
+BEFORE INSERT ON package_repository_enrollment_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repositories
+        WHERE id = NEW.repository_id AND managed_by = 'package-projection'
+    ) THEN RAISE(ABORT, 'package enrollment member requires package-projection ownership') END;
+END;
+CREATE TRIGGER package_repository_members_preserve_owned_repository
+BEFORE UPDATE OF managed_by ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM package_repository_enrollment_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN NEW.managed_by != 'package-projection'
+        THEN RAISE(ABORT, 'package enrollment repository ownership is immutable') END;
+END;
+CREATE TRIGGER package_repository_members_preserve_repository_authority
+BEFORE UPDATE ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM package_repository_enrollment_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN
+        NEW.name IS NOT OLD.name
+        OR NEW.url IS NOT OLD.url
+        OR NEW.content_url IS NOT OLD.content_url
+        OR NEW.enabled IS NOT OLD.enabled
+        OR NEW.priority IS NOT OLD.priority
+        OR NEW.trust_policy_json IS NOT OLD.trust_policy_json
+        OR NEW.metadata_expire IS NOT OLD.metadata_expire
+        OR NEW.default_strategy IS NOT OLD.default_strategy
+        OR NEW.default_strategy_endpoint IS NOT OLD.default_strategy_endpoint
+        OR NEW.source_profile IS NOT OLD.source_profile
+        OR NEW.tuf_enabled IS NOT OLD.tuf_enabled
+        OR NEW.tuf_root_version IS NOT OLD.tuf_root_version
+        OR NEW.tuf_root_url IS NOT OLD.tuf_root_url
+        OR NEW.security_advisory_support IS NOT OLD.security_advisory_support
+        OR NEW.package_format IS NOT OLD.package_format
+        OR NEW.parser_config_json IS NOT OLD.parser_config_json
+        OR NEW.managed_by IS NOT OLD.managed_by
+        OR NEW.source_policy_id IS NOT OLD.source_policy_id
+        OR NEW.repository_identity IS NOT OLD.repository_identity
+        OR NEW.stream_binding_sha256 IS NOT OLD.stream_binding_sha256
+        THEN RAISE(ABORT, 'package enrollment repository authority changes require package transaction') END;
+END;
 CREATE TABLE repository_packages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_id INTEGER NOT NULL,

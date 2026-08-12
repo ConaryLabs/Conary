@@ -507,6 +507,14 @@ fn install_ccs_package_transactionally_inner(
         Path::new(&transaction_root),
         &pkg.manifest().file_capabilities,
     )?;
+    let repository_enrollments = pkg
+        .v3_authority()
+        .map(|authority| authority.lifecycle.repository_enrollments.as_slice())
+        .unwrap_or_default();
+    conary_core::repository::enrollment::validate_payload_bindings(
+        repository_enrollments,
+        &extraction.extracted_files,
+    )?;
     let tx_ctx = TransactionContext {
         db_path: opts.db_path,
         root: &transaction_root,
@@ -521,6 +529,7 @@ fn install_ccs_package_transactionally_inner(
         defer_generation: opts.defer_generation && caller_owned_selected_root,
         repository_provenance: opts.repository_provenance,
         native_lifecycle_bundle,
+        repository_enrollments,
         relation_removals: &relation_plan.removals,
         relation_deconfigurations: &relation_plan.deconfigurations,
         retain_replaced_payload_until_lifecycle: native_transaction

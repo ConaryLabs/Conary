@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 1
+revision: 2
 summary: Define signed package repository intents and their atomic install, update, remove, retention, and rollback semantics
 ---
 
@@ -13,13 +13,12 @@ trust, source-policy, takeover, and owned-projection contracts established by
 #377 and #379 through #381. It makes a repository declaration installed by a
 package future resolution authority in the same transaction as that package.
 
-A package payload is inspected before mutation. Exact APT, DNF/YUM, libzypp,
-and ALPM grammars may produce repository declarations; a filename, directory,
-URL substring, package name, distribution name, or script-text match may not.
-When more than one source grammar admits the same bytes, enrollment is allowed
-only if every admitted parse projects the same typed repository authority.
-Otherwise preflight reports ambiguity without changing the database or selected
-root.
+A package payload is inspected before mutation. This slice admits RPM's exact
+DNF/YUM declaration ABI and grammar. Future APT, libzypp, and ALPM enrollment
+must add their own issue-backed exact ABI and grammar implementations; a URL
+substring, package name, distribution name, or script-text match may not stand
+in for one. Placement in `/etc/yum.repos.d/*.repo` selects DNF's documented
+consumer ABI, while only the closed DNF parse supplies repository semantics.
 
 Repository files created only by arbitrary program behavior are not discovered
 by scraping the completed root. Their source ABI needs a future typed operation
@@ -36,8 +35,7 @@ foreign conversion signs those values into the resulting CCS authority.
 Each intent records:
 
 - a package-stable intent identity;
-- every exact repository definition produced by one declaration, including APT
-  URI, suite, and component products;
+- every exact repository definition produced by one DNF declaration;
 - ecosystem and native version ordering;
 - repository and source identities, release/channel/rolling stream identity,
   follow-or-pin policy, endpoint, parser input, enabled state, priority,
@@ -49,10 +47,10 @@ Each intent records:
 
 The intent references signed payload objects by exact guest path and content
 identity. The converter does not duplicate a mutable path lookup into the
-contract. Local OpenPGP trust references are admitted only when the referenced
-payload object parses to exactly one certificate with the pinned full
-fingerprint for the declared role. Persisted trust uses bounded embedded key
-authority, so a later sync cannot fetch a different certificate from an
+contract. Local OpenPGP trust references are admitted only when every
+certificate in the referenced payload object parses and contributes its pinned
+full fingerprint for the declared role. Persisted trust uses bounded embedded
+key authority, so a later sync cannot fetch a different certificate from an
 unbound URL. A remote key URL, missing payload object, fingerprint mismatch,
 ambiguous keyring, disabled signature verification, or incomplete metadata
 authority blocks enrollment before mutation.
@@ -80,9 +78,9 @@ repository identity, and projection path before hashing or applying.
 Two packages may own the same repository or projection only when the complete
 definition, bytes, mode, trust, and policy are identical. Removing either
 owner leaves the shared authority unchanged. A conflicting second owner or an
-update that would split shared authority fails preflight. Last-owner removal
-obeys that owner's explicit policy; mixed retain/remove last-owner policies are
-invalid rather than order-dependent.
+update that would split shared authority fails preflight. Releasing any
+`retain` owner creates durable retained authority regardless of removal order;
+`remove-when-unowned` owners never override retained authority.
 
 ## Atomic Apply And Projection State
 
@@ -98,12 +96,11 @@ commit failure rolls back both the selected root and SQLite. Repository sync is
 never part of this mutation transaction; it starts only after the committed
 repository and trust authority can be reopened exactly.
 
-The takeover projection model represents both present and absent current
-states. Its pre-takeover state remains immutable while package operations
-advance the current state. This lets package removal restore an originally
-present native declaration, delete a package-created declaration that was
-originally absent, and still lets an eventual full takeover rollback restore
-the exact pre-takeover root.
+Native takeover projections remain a distinct immutable authority. A package
+intent that names an already takeover-owned path fails preflight before root or
+database mutation; it cannot silently advance or strand takeover state. A
+package-created projection absent from takeover authority follows its package
+owners and is deleted only after the final remove-when-unowned owner leaves.
 
 Generic repository mutation remains forbidden for package-owned rows. A
 definition change must pass through a package enrollment transaction;
@@ -114,8 +111,9 @@ mutable repository fields.
 
 Package removal loads its persisted signed intent rather than parsing current
 files. Shared owners are released without changing the common authority. The
-last `remove-when-unowned` owner restores the projection's immutable
-pre-enrollment state and deletes only rows no longer owned. The last `retain`
+last `remove-when-unowned` owner deletes only package-owned authority no longer
+owned; enrollment rejects collisions with existing native or operator-owned
+authority rather than overwriting and later restoring it. The last `retain`
 owner becomes a durable retained record whose source package identity and
 intent digest remain inspectable; it is not silently converted to operator
 authority.
@@ -133,7 +131,8 @@ an old intent from a newer package.
 The end-to-end acceptance fixture is a Chrome-shaped signed RPM: version 1
 installs an RPM repository declaration plus role-separated signing roots. The
 install transaction enrolls it, an authenticated sync imports version 2, and
-normal exact repository resolution selects and installs version 2. The fixture
+normal exact repository resolution selects version 2 with installable source
+profile provenance. The fixture
 then proves update replacement, remove-when-unowned, explicit retention,
 multiple identical owners, trust failure, projection failure, and rollback.
 
@@ -142,8 +141,8 @@ selection.
 
 ## Schema Hard Cut And Proof
 
-Schema revision 33 adds package/retained enrollment ownership and allows owned
-projection rows to represent an absent current state. Revision 32 is retired
+Schema revision 33 adds package/retained enrollment ownership and exact
+projection-owner bindings. Revision 32 is retired
 pre-alpha state. Recovery is `conary system rebuild-db --discard-state --yes`
 followed by takeover and package reinstallation from authoritative inputs; no
 migration or legacy reader is retained.

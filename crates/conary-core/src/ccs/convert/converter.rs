@@ -165,6 +165,21 @@ impl NativePackageConverter {
         }
 
         let mut manifest = self.build_manifest(&final_metadata, &Hooks::default())?;
+        let repository_enrollments = if format == "rpm" {
+            let architecture = metadata.architecture().ok_or_else(|| {
+                ConversionError::ManifestError(
+                    "RPM repository enrollment requires source architecture authority".to_string(),
+                )
+            })?;
+            crate::repository::enrollment::derive::derive_rpm_repository_enrollments(
+                files,
+                architecture,
+                self.source_profile.as_deref(),
+            )
+            .map_err(|error| ConversionError::ManifestError(error.to_string()))?
+        } else {
+            Vec::new()
+        };
         let build_risk_report = classify_foreign_build_body_risk(format, files);
         let scriptlet_risk_report = classify_foreign_scriptlet_risk(metadata);
         let conversion_evidence =
@@ -244,6 +259,7 @@ impl NativePackageConverter {
         authority.provenance.hermetic_evidence_hash = Some(conversion_evidence_hash);
         authority.identity.debian_multi_arch = metadata.debian_multi_arch();
         authority.provided_capabilities = project_source_capabilities(metadata)?;
+        authority.lifecycle.repository_enrollments = repository_enrollments;
         crate::ccs::v3::validate_authority(&authority).map_err(|error| {
             ConversionError::BuildError(format!(
                 "Foreign conversion produced invalid typed provider authority: {error}"

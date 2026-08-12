@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 16
+last_updated: 2026-08-12
+revision: 17
 summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and the issue-decomposed W10 takeover horizon
 proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
@@ -519,7 +519,9 @@ accepted here.
   normalized source policy, distinct repository identity, typed ecosystem and
   version ordering, immutable stream binding, and authenticated follow-or-pin
   snapshot state in binding revision 31. #381 advances the current database
-  schema to revision 32 for takeover and projection ownership. #380 removed the
+  schema to revision 32 for takeover and projection ownership. #382 advances
+  the current database schema to revision 33 for package and retained
+  enrollment ownership. #380 removed the
   inline three-profile checks from repository and repository-package identity
   without growing a catalog. Target capability compatibility remains owned by #383.
   Pre-alpha rebuild and authoritative-input re-enrollment are explicit; no

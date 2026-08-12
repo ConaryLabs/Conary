@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 2
+last_updated: 2026-08-12
+revision: 3
 summary: Define exact native source and repository identity, shared follow or pin policy, stream binding, and authenticated snapshot persistence
 ---
 
@@ -164,7 +164,8 @@ disposable pre-alpha state. There is no migration, compatibility reader,
 implicit default, or adapter for repositories that lack an exact source
 policy. Native repository takeover subsequently advances the current database
 schema to revision 32 while retaining revision 31 as the stream-binding
-encoding identity.
+encoding identity. Package repository enrollment advances the current database
+schema to revision 33 without changing that binding grammar.
 
 Recovery is `conary system rebuild-db --discard-state --yes`, followed by
 re-enrollment from authoritative native declarations, imported trust roots,

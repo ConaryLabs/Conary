@@ -919,6 +919,7 @@ fn restore_transaction_context<'a>(
         defer_generation: false,
         repository_provenance: prepared.repository_provenance.clone(),
         native_lifecycle_bundle: prepared.native_lifecycle_state.bundle_to_persist.as_ref(),
+        repository_enrollments: &[],
         relation_removals: &[],
         relation_deconfigurations: &[],
         retain_replaced_payload_until_lifecycle: retain_old_payload,

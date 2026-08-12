@@ -17,7 +17,7 @@ use tracing::info;
 /// Revision 32 adds native repository takeover ownership and exact projection
 /// state. Earlier pre-alpha databases must be rebuilt; no compatibility
 /// migration is provided.
-pub const SCHEMA_VERSION: i32 = 32;
+pub const SCHEMA_VERSION: i32 = 33;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_31_requires_rebuild_for_revision_32() {
+    fn revision_32_requires_rebuild_for_revision_33() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -245,19 +245,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 31);
+                VALUES ('conary-current-v1', 32);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (31);",
+            INSERT INTO schema_version (version) VALUES (32);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 31; this pre-alpha build supports only schema epoch conary-current-v1 revision 32"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 32; this pre-alpha build supports only schema epoch conary-current-v1 revision 33"
         );
     }
 

@@ -173,6 +173,7 @@ impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
                 RepositoryOwnership::Operator => "operator",
                 RepositoryOwnership::RemiConfig => "remi-config",
                 RepositoryOwnership::NativeProjection => "native-projection",
+                RepositoryOwnership::PackageProjection => "package-projection",
             },
             native_source,
         })

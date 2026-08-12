@@ -75,6 +75,10 @@ pub struct PreparedPackage {
     pub description: Option<String>,
     /// Exact payload descriptors with independently reopenable content sources.
     pub extracted_files: Vec<PackagePayloadFile>,
+    /// Pre-mutation repository authority derived from authenticated native
+    /// payloads or carried by signed CCS lifecycle authority.
+    pub repository_enrollments:
+        Vec<conary_core::repository::enrollment::PackageRepositoryEnrollmentIntent>,
     /// Exact positive requirement groups declared by the package.
     pub requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     /// Exact source-native capabilities declared by the package.

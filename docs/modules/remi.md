@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 20
+last_updated: 2026-08-12
+revision: 21
 summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
@@ -285,10 +285,9 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 32 retains
-fail-closed source-authority state and adds exact native source/repository
-identities, normalized follow-or-pin policy, stream bindings, and authenticated
-snapshot state. It is a pre-alpha hard cut: prior databases are rebuilt and
+schema rejects missing, empty, or malformed values. Schema revision 33 retains
+fail-closed source and takeover authority and adds package-owned repository
+enrollment plus retained ownership. It is a pre-alpha hard cut: prior databases are rebuilt and
 re-ingested from configured repository authority rather than migrated. Local
 conversion tracking is written only after the CCS install transaction commits.
 

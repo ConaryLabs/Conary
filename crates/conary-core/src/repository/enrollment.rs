@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
+pub mod derive;
+pub mod transaction;
+
 pub const PACKAGE_REPOSITORY_ENROLLMENT_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +80,10 @@ pub struct RepositoryDefinition {
 
 impl RepositoryDefinition {
     pub fn materialize(&self) -> Result<Repository> {
+        self.materialize_for(RepositoryOwnership::NativeProjection)
+    }
+
+    pub fn materialize_for(&self, ownership: RepositoryOwnership) -> Result<Repository> {
         let ecosystem = NativeSourceEcosystem::from_repository_format(self.parser.format())?;
         let (mode, pin) = match &self.update {
             RepositoryUpdatePolicyInput::Follow => (RepositoryUpdateMode::Follow, None),
@@ -108,7 +115,7 @@ impl RepositoryDefinition {
         repository.priority = self.priority;
         repository.metadata_expire = self.metadata_expire;
         repository.source_profile = self.source_profile.clone();
-        repository.managed_by = RepositoryOwnership::NativeProjection;
+        repository.managed_by = ownership;
         repository.set_parser_config(self.parser.clone())?;
         repository.set_trust_policy(self.trust.clone())?;
         repository.set_native_source_policy(policy, self.repository_identity.clone(), pin)?;
@@ -224,6 +231,41 @@ impl PackageRepositoryEnrollmentIntent {
         })?;
         Ok(crate::hash::sha256(&bytes))
     }
+}
+
+pub fn validate_payload_bindings(
+    intents: &[PackageRepositoryEnrollmentIntent],
+    payloads: &[crate::packages::payload::PackagePayloadFile],
+) -> Result<()> {
+    for intent in intents {
+        intent.validate()?;
+        for projection in &intent.projections {
+            let normalized = projection.path.trim_start_matches('/');
+            let payload = payloads
+                .iter()
+                .find(|payload| payload.path.trim_start_matches('/') == normalized)
+                .ok_or_else(|| {
+                    Error::ConfigError(format!(
+                        "repository enrollment '{}' projection '{}' is absent from the package payload",
+                        intent.intent_id, projection.path
+                    ))
+                })?;
+            let content = payload.content_authority.as_ref().ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "repository enrollment projection '{}' is not a regular payload object",
+                    projection.path
+                ))
+            })?;
+            if content.sha256 != projection.sha256 || payload.node.mode & 0o7777 != projection.mode
+            {
+                return Err(Error::ConflictError(format!(
+                    "repository enrollment projection '{}' disagrees with signed payload authority",
+                    projection.path
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn require_identity(field: &str, value: &str) -> Result<()> {

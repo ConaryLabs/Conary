@@ -83,4 +83,5 @@ axum.workspace = true
 ed25519-dalek.workspace = true
 remi = { path = "../remi" }
 rpm.workspace = true
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
 tower.workspace = true

@@ -126,6 +126,7 @@ fn validate_authority_common(
             validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
             validate_lifecycle(&authority.lifecycle, &mut diagnostics);
+            validate_repository_enrollment_files(data, authority, &mut diagnostics);
         }
         (PackageKindTagV3::Group, PackageKindV3::Group(data)) => {
             reject_group_redirect_payload_authority(authority, &mut diagnostics);
@@ -162,6 +163,47 @@ fn validate_authority_common(
         Ok(census)
     } else {
         Err(V3ValidationError { diagnostics })
+    }
+}
+
+fn validate_repository_enrollment_files(
+    package: &PackageDataV3,
+    authority: &AuthorityDocumentV3,
+    diagnostics: &mut Vec<V3Diagnostic>,
+) {
+    for intent in &authority.lifecycle.repository_enrollments {
+        for projection in &intent.projections {
+            let Some(file) = package.files.iter().find(|file| {
+                file.path.trim_start_matches('/') == projection.path.trim_start_matches('/')
+            }) else {
+                diagnostics.push(V3Diagnostic::error(
+                    V3DiagnosticCode::KindContractViolation,
+                    format!(
+                        "repository enrollment projection '{}' is absent from signed package files",
+                        projection.path
+                    ),
+                    Some("lifecycle.repository_enrollments".to_string()),
+                    "bind every repository projection to one exact signed regular file",
+                ));
+                continue;
+            };
+            let matches = file
+                .content
+                .as_ref()
+                .is_some_and(|content| content.sha256 == projection.sha256)
+                && file.node.mode & 0o7777 == projection.mode;
+            if !matches {
+                diagnostics.push(V3Diagnostic::error(
+                    V3DiagnosticCode::KindContractViolation,
+                    format!(
+                        "repository enrollment projection '{}' disagrees with signed file authority",
+                        projection.path
+                    ),
+                    Some("lifecycle.repository_enrollments".to_string()),
+                    "copy the exact file digest and mode into the repository projection",
+                ));
+            }
+        }
     }
 }
 
