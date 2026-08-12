@@ -264,6 +264,10 @@ pub struct PendingInstalledConversion {
 }
 
 impl PendingInstalledConversion {
+    pub(crate) fn original_checksum(&self) -> &str {
+        &self.original_checksum
+    }
+
     pub(crate) fn into_record(
         self,
         trove_id: i64,

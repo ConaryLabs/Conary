@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-11
-revision: 68
-summary: Route feature ownership through typed database rebuilds, exact native source identity and update policy, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+last_updated: 2026-08-12
+revision: 69
+summary: Route feature ownership through typed database rebuilds, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -337,8 +337,10 @@ directory-materialization contracts.
 
 **Capability:** preserve migration continuity for existing native
 package-manager state, support explicit takeover, recover selected-generation
-handoff state, and provide non-destructive escape hatches. Adoption is not the
-foreign-package acquisition or cross-distro execution path.
+handoff state, provide non-destructive escape hatches, and convert an adopted
+package only after exact native-artifact re-resolution and payload equivalence.
+Adoption itself is not the foreign-package acquisition or cross-distro
+execution path; the verified resulting CCS enters that path separately.
 
 **Start here:** `apps/conary/src/cli/system.rs` ->
 `apps/conary/src/dispatch/system.rs` ->
@@ -351,10 +353,10 @@ foreign-package acquisition or cross-distro execution path.
 `apps/conary/src/commands/adopt/status.rs`;
 `apps/conary/src/commands/adopt/unadopt.rs`;
 `apps/conary/src/commands/adopt/native_handoff.rs`;
-`docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`. Reintroducing
-adopted-package CCS conversion requires exact native-artifact re-resolution
-and is tracked by GitHub issue #68; installed state alone is not lifecycle
-authority.
+`apps/conary/src/commands/adopt/convert.rs` and
+`apps/conary/src/commands/adopt/convert/tests/`;
+`docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`. Installed state
+alone is never lifecycle authority.
 
 **Neighbor systems:** `apps/conary/src/commands/update/mod.rs`;
 `apps/conary/src/commands/update/package.rs`;
@@ -368,7 +370,8 @@ authority.
 **Paths:** `apps/conary/src/commands/adopt/*`.
 
 **Focused proof:** `cargo test -p conary --lib adopt::native_handoff`;
-`cargo test -p conary --lib adopt::unadopt`.
+`cargo test -p conary --lib adopt::unadopt`;
+`cargo test -p conary --lib commands::adopt::convert`.
 
 **Interaction gate:** `cargo run -p conary-test -- list`;
 `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`
@@ -378,7 +381,11 @@ when selected-generation handoff behavior changes.
 `docs/llms/subsystem-map.md`; `docs/INTEGRATION-TESTING.md`.
 
 **Safety notes:** do not silently take over adopted packages or erase native
-package-manager authority without an explicit takeover path.
+package-manager authority without an explicit takeover path. Adopted
+conversion must hold the runtime mutation lock before installed authority
+reads; accept only exact enrolled source/trust/stream authority; verify identity
+and the complete payload before conversion; and publish the signed CCS path and
+database record atomically.
 
 ## Declarative System Models And Replatform Planning
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 44
-summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
+revision: 45
+summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
 # Foreign Package Lifecycle Contracts
@@ -58,6 +58,12 @@ contract.
 System adoption is a migration-continuity feature for machines that already
 have native package-manager state. It is not the cross-distro product path and
 does not count as proof that conversion or source-independent execution works.
+The explicit adoption-to-CCS bridge is valid only after Conary re-resolves an
+immutable source artifact from enrolled authority and proves its typed identity
+and complete payload equal the adopted record. It then enters the same parser,
+converter, signed CCS, and source-independent lifecycle path shown above; live
+files or the installed package database alone can never establish lifecycle
+equivalence.
 
 ### Orthogonal Source And Target Axes
 
@@ -1627,6 +1633,10 @@ Current ownership:
 - exact CCS authority removed by native upgrades or relations:
   `apps/conary/src/commands/install/ccs_removal_hooks.rs` and
   `apps/conary/src/commands/remove/ccs_hook.rs`;
+- exact adopted-artifact resolution, payload equivalence, verified CCS
+  publication, and installed-conversion persistence:
+  `apps/conary/src/commands/adopt/convert.rs` and
+  `apps/conary/src/commands/adopt/convert/tests/`;
 - shared config decisions and durable snapshot:
   `crates/conary-core/src/config_transaction.rs`;
 - selected-root config planner:
@@ -1668,3 +1678,10 @@ package manager and compares the observable lifecycle trace with an
 authoritative source-manager fixture. A green command-classification corpus,
 same-distro run, hand-picked pairwise converter, or adoption flow is not
 lifecycle proof.
+
+The adopted bridge additionally proves cache reuse and authenticated fetch;
+unavailable, ambiguous, identity-mismatched, and path-specific payload drift;
+directory, symlink, and hardlink topology; lifecycle-bearing conversion; and
+failure-atomic publication for each source format. Its target-root test must
+consume the published signed CCS through install, update, rollback, and remove
+for RPM, Debian, and Arch without entering any native query or mutation module.

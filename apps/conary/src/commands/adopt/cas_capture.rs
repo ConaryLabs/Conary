@@ -149,6 +149,11 @@ fn bind_package_hardlinks(captured: &mut [CapturedFile]) -> Result<()> {
         captured[indices[0]].file.node.source.kind = PayloadNodeKind::Regular {
             hardlink_identity: Some(identity.clone()),
         };
+        let primary = &captured[indices[0]].file;
+        primary
+            .node
+            .source
+            .validate_content(primary.content.as_ref())?;
         for index in indices.iter().skip(1) {
             let file = &mut captured[*index].file;
             file.node.source.kind = PayloadNodeKind::Hardlink {

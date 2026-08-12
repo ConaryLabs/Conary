@@ -199,7 +199,7 @@ pub enum SystemCommands {
         #[arg(long, conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
         refresh: bool,
 
-        /// Convert exact adopted native artifacts to signed CCS packages
+        /// Convert full-adoption packages from exact native artifacts to signed CCS
         #[arg(long, conflicts_with_all = ["system", "status", "refresh", "sync_hook", "full"])]
         convert: bool,
 

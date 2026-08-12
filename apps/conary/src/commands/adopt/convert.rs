@@ -10,14 +10,14 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::TrustPolicy;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ConvertedPackage, PackagePayloadEntry, PackagePayloadOwnership,
-    Repository, RepositoryPackage,
+    Changeset, ChangesetStatus, ConvertedPackage, InstallSource, PackagePayloadEntry,
+    PackagePayloadOwnership, Repository, RepositoryPackage,
 };
 use conary_core::packages::{InstalledPackageIdentity, PackageFormat, PackageFormatType};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind};
 use conary_core::repository::selector::PackageWithRepo;
 use conary_core::repository::{
-    DownloadOptions, PackageSelector, RepositoryFormat, download_package_verified,
+    DownloadOptions, PackageSelector, RepositoryFormat, download_package_with_authority_verified,
     verify_cached_package_verified,
 };
 use tempfile::{NamedTempFile, TempDir};
@@ -30,6 +30,10 @@ use super::super::{InstalledPackageSelector, detect_package_format, open_db};
 enum AdoptedConversionError {
     #[error("adopted package '{package}' has no exact native package identity")]
     MissingNativeIdentity { package: String },
+    #[error(
+        "adopted package '{package}' has no complete payload authority; run 'conary system adopt {package} --full' before conversion"
+    )]
+    PayloadAuthorityRequired { package: String },
     #[error("no enrolled native repository contains exact artifact {identity}")]
     ArtifactUnavailable { identity: String },
     #[error("exact artifact {identity} is ambiguous across repositories: {repositories}")]
@@ -51,6 +55,10 @@ enum AdoptedConversionError {
     UnexpectedPayloadPath { path: String },
     #[error("resolved artifact payload mismatch at {path}: {detail}")]
     PayloadMismatch { path: String, detail: String },
+    #[error(
+        "converted source checksum mismatch: repository selected {expected}, converter consumed {actual}"
+    )]
+    SourceChecksumMismatch { expected: String, actual: String },
 }
 
 struct AdoptedConversionPlan {
@@ -119,6 +127,10 @@ pub async fn cmd_adopt_convert(
             .as_deref());
         let converted =
             convert_native_package_to_ccs(parsed.as_ref(), &acquired.path, format, source_profile)?;
+        validate_converted_source_checksum(
+            converted.pending_record.original_checksum(),
+            &plan.source.package.checksum,
+        )?;
         publish_conversion(&mut conn, db_path, &plan, converted)?;
         crate::ui::status(
             "Converted",
@@ -148,6 +160,7 @@ fn plan_conversion(
             package
         );
     }
+    require_conversion_payload_authority(package, &installed.trove.install_source)?;
     let identity = installed
         .trove
         .native_package_identity
@@ -164,6 +177,16 @@ fn plan_conversion(
         payload,
         source,
     })
+}
+
+fn require_conversion_payload_authority(package: &str, source: &InstallSource) -> Result<()> {
+    if source != &InstallSource::AdoptedFull {
+        return Err(AdoptedConversionError::PayloadAuthorityRequired {
+            package: package.to_string(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn resolve_exact_repository_artifact(
@@ -184,6 +207,7 @@ fn resolve_exact_repository_artifact(
         if !repository.enabled || repository.package_format != expected_format {
             continue;
         }
+        repository.validate_stream_binding()?;
         repository.require_source_policy()?;
         repository.require_trust_policy()?;
         candidates.push(PackageWithRepo {
@@ -253,13 +277,29 @@ async fn acquire_exact_artifact(
         )
     })?;
     let cache_path = cache_dir.join(digest);
+    let signature_path = cache_path.with_extension("sig");
+    if !cache_path.exists() && signature_path.exists() {
+        fs::remove_file(&signature_path).with_context(|| {
+            format!(
+                "failed to remove orphaned native cache authority {}",
+                signature_path.display()
+            )
+        })?;
+    }
     let trust = DownloadOptions::for_repository(
         &source.repository,
         &conary_core::db::paths::keyring_dir(db_path),
     )?;
 
     if cache_path.exists() {
-        match verify_cached_package_verified(&source.package, &cache_path, &trust).await {
+        match verify_cached_package_verified(
+            &source.package,
+            &cache_path,
+            &trust,
+            signature_path.exists().then_some(signature_path.as_path()),
+        )
+        .await
+        {
             Ok(()) => {
                 return Ok(AcquiredArtifact {
                     path: cache_path,
@@ -267,7 +307,7 @@ async fn acquire_exact_artifact(
                 });
             }
             Err(error) => {
-                fs::remove_file(&cache_path).with_context(|| {
+                remove_cached_artifact(&cache_path, &signature_path).with_context(|| {
                     format!(
                         "cached native artifact {} failed authority verification ({error}) and could not be removed",
                         cache_path.display()
@@ -286,10 +326,14 @@ async fn acquire_exact_artifact(
     })?;
     let download = tempfile::tempdir_in(download_dir)
         .context("failed to create native artifact download staging")?;
-    let downloaded = download_package_verified(&source.package, download.path(), &trust).await?;
+    let downloaded =
+        download_package_with_authority_verified(&source.package, download.path(), &trust).await?;
+    if let Some(signature) = downloaded.detached_authority {
+        persist_cache_bytes(&signature_path, &signature)?;
+    }
     let mut staged = NamedTempFile::new_in(&cache_dir)
         .context("failed to create native artifact cache staging")?;
-    let mut input = File::open(&downloaded)?;
+    let mut input = File::open(&downloaded.path)?;
     std::io::copy(&mut input, staged.as_file_mut())?;
     staged.as_file_mut().flush()?;
     staged.as_file().sync_all()?;
@@ -300,17 +344,72 @@ async fn acquire_exact_artifact(
         }
         Err(error) => return Err(error.error.into()),
     }
-    verify_cached_package_verified(&source.package, &cache_path, &trust).await?;
+    if let Err(error) = verify_cached_package_verified(
+        &source.package,
+        &cache_path,
+        &trust,
+        signature_path.exists().then_some(signature_path.as_path()),
+    )
+    .await
+    {
+        remove_cached_artifact(&cache_path, &signature_path).with_context(|| {
+            format!(
+                "new native artifact cache entry {} failed authority verification ({error}) and could not be removed",
+                cache_path.display()
+            )
+        })?;
+        return Err(error.into());
+    }
     Ok(AcquiredArtifact {
         path: cache_path,
         _download: Some(download),
     })
 }
 
+fn remove_cached_artifact(cache_path: &Path, signature_path: &Path) -> Result<()> {
+    if cache_path.exists() {
+        fs::remove_file(cache_path)?;
+    }
+    if signature_path.exists() {
+        fs::remove_file(signature_path)?;
+    }
+    Ok(())
+}
+
+fn persist_cache_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("native cache companion path has no parent")?;
+    let mut staged = NamedTempFile::new_in(parent)?;
+    staged.as_file_mut().write_all(bytes)?;
+    staged.as_file_mut().flush()?;
+    staged.as_file().sync_all()?;
+    match staged.persist_noclobber(path) {
+        Ok(_) => sync_directory(parent),
+        Err(error) if path.exists() => {
+            drop(error.file);
+            Ok(())
+        }
+        Err(error) => Err(error.error.into()),
+    }
+}
+
 fn exact_sha256(checksum: &str) -> Result<String> {
     let value = checksum.strip_prefix("sha256:").unwrap_or(checksum);
     let hash = conary_core::hash::Hash::new(conary_core::hash::HashAlgorithm::Sha256, value)?;
     Ok(hash.value)
+}
+
+fn validate_converted_source_checksum(actual: &str, expected: &str) -> Result<()> {
+    let expected = format!("sha256:{}", exact_sha256(expected)?);
+    if actual != expected {
+        return Err(AdoptedConversionError::SourceChecksumMismatch {
+            expected,
+            actual: actual.to_string(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn validate_native_identity(
@@ -358,6 +457,14 @@ fn validate_payload_equivalence(
     format: PackageFormatType,
     adopted: &PackagePayloadOwnership,
 ) -> Result<()> {
+    validate_payload_entries(package, format, adopted.entries())
+}
+
+fn validate_payload_entries(
+    package: &dyn PackageFormat,
+    format: PackageFormatType,
+    installed_entries: &[PackagePayloadEntry],
+) -> Result<()> {
     let payload = package.package_payload()?;
     let resolved_nodes = resolve_native_payload_nodes(
         Path::new("/"),
@@ -378,8 +485,7 @@ fn validate_payload_equivalence(
             .into());
         }
     }
-    let installed = adopted
-        .entries()
+    let installed = installed_entries
         .iter()
         .map(|entry| (entry.path.clone(), entry))
         .collect::<BTreeMap<_, _>>();
@@ -400,10 +506,102 @@ fn validate_payload_equivalence(
             .into());
         }
     }
-    for (path, (node, content)) in artifact {
-        compare_payload_entry(&path, node, content, installed[&path])?;
+    let artifact_topology = hardlink_topology(
+        artifact
+            .iter()
+            .map(|(path, (node, _))| (path.as_str(), &node.source)),
+    );
+    let installed_topology = hardlink_topology(
+        installed
+            .iter()
+            .map(|(path, entry)| (path.as_str(), &entry.node.source)),
+    );
+    for (path, (node, content)) in &artifact {
+        let installed_entry = installed[path];
+        let artifact_group = artifact_topology.get(path);
+        let installed_group = installed_topology.get(path);
+        if artifact_group != installed_group {
+            return Err(AdoptedConversionError::PayloadMismatch {
+                path: path.clone(),
+                detail: "hardlink group membership differs".to_string(),
+            }
+            .into());
+        }
+        let artifact_content = effective_hardlink_content(
+            path,
+            artifact_group,
+            artifact
+                .iter()
+                .map(|(member, (_, content))| (member.as_str(), content.as_ref())),
+        )?;
+        let installed_content = effective_hardlink_content(
+            path,
+            installed_group,
+            installed
+                .iter()
+                .map(|(member, entry)| (member.as_str(), entry.content.as_ref())),
+        )?;
+        compare_payload_entry(
+            path,
+            node,
+            artifact_content.or_else(|| content.clone()),
+            installed_content.or_else(|| installed_entry.content.clone()),
+            artifact_group.is_some(),
+            installed_entry,
+        )?;
     }
     Ok(())
+}
+
+fn hardlink_topology<'a>(
+    entries: impl Iterator<Item = (&'a str, &'a PayloadNode)>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
+    for (path, node) in entries {
+        let identity = match &node.kind {
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some(identity),
+            }
+            | PayloadNodeKind::Hardlink { identity, .. } => identity,
+            _ => continue,
+        };
+        groups
+            .entry(identity.clone())
+            .or_default()
+            .insert(path.to_string());
+    }
+    let mut by_path = BTreeMap::new();
+    for members in groups.into_values().filter(|members| members.len() > 1) {
+        for path in &members {
+            by_path.insert(path.clone(), members.clone());
+        }
+    }
+    by_path
+}
+
+fn effective_hardlink_content<'a>(
+    path: &str,
+    group: Option<&BTreeSet<String>>,
+    entries: impl Iterator<Item = (&'a str, Option<&'a PayloadContentAuthority>)>,
+) -> Result<Option<PayloadContentAuthority>> {
+    let Some(group) = group else {
+        return Ok(None);
+    };
+    let mut authority = None;
+    for (_, content) in entries.filter(|(member, _)| group.contains(*member)) {
+        let Some(content) = content else {
+            continue;
+        };
+        if authority.as_ref().is_some_and(|current| current != content) {
+            return Err(AdoptedConversionError::PayloadMismatch {
+                path: path.to_string(),
+                detail: "hardlink group carries contradictory content authority".to_string(),
+            }
+            .into());
+        }
+        authority = Some(content.clone());
+    }
+    Ok(authority)
 }
 
 fn canonical_payload_path(value: &str) -> Result<String> {
@@ -436,13 +634,15 @@ fn canonical_payload_path(value: &str) -> Result<String> {
 
 fn compare_payload_entry(
     path: &str,
-    artifact_node: conary_core::payload::ResolvedPayloadNode,
+    artifact_node: &conary_core::payload::ResolvedPayloadNode,
     artifact_content: Option<PayloadContentAuthority>,
+    installed_content: Option<PayloadContentAuthority>,
+    hardlink_member: bool,
     installed: &PackagePayloadEntry,
 ) -> Result<()> {
     let comparable = |node: &PayloadNode| {
         (
-            comparable_kind(&node.kind),
+            comparable_kind(&node.kind, hardlink_member),
             node.mode,
             node.mtime,
             node.xattrs.clone(),
@@ -465,7 +665,7 @@ fn compare_payload_entry(
         }
         .into());
     }
-    if artifact_content != installed.content {
+    if artifact_content != installed_content {
         return Err(AdoptedConversionError::PayloadMismatch {
             path: path.to_string(),
             detail: "content size or SHA-256 differs".to_string(),
@@ -477,24 +677,32 @@ fn compare_payload_entry(
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum ComparableNodeKind {
-    Regular(bool),
+    Regular,
+    HardlinkMember,
     Directory,
     Symlink(String),
-    Hardlink(String),
     BlockDevice(u64, u64),
     CharacterDevice(u64, u64),
     Fifo,
     Socket,
 }
 
-fn comparable_kind(kind: &PayloadNodeKind) -> ComparableNodeKind {
+fn comparable_kind(kind: &PayloadNodeKind, hardlink_member: bool) -> ComparableNodeKind {
+    if hardlink_member
+        && matches!(
+            kind,
+            PayloadNodeKind::Regular {
+                hardlink_identity: Some(_)
+            } | PayloadNodeKind::Hardlink { .. }
+        )
+    {
+        return ComparableNodeKind::HardlinkMember;
+    }
     match kind {
-        PayloadNodeKind::Regular { hardlink_identity } => {
-            ComparableNodeKind::Regular(hardlink_identity.is_some())
-        }
+        PayloadNodeKind::Regular { .. } => ComparableNodeKind::Regular,
         PayloadNodeKind::Directory => ComparableNodeKind::Directory,
         PayloadNodeKind::Symlink { target } => ComparableNodeKind::Symlink(target.clone()),
-        PayloadNodeKind::Hardlink { target, .. } => ComparableNodeKind::Hardlink(target.clone()),
+        PayloadNodeKind::Hardlink { .. } => ComparableNodeKind::HardlinkMember,
         PayloadNodeKind::BlockDevice { major, minor } => {
             ComparableNodeKind::BlockDevice(*major, *minor)
         }
@@ -516,15 +724,45 @@ fn current_conversion_is_usable(
     if existing.needs_reconversion() {
         return Ok(false);
     }
+    let expected_checksum = exact_sha256(&plan.source.package.checksum)?;
+    let existing_checksum = exact_sha256(&existing.original_checksum)?;
+    let expected_format = match package_format(&plan.identity) {
+        PackageFormatType::Rpm => "rpm",
+        PackageFormatType::Deb => "deb",
+        PackageFormatType::Arch => "arch",
+    };
+    if existing_checksum != expected_checksum || existing.original_format != expected_format {
+        return Ok(false);
+    }
     let Some(path) = existing.ccs_path.as_deref() else {
         return Ok(false);
     };
     let key = super::super::ccs::load_or_create_local_dev_key()?;
-    Ok(conary_core::ccs::verify::verify_package(
+    let Ok(verified) = conary_core::ccs::verify::verify_package(
         Path::new(path),
         &TrustPolicy::strict(vec![key.public_key_base64()]),
-    )
-    .is_ok())
+    ) else {
+        return Ok(false);
+    };
+    let Ok(package) = conary_core::ccs::CcsPackage::from_verified_archive(path, &verified) else {
+        return Ok(false);
+    };
+    let manifest = package.manifest();
+    let expected_source_checksum = format!("sha256:{expected_checksum}");
+    Ok(manifest.package.name == plan.identity.name()
+        && manifest.package.version == plan.identity.version()
+        && manifest.package.version_scheme == plan.identity.version_scheme()
+        && manifest
+            .package
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.arch.as_deref())
+            == Some(plan.identity.architecture())
+        && manifest
+            .native_lifecycle
+            .as_ref()
+            .and_then(|lifecycle| lifecycle.source_checksum.as_deref())
+            == Some(expected_source_checksum.as_str()))
 }
 
 fn publish_conversion(
@@ -592,8 +830,17 @@ fn publish_conversion(
     })();
     if let Err(error) = db_result {
         if published_new {
-            let _ = fs::remove_file(&final_path);
-            let _ = sync_directory(&output_dir);
+            fs::remove_file(&final_path).with_context(|| {
+                format!(
+                    "conversion persistence failed ({error}); newly published CCS {} could not be removed",
+                    final_path.display()
+                )
+            })?;
+            sync_directory(&output_dir).with_context(|| {
+                format!(
+                    "conversion persistence failed ({error}); CCS cleanup was not durably synchronized"
+                )
+            })?;
         }
         return Err(error);
     }

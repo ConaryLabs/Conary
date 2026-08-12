@@ -361,6 +361,12 @@ fn parses_exact_adopt_convert_scope() {
         error.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
+
+    let error = match parse_cli(["conary", "system", "adopt", "curl", "--convert", "--full"]) {
+        Ok(_) => panic!("conversion must not recapture payload authority in the same command"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

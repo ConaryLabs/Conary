@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 36
-summary: Document opaque native source identity, repository-scoped follow or pin authority, capability-driven targets, Remi feed presets, and lifecycle handoff
+revision: 37
+summary: Document opaque native source identity, repository-scoped follow or pin authority, exact adopted-artifact conversion, capability-driven targets, Remi feed presets, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -595,6 +595,27 @@ Adoption preserves migration continuity for a machine that already has native
 package-manager state. It is not Conary's foreign-package acquisition path and
 does not prove source-independent cross-distro conversion or lifecycle
 execution.
+
+`conary system adopt <pkg> --convert` is the explicit bridge from that
+migration state to a portable CCS artifact. It selects the adopted trove by
+exact name/version/architecture, requires its persisted native identity and
+complete `AdoptedFull` payload ownership (`conary system adopt <pkg> --full`
+establishes it), and resolves one exact package row from an enabled,
+stream-bound enrolled native repository. The artifact is acquired into the
+Conary cache under its authenticated SHA-256 authority; cached RPM, Debian,
+and Arch artifacts are reverified with their ecosystem-specific package
+authority before reuse. The parser identity and every adopted payload node,
+resolved owner, content digest, symlink, hardlink topology edge, and explicit
+directory must match before the canonical native converter runs.
+
+Conversion does not transfer ownership of the currently adopted trove. It
+publishes a separately installable signed CCS under the Conary runtime root and
+records that path only after immediate strict verification. Same-directory
+staging plus one SQLite transaction ensures a failed conversion or persistence
+step leaves neither a newly published artifact nor an applied changeset. A
+later install, update, rollback, or remove consumes that CCS through Conary's
+ordinary source-independent transaction path without consulting the source
+package manager or its database.
 
 System-wide adoption preserves the native manager's explicit-versus-dependency
 reason for every installed package. On RPM systems, Conary uses each

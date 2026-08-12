@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-09
-revision: 45
-summary: Document selected-generation lifecycle proof and the current Fedora supported-host generation export gates
+last_updated: 2026-08-12
+revision: 46
+summary: Document selected-generation lifecycle proof, exact adopted-artifact CCS lifecycle proof, and the current Fedora supported-host generation export gates
 ---
 
 # Integration Testing
@@ -547,8 +547,8 @@ Corpus coverage boundaries (not product support exemptions):
 
 The focused `native-cross-source-lifecycle` manifest contains three non-flaky
 corpus cases, one for each exact source format. A failed case does not suppress
-the remaining source-format evidence. Each case executes
-the same shared lifecycle helper as `TNPM02X`, writes a versioned evidence
+the remaining source-format evidence. Each case executes the same shared
+lifecycle helper as `TNPM02X`, writes a versioned evidence
 envelope carrying both install and update artifact digests, the typed fixture
 build-manifest authority that produced them, and stage checkpoints. It is
 projected by `conary-test` into a typed
@@ -556,6 +556,20 @@ projected by `conary-test` into a typed
 ordinary test results and records the manifest-declared case count; a missing,
 malformed, skipped, failed, or unclassified corpus case makes the command fail
 even if generic command output happened to look successful.
+
+The adopted-artifact bridge has a separate hermetic command test:
+
+```bash
+cargo test -p conary --lib commands::adopt::convert
+```
+
+Its lifecycle case re-executes in an unprivileged user and private mount
+namespace when the parent test is not root. For RPM, Debian, and Arch it
+publishes two adoption-produced signed CCS versions, installs and updates them
+in a clean selected root, rolls the update back, removes the restored package,
+and confirms the persisted native lifecycle bundle. The execution path uses
+only CCS operations after publication and therefore never consults a source
+package manager or its database at runtime.
 The `pr-gate` workflow builds each configured distro image first and then runs
 that focused manifest across `fedora44`, `ubuntu-26.04`, and `arch`. Together,
 the required lanes authenticate all three checked-in source-ABI traces and run
