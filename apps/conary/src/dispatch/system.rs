@@ -115,6 +115,9 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             exclude,
             explicit_only,
             refresh,
+            convert,
+            version,
+            arch,
             sync_hook,
             remove_hook,
             quiet,
@@ -123,6 +126,15 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             let package_manager = package_manager.map(Into::into);
             if sync_hook {
                 commands::cmd_sync_hook_install(remove_hook, package_manager).await
+            } else if convert {
+                commands::cmd_adopt_convert(
+                    &packages,
+                    version.as_deref(),
+                    arch.as_deref(),
+                    &db.db_path,
+                    dry_run,
+                )
+                .await
             } else if status {
                 commands::cmd_adopt_status(&db.db_path, package_manager).await
             } else if refresh {

@@ -240,6 +240,21 @@ pub async fn download_package_verified(
     download_package_inner(repo_pkg, dest_dir, Some(options), None, false).await
 }
 
+/// Re-verify a checksum-addressed cached native artifact through the same
+/// checksum, size, and ecosystem-native package authority as a fresh download.
+pub async fn verify_cached_package_verified(
+    repo_pkg: &RepositoryPackage,
+    path: &Path,
+    options: &DownloadOptions,
+) -> Result<()> {
+    verify_checksum(path, &repo_pkg.checksum)?;
+    let expected_size = u64::try_from(repo_pkg.size).map_err(|_| {
+        Error::DownloadError("negative package size in repository metadata".to_string())
+    })?;
+    verify_file_size(path, expected_size)?;
+    verify_native_package(repo_pkg, path, options).await
+}
+
 /// Download a package from a verified static repository.
 ///
 /// Static repositories may legitimately publish local `file://` or bare-path

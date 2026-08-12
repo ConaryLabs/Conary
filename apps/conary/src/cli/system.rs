@@ -157,24 +157,24 @@ pub enum SystemCommands {
         db: DbArgs,
 
         /// Select native authority when more than one package database is populated
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with = "convert")]
         package_manager: Option<NativePackageManager>,
 
         /// Copy files to CAS for full management (enables rollback)
         /// Used by: default (package adopt), --system
-        #[arg(long, conflicts_with_all = ["status", "sync_hook", "from_sync_hook"])]
+        #[arg(long, conflicts_with_all = ["status", "convert", "sync_hook", "from_sync_hook"])]
         full: bool,
 
         /// Adopt all installed system packages
-        #[arg(long, conflicts_with_all = ["status", "refresh", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         system: bool,
 
         /// Show adoption status
-        #[arg(long, conflicts_with_all = ["system", "refresh", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["system", "refresh", "convert", "sync_hook"])]
         status: bool,
 
         /// Show what would be adopted without making changes
-        /// Used by: package names, --system, and --refresh. Package
+        /// Used by: package names, --system, --refresh, and --convert. Package
         /// preview shares discovery and policy with apply without writing
         /// SQLite, CAS, native package-manager, generation, hook, or live-root state.
         #[arg(long, conflicts_with_all = ["status", "sync_hook"])]
@@ -182,25 +182,37 @@ pub enum SystemCommands {
 
         /// Only adopt packages matching this glob pattern (e.g., "lib*")
         /// Used by: --system only
-        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "sync_hook"])]
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         pattern: Option<String>,
 
         /// Skip packages matching this glob pattern (e.g., "kernel*")
         /// Used by: --system only
-        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "sync_hook"])]
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         exclude: Option<String>,
 
         /// Only adopt explicitly installed packages (skip auto-installed deps)
         /// Used by: --system only
-        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "sync_hook"])]
+        #[arg(long, requires = "system", conflicts_with_all = ["status", "refresh", "convert", "sync_hook"])]
         explicit_only: bool,
 
         /// Check adopted packages for version drift and update changed ones
-        #[arg(long, conflicts_with_all = ["system", "status", "sync_hook"])]
+        #[arg(long, conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
         refresh: bool,
 
+        /// Convert exact adopted native artifacts to signed CCS packages
+        #[arg(long, conflicts_with_all = ["system", "status", "refresh", "sync_hook", "full"])]
+        convert: bool,
+
+        /// Exact package version to convert when installed variants share a name
+        #[arg(long, requires = "convert")]
+        version: Option<String>,
+
+        /// Exact package architecture to convert when installed variants share a name
+        #[arg(long, requires = "convert")]
+        arch: Option<String>,
+
         /// Install/remove system PM sync hooks
-        #[arg(long, conflicts_with_all = ["system", "status", "refresh"])]
+        #[arg(long, conflicts_with_all = ["system", "status", "refresh", "convert"])]
         sync_hook: bool,
 
         /// Remove sync hooks instead of installing (requires --sync-hook)
@@ -209,14 +221,14 @@ pub enum SystemCommands {
 
         /// Suppress output (for use by PM hooks and --refresh)
         /// Used by: --refresh only
-        #[arg(long, requires = "refresh", conflicts_with_all = ["system", "status", "sync_hook"])]
+        #[arg(long, requires = "refresh", conflicts_with_all = ["system", "status", "convert", "sync_hook"])]
         quiet: bool,
 
         /// Internal path used by installed native package-manager sync hooks.
         ///
         /// Requires --refresh --quiet and cannot be combined with --full; hook
         /// install/remove remains the explicit consent point.
-        #[arg(long, hide = true, requires_all = ["refresh", "quiet"], conflicts_with_all = ["system", "status", "sync_hook", "full"])]
+        #[arg(long, hide = true, requires_all = ["refresh", "quiet"], conflicts_with_all = ["system", "status", "convert", "sync_hook", "full"])]
         from_sync_hook: bool,
     },
 

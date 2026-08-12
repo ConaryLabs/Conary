@@ -333,6 +333,16 @@ impl ConvertedPackage {
         Ok(result)
     }
 
+    /// Delete conversion evidence for one installed trove.
+    pub fn delete_installed_by_trove(conn: &Connection, trove_id: i64) -> Result<usize> {
+        conn.execute(
+            "DELETE FROM converted_packages
+             WHERE artifact_kind = 'installed' AND trove_id = ?1",
+            [trove_id],
+        )
+        .map_err(Into::into)
+    }
+
     /// Check if a package needs re-conversion (algorithm upgraded)
     pub fn needs_reconversion(&self) -> bool {
         self.conversion_version != CONVERSION_VERSION
@@ -528,10 +538,15 @@ impl ConvertedPackage {
                     || self.chunk_hashes_json.is_some()
                     || self.total_size.is_some()
                     || self.content_hash.is_some()
-                    || self.ccs_path.is_some()
                 {
                     return Err(crate::Error::InternalError(format!(
                         "installed converted package {} carries repository-serving fields",
+                        self.record_identity()
+                    )));
+                }
+                if self.ccs_path.as_deref().is_some_and(str::is_empty) {
+                    return Err(crate::Error::InternalError(format!(
+                        "installed converted package {} carries an empty CCS path",
                         self.record_identity()
                     )));
                 }
@@ -547,6 +562,17 @@ impl ConvertedPackage {
                 self.repository_artifact().map(|_| ())
             }
         }
+    }
+
+    /// Attach the durable signed CCS output retained for an adopted package.
+    pub fn set_installed_ccs_path(&mut self, path: String) -> Result<()> {
+        if self.artifact_kind != ConvertedArtifactKind::Installed || path.is_empty() {
+            return Err(crate::Error::InternalError(
+                "installed CCS path requires a non-empty installed conversion".to_string(),
+            ));
+        }
+        self.ccs_path = Some(path);
+        Ok(())
     }
 
     /// Store passive scriptlet metadata generated during conversion.

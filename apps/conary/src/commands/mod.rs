@@ -70,8 +70,8 @@ pub mod verify;
 // Re-export all command handlers
 pub use adopt::{
     NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, UnadoptOptions, cmd_adopt,
-    cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts, cmd_native_handoff,
-    cmd_sync_hook_install, cmd_unadopt,
+    cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts,
+    cmd_native_handoff, cmd_sync_hook_install, cmd_unadopt,
 };
 pub use automation::{
     cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,

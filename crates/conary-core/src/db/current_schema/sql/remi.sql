@@ -32,7 +32,7 @@ CREATE TABLE converted_packages (
                     AND chunk_hashes_json IS NULL
                     AND total_size IS NULL
                     AND content_hash IS NULL
-                    AND ccs_path IS NULL
+                    AND (ccs_path IS NULL OR length(ccs_path) > 0)
                 )
                 OR (
                     artifact_kind = 'repository'

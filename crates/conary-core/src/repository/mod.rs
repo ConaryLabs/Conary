@@ -54,7 +54,8 @@ pub use dependencies::download_dependencies;
 pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package_verified,
     download_package_verified_with_progress, download_static_package_verified,
-    download_static_package_verified_with_progress, verify_checksum,
+    download_static_package_verified_with_progress, verify_cached_package_verified,
+    verify_checksum,
 };
 pub use effective_policy::{EffectiveSourcePolicy, load_effective_policy};
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
