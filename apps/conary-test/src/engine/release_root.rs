@@ -9,9 +9,13 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::release_root::{
     TARGET_RELEASE_EVIDENCE_SCHEMA, TargetArtifactDigestSource, TargetArtifactIdentity,
-    TargetArtifactRole, TargetReleaseEvidence, TargetReleaseStage, TargetReleaseStageResult,
+    TargetArtifactRole, TargetPackageIdentity, TargetReleaseEvidence, TargetReleaseStage,
+    TargetReleaseStageResult,
 };
-use crate::config::{DistroReleaseRoot, ExpectedOsRelease};
+use crate::config::{
+    AuthenticatedTargetRoot, DistroReleaseRoot, ExpectedNativePackage, ExpectedOsRelease,
+    NativePackageQuery, PinnedTargetFile,
+};
 use crate::container::{ContainerBackend, ContainerId};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -43,8 +47,10 @@ pub async fn capture_target_release_evidence(
     let observed_release = ExpectedOsRelease {
         id: values[0].to_string(),
         version_id: values[1].to_string(),
-        version_codename: values[2].to_string(),
-        ubuntu_codename: values[3].to_string(),
+        version_codename: nonempty(values[2]),
+        ubuntu_codename: nonempty(values[3]),
+        id_like: None,
+        build_id: None,
     };
     if observed_release != root.expected_os_release {
         bail!(
@@ -241,6 +247,13 @@ pub async fn capture_target_release_evidence(
         checkout_commit,
         checkout_dirty,
         conary_version,
+        packages: [&root.keyring_package, &root.identity_package]
+            .into_iter()
+            .map(|package| TargetPackageIdentity {
+                name: package.name.clone(),
+                version: package.version.clone(),
+            })
+            .collect(),
         artifacts,
         stages: [
             TargetReleaseStage::ReleaseIdentity,
@@ -255,6 +268,235 @@ pub async fn capture_target_release_evidence(
         })
         .collect(),
     })
+}
+
+pub async fn capture_authenticated_target_evidence(
+    backend: &dyn ContainerBackend,
+    container_id: &ContainerId,
+    target_profile: &str,
+    root: &AuthenticatedTargetRoot,
+    checkout_commit: String,
+    checkout_dirty: bool,
+) -> Result<TargetReleaseEvidence> {
+    root.validate()?;
+    let observed_release = probe_os_release(backend, container_id).await?;
+    if observed_release != root.expected_os_release {
+        bail!(
+            "target os-release identity mismatch: expected {:?}, observed {:?}",
+            root.expected_os_release,
+            observed_release
+        );
+    }
+
+    let mut packages = Vec::new();
+    for expected in &root.identity_packages {
+        let version = query_package(backend, container_id, root.package_query, expected).await?;
+        packages.push(TargetPackageIdentity {
+            name: expected.name.clone(),
+            version,
+        });
+    }
+
+    let mut artifacts = Vec::new();
+    let (_, base_digest) = root
+        .base_image
+        .rsplit_once("@sha256:")
+        .context("validated base image has no digest")?;
+    artifacts.push(TargetArtifactIdentity {
+        role: TargetArtifactRole::BaseImage,
+        digest_source: TargetArtifactDigestSource::PinnedBuildInput,
+        identity: root.base_image.clone(),
+        sha256: base_digest.to_string(),
+        fingerprints: Vec::new(),
+    });
+    for declaration in &root.repository_declarations {
+        artifacts.push(
+            verify_target_file(
+                backend,
+                container_id,
+                declaration,
+                TargetArtifactRole::NativeRepositoryDeclaration,
+                false,
+            )
+            .await?,
+        );
+    }
+    for signing_root in &root.signing_roots {
+        artifacts.push(
+            verify_target_file(
+                backend,
+                container_id,
+                signing_root,
+                TargetArtifactRole::SigningRoot,
+                true,
+            )
+            .await?,
+        );
+    }
+
+    let conary_digest = exec_stdout(backend, container_id, &["sha256sum", "/usr/bin/conary"])
+        .await?
+        .split_ascii_whitespace()
+        .next()
+        .context("conary SHA-256 probe returned no digest")?
+        .to_string();
+    validate_sha256(&conary_digest, "running conary executable")?;
+    let conary_version = exec_stdout(backend, container_id, &["/usr/bin/conary", "--version"])
+        .await?
+        .trim()
+        .to_string();
+    if conary_version.is_empty() {
+        bail!("running conary version is empty");
+    }
+    artifacts.push(TargetArtifactIdentity {
+        role: TargetArtifactRole::ConaryExecutable,
+        digest_source: TargetArtifactDigestSource::RunningTargetBytes,
+        identity: "/usr/bin/conary".to_string(),
+        sha256: conary_digest,
+        fingerprints: Vec::new(),
+    });
+
+    Ok(TargetReleaseEvidence {
+        schema_version: TARGET_RELEASE_EVIDENCE_SCHEMA,
+        target_profile: target_profile.to_string(),
+        release: observed_release,
+        checkout_commit,
+        checkout_dirty,
+        conary_version,
+        packages,
+        artifacts,
+        stages: [
+            TargetReleaseStage::ReleaseIdentity,
+            TargetReleaseStage::PackageIdentity,
+            TargetReleaseStage::RepositoryDeclarations,
+            TargetReleaseStage::ConaryRuntime,
+        ]
+        .into_iter()
+        .map(|stage| TargetReleaseStageResult {
+            stage,
+            passed: true,
+        })
+        .collect(),
+    })
+}
+
+async fn probe_os_release(
+    backend: &dyn ContainerBackend,
+    container_id: &ContainerId,
+) -> Result<ExpectedOsRelease> {
+    let output = exec_stdout(
+        backend,
+        container_id,
+        &[
+            "sh",
+            "-c",
+            ". /etc/os-release; printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$ID\" \"$VERSION_ID\" \"${VERSION_CODENAME:-}\" \"${UBUNTU_CODENAME:-}\" \"${ID_LIKE:-}\" \"${BUILD_ID:-}\"",
+        ],
+    )
+    .await?;
+    let values = output.lines().collect::<Vec<_>>();
+    if values.len() != 6 {
+        bail!("target os-release probe returned {} fields", values.len());
+    }
+    Ok(ExpectedOsRelease {
+        id: values[0].to_string(),
+        version_id: values[1].to_string(),
+        version_codename: nonempty(values[2]),
+        ubuntu_codename: nonempty(values[3]),
+        id_like: nonempty(values[4]),
+        build_id: nonempty(values[5]),
+    })
+}
+
+async fn query_package(
+    backend: &dyn ContainerBackend,
+    container_id: &ContainerId,
+    query: NativePackageQuery,
+    package: &ExpectedNativePackage,
+) -> Result<String> {
+    let command: Vec<&str> = match query {
+        NativePackageQuery::Dpkg => vec![
+            "dpkg-query",
+            "--showformat=${Version}",
+            "--show",
+            &package.name,
+        ],
+        NativePackageQuery::Pacman => vec!["pacman", "-Q", &package.name],
+        NativePackageQuery::Rpm => vec!["rpm", "-q", "--qf", "%{EVR}", &package.name],
+    };
+    let output = exec_stdout(backend, container_id, &command)
+        .await
+        .with_context(|| format!("query target package {}", package.name))?;
+    let observed = match query {
+        NativePackageQuery::Pacman => output
+            .split_ascii_whitespace()
+            .nth(1)
+            .context("pacman package query returned no version")?,
+        NativePackageQuery::Dpkg | NativePackageQuery::Rpm => output.trim(),
+    };
+    if observed != package.version {
+        bail!(
+            "target package {} version mismatch: expected {}, observed {}",
+            package.name,
+            package.version,
+            observed
+        );
+    }
+    Ok(observed.to_string())
+}
+
+async fn verify_target_file(
+    backend: &dyn ContainerBackend,
+    container_id: &ContainerId,
+    file: &PinnedTargetFile,
+    role: TargetArtifactRole,
+    inspect_fingerprints: bool,
+) -> Result<TargetArtifactIdentity> {
+    let output = exec_stdout(backend, container_id, &["sha256sum", &file.path]).await?;
+    let observed = output
+        .split_ascii_whitespace()
+        .next()
+        .context("target file SHA-256 probe returned no digest")?;
+    if observed != file.sha256 {
+        bail!(
+            "target file {} digest mismatch: expected {}, observed {}",
+            file.path,
+            file.sha256,
+            observed
+        );
+    }
+    let fingerprints = if inspect_fingerprints {
+        let listing = exec_stdout(
+            backend,
+            container_id,
+            &["gpg", "--batch", "--with-colons", "--show-keys", &file.path],
+        )
+        .await?;
+        let observed = primary_openpgp_fingerprints(&listing)?;
+        let expected = file.fingerprints.iter().cloned().collect::<BTreeSet<_>>();
+        if observed != expected {
+            bail!(
+                "target signing root {} fingerprint mismatch: expected {:?}, observed {:?}",
+                file.path,
+                expected,
+                observed
+            );
+        }
+        observed.into_iter().collect()
+    } else {
+        Vec::new()
+    };
+    Ok(TargetArtifactIdentity {
+        role,
+        digest_source: TargetArtifactDigestSource::RunningTargetBytes,
+        identity: file.path.clone(),
+        sha256: file.sha256.clone(),
+        fingerprints,
+    })
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 async fn exec_stdout(

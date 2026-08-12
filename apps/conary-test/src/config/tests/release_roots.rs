@@ -49,7 +49,10 @@ fn derivative_roots_carry_typed_release_and_package_authority() {
         assert_eq!(root.fixture, distro);
         assert_eq!(root.keyring_package.sha256.len(), 64);
         assert_eq!(root.identity_package.sha256.len(), 64);
-        assert_eq!(root.expected_os_release.ubuntu_codename, "noble");
+        assert_eq!(
+            root.expected_os_release.ubuntu_codename.as_deref(),
+            Some("noble")
+        );
         assert!(root.signing_roots.iter().all(|item| {
             item.fingerprints
                 .iter()
@@ -87,6 +90,69 @@ fn derivative_roots_carry_typed_release_and_package_authority() {
         ReleaseMediaAuthority::HttpsMetadata { metadata_url, .. }
             if metadata_url == "https://api.pop-os.org/builds/24.04/generic?arch=amd64"
     ));
+}
+
+#[test]
+fn rolling_roots_carry_authenticated_native_authority() {
+    let config = shipped_config();
+    for distro in ["cachyos", "opensuse-tumbleweed"] {
+        let root = config.distros[distro]
+            .target_root
+            .as_ref()
+            .unwrap_or_else(|| panic!("{distro} must declare target-root authority"));
+        root.validate()
+            .unwrap_or_else(|error| panic!("{distro} target root is invalid: {error}"));
+        assert!(root.base_image.contains("@sha256:"));
+        assert!(root.identity_packages.len() >= 4);
+        assert!(!root.repository_declarations.is_empty());
+        assert!(!root.signing_roots.is_empty());
+        assert_eq!(
+            root.repository_trust.len(),
+            if distro == "cachyos" { 4 } else { 6 }
+        );
+    }
+    assert_eq!(
+        config.distros["cachyos"]
+            .target_root
+            .as_ref()
+            .unwrap()
+            .expected_os_release
+            .id_like
+            .as_deref(),
+        Some("arch")
+    );
+    assert_eq!(
+        config.distros["opensuse-tumbleweed"]
+            .target_root
+            .as_ref()
+            .unwrap()
+            .expected_os_release
+            .id,
+        "opensuse-tumbleweed"
+    );
+}
+
+#[test]
+fn rolling_takeover_helper_uses_typed_configuration_not_distro_names() {
+    let path =
+        integration_root().join("../../fixtures/distro-roots/run-native-repository-takeover.py");
+    let source = std::fs::read_to_string(&path).expect("read native takeover helper");
+    for forbidden in ["cachyos", "tumbleweed", "opensuse"] {
+        assert!(
+            !source.to_ascii_lowercase().contains(forbidden),
+            "{} must not select product behavior from {forbidden}",
+            path.display()
+        );
+    }
+    for required in [
+        "preview_sha256",
+        "repository_trust",
+        "repository-takeover",
+        "projection_sha256",
+        "packager_key_threshold",
+    ] {
+        assert!(source.contains(required), "helper must require {required}");
+    }
 }
 
 #[test]

@@ -93,6 +93,13 @@ pub(super) fn collect_projection_content(
                     sources.push((path.clone(), fs::read(safe_join(selected_root, &path)?)?));
                 }
             }
+            if let Some(paths) =
+                explicit_zypper_global_trust_paths(selected_root, plan, &input.trust)
+            {
+                for path in paths {
+                    sources.push((path.clone(), fs::read(safe_join(selected_root, &path)?)?));
+                }
+            }
         }
     }
     sources.sort_by(|left, right| left.0.cmp(&right.0));

@@ -404,8 +404,12 @@ Each fixture family should record:
   lifecycle suite on every configured target for complete target-image
   coverage. Linux Mint 22.3 and Pop!_OS 24.04 additionally run
   `debian-derivative-acceptance`, which exercises their actual APT declarations,
-  trust roots, native package adoption, and repository takeover. `fedora44` is the
-  existing `conary-test` runner distro key; public CCS target IDs remain
+  trust roots, native package adoption, and repository takeover. CachyOS and
+  openSUSE Tumbleweed additionally run `rolling-derivative-acceptance`, which
+  authenticates their first-party image identity, native package versions,
+  repository declaration bytes, and signing roots before real pacman or Zypper
+  package adoption and exact repository takeover. `fedora44` is the existing
+  `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`.
   Published artifacts use
   `cargo run -p conary-test -- images build --distro <distro> --native-package <path>`

@@ -34,7 +34,9 @@ use projection::{
     ensure_projection_inputs_unchanged, load_current_projections, load_prior_projections,
     persist_staged, projection_drift, restore_projection_bytes, stage_projection_writes,
 };
-use trust_policy::{expected_trust_policy, explicit_apt_global_trust_paths};
+use trust_policy::{
+    expected_trust_policy, explicit_apt_global_trust_paths, explicit_zypper_global_trust_paths,
+};
 
 pub const TAKEOVER_MANIFEST_SCHEMA: u32 = 1;
 pub const TAKEOVER_PREVIEW_SCHEMA: u32 = 1;

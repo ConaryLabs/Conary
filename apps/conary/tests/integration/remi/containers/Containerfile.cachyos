@@ -1,0 +1,36 @@
+# tests/integration/remi/containers/Containerfile.cachyos
+# Authentic CachyOS rolling container for package-ecosystem acceptance.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG INSTALL_MODE=binary
+
+COPY conary* /tmp/install/
+
+RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.pkg.tar.zst ]; then \
+        pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst; \
+    elif [ -f /tmp/install/conary ]; then \
+        install -m 755 /tmp/install/conary /usr/bin/conary; \
+    else \
+        echo "No conary binary or package found in build context" >&2; exit 1; \
+    fi && rm -rf /tmp/install
+
+RUN /usr/bin/conary --version \
+    && command -v cmp \
+    && command -v diff \
+    && command -v gpg \
+    && command -v python3 \
+    && test -e /lib64/ld-linux-x86-64.so.2
+
+COPY config.toml /opt/remi-tests/config.toml
+COPY fixtures/ /opt/remi-tests/fixtures/
+
+RUN mkdir -p /var/lib/conary /results
+
+ENV DISTRO=cachyos
+ENV DB_PATH=/var/lib/conary/conary.db
+ENV RESULTS_DIR=/results
+ENV CONARY_BIN=/usr/bin/conary
+
+CMD ["sleep", "infinity"]

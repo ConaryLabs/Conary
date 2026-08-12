@@ -58,6 +58,14 @@ contract.
 System adoption is a migration-continuity feature for machines that already
 have native package-manager state. It is not the cross-distro product path and
 does not count as proof that conversion or source-independent execution works.
+For RPM adoption, the installed database's parallel `FILESTATES` array is the
+live-payload authority. Conary admits `NORMAL` and `NETSHARED`, the two states
+RPM itself defines as installed, and excludes `REPLACED`, `NOTINSTALLED`, and
+`WRONGCOLOR` records from capture. This preserves transactions such as
+`--excludedocs` without treating an intentionally uninstalled header entry as
+missing payload, and without capturing another package's replacement bytes.
+Unknown states fail closed. The pinned contract is RPM 4.20.1's
+[`rpmfileState` and `RPMFILE_IS_INSTALLED`](https://github.com/rpm-software-management/rpm/blob/c8dc5ea575a2e9c1488036d12f4b75f6a5a49120/include/rpm/rpmfiles.h#L31-L43).
 The explicit adoption-to-CCS bridge is valid only after Conary re-resolves an
 immutable source artifact from enrolled authority and proves its typed identity
 and complete payload equal the adopted record. It then enters the same parser,

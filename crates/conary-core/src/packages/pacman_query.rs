@@ -319,6 +319,13 @@ fn parse_pacman_info_field(output: &str, requested_key: &str) -> Result<String> 
     let mut value: Option<String> = None;
     let mut collecting = false;
     for (index, line) in output.lines().enumerate() {
+        if line.is_empty() {
+            // Pacman terminates each `-Qi` record with an empty separator
+            // line. An exact-name query still emits that delimiter after its
+            // sole record.
+            collecting = false;
+            continue;
+        }
         if line
             .as_bytes()
             .first()
@@ -694,6 +701,24 @@ Provides        : fixture-abi
             "glibc>=2.41  openssl zlib"
         );
         assert!(parse_pacman_info_field(output, "Missing").is_err());
+    }
+
+    #[test]
+    fn info_field_parser_accepts_pacman_record_separator() {
+        let output = "\
+Installed From  : extra
+Name            : jq
+Version         : 1.8.2-1
+Architecture    : x86_64
+Depends On      : glibc  oniguruma
+Validated By    : Signature
+
+";
+
+        assert_eq!(
+            parse_pacman_info_field(output, "Depends On").unwrap(),
+            "glibc  oniguruma"
+        );
     }
 
     #[test]

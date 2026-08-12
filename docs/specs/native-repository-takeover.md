@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 4
-summary: Define deterministic native repository takeover, exact legacy APT trust binding, owned projections, drift detection, and rollback
+revision: 5
+summary: Define deterministic native repository takeover, exact APT and Zypper global trust binding, owned projections, drift detection, and rollback
 ---
 
 # Native Repository Takeover And Projections
@@ -10,7 +10,8 @@ summary: Define deterministic native repository takeover, exact legacy APT trust
 
 Issue #381 established the fourth bounded W10 slice. Issue #384 extended its
 model conformance boundary; issue #396 owns execution on authentic Linux Mint
-and Pop!_OS roots. Takeover consumes lossless selected-root
+and Pop!_OS roots, while issue #398 extends that proof to CachyOS and openSUSE
+Tumbleweed. Takeover consumes lossless selected-root
 declarations, their trust-import dispositions, and an explicit versioned
 enrollment manifest. It produces a complete preview before mutation and can
 then make Conary the sole repository authority while preserving the native
@@ -75,6 +76,18 @@ the named certificate must exist in those exact bytes, and every other trust
 finding remains non-overridable. This preserves legacy distro declarations
 without treating the whole global keyring or a filename as repository trust.
 
+Zypper repositories may omit per-repository `gpgcheck`, `repo_gpgcheck`,
+`pkg_gpgcheck`, and `gpgkey` because
+[libzypp's canonical configuration](https://github.com/openSUSE/libzypp/blob/master/zypp.conf)
+documents globally enabled signature checking and per-repository overrides. An enrollment manifest may resolve only the
+resulting `MissingRequiredAuthority` findings when `/etc/zypp/zypp.conf` is
+absent, both RPM roles name the same exact primary fingerprints, and every file
+URL resolves directly below `/usr/lib/rpm/gnupg/keys/` in the selected root.
+Any explicit global override, disabled verification, different ambiguity, key
+outside that native store, or missing certificate remains a blocker. This
+models Tumbleweed's native authority without inferring trust from its distro
+name or repository aliases.
+
 ## Apply And Projection Ownership
 
 Apply consumes the exact preview digest. Before mutation it repeats discovery
@@ -84,7 +97,7 @@ the lossless grammar. Selected-root key files referenced by importable trust
 evidence become owned projections too. APT embedded OpenPGP blocks remain in
 their exact declaration projection and are persisted as bounded exact
 `application/pgp-keys` data authority for Conary's pinned certificate loader.
-Exact native global-keyring files admitted by an explicit legacy APT binding
+Exact native global-keyring files admitted by an explicit APT or Zypper binding
 also become owned projections.
 Projection content is persisted beside its SHA-256 and prior path state;
 subsequent operations render from that persisted Conary authority rather than
@@ -153,8 +166,10 @@ Clippy, formatting, current-schema rejection/rebuild proof, and documentation
 truth checks remain required.
 
 The model conformance corpus covers APT, ALPM, and Zypper derivative shapes.
-Authentic Linux Mint and Pop!_OS execution is a separate target gate: it must
-retain release-owned declaration and signing-root bytes, exercise typed
-preview/apply/repeat/rollback, and must not use a distro-name selector in
-product code. A configured lane is not verified evidence until its exact-head
+Authentic Linux Mint, Pop!_OS, CachyOS, and openSUSE Tumbleweed execution is a
+separate target gate: it must retain release-owned declaration and signing-root
+bytes, exercise typed preview/apply/repeat/rollback, and must not use a
+distro-name selector in product code. CachyOS additionally binds its CachyOS
+and Arch ALPM keyrings through exact master fingerprints and certification
+thresholds. A configured lane is not verified evidence until its exact-head
 hosted result passes.
