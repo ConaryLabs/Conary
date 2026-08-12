@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 47
-summary: Document authenticated Linux Mint and Pop!_OS target lanes, typed release evidence, and the native lifecycle gates
+revision: 48
+summary: Document authenticated derivative targets, transport normalization, typed release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -589,7 +589,10 @@ succeeds.
 The two Debian-derivative jobs also run `debian-derivative-acceptance`. Their
 shared Containerfile starts from one digest-pinned Ubuntu transport root, then
 installs exact release-owned identity and keyring packages and restores the
-actual APT declarations captured from authenticated release media. Build and
+actual APT declarations captured from authenticated release media. Before any
+release package is installed, the builder verifies and removes the pinned OCI
+transport's dpkg payload-exclusion policy; release-root package records must
+refer to materialized payload rather than Docker-reduced bytes. Build and
 runtime preflight require exact `/etc/os-release`, package versions,
 declaration bytes, signing-root bytes and fingerprints, and `conary --version`.
 Linux Mint's legacy global APT trust is resolved only by declaration-entry and

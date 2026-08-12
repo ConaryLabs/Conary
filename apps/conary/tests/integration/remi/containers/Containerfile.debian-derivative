@@ -23,7 +23,10 @@ ARG REQUIRED_APT_URIS
 ARG REQUIRED_SIGNING_ROOTS
 ARG INSTALL_MODE=binary
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN echo "61159013263411a7c7a4157a6ddcd4eca3329ee698e508850070af11338098db  /etc/dpkg/dpkg.cfg.d/excludes" \
+        | sha256sum --check --strict \
+    && rm /etc/dpkg/dpkg.cfg.d/excludes \
+    && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
@@ -54,6 +57,7 @@ RUN find /etc/apt/sources.list.d -maxdepth 1 -type f -delete \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eu; \
+    test ! -e /etc/dpkg/dpkg.cfg.d/excludes; \
     . /etc/os-release; \
     test "${ID}" = "${EXPECTED_OS_ID}"; \
     test "${VERSION_ID}" = "${EXPECTED_VERSION_ID}"; \
