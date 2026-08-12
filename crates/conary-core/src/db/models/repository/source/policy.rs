@@ -347,3 +347,32 @@ pub(crate) fn calculate_stream_binding(
     })?;
     Ok(crate::hash::sha256(&encoded))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_distribution_names_are_valid_typed_source_identities() {
+        for (source_identity, ecosystem) in [
+            ("linux-mint:22", NativeSourceEcosystem::Deb),
+            ("mx-linux:23", NativeSourceEcosystem::Deb),
+            ("manjaro:stable", NativeSourceEcosystem::Alpm),
+            ("cachyos:rolling", NativeSourceEcosystem::Alpm),
+            ("opensuse:tumbleweed", NativeSourceEcosystem::Rpm),
+            ("artix:rolling", NativeSourceEcosystem::Alpm),
+        ] {
+            let policy = RepositorySourcePolicy::new(
+                source_identity,
+                RepositoryPolicyScope::repository(format!("{source_identity}:core")).unwrap(),
+                ecosystem,
+                NativeSourceStream::rolling("current").unwrap(),
+                RepositoryUpdateMode::Follow,
+            )
+            .unwrap();
+
+            assert_eq!(policy.source_identity, source_identity);
+            assert_eq!(policy.version_scheme, ecosystem.version_scheme());
+        }
+    }
+}

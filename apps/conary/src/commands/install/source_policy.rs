@@ -43,10 +43,10 @@ pub(super) fn build_resolution_policy(
 
 /// Bind dependency resolution to exact selected-root provenance.
 ///
-/// An explicit scope or persisted system pin already supplies a primary
-/// source identity. Otherwise a repository-backed root establishes it from the
+/// An explicit scope may already supply a primary source identity. Otherwise
+/// a repository-backed root establishes it from the
 /// selected package/repository contract. Local files do not manufacture that
-/// authority; strict dependency solving will require the user to pin or scope
+/// authority; strict dependency solving will require the user to scope
 /// the transaction.
 pub(super) fn bind_transaction_source_identity(
     mut policy: ResolutionPolicy,
@@ -93,10 +93,11 @@ pub(super) fn bind_transaction_source_identity(
 
 /// Resolve the canonical name for a package.
 ///
-/// If `--from <profile>` was specified, resolve the canonical name to that
-/// profile's package name. Otherwise, use canonical expansion to find the best
-/// implementation for the current system (canonical expansion applies only to
-/// root requests, never deps).
+/// If `--from <source>` names a feed preset with canonical mappings, project
+/// the canonical name to that preset's package name. Opaque source identities
+/// that are not presets remain fully valid and keep the package name unchanged.
+/// Otherwise, use canonical expansion to find the uniquely authorized root
+/// implementation (canonical expansion never applies to dependencies).
 pub(super) fn resolve_canonical_name(
     conn: &rusqlite::Connection,
     package: &str,
@@ -109,7 +110,7 @@ pub(super) fn resolve_canonical_name(
             "--from source identity",
         )
         .map_err(anyhow::Error::msg)?;
-        let Some(profile_id) = exact_profile_id(target_source) else {
+        let Some(profile_id) = canonical_projection_profile_id(target_source) else {
             return Ok(None);
         };
         if let Some(canonical) =
@@ -171,7 +172,7 @@ pub(super) fn resolve_canonical_name(
     }
 }
 
-fn exact_profile_id(value: &str) -> Option<&'static str> {
+fn canonical_projection_profile_id(value: &str) -> Option<&'static str> {
     conary_core::repository::supported_profiles::profile_by_public_id(value)
         .map(conary_core::repository::supported_profiles::SupportedProfile::id)
 }
@@ -193,14 +194,20 @@ mod tests {
     }
 
     #[test]
-    fn exact_profile_id_accepts_only_public_ids() {
-        assert_eq!(exact_profile_id("fedora-44"), Some("fedora-44"));
-        assert_eq!(exact_profile_id("ubuntu-26.04"), Some("ubuntu-26.04"));
-        assert_eq!(exact_profile_id("arch"), Some("arch"));
+    fn named_feed_ids_enable_canonical_projection() {
+        assert_eq!(
+            canonical_projection_profile_id("fedora-44"),
+            Some("fedora-44")
+        );
+        assert_eq!(
+            canonical_projection_profile_id("ubuntu-26.04"),
+            Some("ubuntu-26.04")
+        );
+        assert_eq!(canonical_projection_profile_id("arch"), Some("arch"));
     }
 
     #[test]
-    fn exact_profile_id_rejects_unsupported_derivatives() {
+    fn opaque_source_identities_do_not_imply_named_canonical_projection() {
         for name in [
             "debian",
             "debian-13",
@@ -210,13 +217,13 @@ mod tests {
             "ubuntu-noble",
             "fedora-45",
         ] {
-            assert_eq!(exact_profile_id(name), None, "{name}");
+            assert_eq!(canonical_projection_profile_id(name), None, "{name}");
         }
     }
 
     #[test]
-    fn exact_profile_id_rejects_unknown() {
-        assert_eq!(exact_profile_id("nixos"), None);
+    fn unknown_source_identity_has_no_named_canonical_projection() {
+        assert_eq!(canonical_projection_profile_id("nixos"), None);
     }
 
     #[test]
@@ -243,17 +250,27 @@ mod tests {
     }
 
     #[test]
-    fn selected_root_requires_exact_supported_profile() {
-        for profile in [None, Some("fedora"), Some("rpm")] {
-            assert!(
-                bind_transaction_source_identity(
-                    ResolutionPolicy::new(),
-                    Some(&provenance(profile)),
-                )
-                .is_err(),
-                "{profile:?}"
+    fn selected_root_accepts_uncatalogued_exact_source_identity() {
+        for source_identity in ["linux-mint:22", "opensuse:tumbleweed", "artix:rolling"] {
+            let policy = bind_transaction_source_identity(
+                ResolutionPolicy::new(),
+                Some(&provenance(Some(source_identity))),
+            )
+            .unwrap();
+            assert_eq!(
+                policy.primary_source_identity(),
+                Some(source_identity),
+                "{source_identity}"
             );
         }
+    }
+
+    #[test]
+    fn selected_native_root_requires_an_exact_source_identity() {
+        assert!(
+            bind_transaction_source_identity(ResolutionPolicy::new(), Some(&provenance(None)))
+                .is_err()
+        );
     }
 
     #[test]

@@ -1,6 +1,5 @@
 // apps/conary/src/commands/model/apply/tests.rs
 
-use super::super::context::compute_model_diff;
 use super::super::test_support::{
     ReplatformMetadataFailpointReset, build_test_ccs_package,
     build_test_ccs_package_with_payloads_and_relations, insert_test_repository_package_resolution,
@@ -10,8 +9,6 @@ use super::super::test_support::{
 use super::*;
 use crate::commands::test_helpers::create_test_db;
 use conary_core::db::models::InstalledNativeLifecycleBundle;
-use conary_core::model::capture_current_state;
-use conary_core::model::parser::SystemModel;
 use tempfile::tempdir;
 
 fn published_or_pending_generation_has_path(db_path: &std::path::Path, path: &str) -> bool {
@@ -271,10 +268,6 @@ async fn test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction()
 [model]
 version = 1
 install = ["a-model-consumer", "z-model-provider"]
-
-[system.pin]
-distro = "fedora-44"
-strength = "strict"
 "#,
     )
     .unwrap();
@@ -313,8 +306,8 @@ strength = "strict"
 }
 
 #[tokio::test]
-async fn test_model_apply_executes_replatform_replacement_when_route_is_executable() {
-    const TEST_NAME: &str = "commands::model::apply::tests::test_model_apply_executes_replatform_replacement_when_route_is_executable";
+async fn test_replatform_executor_replaces_package_when_route_is_executable() {
+    const TEST_NAME: &str = "commands::model::apply::tests::test_replatform_executor_replaces_package_when_route_is_executable";
     if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
         return;
     }
@@ -387,37 +380,30 @@ async fn test_model_apply_executes_replatform_replacement_when_route_is_executab
     arch_pkg.source_profile = Some("arch".to_string());
     let arch_package_id = arch_pkg.insert(&conn).unwrap();
     insert_test_repository_package_resolution(&conn, arch_repo_id, arch_package_id, "vim", "9.1.0");
+    let actions = [DiffAction::ReplatformReplace {
+        package: "vim".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
+        current_version: "9.0.1".to_string(),
+        current_architecture: Some("x86_64".to_string()),
+        target_version: "9.1.0".to_string(),
+        architecture: Some("x86_64".to_string()),
+        target_repository: Some("arch-core".to_string()),
+        target_repository_package_id: Some(arch_package_id),
+    }];
+    let action_refs = actions.iter().collect::<Vec<_>>();
     drop(conn);
 
-    let model_path = temp_dir.path().join("system.toml");
-    std::fs::write(
-        &model_path,
-        r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-    )
-    .unwrap();
-
-    let result = cmd_model_apply(ApplyOptions {
-        model_path: model_path.to_str().unwrap(),
-        db_path: &db_path,
-        root: install_root.to_str().unwrap(),
-        dry_run: false,
-        skip_optional: false,
-        strict: false,
-        autoremove: false,
-        offline: true,
-    });
-
     let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
-    let result = result.await;
-
-    result.unwrap();
+    let (executed, errors) =
+        apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)
+            .await
+            .unwrap();
+    assert_eq!(executed, 1, "replatform should execute: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "unexpected replatform errors: {errors:?}"
+    );
 
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
@@ -521,10 +507,10 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
         "9.1.0",
     );
 
-    let actions = vec![DiffAction::ReplatformReplace {
+    let actions = [DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("arch".to_string()),
-        target_distro: "fedora-44".to_string(),
+        current_source_identity: Some("arch".to_string()),
+        target_source_identity: "fedora-44".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),
@@ -650,28 +636,23 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
     let arch_package_id = arch_pkg.insert(&conn).unwrap();
     insert_test_repository_package_resolution(&conn, arch_repo_id, arch_package_id, "vim", "9.1.0");
 
-    let model: SystemModel = toml::from_str(
-        r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#,
-    )
-    .unwrap();
-
-    let state = capture_current_state(&conn).unwrap();
-    let diff = compute_model_diff(&model, &state, &conn, true, false)
-        .await
-        .unwrap();
+    let actions = [DiffAction::ReplatformReplace {
+        package: "vim".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
+        current_version: "9.0.1".to_string(),
+        current_architecture: Some("x86_64".to_string()),
+        target_version: "9.1.0".to_string(),
+        architecture: Some("x86_64".to_string()),
+        target_repository: Some("arch-core".to_string()),
+        target_repository_package_id: Some(arch_package_id),
+    }];
     drop(conn);
 
     set_replatform_metadata_failpoint_for_test(true);
     let _reset = ReplatformMetadataFailpointReset;
 
-    let action_refs = diff.actions.iter().collect::<Vec<_>>();
+    let action_refs = actions.iter().collect::<Vec<_>>();
     let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
     let (executed, errors) =
         apply_replatform_changes(&db_path, install_root.to_str().unwrap(), &action_refs)

@@ -139,11 +139,11 @@ repository-scope policy owned by that exact repository identity. With a group,
 the exact group identifier is created or reused under the same source identity.
 
 `--source-profile` may still select a configured feed preset or Remi route, but
-native identity and refresh do not require it. When present it must still be an
-exact configured public profile and is copied to package rows for the existing
-resolver during this transitional W10 slice. When absent, native sync stores no
-profile projection; the later distro-gate-removal slice moves resolution onto
-source identity. The fixed three-profile SQLite CHECK is removed from
+native identity, resolution, and refresh do not require it. When present it
+must still be an exact configured public profile and is copied to package rows
+as an optional feed projection. When absent, native sync stores no profile
+projection; resolution uses the repository policy's opaque source identity.
+The fixed three-profile SQLite CHECK is removed from
 `repositories` and `repository_packages` now; source-profile validation is a
 typed preset lookup rather than repository identity authority. Third-party
 repositories use the same identity and refresh contract without being added to
@@ -165,7 +165,9 @@ implicit default, or adapter for repositories that lack an exact source
 policy. Native repository takeover subsequently advances the current database
 schema to revision 32 while retaining revision 31 as the stream-binding
 encoding identity. Package repository enrollment advances the current database
-schema to revision 33 without changing that binding grammar.
+schema to revision 33 without changing that binding grammar. Distro-gate
+removal advances it to revision 34, removes global pin/allowlist state, and
+keys diagnostic affinity by opaque source identity.
 
 Recovery is `conary system rebuild-db --discard-state --yes`, followed by
 re-enrollment from authoritative native declarations, imported trust roots,

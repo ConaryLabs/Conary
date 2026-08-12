@@ -206,7 +206,6 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/restore/`;
 `apps/conary/src/commands/update/mod.rs`;
 `apps/conary/src/commands/update/package.rs`;
-`apps/conary/src/commands/update/source_policy.rs`;
 `apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/update/adopted_authority.rs`;
 `apps/conary/src/commands/update/collection.rs`;
@@ -359,7 +358,6 @@ authority.
 
 **Neighbor systems:** `apps/conary/src/commands/update/mod.rs`;
 `apps/conary/src/commands/update/package.rs`;
-`apps/conary/src/commands/update/source_policy.rs`;
 `apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/update/adopted_authority.rs`;
 `apps/conary/src/commands/update/collection.rs`;
@@ -387,8 +385,8 @@ package-manager authority without an explicit takeover path.
 **Slug:** model
 
 **Capability:** diff, apply, check, snapshot, publish, lock, update, and
-remote-diff declarative system model files while preserving source-policy and
-replatform convergence behavior.
+remote-diff declarative system model files while preserving package ownership
+convergence and reproducible planning behavior.
 
 **Start here:** `apps/conary/src/commands/model.rs`;
 `apps/conary/src/commands/model/context.rs`;
@@ -406,7 +404,7 @@ replatform convergence behavior.
 `crates/conary-core/src/model/replatform.rs`;
 `docs/modules/source-selection.md`.
 
-**Neighbor systems:** install/remove execution, update source-policy selection,
+**Neighbor systems:** install/remove execution, exact-source update selection,
 repository remote include cache, derived package builds, live-host mutation
 acknowledgement, and conaryd package-job mutation intent.
 
@@ -424,10 +422,10 @@ behavior or live-mutation safety changes.
 **Docs to update:** `docs/modules/source-selection.md`;
 `docs/llms/subsystem-map.md`; `docs/ARCHITECTURE.md`.
 
-**Safety notes:** preserve `model check` drift exit code 2, source-policy
-persistence semantics, executable replatform planning boundaries, lockfile
+**Safety notes:** preserve `model check` drift exit code 2, package ownership
+convergence, executable replatform planning boundaries, lockfile
 reproducibility, remote include cache behavior, and refusal-before-live-mutation
-gates.
+gates. Declarative models do not own global repository source state.
 
 ## Repository Metadata, Requirements, And SAT Resolution
 
@@ -1033,7 +1031,7 @@ versioned canonical-map exchange.
 `crates/conary-core/src/repository/sync/remi.rs`;
 `docs/modules/source-selection.md`; `docs/modules/remi.md`.
 
-**Neighbor systems:** repository feed profiles, source-policy request scope,
+**Neighbor systems:** repository feed profiles, exact-source request scope,
 Remi repository sync, AppStream and Repology discovery caches, resolver
 canonical expansion, and current-schema rebuilds.
 

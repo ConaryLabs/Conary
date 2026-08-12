@@ -26,16 +26,19 @@ impl SystemAffinity {
                      / MAX(1, (SELECT COUNT(*) FROM troves)) AS percentage,
                  datetime('now')
              FROM (
-                 SELECT source_profile AS source_identity FROM troves
-                 WHERE source_profile IS NOT NULL
-                 UNION ALL
-                 SELECT COALESCE(rsp.source_identity, r.source_profile) AS source_identity
+                 SELECT COALESCE(
+                     rsp.source_identity,
+                     t.source_profile,
+                     r.source_profile
+                 ) AS source_identity
                  FROM troves t
-                 JOIN repositories r ON t.installed_from_repository_id = r.id
+                 LEFT JOIN repositories r ON t.installed_from_repository_id = r.id
                  LEFT JOIN repository_source_policies rsp ON rsp.id = r.source_policy_id
-                 WHERE t.source_profile IS NULL
-                   AND t.installed_from_repository_id IS NOT NULL
-                   AND COALESCE(rsp.source_identity, r.source_profile) IS NOT NULL
+                 WHERE COALESCE(
+                     rsp.source_identity,
+                     t.source_profile,
+                     r.source_profile
+                 ) IS NOT NULL
              )
              WHERE source_identity IS NOT NULL
              GROUP BY source_identity",
@@ -74,5 +77,53 @@ impl SystemAffinity {
             package_count: row.get(1)?,
             percentage: row.get(2)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::testing::create_test_db;
+
+    #[test]
+    fn native_repository_identity_precedes_optional_named_profile() {
+        let (_database, conn) = create_test_db();
+        conn.execute(
+            "INSERT INTO repository_source_policies
+             (source_identity, scope_kind, scope_identity, ecosystem, version_scheme,
+              stream_kind, stream_identity, update_mode)
+             VALUES ('opensuse:tumbleweed', 'repository', 'tumbleweed:x86_64',
+                     'rpm', 'rpm', 'rolling', 'current', 'follow')",
+            [],
+        )
+        .unwrap();
+        let policy_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO repositories
+             (name, url, source_profile, package_format, parser_config_json,
+              source_policy_id, repository_identity, stream_binding_sha256)
+             VALUES ('tumbleweed', 'https://example.test/tumbleweed', 'fedora-44',
+                     'rpm', '{\"format\":\"rpm\",\"architecture\":\"x86_64\"}',
+                     ?1, 'tumbleweed:x86_64', ?2)",
+            rusqlite::params![policy_id, "a".repeat(64)],
+        )
+        .unwrap();
+        let repository_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO troves
+             (name, version, type, install_source, install_reason, source_profile,
+              version_scheme, installed_from_repository_id)
+             VALUES ('demo', '1.0-1', 'package', 'repository', 'explicit',
+                     'fedora-44', 'rpm', ?1)",
+            [repository_id],
+        )
+        .unwrap();
+
+        SystemAffinity::recompute(&conn).unwrap();
+
+        let affinities = SystemAffinity::list(&conn).unwrap();
+        assert_eq!(affinities.len(), 1);
+        assert_eq!(affinities[0].source_identity, "opensuse:tumbleweed");
+        assert_eq!(affinities[0].package_count, 1);
     }
 }

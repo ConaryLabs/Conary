@@ -64,7 +64,7 @@ async fn process_package_set(
     if requests.is_empty() {
         return Ok(0);
     }
-    crate::commands::hint_unconfigured_source_policy();
+    crate::commands::hint_default_convergence();
 
     let conn = super::super::open_db(db_path)?;
     let policy =
@@ -155,7 +155,7 @@ async fn process_package_set(
 /// Establish the strict transaction source identity shared by every typed root.
 ///
 /// A single-package install selects its repository-backed root before solving
-/// dependencies, and that exact provenance binds the transaction profile. A
+/// dependencies, and that exact provenance binds the transaction source. A
 /// package set has no privileged root, so the only implicit authority is the
 /// one exact source identity common to every root's version-compatible candidates.
 /// Ambiguous or disjoint identity sets require an explicit source scope instead
@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn package_set_binds_only_profile_common_to_every_root() {
+    fn package_set_binds_only_source_identity_common_to_every_root() {
         let conn = test_db();
         add_candidate(&conn, "fedora", "fedora-44", 10, "alpha", "1");
         add_candidate(&conn, "ubuntu", "ubuntu-26.04", 10, "alpha", "1");
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn package_set_rejects_disjoint_root_profiles() {
+    fn package_set_rejects_disjoint_root_source_identities() {
         let conn = test_db();
         add_candidate(&conn, "fedora", "fedora-44", 10, "alpha", "1");
         add_candidate(&conn, "ubuntu", "ubuntu-26.04", 10, "beta", "1");
@@ -328,11 +328,15 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("no exact source profile common"));
+        assert!(
+            error
+                .to_string()
+                .contains("no exact source identity common")
+        );
     }
 
     #[test]
-    fn package_set_rejects_ambiguous_common_profiles() {
+    fn package_set_rejects_ambiguous_common_source_identities() {
         let conn = test_db();
         for package in ["alpha", "beta"] {
             add_candidate(&conn, "fedora", "fedora-44", 10, package, "1");
@@ -349,11 +353,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("ambiguous source profiles"));
+        assert!(error.to_string().contains("ambiguous source identities"));
     }
 
     #[test]
-    fn package_set_preserves_an_existing_transaction_profile() {
+    fn package_set_preserves_an_existing_transaction_source_identity() {
         let conn = test_db();
         let policy = bind_package_set_source_identity(
             &conn,

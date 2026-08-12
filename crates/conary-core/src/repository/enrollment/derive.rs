@@ -539,15 +539,18 @@ mod tests {
     }
 
     #[test]
-    fn repository_payload_without_exact_source_profile_fails_closed() {
+    fn repository_payload_without_named_feed_projection_derives_exact_source_identity() {
         let declaration = b"[browser]\nbaseurl=https://repo.example/rpm\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/browser.gpg\n".to_vec();
         let payloads = vec![
             payload("etc/yum.repos.d/browser.repo", declaration),
             payload("etc/pki/rpm-gpg/browser.gpg", certificate()),
         ];
 
-        let error = derive_rpm_repository_enrollments(&payloads, "x86_64", None).unwrap_err();
+        let intents = derive_rpm_repository_enrollments(&payloads, "x86_64", None).unwrap();
 
-        assert!(error.to_string().contains("exact RPM source profile"));
+        assert_eq!(intents.len(), 1);
+        let repository = &intents[0].repositories[0];
+        assert_eq!(repository.source_profile, None);
+        assert!(repository.source_identity.starts_with("rpm-source-"));
     }
 }

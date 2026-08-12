@@ -84,7 +84,10 @@ fn effective_installed_source_identity(
     if let Some(repository_id) = trove.installed_from_repository_id
         && let Some(repository) = Repository::find_by_id(conn, repository_id)?
     {
-        return Ok(repository.resolution_source_identity()?.map(str::to_string));
+        return Ok(repository
+            .resolution_source_identity()?
+            .map(str::to_string)
+            .or_else(|| trove.source_profile.clone()));
     }
     Ok(trove.source_profile.clone())
 }

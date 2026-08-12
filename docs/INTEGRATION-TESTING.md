@@ -758,7 +758,7 @@ message rather than pretending it is production-ready.
 | B | T177-T195 plus suffix IDs | 20 | Label, model, collection, derive |
 | C | T196-T220 plus suffix IDs | 27 | CCS ops, query, repo management |
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
-| E | T256-T277 plus suffix IDs | 24 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
+| E | T256-T273 and T276-T277 plus suffix IDs | 22 | Cross-source compatibility overlay: native package parity, source identity, model convergence, and takeover |
 | Native package-manager parity | TNPM01-TNPM18 plus TNPM02X | 19 | Cross-distro native PM parity and daily-driver corpus |
 | Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A | 3 | Attributable native-oracle install/update/rollback/remove corpus evidence on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
@@ -766,19 +766,19 @@ message rather than pretending it is production-ready.
 Phase 4 is intentionally mixed:
 
 - Positive-path coverage proves real flows such as tracked-config backup/restore,
-  the `conary distro` command family, label mutation, trigger mutation,
+  read-only `conary distro` diagnostics, label mutation, trigger mutation,
   selective CCS component installs, native local RPM/DEB/Arch installs, TUF
   bootstrap with a signed test root, provenance diff, pinned-fingerprint
-  federation peers, model-driven replatform apply, ready-to-activate takeover,
+  federation peers, model package convergence, ready-to-activate takeover,
   and the cross-distro takeover ownership ladder.
 - Preview-only flows are still exercised, but the assertions check for the
   expected explanatory output. Current examples include empty automation
   history and persisting automation configuration changes.
 
 Group E is intentionally richer than a simple “portability” smoke test. It
-covers canonical mapping, distro pinning and mixing behavior, source-policy
-replatform planning and apply flows, takeover across distro boundaries, and
-native-format package handling on the host distro.
+covers canonical mapping, repository-scoped source identity, read-only affinity
+diagnostics, package ownership convergence, takeover across source ecosystems,
+and native-format package handling on the host distribution.
 
 In addition to the container-backed suites, `apps/conary/tests/bootstrap_workflow.rs`
 exercises the `conary` binary directly for manifest-run record loading,

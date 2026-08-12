@@ -608,7 +608,7 @@ pub enum Commands {
     #[command(subcommand)]
     Config(ConfigCommands),
 
-    /// Distro pinning management
+    /// Named source-feed and installed-affinity diagnostics
     #[command(subcommand)]
     Distro(DistroCommands),
 

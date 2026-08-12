@@ -586,11 +586,11 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 33 retains the fail-closed native source and takeover state and
-adds signed package-repository enrollment, package and retained ownership,
-role-separated projection authority, and exact owner-definition bindings.
+Schema revision 34 retains signed package-repository enrollment and the
+fail-closed native source/takeover state, removes the retired global distro
+pin, and records diagnostic affinity by opaque source identity.
 Native repositories do not use the fixed public-profile catalog as repository
-identity or refresh authority. This is a current-schema hard cut: revision 32
+identity, eligibility, or refresh authority. This is a current-schema hard cut: revision 33
 state must be rebuilt and native repositories re-enrolled
 from authoritative declarations, trust roots, source/repository identities,
 stream decisions, and pins.

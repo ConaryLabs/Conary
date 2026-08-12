@@ -545,7 +545,6 @@ fn removed_selection_mode_is_rejected() {
 fn test_source_policy_with_track_only_convergence_is_configured() {
     let config = SystemConfig {
         convergence: ConvergenceIntent::TrackOnly,
-        ..SystemConfig::default()
     };
     assert!(config.is_source_policy_configured());
 }

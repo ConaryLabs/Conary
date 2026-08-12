@@ -225,7 +225,7 @@ fn test_excluded_dependency_package_removed() {
 fn test_summary_reports_visible_realignment_candidates() {
     let mut diff = ModelDiff::new();
     diff.visible_realignment_candidates = Some(crate::model::VisibleRealignmentCandidates {
-        target_distro: "arch".to_string(),
+        target_source_identity: "arch".to_string(),
         candidate_count: 7,
     });
 
@@ -238,8 +238,8 @@ fn test_summary_reports_visible_realignment_candidates() {
 fn test_replatform_replace_is_structural_and_descriptive() {
     let action = DiffAction::ReplatformReplace {
         package: "vim".to_string(),
-        current_distro: Some("fedora-44".to_string()),
-        target_distro: "arch".to_string(),
+        current_source_identity: Some("fedora-44".to_string()),
+        target_source_identity: "arch".to_string(),
         current_version: "9.0.1".to_string(),
         current_architecture: Some("x86_64".to_string()),
         target_version: "9.1.0".to_string(),

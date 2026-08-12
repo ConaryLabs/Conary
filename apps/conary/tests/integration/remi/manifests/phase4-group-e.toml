@@ -4,12 +4,12 @@
 #
 # Tests that verify Conary works correctly across distro boundaries:
 # CCS portability, canonical name mapping, dependency normalization,
-# resolver behavior differences, and distro replatforming.
+# resolver behavior differences, source-affinity diagnostics, and takeover.
 #
 # Variables: ${REMI_ENDPOINT}, ${DB_PATH}, ${CONARY_BIN}
 # Distro overrides: ${distro_repo}, ${native_pkg}, ${canonical_pkg},
 #                   ${canonical_native}, ${dep_provides_format},
-#                   ${solib_pkg}, ${replatform_target}, ${replatform_repo}
+#                   ${solib_pkg}
 
 [suite]
 name = "Phase 4 Group E: Cross-Distro Compatibility"
@@ -27,10 +27,6 @@ dep_provides_format = "libz.so"
 solib_pkg = "zlib"
 # Package with distro-specific name
 distro_specific_name = "dnf"
-# Replatform: fedora -> arch
-replatform_target = "arch"
-replatform_repo = "arch-remi"
-replatform_remi_distro = "arch"
 local_native_target = "rpm"
 local_native_glob = "*.rpm"
 
@@ -42,10 +38,6 @@ canonical_native = "python"
 dep_provides_format = "libz.so"
 solib_pkg = "zlib"
 distro_specific_name = "pacman"
-# Replatform: arch -> fedora
-replatform_target = "fedora44"
-replatform_repo = "fedora-remi"
-replatform_remi_distro = "fedora-44"
 local_native_target = "arch"
 local_native_glob = "*.pkg.tar.zst"
 
@@ -57,10 +49,6 @@ canonical_native = "python3"
 dep_provides_format = "libz.so"
 solib_pkg = "zlib1g"
 distro_specific_name = "apt"
-# Replatform: ubuntu -> arch
-replatform_target = "arch"
-replatform_repo = "arch-remi"
-replatform_remi_distro = "arch"
 local_native_target = "deb"
 local_native_glob = "*.deb"
 
@@ -422,69 +410,56 @@ stdout_contains = "Generation"
 run = "${CONARY_BIN} remove conary-test-fixture --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; ${CONARY_BIN} remove tree --sandbox always --yes --db-path ${DB_PATH} 2>/dev/null; true"
 
 # ==========================================================================
-# Distro Replatforming Tests (T268-T275)
+# Source identity and model convergence tests (T268-T273)
 # ==========================================================================
-# These tests verify that pinning to a different distro and applying the
-# model causes packages to converge toward the target distro.
+# Repository identity owns package selection. Distro commands remain
+# read-only diagnostics, while models own package convergence only.
 
 # --------------------------------------------------------------------------
-# T268: Distro pin set and verify
+# T268: Source diagnostics are available
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T268"
-name = "distro_pin_set"
-description = "Pin to the target replatform distro and verify the pin is stored"
+name = "source_affinity_diagnostics"
+description = "List named feed presets and report installed source affinity without mutating policy"
 timeout = 30
 group = "E"
 
 [[test.step]]
-conary = "distro set ${replatform_target} --mixing guarded"
+conary = "distro list"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Pinned to ${replatform_target}"
+stdout_contains = "Available source feeds"
 
 [[test.step]]
 conary = "distro info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${replatform_target}", "guarded"]
+stdout_contains = "diagnostic only"
 
 # --------------------------------------------------------------------------
-# T269: Install packages from current distro before replatform
+# T269: Install package from one exact repository
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T269"
-name = "pre_replatform_install"
-description = "Install native packages from the current distro to set up replatform baseline"
+name = "exact_repository_install"
+description = "Install a native package from one explicitly selected repository"
 timeout = 180
 group = "E"
 depends_on = ["T268"]
 
-# Add the replatform target repo with Remi strategy (may already exist, ignore errors)
-[[test.step]]
-run = "${CONARY_BIN} repo add ${replatform_repo} https://remi.conary.io --package-format json --default-strategy remi --remi-endpoint https://remi.conary.io --source-profile ${replatform_remi_distro} --db-path ${DB_PATH} 2>&1; true"
-
-[test.step.assert]
-exit_code = 0
-
-# Sync both distro repos
+# Sync the selected repository
 [[test.step]]
 conary = "repo sync ${distro_repo} --force"
 
 [test.step.assert]
 exit_code = 0
 
-[[test.step]]
-conary = "repo sync ${replatform_repo} --force"
-
-[test.step.assert]
-exit_code = 0
-
-# Install a package from the current distro
+# Install a package from the exact repository
 [[test.step]]
 conary = "install tree --repo ${distro_repo} --no-deps --yes --sandbox always"
 
@@ -499,49 +474,49 @@ exit_code = 0
 stdout_contains = "tree"
 
 # --------------------------------------------------------------------------
-# T270: Model diff shows replatform actions
+# T270: Model diff owns package convergence only
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T270"
-name = "replatform_model_diff"
-description = "Model diff with a distro pin shows replatform replacement proposals"
+name = "package_convergence_model_diff"
+description = "Model diff accepts package ownership intent without global source policy"
 timeout = 60
 group = "E"
 depends_on = ["T269"]
 
 # Write a minimal system model
 [[test.step]]
-run = "mkdir -p /etc/conary && cat > /tmp/replatform-model.toml << 'TOML'\n[system.pin]\ndistro = \"${replatform_target}\"\nstrength = \"guarded\"\n\n[model]\ninstall = [\"tree\"]\nTOML"
+run = "mkdir -p /etc/conary && cat > /tmp/source-model.toml << 'TOML'\n[model]\ninstall = [\"tree\"]\nTOML"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "${CONARY_BIN} model diff -m /tmp/replatform-model.toml --db-path ${DB_PATH} 2>&1; true"
+run = "${CONARY_BIN} model diff -m /tmp/source-model.toml --db-path ${DB_PATH} 2>&1; true"
 
 [test.step.assert]
 exit_code = 0
 
 # --------------------------------------------------------------------------
-# T271: Model apply executes replatform
+# T271: Model apply preserves the package intent
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T271"
-name = "replatform_model_apply"
-description = "Model apply with distro pin replaces packages from the target distro"
+name = "package_convergence_model_apply"
+description = "Model apply preserves an already satisfied package intent"
 timeout = 300
 group = "E"
 depends_on = ["T270"]
 
 [[test.step]]
-run = "${CONARY_BIN} model apply -m /tmp/replatform-model.toml --db-path ${DB_PATH} --yes --sandbox always 2>&1; echo EXIT:$?"
+run = "${CONARY_BIN} model apply -m /tmp/source-model.toml --db-path ${DB_PATH} --yes --sandbox always 2>&1; echo EXIT:$?"
 
 [test.step.assert]
 exit_code = 0
 
-# tree should still be installed (possibly from new distro)
+# tree remains installed from the explicitly selected repository
 [[test.step]]
 conary = "list tree --info"
 
@@ -550,13 +525,13 @@ exit_code = 0
 stdout_contains = "tree"
 
 # --------------------------------------------------------------------------
-# T272: Distro affinity shifts after replatform
+# T272: Source affinity remains diagnostic
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T272"
-name = "replatform_affinity_shift"
-description = "After replatform apply, distro info shows affinity shifted toward target"
+name = "source_affinity_after_model_apply"
+description = "Model apply leaves source affinity as measured diagnostic output"
 timeout = 30
 group = "E"
 depends_on = ["T271"]
@@ -566,78 +541,22 @@ conary = "distro info"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "${replatform_target}"
+stdout_contains = "diagnostic only"
 
 # --------------------------------------------------------------------------
-# T273: Model check after replatform
+# T273: Model check after convergence
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "T273"
-name = "replatform_model_check"
-description = "Model check confirms system matches the replatform model"
+name = "package_convergence_model_check"
+description = "Model check confirms the package ownership model"
 timeout = 30
 group = "E"
 depends_on = ["T271"]
 
 [[test.step]]
-run = "${CONARY_BIN} model check -m /tmp/replatform-model.toml --db-path ${DB_PATH} --verbose 2>&1; true"
-
-[test.step.assert]
-exit_code = 0
-
-# --------------------------------------------------------------------------
-# T274: Distro pin removal restores agnostic state
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T274"
-name = "distro_pin_remove"
-description = "Removing the distro pin returns system to distro-agnostic state"
-timeout = 30
-group = "E"
-
-[[test.step]]
-conary = "distro remove"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "distro-agnostic"
-
-[[test.step]]
-conary = "distro info"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "${replatform_target}"
-
-# --------------------------------------------------------------------------
-# T275: Mixing policy enforcement
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T275"
-name = "mixing_policy_strict"
-description = "Strict mixing policy blocks packages not from the pinned distro"
-timeout = 60
-group = "E"
-
-[[test.step]]
-conary = "distro set ${replatform_target} --mixing strict"
-
-[test.step.assert]
-exit_code = 0
-
-# Attempt install from the non-pinned distro repo should be blocked or warned
-[[test.step]]
-run = "${CONARY_BIN} install tree --repo ${distro_repo} --no-deps --yes --sandbox always --db-path ${DB_PATH} 2>&1; echo EXIT:$?"
-
-[test.step.assert]
-exit_code = 0
-
-# Clean up pin
-[[test.step]]
-conary = "distro remove"
+run = "${CONARY_BIN} model check -m /tmp/source-model.toml --db-path ${DB_PATH} --verbose 2>&1; true"
 
 [test.step.assert]
 exit_code = 0
@@ -652,7 +571,7 @@ name = "takeover_dry_run_cross_distro"
 description = "Takeover dry-run writes a planning record and reports the ready-to-activate generation contract"
 timeout = 180
 group = "E"
-depends_on = ["T275"]
+depends_on = ["T273"]
 
 [[test.step]]
 conary = "system takeover --dry-run"

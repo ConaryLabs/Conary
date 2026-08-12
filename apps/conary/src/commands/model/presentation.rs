@@ -40,7 +40,7 @@ fn render_realignment_proposal_preview(proposals: &[VisibleRealignmentProposal])
         .map(|proposal| {
             let mut rendered = format!(
                 "{} -> {} {}",
-                proposal.package, proposal.target_distro, proposal.target_version
+                proposal.package, proposal.target_source_identity, proposal.target_version
             );
             if let Some(arch) = &proposal.architecture {
                 rendered.push_str(&format!(" [{arch}]"));

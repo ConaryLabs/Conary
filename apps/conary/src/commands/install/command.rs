@@ -59,7 +59,7 @@ async fn cmd_install_with_intent(
     } = opts;
 
     // Hint if source policy is unconfigured (first-run guidance)
-    crate::commands::hint_unconfigured_source_policy();
+    crate::commands::hint_default_convergence();
 
     // Open the database once for all pre-install checks (canonical resolution,
     // adoption check, promotion check). This connection is later promoted to `mut`

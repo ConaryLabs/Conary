@@ -92,7 +92,7 @@ fn test_visible_realignment_candidates_counts_same_name_target_impls() {
     arch_pkg.insert(&conn).unwrap();
 
     let summary = visible_realignment_candidates(&conn, "arch").unwrap();
-    assert_eq!(summary.target_distro, "arch");
+    assert_eq!(summary.target_source_identity, "arch");
     assert_eq!(summary.candidate_count, 1);
 }
 
@@ -114,7 +114,7 @@ fn test_replatform_estimate_from_affinities_uses_target_counts() {
     let estimate = replatform_estimate_from_affinities(&affinities, "arch")
         .expect("expected affinity-based estimate");
 
-    assert_eq!(estimate.target_distro, "arch");
+    assert_eq!(estimate.target_source_identity, "arch");
     assert_eq!(estimate.aligned_packages, 3);
     assert_eq!(estimate.packages_to_realign, 9);
     assert_eq!(estimate.total_packages, 12);
@@ -178,18 +178,18 @@ fn test_source_policy_replatform_snapshot_combines_estimate_and_candidates() {
 
     let snapshot = source_policy_replatform_snapshot(&conn, "arch").unwrap();
 
-    assert_eq!(snapshot.target_distro, "arch");
+    assert_eq!(snapshot.target_source_identity, "arch");
     assert_eq!(snapshot.visible_realignment_candidates, 1);
     assert_eq!(snapshot.visible_realignment_proposals.len(), 1);
     assert_eq!(snapshot.visible_realignment_proposals[0].package, "vim");
     assert_eq!(
         snapshot.visible_realignment_proposals[0]
-            .current_distro
+            .current_source_identity
             .as_deref(),
         Some("fedora-44")
     );
     assert_eq!(
-        snapshot.visible_realignment_proposals[0].target_distro,
+        snapshot.visible_realignment_proposals[0].target_source_identity,
         "arch"
     );
     assert_eq!(

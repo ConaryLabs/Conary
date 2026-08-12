@@ -186,14 +186,14 @@ impl PackageSelector {
             let candidate_identity = candidate_source_identity(&pkg, &repo)?;
 
             // Apply resolution policy filter
-            if let Some(ref policy) = options.policy {
-                if !policy.accepts_candidate(&repo.name, candidate_identity, options.is_root) {
-                    debug!(
-                        "Policy rejected package {} {} from repository {} (scheme {:?})",
-                        pkg.name, pkg.version, repo.name, scheme
-                    );
-                    continue;
-                }
+            if let Some(ref policy) = options.policy
+                && !policy.accepts_candidate(&repo.name, candidate_identity, options.is_root)
+            {
+                debug!(
+                    "Policy rejected package {} {} from repository {} (scheme {:?})",
+                    pkg.name, pkg.version, repo.name, scheme
+                );
+                continue;
             }
 
             results.push(PackageWithRepo {

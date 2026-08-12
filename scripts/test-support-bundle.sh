@@ -78,8 +78,8 @@ case "$*" in
         printf 'No pending generation publication debt\n'
         ;;
     "distro info")
-        printf 'No source pin set. Resolution can mix configured feeds.\n'
-        printf 'Selection mode: policy (runtime default)\n'
+        printf 'Installed source affinity (diagnostic only):\n'
+        printf '  example-publisher: 2 packages (100.0%%)\n'
         ;;
     "repo list --all")
         printf 'remi https://user:password@example.invalid/repo?access_token=token123\n'
@@ -108,9 +108,6 @@ case "$*" in
         ;;
     *"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"*)
         printf 'changesets\nrepositories\ntroves\n'
-        ;;
-    *"SELECT key || '=' || value FROM settings"*)
-        printf 'source.allowed-distros=["arch"]\n'
         ;;
     *)
         printf 'unexpected sqlite3 command: %s\n' "$*" >&2
@@ -163,7 +160,6 @@ assert_file "$bundle/uname.txt"
 assert_file "$bundle/os-release.txt"
 assert_file "$bundle/db-integrity-check.txt"
 assert_file "$bundle/db-tables.txt"
-assert_file "$bundle/source-settings.txt"
 
 assert_contains "$bundle/README.txt" "Review this local support bundle before attaching it to an issue."
 assert_contains "$bundle/README.txt" "does not include conary.db"
@@ -171,8 +167,7 @@ assert_contains "$bundle/README.txt" "Database-backed diagnostics used: current 
 assert_contains "$bundle/conary-version.txt" "conary 0.8.0"
 assert_contains "$bundle/db-integrity-check.txt" "ok"
 assert_contains "$bundle/db-tables.txt" "troves"
-assert_contains "$bundle/distro-info.txt" "Resolution can mix configured feeds."
-assert_contains "$bundle/source-settings.txt" 'source.allowed-distros=["arch"]'
+assert_contains "$bundle/distro-info.txt" "Installed source affinity (diagnostic only):"
 
 assert_not_contains "$bundle/repo-list.txt" "user:password"
 assert_not_contains "$bundle/repo-list.txt" "token123"

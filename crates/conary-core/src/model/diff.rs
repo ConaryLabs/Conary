@@ -17,11 +17,11 @@ use super::{ResolvedModel, resolve_includes, resolve_includes_with_options};
 /// An action to take to reach the desired state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffAction {
-    /// Replace an installed package with a target-distro implementation during replatforming
+    /// Replace an installed package with an exact target-source implementation.
     ReplatformReplace {
         package: String,
-        current_distro: Option<String>,
-        target_distro: String,
+        current_source_identity: Option<String>,
+        target_source_identity: String,
         current_version: String,
         current_architecture: Option<String>,
         target_version: String,
@@ -89,7 +89,7 @@ pub enum DiffAction {
 /// Rough replatform scope estimate derived from affinity data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplatformEstimate {
-    pub target_distro: String,
+    pub target_source_identity: String,
     pub aligned_packages: i64,
     pub packages_to_realign: i64,
     pub total_packages: i64,
@@ -148,8 +148,8 @@ impl DiffAction {
         match self {
             DiffAction::ReplatformReplace {
                 package,
-                current_distro,
-                target_distro,
+                current_source_identity,
+                target_source_identity,
                 current_version,
                 current_architecture,
                 target_version,
@@ -157,10 +157,12 @@ impl DiffAction {
                 target_repository,
                 target_repository_package_id,
             } => {
-                let current = current_distro.as_deref().unwrap_or("unknown source");
+                let current = current_source_identity
+                    .as_deref()
+                    .unwrap_or("unknown source");
                 let mut desc = format!(
                     "Replatform {} ({} -> {} {} -> {})",
-                    package, current, target_distro, current_version, target_version
+                    package, current, target_source_identity, current_version, target_version
                 );
                 if let Some(current_arch) = current_architecture {
                     desc.push_str(&format!(" from [{}]", current_arch));

@@ -805,6 +805,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn artix_named_source_does_not_imply_a_systemd_target() {
+        let root = tempfile::tempdir().unwrap();
+        // Host capability inventory has no source-identity input. An Artix
+        // package therefore receives this exact target result rather than an
+        // Arch-profile-derived systemd assumption.
+        let inventory = HostCapabilityInventory::default();
+        let mut hooks = Hooks::default();
+        hooks.services.push(Service {
+            name: "portable.service".to_string(),
+            action: ServiceAction::Enable,
+            reversible: Some(true),
+        });
+
+        assert_eq!(inventory.init_system, InitSystemCapability::Unsupported);
+        assert!(inventory.systemd.is_none());
+        assert!(matches!(
+            inventory.preflight_hooks(root.path(), &hooks),
+            Err(HostCapabilityPreflightError::MissingCapability {
+                requirement: HostCapabilityRequirement::SystemdManager,
+                hook: "hooks.services"
+            })
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn runtime_service_action_preflights_for_deferred_generation_activation() {

@@ -156,10 +156,6 @@ async fn model_apply_dry_run_rejects_the_same_invalid_package_transaction_as_app
 [model]
 version = 1
 install = ["{package_name}"]
-
-[system.pin]
-distro = "fedora-44"
-strength = "strict"
 "#,
         ),
     )

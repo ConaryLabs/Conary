@@ -225,14 +225,14 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     conary_core::util::format_bytes(bytes)
 }
 
-/// Emit a one-time hint when source policy is not explicitly configured.
+/// Emit a one-time hint when ownership convergence is not explicitly configured.
 ///
-/// Checks whether a system model exists and, if so, whether the source policy
-/// section has been explicitly set. When running with pure defaults, emits an
-/// informational message guiding the user to configure their source policy.
+/// Checks whether a system model exists and, if so, whether convergence has
+/// been explicitly set. Repository source selection is deliberately not owned
+/// by this model-level hint.
 ///
 /// This is a non-blocking hint -- it never prevents the operation from proceeding.
-pub(crate) fn hint_unconfigured_source_policy() {
+pub(crate) fn hint_default_convergence() {
     use conary_core::model;
 
     if !model::model_exists(None) {
@@ -241,9 +241,10 @@ pub(crate) fn hint_unconfigured_source_policy() {
     }
     match model::load_model(None) {
         Ok(m) if !m.system.is_source_policy_configured() => {
-            eprintln!("hint: Source policy is using defaults (cas-backed, any distro).");
-            eprintln!("      Configure [system] in /etc/conary/system.toml to set convergence,",);
-            eprintln!("      distro pin, or allowed distros. See 'conary model diff' for details.",);
+            eprintln!("hint: Package ownership convergence is using the cas-backed default.");
+            eprintln!(
+                "      Configure [system] convergence in /etc/conary/system.toml if a different ownership level is required."
+            );
         }
         _ => {}
     }

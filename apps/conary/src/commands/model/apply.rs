@@ -273,13 +273,13 @@ pub(super) async fn apply_replatform_changes(
         let current_source = {
             let conn = rusqlite::Connection::open(db_path)?;
             find_current_replatform_source(&conn, &transaction)?
-                .or_else(|| transaction.current_distro.clone())
+                .or_else(|| transaction.current_source_identity.clone())
                 .unwrap_or_else(|| "unknown source".to_string())
         };
 
         let selection_reason = format!(
             "Replatformed from {} to {} by model apply",
-            current_source, transaction.target_distro
+            current_source, transaction.target_source_identity
         );
         let exact_release = {
             let repository_package_id = transaction
@@ -327,7 +327,7 @@ pub(super) async fn apply_replatform_changes(
                         println!(
                             "Executed replatform replacement: {} -> {} {}",
                             transaction.package,
-                            transaction.target_distro,
+                            transaction.target_source_identity,
                             transaction.target_version
                         );
                         executed += 1;
@@ -388,7 +388,7 @@ fn finalize_replatform_provenance(
     Trove::update_replatform_metadata(
         conn,
         installed_id,
-        &transaction.target_distro,
+        repository.source_profile.as_deref(),
         version_scheme,
         repository_id,
         selection_reason,
@@ -433,12 +433,23 @@ fn find_current_replatform_source(
         })
         .collect::<Vec<_>>();
 
-    Ok(select_replatform_variant(
+    let Some(trove) = select_replatform_variant(
         &matches,
         transaction.current_architecture.as_deref(),
         &transaction.package,
     )?
-    .and_then(|trove| trove.source_profile.clone()))
+    else {
+        return Ok(None);
+    };
+    if let Some(repository_id) = trove.installed_from_repository_id
+        && let Some(repository) = Repository::find_by_id(conn, repository_id)?
+    {
+        return Ok(repository
+            .resolution_source_identity()?
+            .map(str::to_string)
+            .or_else(|| trove.source_profile.clone()));
+    }
+    Ok(trove.source_profile.clone())
 }
 
 fn select_replatform_variant<'a>(

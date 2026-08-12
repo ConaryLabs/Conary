@@ -507,7 +507,7 @@ impl Trove {
     pub fn update_replatform_metadata(
         conn: &Connection,
         id: i64,
-        source_profile: &str,
+        source_profile: Option<&str>,
         version_scheme: VersionScheme,
         installed_from_repository_id: i64,
         selection_reason: &str,
@@ -848,7 +848,7 @@ mod tests {
         Trove::update_replatform_metadata(
             &conn,
             trove_id,
-            "arch",
+            Some("arch"),
             VersionScheme::Arch,
             repo_id,
             "Replatformed from fedora-44 to arch by model apply",

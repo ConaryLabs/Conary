@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 35
-summary: Document exact native source identity and update policy, multi-root model authority, Remi CCS package authority, canonical map authority, native declaration and trust-import planning, package identity, full-adoption root continuity, and lifecycle handoff
+revision: 36
+summary: Document opaque native source identity, repository-scoped follow or pin authority, capability-driven targets, Remi feed presets, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -17,91 +17,63 @@ logic in each flow.
 ## Data Flow
 
 ```text
-system.toml [system]
+repository declaration + authenticated trust
   |
-  +-- SystemConfig
-  |     allowed_distros
-  |     pin / distro / mixing
-  |     convergence
+  +-- RepositorySourcePolicy
+  |     opaque source_identity
+  |     ecosystem + native version scheme
+  |     stream + follow or authenticated pin
   |
-  +-- model apply mirrors explicit runtime state
-          |
-          +-- DistroPin table
-          |     current source pin + mixing policy
-          |
-          +-- settings table
-                source.allowed-distros
-                       |
-                       v
-              load_effective_policy()
-                       |
-                       v
-              EffectiveSourcePolicy
-                       |
-                       +-- ResolutionPolicy eligibility
-                       +-- root install / SAT ordering / update / replatform
+  +-- Repository
+        exact repository_identity
+        optional named feed projection
+                 |
+                 v
+        transaction provenance
+                 |
+                 v
+        ResolutionPolicy
+        root scope + exact source identity
+                 |
+                 +-- SAT selection / install / update
 ```
 
 ## Key Types
 
 | Type | File | Purpose |
 |------|------|---------|
-| `SystemConfig` | `model/parser/source_policy.rs` | Model-layer source-policy config from `[system]` |
-| `SourcePinConfig` | `model/parser/source_policy.rs` | Explicit source pin plus source strength |
+| `SystemConfig` | `model/parser/source_policy.rs` | Model-layer ownership convergence config from `[system]` |
 | `ConvergenceIntent` | `model/parser/source_policy.rs` | How aggressively Conary should move packages toward Conary-managed state |
 | `DependencyMixingPolicy` | `repository/resolution_policy.rs` | Closed `strict`/`guarded`/`permissive` dependency-mixing contract |
-| `ResolutionPolicy` | `repository/resolution_policy.rs` | Exact request scope, dependency mixing, and source allowlist used by the resolver |
-| `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Runtime policy assembled from DB state with one exact transaction profile |
+| `ResolutionPolicy` | `repository/resolution_policy.rs` | Exact repository/source request scope and transaction source identity used by the resolver |
+| `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Request-scoped runtime policy with no ambient distro authority |
 | `DiscoveredRepositoryDeclarations` | `repository/declarations/discovery.rs` | Lossless, source-located APT, DNF5, libzypp, and ALPM declarations confined to an explicit selected root |
 | `NativeTrustImportPlan` | `repository/declarations/trust_import/` | Deterministic importable, ambiguous, or unsupported role-separated trust preview for discovered native repositories |
 | `RepositorySourcePolicy` | `db/models/repository/source/policy.rs` | Exact native source, typed ecosystem/version ordering, stream, scope, and closed follow-or-pin decision |
 | `AuthenticatedSnapshotIdentity` | `repository/parsers/snapshot.rs` | SHA-256 identity of the exact top-level metadata bytes admitted by native trust |
-| `SystemAffinity` | `db/models/distro_pin.rs` | Informational installed-provenance measurement used for display and replatform estimates |
+| `SystemAffinity` | `db/models/system_affinity.rs` | Informational installed-provenance measurement that never selects mutation authority |
 | `ReplatformExecutionPlan` | `model/replatform.rs` | Executable and blocked replatform transactions derived from planned replacements |
 
 ## Model Inputs
 
-The user-facing source-policy surface lives under `[system]` in `system.toml`.
-
-Important fields:
-
-- `allowed_distros`: allowlist of exact supported public profile IDs Conary may
-  use when selecting packages.
-- `pin`: the source-pin contract, with an exact supported public profile ID
-  plus typed dependency-mixing strength.
-- `convergence`: how aggressively package ownership should move during source
-  transitions.
-
-The only mixing values are `strict`, `guarded`, and `permissive`. A configured
-`[system.pin]` must name both its exact profile and its strength; omission is a
-parse error rather than an implicit `guarded` choice. Model parsing rejects
-unknown profile IDs, profile route aliases, unknown mixing values, and unknown
-source-pin fields. The CLI parses the same typed mixing enum before changing
-state, and the current schema independently requires and constrains both
-persisted profile IDs and mixing values. No omitted or invalid value silently
-becomes a default. Absence of the entire pin remains the distinct supported
-unpinned state.
-
-The removed flat `[system].distro` and `[system].mixing` aliases are rejected;
-write `[system.pin]` directly. The former `profile` and `selection_mode`
-surfaces are also rejected: after external ranking signals were removed from
-mutation authority, both fields became decorative aliases for the same exact
-selection algorithm.
+`[system]` owns only target ownership convergence. Distro pins, source
+allowlists, and mixing settings are rejected as unknown fields. Source choice
+belongs to enrolled repository identity and an explicit request scope, not to
+a global system label. The `conary distro` command is therefore diagnostic:
+`list` shows named feed presets and `info` shows measured installed affinity;
+neither mutates selection policy.
 
 ## Runtime Mirrors
 
-Conary persists the runtime source-policy mirror in SQLite:
-
-- `DistroPin`: one exact supported public profile ID plus a typed mixing policy
-- `settings["source.allowed-distros"]`: JSON-encoded allowlist
-
-`load_effective_policy()` merges those tables into one `EffectiveSourcePolicy`
-and carries the exact pinned profile into `ResolutionPolicy` for strict or
-guarded mixing. Package format is never a substitute for that profile: Fedora
-and openSUSE packages may both use RPM while remaining distinct source
-authorities. Strict policy rejects an unprofiled transitive candidate instead
-of inferring authority from its repository name or version scheme. A corrupt
-persisted mixing value is a read error, not a fallback policy.
+Conary persists source authority per repository through
+`RepositorySourcePolicy`. `load_effective_policy()` starts with no ambient
+source authority and binds one only from `--from`, `--repo`, or exact selected
+root provenance. A native repository supplies its opaque, stream-bound
+`source_identity`; static and Remi sources may project a named feed ID. Package
+format is never a substitute: Fedora, Tumbleweed, Mint, and MX may share an
+ecosystem with other sources without becoming interchangeable authorities.
+Strict dependency resolution rejects a transitive candidate until one exact
+transaction source identity is established.
 
 `SystemAffinity` is a measured summary of exact installed-package provenance.
 It is deliberately not an input to eligibility, candidate ranking, canonical
@@ -526,21 +498,20 @@ Eligibility inputs include:
 
 - root request scope (`--repo`, `--from`)
 - mixing policy (`strict`, `guarded`, `permissive`)
-- explicit allowlist from `allowed_distros`
 
-Strict mixing admits only the exact transaction profile supplied by an
-explicit source scope, persisted system pin, or the exact profile carried by
-the selected repository-backed root package. The policy-explicit SAT API
-rejects strict dependency solving when that profile has not been established;
-it never treats an empty profile as an empty candidate set and never derives
+Strict mixing admits only the exact transaction source identity supplied by an
+explicit source/repository scope or selected repository-backed root package.
+The policy-explicit SAT API rejects strict dependency solving when that
+identity has not been established; it never treats an absent identity as an
+empty candidate set and never derives
 one from a package name, repository label, URL, or package format. Local files
-with repository dependencies therefore require an explicit scope or system
-pin. A declarative multi-root package set has no privileged root: when no
-profile is already pinned, its only implicit authority is the one exact source
-profile common to every root's version-compatible repository candidates.
-Disjoint or ambiguous profile sets fail closed and require an explicit pin;
-model order never selects source authority. Guarded mixing prefers an
-established profile and may fall back; permissive mixing does not add a profile
+with repository dependencies therefore require an explicit scope. A
+declarative multi-root package set has no privileged root: its only implicit
+authority is the one exact source identity common to every root's
+version-compatible repository candidates. Disjoint or ambiguous identity sets
+fail closed and require an explicit source scope; model order never selects
+source authority. Guarded mixing prefers an established identity and may fall
+back; permissive mixing does not add a source
 preference. An exact installed
 package-name or declared capability provider that satisfies a transitive
 requirement is favored before repository ranking, so dependency planning does
@@ -562,8 +533,8 @@ version constraint semantics.
 
 Source policy decides which package artifact may satisfy a request. Once an RPM,
 Debian, or Arch artifact is selected, its typed package-manager lifecycle ABI is
-part of that artifact's identity and is not reinterpreted by `DistroPin`
-mixing policy.
+part of that artifact's identity and is not reinterpreted by repository source
+identity or a target distribution label.
 
 The lifecycle bundle records the exact source format, distro, release,
 architecture, and native version scheme. Packages with source lifecycle
@@ -684,8 +655,9 @@ silently omit its paths.
 
 Install uses the shared effective policy and then layers root-only request
 scope such as `--repo` or `--from` on top of it. `--from` accepts only an
-exact public source-profile ID; Remi route slugs are not install aliases.
-Exact-name selection
+exact lexically valid source identity and does not consult the named feed
+catalog. A named feed ID may additionally enable canonical-name projection;
+unknown identities use exact package names. Exact-name selection
 and SAT ordering both respect the effective source-selection settings.
 
 ### Update
@@ -717,18 +689,9 @@ Update also enforces the limited-preview ownership boundary:
 
 ### Model Diff / Apply
 
-Model diff captures source-policy drift as structured actions such as:
-
-- `SetSourcePin`
-- `ClearSourcePin`
-- `SetAllowedDistros`
-- `ClearAllowedDistros`
-- `ReplatformReplace`
-
-Model apply persists source-policy changes first, then executes any
-replatform transactions that are actually executable through the shared install
-path. Blocked transactions remain visible in the rendered plan and in follow-up
-warnings.
+Model files do not own global source-selection state. Model diff/apply operate
+on packages, ownership convergence, and explicit replatform actions;
+repository enrollment and request-scoped selection remain source authority.
 
 `model apply --dry-run` resolves the complete incoming package set, downloads
 and authenticates its exact artifacts, and runs the same read-only batch
@@ -743,9 +706,9 @@ typed ordering error apply would return for an invalid prepared transaction.
 logic to find visible realignment targets and build a
 `ReplatformExecutionPlan`.
 
-Measured `SystemAffinity` contributes only the informational package-count
-estimate. The proposals and executable transactions are derived independently
-from the explicit target profile, authenticated repository metadata, exact
+Measured `SystemAffinity` contributes only diagnostic package counts. The
+proposals and executable transactions are derived independently from an
+explicit target source identity, authenticated repository metadata, exact
 package identity, dependency constraints, architecture compatibility, and
 available install routes. Affinity percentages never choose or rank a mutation
 candidate.
@@ -766,14 +729,14 @@ replatform replacements can execute immediately.
 The main CLI entry points are:
 
 ```bash
-conary distro set fedora-44 --mixing guarded
-conary distro mixing permissive
+conary distro list
 conary distro info
 ```
 
-`conary distro info` shows the exact pin, typed mixing policy, and measured
-source-affinity data. The affinity rows are informational; changing system
-state requires an explicit scoped install, update, or replatform operation.
+`conary distro list` shows named feed presets, not a destination support list.
+`conary distro info` shows measured source-affinity data. Both commands are
+informational; source choice requires enrolled repository authority and an
+explicit scoped install, update, or replatform operation.
 
 ## Where To Read Next
 
@@ -813,7 +776,7 @@ state requires an explicit scoped install, update, or replatform operation.
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
   execution, delta/full update handling, and lifecycle execution preflight
-- `apps/conary/src/commands/update/source_policy.rs` for source-policy update
+- `apps/conary/src/commands/update/resolution.rs` for exact-source update selection
   preview and replatform update context
 - `apps/conary/src/commands/update/selection.rs` for exact-source update
   candidate behavior
@@ -824,8 +787,8 @@ state requires an explicit scoped install, update, or replatform operation.
 - `apps/conary/src/commands/model.rs` for the model command hub
 - `apps/conary/src/commands/model/context.rs` for model loading and diff
   enrichment
-- `apps/conary/src/commands/model/presentation.rs` for source-policy and
-  replatform summaries
+- `apps/conary/src/commands/model/presentation.rs` for ownership-convergence and
+  explicit replatform summaries
 - `apps/conary/src/commands/model/apply.rs` for model apply execution and
   replatform install dispatch
 - `apps/conary/src/commands/model/apply/packages.rs` for model package-set
