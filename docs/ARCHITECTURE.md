@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 44
+last_updated: 2026-08-12
+revision: 45
 summary: Describe workspace architecture, exact native source identity and update policy, source-authority projections, native trust-import planning, repository verification, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -586,12 +586,12 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 32 retains the fail-closed persisted-state constraints and
-adds normalized native source policies, exact repository identities,
-revision-bound stream commitments, per-member pins, and admitted authenticated
-snapshot identity. Native repositories no longer use the fixed public-profile
-catalog as repository identity or refresh authority. This is a current-schema
-hard cut: revision 30 state must be rebuilt and native repositories re-enrolled
+Schema revision 33 retains the fail-closed native source and takeover state and
+adds signed package-repository enrollment, package and retained ownership,
+role-separated projection authority, and exact owner-definition bindings.
+Native repositories do not use the fixed public-profile catalog as repository
+identity or refresh authority. This is a current-schema hard cut: revision 32
+state must be rebuilt and native repositories re-enrolled
 from authoritative declarations, trust roots, source/repository identities,
 stream decisions, and pins.
 

@@ -127,6 +127,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular("/usr/bin/foo", b"pkg1 content", 0o755)],
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -159,6 +160,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
             b"pkg2 content",
             0o755,
         )],
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -214,6 +216,7 @@ fn test_prepared_package_to_trove() {
         architecture: Some("amd64".to_string()),
         description: Some("Test package".to_string()),
         extracted_files: Vec::new(),
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -262,6 +265,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         architecture: Some("x86_64".to_string()),
         description: Some("Repo dependency".to_string()),
         extracted_files: Vec::new(),
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -316,6 +320,7 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular(path, content, 0o755)],
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: vec![crate::commands::test_helpers::exact_package_self_provider(
             name,
@@ -338,6 +343,150 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         native_lifecycle_state: NativeLifecycleInstallState::default(),
         ccs: None,
     }
+}
+
+fn prepared_repository_package(
+    name: &str,
+    version: &str,
+    endpoint: &str,
+    key: &[u8],
+) -> PreparedPackage {
+    let declaration_path = "/etc/yum.repos.d/browser.repo";
+    let key_path = "/etc/pki/rpm-gpg/browser.gpg";
+    let declaration = format!(
+        "[browser]\nbaseurl={endpoint}\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://{key_path}\n"
+    );
+    let mut package = prepared_test_package(name, declaration_path, declaration.as_bytes());
+    package.version = version.to_string();
+    package.extracted_files[0].node.mode = libc::S_IFREG | 0o644;
+    package
+        .extracted_files
+        .push(extracted_regular(key_path, key, 0o644));
+    package.classified_files.insert(
+        ComponentType::Runtime,
+        vec![declaration_path.to_string(), key_path.to_string()],
+    );
+    package.provides = vec![crate::commands::test_helpers::exact_package_self_provider(
+        name,
+        version,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    )];
+    package.repository_enrollments =
+        conary_core::repository::enrollment::derive::derive_rpm_repository_enrollments(
+            &package.extracted_files,
+            "x86_64",
+            Some("fedora-44"),
+        )
+        .unwrap();
+    package
+}
+
+fn repository_certificate() -> Vec<u8> {
+    use sequoia_openpgp::cert::prelude::CertBuilder;
+    use sequoia_openpgp::serialize::Serialize;
+    let (certificate, _) = CertBuilder::new()
+        .add_userid("batch repository fixture")
+        .generate()
+        .unwrap();
+    let mut bytes = Vec::new();
+    certificate.serialize(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn batch_install_and_update_replace_repository_authority_atomically() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let key = repository_certificate();
+    let first = prepared_repository_package(
+        "browser-repository-release",
+        "1",
+        "https://repo.example/one/$basearch",
+        &key,
+    );
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![first])
+        .unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let old_trove = Trove::find_by_name(&conn, "browser-repository-release")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        conary_core::db::models::Repository::find_by_name(&conn, "browser")
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://repo.example/one/x86_64"
+    );
+    drop(conn);
+
+    let mut second = prepared_repository_package(
+        "browser-repository-release",
+        "2",
+        "https://repo.example/two/$basearch",
+        &key,
+    );
+    second.is_upgrade = true;
+    second.old_trove = Some(Box::new(old_trove));
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![second])
+        .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::Repository::find_by_name(&conn, "browser")
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://repo.example/two/x86_64"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM package_repository_enrollments
+             WHERE owner_kind = 'package'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
+    drop(conn);
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(crate::commands::remove::cmd_remove(
+            "browser-repository-release",
+            &db_path_string,
+            None,
+            Some("x86_64".to_string()),
+            SandboxMode::Always,
+            false,
+        ))
+        .unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        conary_core::db::models::Repository::find_by_name(&conn, "browser")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM package_repository_enrollments",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
 }
 
 fn prepared_test_hardlink_package(

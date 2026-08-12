@@ -9,8 +9,10 @@ use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod repository_enrollments;
 mod runtime_projections;
 
+use repository_enrollments::RepositoryEnrollmentSnapshot;
 use runtime_projections::RuntimeProjections;
 pub(crate) use runtime_projections::{
     ConfigRuntimeSnapshot, DerivedRuntimeSnapshot, InstalledNativeRuntimeSnapshot,
@@ -33,6 +35,7 @@ pub(crate) struct RollbackSystemAuthority {
     pub installed_native_runtime: Vec<InstalledNativeRuntimeSnapshot>,
     pub config_runtime: Vec<ConfigRuntimeSnapshot>,
     pub derived_runtime: Vec<DerivedRuntimeSnapshot>,
+    pub repository_enrollments: RepositoryEnrollmentSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +280,7 @@ impl RollbackSystemAuthority {
             installed_native_runtime: runtime.installed_native,
             config_runtime: runtime.config,
             derived_runtime: runtime.derived,
+            repository_enrollments: RepositoryEnrollmentSnapshot::capture(conn)?,
         };
         authority.validate()?;
         Ok(authority)
@@ -405,6 +409,7 @@ impl RollbackSystemAuthority {
             &self.config_runtime,
             &self.derived_runtime,
         )?;
+        self.repository_enrollments.validate()?;
         Ok(())
     }
 
@@ -524,6 +529,7 @@ impl RollbackSystemAuthority {
             &self.config_runtime,
             &self.derived_runtime,
         )?;
+        self.repository_enrollments.restore(tx)?;
         Ok(())
     }
 }

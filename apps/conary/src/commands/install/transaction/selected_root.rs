@@ -81,6 +81,12 @@ where
     )
     .context("Package relation transaction preflight failed")?;
     super::preflight_generation_file_capabilities_for_install(ctx, extraction)?;
+    conary_core::repository::enrollment::transaction::preflight_transition(
+        conn,
+        ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
+        ctx.repository_enrollments,
+    )
+    .context("Package repository enrollment preflight failed")?;
     inner::preflight_file_ownership(
         conn,
         extraction
@@ -387,6 +393,15 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
         if let Some(capabilities) = self.ctx.ccs_capabilities {
             conary_core::capability::store_capabilities(self.tx, installed.trove_id, capabilities)?;
         }
+        conary_core::repository::enrollment::transaction::apply_transition(
+            self.tx,
+            self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
+            installed.trove_id,
+            self.pkg.name(),
+            self.pkg.version(),
+            self.ctx.repository_enrollments,
+        )
+        .context("Failed to apply package repository enrollment")?;
         self.native_transaction
             .mark_install_payload_applied_for(self.tx, &self.installing_identity)?;
         self.config_transaction = Some(config_transaction);
@@ -413,6 +428,15 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
         if let Some(Some(package)) = self.removing_deb_identities.get(change_index) {
             self.native_transaction
                 .mark_remove_payload_started_for(self.tx, package)?;
+        }
+        if self
+            .ctx
+            .relation_removals
+            .iter()
+            .any(|removal| removal.trove_id == *trove_id)
+        {
+            conary_core::repository::enrollment::transaction::apply_removal(self.tx, *trove_id)
+                .context("Failed to release relation-removed package repository enrollment")?;
         }
         let selected_path = self.selected_root.selected_root().to_path_buf();
         finalize_owned_trove(

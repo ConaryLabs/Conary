@@ -28,6 +28,8 @@ pub(super) struct TransactionContext<'a> {
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
     pub(super) native_lifecycle_bundle:
         Option<&'a conary_core::ccs::native_lifecycle::NativeLifecycleBundle>,
+    pub(super) repository_enrollments:
+        &'a [conary_core::repository::enrollment::PackageRepositoryEnrollmentIntent],
     /// Exact installed packages that the incoming native relation contract
     /// authorizes this transaction to remove.
     pub(super) relation_removals: &'a [PackageRelationRemoval],

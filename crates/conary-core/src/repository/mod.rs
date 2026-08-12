@@ -34,6 +34,7 @@ pub mod trust;
 pub mod declarations;
 pub mod dependency_model;
 pub mod effective_policy;
+pub mod enrollment;
 pub mod package_relation;
 pub mod parsers;
 pub mod requirement;

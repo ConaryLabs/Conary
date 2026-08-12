@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 1
+last_updated: 2026-08-12
+revision: 2
 summary: Define deterministic native repository takeover, owned projections, drift detection, and rollback
 ---
 
@@ -103,10 +103,11 @@ only their mutation authority changes.
 
 ## Schema Hard Cut
 
-Schema revision 32 adds `native-projection` repository ownership plus normalized
+Schema revision 32 introduced `native-projection` repository ownership plus normalized
 takeover, membership, and projection-state tables. Projection paths are unique
 within the current Conary database, content and prior bytes are stored as BLOBs,
-and SHA-256 values are lowercase exact-length values. Revision 31 databases are
+and SHA-256 values are lowercase exact-length values. Schema revision 33 retains
+that authority while adding package enrollment; revision 32 databases are
 retired pre-alpha state. Recovery is:
 
 ```bash

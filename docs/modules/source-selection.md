@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 34
+last_updated: 2026-08-12
+revision: 35
 summary: Document exact native source identity and update policy, multi-root model authority, Remi CCS package authority, canonical map authority, native declaration and trust-import planning, package identity, full-adoption root continuity, and lifecycle handoff
 ---
 
@@ -599,6 +599,14 @@ declaration paths remain byte-identical compatibility projections, and any
 missing or changed path is reported as drift rather than becoming new
 authority. The exact contract is
 [`native-repository-takeover.md`](../specs/native-repository-takeover.md).
+
+After takeover, repository declarations and trust roots installed by a package
+participate in the package's selected-root and SQLite transaction. CCS carries
+the signed desired-state intent; direct native installation derives the same
+intent from exact package payload grammars before mutation. Update, removal,
+explicit retention, shared ownership, and rollback follow
+[`package-repository-enrollment.md`](../specs/package-repository-enrollment.md).
+The completed filesystem is never scanned for repository-looking files.
 
 `conary system adopt <pkg> --dry-run` builds the same package-specific plan
 that apply consumes. The preview opens an existing current-schema database

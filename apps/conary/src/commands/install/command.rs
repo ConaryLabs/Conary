@@ -213,6 +213,18 @@ async fn cmd_install_with_intent(
         format,
         policy.primary_profile(),
     )?;
+    let repository_enrollments = if format == crate::commands::PackageFormatType::Rpm {
+        let architecture = pkg.architecture().ok_or_else(|| {
+            anyhow::anyhow!("RPM repository enrollment requires package architecture authority")
+        })?;
+        conary_core::repository::enrollment::derive::derive_rpm_repository_enrollments(
+            &extraction.extracted_files,
+            architecture,
+            policy.primary_profile(),
+        )?
+    } else {
+        Vec::new()
+    };
     let resolution_capabilities = pkg.resolution_capabilities()?;
     let native_transaction = PreparedNativeTransaction::prepare_install(
         &conn,
@@ -263,6 +275,7 @@ async fn cmd_install_with_intent(
         defer_generation: false,
         repository_provenance,
         native_lifecycle_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
+        repository_enrollments: &repository_enrollments,
         relation_removals: &relation_plan.removals,
         relation_deconfigurations: &relation_plan.deconfigurations,
         retain_replaced_payload_until_lifecycle: native_transaction

@@ -405,5 +405,136 @@ mod tests {
         assert_eq!(result, "https://other-server.com/packages/foo.rpm");
     }
 
+    #[test]
+    fn package_enrolled_repository_admits_authenticated_sync_and_exact_update_selection() {
+        use crate::repository::enrollment::{
+            LastOwnerDisposition, PackageProjectionReference, PackageProjectionRole,
+            PackageRepositoryEnrollmentIntent, RepositoryDefinition,
+            RepositoryPolicyScopeInput, RepositorySourceStreamInput,
+            RepositoryUpdatePolicyInput, PACKAGE_REPOSITORY_ENROLLMENT_SCHEMA,
+        };
+
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let trove_id = crate::db::models::Trove::new(
+            "browser-repository-release".to_string(),
+            "1".to_string(),
+            crate::db::models::TroveType::Package,
+            VersionScheme::Rpm,
+        )
+        .insert(&conn)
+        .unwrap();
+        let root = OpenPgpTrustRoot {
+            url: "https://packages.example.test/browser-signing-key.gpg".to_string(),
+            fingerprint: "A".repeat(40),
+        };
+        let intent = PackageRepositoryEnrollmentIntent {
+            schema: PACKAGE_REPOSITORY_ENROLLMENT_SCHEMA,
+            intent_id: "browser-stable".to_string(),
+            repositories: vec![RepositoryDefinition {
+                name: "browser-stable".to_string(),
+                source_identity: "browser-rpm".to_string(),
+                repository_identity: "browser-stable-x86_64".to_string(),
+                scope: RepositoryPolicyScopeInput::Repository {
+                    identity: "browser-stable-x86_64".to_string(),
+                },
+                stream: RepositorySourceStreamInput::Channel {
+                    identity: "stable".to_string(),
+                },
+                update: RepositoryUpdatePolicyInput::Follow,
+                metadata_url: "https://packages.example.test/browser/rpm/stable/x86_64"
+                    .to_string(),
+                content_url: None,
+                parser: RepositoryParserConfig::Rpm {
+                    architecture: "x86_64".to_string(),
+                },
+                trust: RepositoryTrustPolicy::Rpm {
+                    metadata: RpmMetadataAuthority::OpenPgp {
+                        keys: vec![root.clone()],
+                    },
+                    package_keys: vec![root],
+                },
+                enabled: true,
+                priority: 10,
+                metadata_expire: 3600,
+                source_profile: Some("fedora-44".to_string()),
+            }],
+            projections: vec![PackageProjectionReference {
+                path: "/etc/yum.repos.d/browser.repo".to_string(),
+                sha256: "b".repeat(64),
+                mode: 0o644,
+                role: PackageProjectionRole::Declaration,
+            }],
+            last_owner: LastOwnerDisposition::RemoveWhenUnowned,
+        };
+
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::repository::enrollment::transaction::apply_transition(
+            &tx,
+            None,
+            trove_id,
+            "browser-repository-release",
+            "1",
+            &[intent],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let mut repository = Repository::find_by_name(&conn, "browser-stable")
+            .unwrap()
+            .unwrap();
+        let repository_id = repository.id.unwrap();
+        let mut update = PackageMetadata::new(
+            "browser".to_string(),
+            "2.0-1".to_string(),
+            "c".repeat(64),
+            4096,
+            "https://packages.example.test/browser/rpm/stable/x86_64/browser-2.0-1.x86_64.rpm"
+                .to_string(),
+            RepositoryDependencyFlavor::Rpm,
+            VersionScheme::Rpm,
+        );
+        update.architecture = Some("x86_64".to_string());
+        let synced = synced_package_row(
+            repository_id,
+            repository.source_profile.as_deref(),
+            &repository.url,
+            repository.content_url.as_deref(),
+            update,
+        );
+
+        persist_native_sync_rows(
+            &conn,
+            &mut repository,
+            vec![synced],
+            AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd.xml revision 2"),
+        )
+        .unwrap();
+
+        let selected = crate::repository::selector::PackageSelector::find_best_package(
+            &conn,
+            "browser",
+            &crate::repository::selector::SelectionOptions {
+                version: Some("2.0-1".to_string()),
+                repository: Some("browser-stable".to_string()),
+                architecture: Some("x86_64".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.package.version, "2.0-1");
+        assert_eq!(selected.repository.id, Some(repository_id));
+        assert!(selected.repository.authenticated_snapshot.is_some());
+        assert_eq!(
+            selected
+                .repository
+                .resolution_source_profile()
+                .unwrap()
+                .unwrap()
+                .id(),
+            "fedora-44"
+        );
+    }
+
     include!("tests/native.rs");
 }

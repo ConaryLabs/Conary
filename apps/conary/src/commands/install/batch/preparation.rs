@@ -87,6 +87,18 @@ pub fn prepare_package_for_batch(
         .package_payload()
         .map(conary_core::packages::payload::PackagePayload::into_files)
         .with_context(|| format!("Failed to extract files from package '{}'", pkg.name()))?;
+    let repository_enrollments = if format == super::super::PackageFormatType::Rpm {
+        let architecture = pkg.architecture().ok_or_else(|| {
+            anyhow::anyhow!("RPM repository enrollment requires package architecture authority")
+        })?;
+        conary_core::repository::enrollment::derive::derive_rpm_repository_enrollments(
+            &extracted_files,
+            architecture,
+            source_profile_id,
+        )?
+    } else {
+        Vec::new()
+    };
 
     // Native package formats do not carry Conary component authority. Keep
     // their complete payload losslessly in one explicit runtime component.
@@ -115,6 +127,7 @@ pub fn prepare_package_for_batch(
         architecture: pkg.architecture().map(|s| s.to_string()),
         description: pkg.description().map(|s| s.to_string()),
         extracted_files,
+        repository_enrollments,
         provides,
         requirements: pkg.requirements().to_vec(),
         relations: pkg.relations().to_vec(),

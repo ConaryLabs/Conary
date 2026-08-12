@@ -83,4 +83,5 @@ axum.workspace = true
 ed25519-dalek.workspace = true
 remi = { path = "../remi" }
 rpm.workspace = true
+sequoia-openpgp.workspace = true
 tower.workspace = true

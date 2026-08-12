@@ -7,12 +7,13 @@ use super::trust_import::{
     TrustEvidenceSource, TrustImportDisposition, TrustImportEvidence, plan_selected_root_trust,
 };
 use super::{DiscoveredRepositoryDeclarations, discover_selected_root};
-use crate::db::models::{
-    AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream, Repository,
-    RepositoryOwnership, RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode,
-};
+use crate::db::models::{Repository, RepositoryOwnership};
 use crate::error::{Error, Result};
 use crate::filesystem::path::safe_join;
+use crate::repository::enrollment::{
+    RepositoryDefinition, RepositoryPolicyScopeInput, RepositorySourceStreamInput,
+    RepositoryUpdatePolicyInput,
+};
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
     RpmMetadataAuthority, TrustRole,
@@ -37,46 +38,9 @@ use trust_policy::expected_trust_policy;
 pub const TAKEOVER_MANIFEST_SCHEMA: u32 = 1;
 pub const TAKEOVER_PREVIEW_SCHEMA: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum TakeoverPolicyScope {
-    Repository { identity: String },
-    Group { identity: String },
-}
-
-impl TakeoverPolicyScope {
-    fn materialize(&self) -> Result<RepositoryPolicyScope> {
-        match self {
-            Self::Repository { identity } => RepositoryPolicyScope::repository(identity.clone()),
-            Self::Group { identity } => RepositoryPolicyScope::group(identity.clone()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum TakeoverSourceStream {
-    Release { identity: String },
-    Channel { identity: String },
-    Rolling { identity: String },
-}
-
-impl TakeoverSourceStream {
-    fn materialize(&self) -> Result<NativeSourceStream> {
-        match self {
-            Self::Release { identity } => NativeSourceStream::release(identity.clone()),
-            Self::Channel { identity } => NativeSourceStream::channel(identity.clone()),
-            Self::Rolling { identity } => NativeSourceStream::rolling(identity.clone()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum TakeoverUpdatePolicy {
-    Follow,
-    Pin { snapshot_sha256: String },
-}
+pub type TakeoverPolicyScope = RepositoryPolicyScopeInput;
+pub type TakeoverSourceStream = RepositorySourceStreamInput;
+pub type TakeoverUpdatePolicy = RepositoryUpdatePolicyInput;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,35 +63,27 @@ pub struct TakeoverRepositoryInput {
 }
 
 impl TakeoverRepositoryInput {
+    fn definition(&self) -> RepositoryDefinition {
+        RepositoryDefinition {
+            name: self.name.clone(),
+            source_identity: self.source_identity.clone(),
+            repository_identity: self.repository_identity.clone(),
+            scope: self.scope.clone(),
+            stream: self.stream.clone(),
+            update: self.update.clone(),
+            metadata_url: self.metadata_url.clone(),
+            content_url: self.content_url.clone(),
+            parser: self.parser.clone(),
+            trust: self.trust.clone(),
+            enabled: self.enabled,
+            priority: self.priority,
+            metadata_expire: self.metadata_expire,
+            source_profile: self.source_profile.clone(),
+        }
+    }
+
     fn materialize(&self) -> Result<Repository> {
-        let ecosystem = NativeSourceEcosystem::from_repository_format(self.parser.format())?;
-        let (mode, pin) = match &self.update {
-            TakeoverUpdatePolicy::Follow => (RepositoryUpdateMode::Follow, None),
-            TakeoverUpdatePolicy::Pin { snapshot_sha256 } => (
-                RepositoryUpdateMode::Pin,
-                Some(AuthenticatedSnapshotIdentity::from_sha256(
-                    snapshot_sha256.clone(),
-                )?),
-            ),
-        };
-        let policy = RepositorySourcePolicy::new(
-            self.source_identity.clone(),
-            self.scope.materialize()?,
-            ecosystem,
-            self.stream.materialize()?,
-            mode,
-        )?;
-        let mut repository = Repository::new(self.name.clone(), self.metadata_url.clone());
-        repository.content_url = self.content_url.clone();
-        repository.enabled = self.enabled;
-        repository.priority = self.priority;
-        repository.metadata_expire = self.metadata_expire;
-        repository.source_profile = self.source_profile.clone();
-        repository.managed_by = RepositoryOwnership::NativeProjection;
-        repository.set_parser_config(self.parser.clone())?;
-        repository.set_trust_policy(self.trust.clone())?;
-        repository.set_native_source_policy(policy, self.repository_identity.clone(), pin)?;
-        Ok(repository)
+        self.definition().materialize()
     }
 }
 

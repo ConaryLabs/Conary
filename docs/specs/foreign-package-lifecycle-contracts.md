@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-08
-revision: 42
+last_updated: 2026-08-12
+revision: 43
 summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
 ---
 
@@ -17,6 +17,13 @@ package identity, provision, payload-record, and config-declaration models plus
 their fallible projection into this lifecycle and transaction contract. This
 document remains the owner of event order, arguments, installed config state,
 and selected-root execution.
+
+Repository declarations and signing roots installed by a package are a
+separate typed lifecycle effect. Their signed desired state, ownership, atomic
+install/update/remove behavior, and rollback contract are defined by
+[`package-repository-enrollment.md`](package-repository-enrollment.md). They
+are planned from authenticated package payloads before mutation and are never
+inferred by scraping a completed root or classifying script text.
 
 ## Cross-Distro Product Contract
 
