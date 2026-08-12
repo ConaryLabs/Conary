@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-31
-revision: 30
-summary: Map fixture ownership, including supported-host generation export, Fedora guest regeneration, and cross-source lifecycle proof
+last_updated: 2026-08-12
+revision: 31
+summary: Map fixture ownership, including authenticated Debian-derivative roots and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -382,6 +382,7 @@ Each fixture family should record:
   `apps/conary/tests/fixtures/conary-test-fixture/`;
   `apps/conary/tests/fixtures/native/`;
   `apps/conary/tests/fixtures/native-lifecycle-parity/`;
+  `apps/conary/tests/fixtures/distro-roots/`;
   `apps/conary/tests/fixtures/phase4-runtime-fixture{,-v2}/`;
   `apps/conary/tests/fixtures/native-selected-root-layout/`;
   `apps/conary/tests/fixtures/adversarial/`; disposable signing authority and
@@ -400,8 +401,10 @@ Each fixture family should record:
   and
   `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4`
   when behavior changes require live integration proof. Run the focused
-  lifecycle suite on `fedora44`, `ubuntu-26.04`, and `arch` for complete target
-  image coverage. `fedora44` is the
+  lifecycle suite on every configured target for complete target-image
+  coverage. Linux Mint 22.3 and Pop!_OS 24.04 additionally run
+  `debian-derivative-acceptance`, which exercises their actual APT declarations,
+  trust roots, native package adoption, and repository takeover. `fedora44` is the
   existing `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`.
   Published artifacts use
@@ -434,8 +437,15 @@ Each fixture family should record:
   all nine source-format/target-profile Conary rows. Each manifest lane supplies
   its native oracle format explicitly; fixture execution does not infer
   authority from distro-name matching. The typed workflow test owns the three
-  required target lanes and the stable all-lane aggregator context; do not
-  weaken either in workflow-only edits.
+  source-format cases across all six required target lanes and the stable
+  all-lane aggregator context; do not weaken either in workflow-only edits.
+  Derivative roots are assembled from digest-pinned transport images, exact
+  release identity/keyring packages, and byte-pinned APT declarations captured
+  from authenticated release media. Product code must not branch on their
+  distro names. A successful derivative run records typed `target_release`
+  artifact identities, signing fingerprints, and preflight stages; configuration
+  alone is not acceptance evidence. Artifact digest provenance remains typed as
+  pinned release authority, pinned build input, or running-target bytes.
 
 ### supported-host-generation-export
 

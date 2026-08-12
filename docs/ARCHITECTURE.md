@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 46
-summary: Describe workspace architecture, exact native source identity and update policy, source-authority projections, native trust-import planning, repository verification, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+revision: 47
+summary: Describe workspace architecture, exact native source authority, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -252,8 +252,8 @@ apps/conary-test/        Declarative test infrastructure (TOML manifests, contai
     +-- config/          TOML manifest and distro config parsing
     +-- engine/          Test suite, runner, assertions
     +-- container/       ContainerBackend trait, bollard implementation
-    +-- report/          JSON output, SSE event streaming
-    +-- server/          Axum HTTP API, MCP server (rmcp)
+    +-- report/          Typed JSON output and corpus aggregation
+    +-- remi_client.rs   Remi result and fixture client
     +-- cli.rs           Binary entrypoint
 
 apps/remi/               Remi server + federation

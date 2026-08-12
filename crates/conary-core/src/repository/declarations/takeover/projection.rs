@@ -43,6 +43,7 @@ pub(super) fn collect_projection_content(
     selected_root: &Path,
     declarations: &DiscoveredRepositoryDeclarations,
     trust: &NativeTrustImportPlan,
+    repositories: &[TakeoverRepositoryInput],
 ) -> Result<(Vec<ProjectionContent>, Vec<TakeoverBlocker>)> {
     let mut sources: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     sources.extend(
@@ -80,6 +81,17 @@ pub(super) fn collect_projection_content(
         for evidence in &plan.evidence {
             if let TrustEvidenceSource::SelectedRootFile { path } = &evidence.source {
                 sources.push((path.clone(), fs::read(safe_join(selected_root, path)?)?));
+            }
+        }
+        for input in repositories
+            .iter()
+            .filter(|input| input.declaration == plan.repository)
+        {
+            if let Some(paths) = explicit_apt_global_trust_paths(selected_root, plan, &input.trust)
+            {
+                for path in paths {
+                    sources.push((path.clone(), fs::read(safe_join(selected_root, &path)?)?));
+                }
             }
         }
     }

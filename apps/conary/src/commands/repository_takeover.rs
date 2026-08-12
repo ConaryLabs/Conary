@@ -5,8 +5,9 @@
 use crate::ui;
 use anyhow::{Context, Result, bail};
 use conary_core::repository::declarations::takeover::{
-    NativeRepositoryTakeoverManifest, TakeoverApplyStatus, apply_native_repository_takeover,
-    preview_native_repository_takeover, rollback_native_repository_takeover,
+    NativeRepositoryTakeoverManifest, NativeRepositoryTakeoverPreviewEnvelope, TakeoverApplyStatus,
+    apply_native_repository_takeover, preview_native_repository_takeover,
+    rollback_native_repository_takeover,
 };
 use std::path::Path;
 
@@ -43,14 +44,15 @@ pub fn cmd_repository_takeover(
         .with_context(|| format!("decode takeover manifest {}", manifest_path.display()))?;
     let preview = preview_native_repository_takeover(&conn, root, &manifest)
         .context("preview native repository takeover")?;
-    let digest = preview.sha256()?;
-    println!("{}", serde_json::to_string_pretty(&preview)?);
+    let envelope = NativeRepositoryTakeoverPreviewEnvelope::new(preview)?;
+    let digest = envelope.preview_sha256.clone();
+    println!("{}", serde_json::to_string_pretty(&envelope)?);
     ui::field("Preview SHA-256", &digest);
     if dry_run {
-        if !preview.blockers.is_empty() {
+        if !envelope.preview.blockers.is_empty() {
             ui::warn(&format!(
                 "takeover preview has {} blocker(s)",
-                preview.blockers.len()
+                envelope.preview.blockers.len()
             ));
         }
         return Ok(());

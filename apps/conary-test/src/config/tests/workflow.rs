@@ -160,7 +160,14 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
     assert!(!job.strategy.fail_fast);
     assert_eq!(
         job.strategy.matrix.distro,
-        ["fedora44", "ubuntu-26.04", "arch", "artix"]
+        [
+            "fedora44",
+            "ubuntu-26.04",
+            "arch",
+            "artix",
+            "linux-mint-22.3",
+            "pop-os-24.04",
+        ]
     );
 
     let runtime = named_step(&job.steps, "Require the hosted container runtime");
@@ -200,6 +207,43 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
     );
     assert!(!run.continue_on_error);
     assert_eq!(run.condition, None);
+
+    let derivative = named_step(
+        &job.steps,
+        "Prove authentic Debian derivative state and native APT behavior",
+    );
+    assert_eq!(
+        derivative.condition.as_deref(),
+        Some("${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}")
+    );
+    assert!(
+        derivative
+            .run
+            .as_deref()
+            .is_some_and(|command| command.contains("--suite debian-derivative-acceptance"))
+    );
+    let evidence = named_step(&job.steps, "Verify Debian derivative evidence");
+    assert_eq!(evidence.condition, derivative.condition);
+    assert!(
+        evidence
+            .run
+            .as_deref()
+            .is_some_and(|command| command.contains(".target_release.stages"))
+    );
+    for required in [
+        ".target_release.checkout_commit",
+        ".target_release.checkout_dirty == false",
+        "base_image",
+        "keyring_package",
+        "identity_package",
+        "digest_source",
+        "fingerprints",
+    ] {
+        assert!(
+            evidence.run.as_deref().unwrap().contains(required),
+            "derivative evidence gate must require {required}"
+        );
+    }
 }
 
 #[test]

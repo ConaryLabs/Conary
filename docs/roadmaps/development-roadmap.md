@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-12
-revision: 17
-summary: Track Conary's cross-distro package milestone, ordered workstreams, evidence, blockers, and the issue-decomposed W10 takeover horizon
+revision: 18
+summary: Track Conary's cross-distro package milestone, authenticated derivative execution, and the issue-decomposed W10 takeover horizon
 proof_baseline: "immutable v0.14.0 at fe23a604b64ea6f7cc87fce8298911e2245e027f and production remi-v0.9.5 at 101dba655257f1ff3d1bee689d9c5ac8b2b68cbd; exact asset, deployment, and released-package proof complete"
 current_milestone: first external tester loop
 active_workstream: W6 Authority Audit Closure
@@ -493,8 +493,10 @@ accepted here.
   package ecosystems without a distro-name routing matrix.
 - **Execution status:** #62 is tracked as bounded child slices. #377 and #379
   through #383 are merged. #68 provides exact adopted-artifact conversion;
-  #384 remains the final derivative and rolling-distro conformance slice.
-- **Issues:** #62 as epic; #377 and #379-#384 as tracked children; #68 follows.
+  #384 completed the synthetic derivative and rolling-distro model boundary.
+  #396 owns authentic Linux Mint and Pop!_OS release-root execution and evidence.
+- **Issues:** #62 as epic; #377 and #379-#384 as completed children; #396 as
+  authentic derivative execution; #68 follows.
 - **Decomposition:**
   - Lossless native repository declarations, with separate parsers and models
     for APT, RPM/DNF, Zypper, and ALPM. No generic repository-config model until

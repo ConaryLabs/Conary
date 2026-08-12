@@ -3,6 +3,8 @@
 use super::*;
 use std::path::PathBuf;
 
+mod release_roots;
+
 fn remi_manifest_path(file_name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../conary/tests/integration/remi/manifests")
@@ -822,6 +824,8 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
         ("ubuntu-26.04", "deb", "systemd"),
         ("arch", "arch", "systemd"),
         ("artix", "arch", "openrc"),
+        ("linux-mint-22.3", "deb", "systemd"),
+        ("pop-os-24.04", "deb", "systemd"),
     ] {
         let overrides = manifest
             .distro_overrides
@@ -838,6 +842,30 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
             overrides.get("target_init_system").map(String::as_str),
             Some(expected_init),
             "{distro} must declare its target init authority explicitly"
+        );
+    }
+}
+
+#[test]
+fn derivative_acceptance_manifest_covers_takeover_and_native_apt() {
+    let path = remi_manifest_path("debian-derivative-acceptance.toml");
+    let manifest = load_manifest(&path).expect("load Debian derivative acceptance manifest");
+    assert_eq!(manifest.suite.phase, 4);
+    assert_eq!(manifest.test.len(), 2);
+    assert_eq!(manifest.test[0].id, "TNPMD01");
+    assert_eq!(manifest.test[1].id, "TNPMD02");
+    let rendered = format!("{:?}", manifest.test);
+    for required in [
+        "run-apt-repository-takeover.py",
+        "system adopt jq",
+        "system adopt --refresh",
+        "system takeover",
+        "system unadopt jq",
+        "apt-get remove",
+    ] {
+        assert!(
+            rendered.contains(required),
+            "manifest must exercise {required}"
         );
     }
 }

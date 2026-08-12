@@ -78,6 +78,25 @@ fn images_build_accepts_an_explicit_native_package() {
 }
 
 #[test]
+fn images_base_ref_accepts_a_derivative_lane() {
+    let cli = Cli::try_parse_from([
+        "conary-test",
+        "images",
+        "base-ref",
+        "--distro",
+        "pop-os-24.04",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Images {
+            command: ImageCommands::BaseRef { distro },
+        } => assert_eq!(distro, "pop-os-24.04"),
+        _ => panic!("unexpected command"),
+    }
+}
+
+#[test]
 fn deploy_status_and_health_have_no_server_port() {
     let cli = Cli::try_parse_from(["conary-test", "deploy", "status"]).unwrap();
     match cli.command {

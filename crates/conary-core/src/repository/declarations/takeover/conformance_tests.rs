@@ -164,6 +164,71 @@ fn apt_derivative_fixture(
     (root, conn, manifest)
 }
 
+fn apt_legacy_global_trust_fixture() -> (
+    tempfile::TempDir,
+    Connection,
+    NativeRepositoryTakeoverManifest,
+) {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("etc/apt/sources.list.d")).unwrap();
+    fs::create_dir_all(root.path().join("etc/apt/trusted.gpg.d")).unwrap();
+    let (certificate, fingerprint) = certificate();
+    let key_path = root.path().join("etc/apt/trusted.gpg.d/derivative.gpg");
+    fs::write(&key_path, certificate).unwrap();
+    fs::write(
+        root.path().join("etc/apt/sources.list.d/derivative.list"),
+        "deb https://packages.example/debian stable main\n",
+    )
+    .unwrap();
+    let db_path = root.path().join("conary.db");
+    crate::db::init(&db_path).unwrap();
+    let conn = crate::db::open(&db_path).unwrap();
+    let declarations = discover_selected_root(root.path()).unwrap();
+    let trust = plan_selected_root_trust(&declarations);
+    assert!(matches!(
+        trust.repositories[0].disposition,
+        TrustImportDisposition::Ambiguous { ref findings }
+            if findings.iter().all(|finding|
+                finding.kind == TrustImportFindingKind::ImplicitGlobalAuthority)
+    ));
+    let reference = trust.repositories[0].repository.clone();
+    let policy = RepositoryTrustPolicy::Debian {
+        release_keys: vec![OpenPgpTrustRoot {
+            url: url::Url::from_file_path(&key_path).unwrap().to_string(),
+            fingerprint,
+        }],
+    };
+    let manifest = NativeRepositoryTakeoverManifest {
+        schema: TAKEOVER_MANIFEST_SCHEMA,
+        repositories: vec![TakeoverRepositoryInput {
+            declaration: reference,
+            name: "derivative-main".to_string(),
+            source_identity: "derivative:stable:amd64".to_string(),
+            repository_identity: "derivative:main:amd64".to_string(),
+            scope: TakeoverPolicyScope::Repository {
+                identity: "derivative:main:amd64".to_string(),
+            },
+            stream: TakeoverSourceStream::Release {
+                identity: "stable".to_string(),
+            },
+            update: TakeoverUpdatePolicy::Follow,
+            metadata_url: "https://packages.example/debian".to_string(),
+            content_url: None,
+            parser: RepositoryParserConfig::Deb {
+                distribution: "stable".to_string(),
+                component: "main".to_string(),
+                architecture: "amd64".to_string(),
+            },
+            trust: policy,
+            enabled: true,
+            priority: 50,
+            metadata_expire: 3600,
+            source_profile: None,
+        }],
+    };
+    (root, conn, manifest)
+}
+
 fn tumbleweed_fixture() -> (
     tempfile::TempDir,
     Connection,
@@ -250,6 +315,83 @@ fn exact_alpm_keyring_binding_resolves_only_the_native_keyring_ambiguity() {
     assert_eq!(
         stored.source_policy.expect("source policy").stream.kind(),
         "rolling"
+    );
+}
+
+#[test]
+fn exact_manifest_binding_resolves_only_apt_legacy_global_trust() {
+    let (root, conn, manifest) = apt_legacy_global_trust_fixture();
+    let source_path = Path::new("/etc/apt/sources.list.d/derivative.list");
+    let key_path = Path::new("/etc/apt/trusted.gpg.d/derivative.gpg");
+    let source_before = fs::read(safe_join(root.path(), source_path).unwrap()).unwrap();
+    let key_before = fs::read(safe_join(root.path(), key_path).unwrap()).unwrap();
+
+    let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
+    assert!(preview.blockers.is_empty(), "{:?}", preview.blockers);
+    assert!(
+        preview
+            .projections
+            .iter()
+            .any(|item| item.path == source_path)
+    );
+    assert!(preview.projections.iter().any(|item| item.path == key_path));
+
+    let digest = preview.sha256().unwrap();
+    let applied = apply_native_repository_takeover(&conn, root.path(), &manifest, &digest).unwrap();
+    assert_eq!(applied.status, TakeoverApplyStatus::Applied);
+    let repeated =
+        apply_native_repository_takeover(&conn, root.path(), &manifest, &digest).unwrap();
+    assert_eq!(repeated.status, TakeoverApplyStatus::AlreadyApplied);
+    rollback_native_repository_takeover(&conn, root.path()).unwrap();
+
+    assert_eq!(
+        fs::read(safe_join(root.path(), source_path).unwrap()).unwrap(),
+        source_before
+    );
+    assert_eq!(
+        fs::read(safe_join(root.path(), key_path).unwrap()).unwrap(),
+        key_before
+    );
+}
+
+#[test]
+fn apt_legacy_global_trust_requires_an_exact_native_keyring_binding() {
+    let (root, conn, manifest) = apt_legacy_global_trust_fixture();
+
+    let mut wrong_fingerprint = manifest.clone();
+    let RepositoryTrustPolicy::Debian { release_keys } =
+        &mut wrong_fingerprint.repositories[0].trust
+    else {
+        unreachable!()
+    };
+    release_keys[0].fingerprint = "A".repeat(40);
+    let preview =
+        preview_native_repository_takeover(&conn, root.path(), &wrong_fingerprint).unwrap();
+    assert!(
+        preview
+            .blockers
+            .iter()
+            .any(|blocker| matches!(blocker, TakeoverBlocker::TrustPolicyMismatch { .. }))
+    );
+
+    let mut outside_native_keyring = manifest;
+    let RepositoryTrustPolicy::Debian { release_keys } =
+        &mut outside_native_keyring.repositories[0].trust
+    else {
+        unreachable!()
+    };
+    let native_key = root.path().join("etc/apt/trusted.gpg.d/derivative.gpg");
+    let unrelated = root.path().join("opt/derivative.gpg");
+    fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+    fs::copy(native_key, &unrelated).unwrap();
+    release_keys[0].url = url::Url::from_file_path(unrelated).unwrap().to_string();
+    let preview =
+        preview_native_repository_takeover(&conn, root.path(), &outside_native_keyring).unwrap();
+    assert!(
+        preview
+            .blockers
+            .iter()
+            .any(|blocker| matches!(blocker, TakeoverBlocker::TrustPolicyMismatch { .. }))
     );
 }
 

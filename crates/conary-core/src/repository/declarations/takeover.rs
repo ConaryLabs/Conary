@@ -34,10 +34,11 @@ use projection::{
     ensure_projection_inputs_unchanged, load_current_projections, load_prior_projections,
     persist_staged, projection_drift, restore_projection_bytes, stage_projection_writes,
 };
-use trust_policy::expected_trust_policy;
+use trust_policy::{expected_trust_policy, explicit_apt_global_trust_paths};
 
 pub const TAKEOVER_MANIFEST_SCHEMA: u32 = 1;
 pub const TAKEOVER_PREVIEW_SCHEMA: u32 = 1;
+pub const TAKEOVER_PREVIEW_ENVELOPE_SCHEMA: u32 = 1;
 
 pub type TakeoverPolicyScope = RepositoryPolicyScopeInput;
 pub type TakeoverSourceStream = RepositorySourceStreamInput;
@@ -226,6 +227,25 @@ impl NativeRepositoryTakeoverPreview {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRepositoryTakeoverPreviewEnvelope {
+    pub schema: u32,
+    pub preview_sha256: String,
+    pub preview: NativeRepositoryTakeoverPreview,
+}
+
+impl NativeRepositoryTakeoverPreviewEnvelope {
+    pub fn new(preview: NativeRepositoryTakeoverPreview) -> Result<Self> {
+        let preview_sha256 = preview.sha256()?;
+        Ok(Self {
+            schema: TAKEOVER_PREVIEW_ENVELOPE_SCHEMA,
+            preview_sha256,
+            preview,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TakeoverApplyStatus {
     Applied,
@@ -278,10 +298,10 @@ pub fn preview_native_repository_takeover(
         ))
     })?;
     let trust = plan_selected_root_trust(&declarations);
-    let (projections, projection_blockers) =
-        collect_projection_content(selected_root, &declarations, &trust)?;
     let mut repositories = manifest.repositories.clone();
     repositories.sort_by(|left, right| left.name.cmp(&right.name));
+    let (projections, projection_blockers) =
+        collect_projection_content(selected_root, &declarations, &trust, &repositories)?;
     let mut blockers = validate_enrollments(conn, &declarations, &trust, &repositories)?;
     blockers.extend(projection_blockers);
     let projection_previews = projections
@@ -362,8 +382,12 @@ fn apply_native_repository_takeover_with_persist(
         });
     }
 
-    let (projections, projection_blockers) =
-        collect_projection_content(selected_root, &preview.declarations, &preview.trust)?;
+    let (projections, projection_blockers) = collect_projection_content(
+        selected_root,
+        &preview.declarations,
+        &preview.trust,
+        &preview.repositories,
+    )?;
     if !projection_blockers.is_empty() {
         return Err(Error::ConflictError(
             "native repository projection type changed after preview".to_string(),

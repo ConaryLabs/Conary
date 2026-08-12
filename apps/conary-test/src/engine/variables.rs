@@ -270,6 +270,7 @@ mod tests {
                     package: "conary-test-fixture".to_string(),
                     binary: "/usr/bin/true".to_string(),
                 }],
+                release_root: None,
             },
         );
 

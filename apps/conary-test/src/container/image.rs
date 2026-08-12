@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::backend::ContainerBackend;
-use crate::config::DistroBuildContext;
+use crate::config::{DistroBuildContext, DistroConfig};
 
 #[derive(Debug)]
 struct StagedBuildContext {
@@ -347,9 +347,9 @@ pub async fn build_distro_image(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
-    build_context: DistroBuildContext,
+    distro_config: &DistroConfig,
 ) -> Result<String> {
-    build_distro_image_inner(backend, containerfile, distro, build_context, None).await
+    build_distro_image_inner(backend, containerfile, distro, distro_config, None).await
 }
 
 /// Build a distro-specific test image by installing one exact native package.
@@ -361,7 +361,7 @@ pub async fn build_distro_image_from_native_package(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
-    build_context: DistroBuildContext,
+    distro_config: &DistroConfig,
     package: &Path,
     package_format: ProfilePackageFormat,
 ) -> Result<String> {
@@ -369,7 +369,7 @@ pub async fn build_distro_image_from_native_package(
         backend,
         containerfile,
         distro,
-        build_context,
+        distro_config,
         Some(NativePackageArtifact {
             path: package,
             format: package_format,
@@ -382,7 +382,7 @@ async fn build_distro_image_inner(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
-    build_context: DistroBuildContext,
+    distro_config: &DistroConfig,
     native_package: Option<NativePackageArtifact<'_>>,
 ) -> Result<String> {
     let tag = format!("conary-test-{distro}:latest");
@@ -408,8 +408,16 @@ async fn build_distro_image_inner(
         }
     }
 
-    let staged = stage_build_context(containerfile, distro, build_context, native_package)?;
-    let mut build_args = HashMap::new();
+    let staged = stage_build_context(
+        containerfile,
+        distro,
+        distro_config.build_context,
+        native_package,
+    )?;
+    let mut build_args = match &distro_config.release_root {
+        Some(release_root) => release_root.docker_build_args()?,
+        None => HashMap::new(),
+    };
     if native_package.is_some() {
         build_args.insert("INSTALL_MODE".to_string(), "package".to_string());
     }
@@ -730,6 +738,7 @@ printf 'fixture\n' > "$output/$file"
             "Containerfile.ubuntu-26.04",
             "Containerfile.arch",
             "Containerfile.artix",
+            "Containerfile.debian-derivative",
         ] {
             let contents =
                 fs::read_to_string(containers.join(file)).expect("read distro containerfile");
@@ -772,6 +781,11 @@ printf 'fixture\n' > "$output/$file"
                 "Containerfile.artix",
                 "conary-release.pkg.tar.zst",
                 "pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst",
+            ),
+            (
+                "Containerfile.debian-derivative",
+                "conary-release.deb",
+                "apt-get install -y /tmp/install/conary-release.deb",
             ),
         ] {
             let contents =

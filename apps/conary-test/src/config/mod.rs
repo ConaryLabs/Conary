@@ -3,9 +3,15 @@
 pub mod corpus;
 pub mod distro;
 pub mod manifest;
+pub mod release_root;
 
 pub use distro::{DistroBuildContext, DistroConfig, GlobalConfig, TestPackage};
 pub use manifest::{Assertion, StepType, TestDef, TestManifest};
+pub use release_root::{
+    AptGlobalTrustBinding, DistroReleaseRoot, ExpectedOsRelease, PinnedTargetFile,
+    ReleaseMediaAuthority, TargetArtifactIdentity, TargetArtifactRole, TargetReleaseEvidence,
+    TargetReleaseStage, TargetReleaseStageResult,
+};
 
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;

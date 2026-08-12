@@ -1,0 +1,59 @@
+# tests/integration/remi/manifests/debian-derivative-acceptance.toml
+
+[suite]
+name = "Debian Derivative Acceptance"
+phase = 4
+timeout = 1800
+
+[[test]]
+id = "TNPMD01"
+name = "actual_apt_repository_takeover_round_trip"
+description = "The target's real APT declarations and signing roots pass typed preview, apply, repeat, and byte-exact rollback"
+timeout = 600
+fatal = true
+group = "debian-derivative-acceptance"
+
+[[test.step]]
+run = "python3 /opt/remi-tests/fixtures/distro-roots/run-apt-repository-takeover.py --conary ${CONARY_BIN} --config /opt/remi-tests/config.toml --target ${DISTRO} --db ${DB_PATH} --root / --evidence /tmp/conary-apt-takeover-evidence.json"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "python3 -c 'import json; value=json.load(open(\"/tmp/conary-apt-takeover-evidence.json\")); assert value[\"schema_version\"] == 1; assert value[\"target_profile\"] == \"${DISTRO}\"; assert value[\"repository_products\"] > 0; assert value[\"stages\"] == [\"preview\", \"apply\", \"repeat\", \"rollback\"]'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPMD02"
+name = "native_apt_query_adopt_refresh_unadopt_remove"
+description = "A real APT package remains queryable across Conary adoption refresh and unadoption, then native removal"
+timeout = 900
+fatal = true
+group = "debian-derivative-acceptance"
+depends_on = ["TNPMD01"]
+
+[[test.step]]
+run = "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq && dpkg --status jq | grep -q '^Status: install ok installed$'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt jq --package-manager dpkg --db-path ${DB_PATH} --dry-run && ${CONARY_BIN} system adopt jq --package-manager dpkg --db-path ${DB_PATH} && ${CONARY_BIN} system adopt --status --db-path ${DB_PATH} && ${CONARY_BIN} system adopt --refresh --package-manager dpkg --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system takeover --package-manager dpkg --db-path ${DB_PATH} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --dry-run && ${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --yes && DEBIAN_FRONTEND=noninteractive apt-get remove -y jq && ! dpkg --status jq 2>/dev/null | grep -q '^Status: install ok installed$'"
+
+[test.step.assert]
+exit_code = 0

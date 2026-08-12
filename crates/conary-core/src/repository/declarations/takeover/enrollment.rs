@@ -41,7 +41,9 @@ pub(super) fn validate_enrollments(
             && !matches!(plan.disposition, TrustImportDisposition::Importable)
             && !repositories.iter().any(|input| {
                 input.declaration == plan.repository
-                    && explicit_alpm_trust_resolves(plan, &input.trust)
+                    && (explicit_alpm_trust_resolves(plan, &input.trust)
+                        || explicit_apt_global_trust_paths(&declarations.root, plan, &input.trust)
+                            .is_some())
             })
         {
             blockers.push(TakeoverBlocker::EnabledTrust {
@@ -108,6 +110,7 @@ fn validate_input_contract(
                 == Some(&input.trust)
         } else {
             explicit_alpm_trust_resolves(plan, &input.trust)
+                || explicit_apt_global_trust_paths(&declarations.root, plan, &input.trust).is_some()
         };
         if !trust_matches {
             blockers.push(TakeoverBlocker::TrustPolicyMismatch {

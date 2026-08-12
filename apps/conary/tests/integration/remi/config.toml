@@ -63,6 +63,110 @@ test_packages = [
     { package = "jq", binary = "/usr/bin/jq" },
 ]
 
+[distros."linux-mint-22.3"]
+remi_distro = "ubuntu-26.04"
+repo_name = "remi-ubuntu-26.04"
+build_context = "static-binary"
+containerfile = "Containerfile.debian-derivative"
+test_packages = [
+    { package = "patch", binary = "/usr/bin/patch" },
+    { package = "nano", binary = "/usr/bin/nano" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
+
+[distros."linux-mint-22.3".release_root]
+base_image = "docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea"
+fixture = "linux-mint-22.3"
+required_apt_uris = [
+    "http://packages.linuxmint.com",
+    "http://archive.ubuntu.com/ubuntu",
+    "http://security.ubuntu.com/ubuntu/",
+]
+signing_roots = [
+    { path = "/etc/apt/trusted.gpg.d/linuxmint-keyring.gpg", sha256 = "603dcf3ba2b9b0d7cbdb244b1ddae966b3504b23d3ddc7e3034b66e8b3ec9845", fingerprints = ["302F0738F465C1535761F965A6616109451BBBF2"] },
+    { path = "/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg", sha256 = "5ebbeeb474034b1fa7e50abbe6f136e177fc826219e01f314b3623f7b3097e96", fingerprints = ["F6ECB3762474EDA9D21B7022871920D1991BC93C"] },
+]
+apt_global_trust = [
+    { document = "/etc/apt/sources.list.d/official-package-repositories.list", entry_indexes = [0], signing_root_paths = ["/etc/apt/trusted.gpg.d/linuxmint-keyring.gpg"] },
+    { document = "/etc/apt/sources.list.d/official-package-repositories.list", entry_indexes = [1, 2, 3, 4], signing_root_paths = ["/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg"] },
+]
+
+[distros."linux-mint-22.3".release_root.keyring_package]
+name = "linuxmint-keyring"
+version = "2022.06.21"
+url = "http://packages.linuxmint.com/pool/main/l/linuxmint-keyring/linuxmint-keyring_2022.06.21_all.deb"
+sha256 = "b71be690c543112ea7b65f43e9bbce9a3f17dd5cc784074858f0824154942a99"
+
+[distros."linux-mint-22.3".release_root.identity_package]
+name = "base-files"
+version = "13ubuntu10mint22.3.0"
+url = "http://packages.linuxmint.com/pool/upstream/b/base-files/base-files_13ubuntu10mint22.3.0_amd64.deb"
+sha256 = "9d1e93b0578c4d57e0b873b78ea0926b9a0f75bada90deb9b24599fefd0135db"
+
+[distros."linux-mint-22.3".release_root.expected_os_release]
+id = "linuxmint"
+version_id = "22.3"
+version_codename = "zena"
+ubuntu_codename = "noble"
+
+[distros."linux-mint-22.3".release_root.release_media]
+checksum_authority = "open-pgp"
+media_url = "https://mirrors.kernel.org/linuxmint/stable/22.3/linuxmint-22.3-cinnamon-64bit.iso"
+media_sha256 = "a081ab202cfda17f6924128dbd2de8b63518ac0531bcfe3f1a1b88097c459bd4"
+checksums_url = "https://mirrors.kernel.org/linuxmint/stable/22.3/sha256sum.txt"
+signature_url = "https://mirrors.kernel.org/linuxmint/stable/22.3/sha256sum.txt.gpg"
+signing_fingerprint = "27DEB15644C6B3CF3BD7D291300F846BA25BAE09"
+squashfs_path = "casper/filesystem.squashfs"
+
+[distros."pop-os-24.04"]
+remi_distro = "ubuntu-26.04"
+repo_name = "remi-ubuntu-26.04"
+build_context = "static-binary"
+containerfile = "Containerfile.debian-derivative"
+test_packages = [
+    { package = "patch", binary = "/usr/bin/patch" },
+    { package = "nano", binary = "/usr/bin/nano" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
+
+[distros."pop-os-24.04".release_root]
+base_image = "docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea"
+fixture = "pop-os-24.04"
+required_apt_uris = [
+    "http://apt.pop-os.org/proprietary",
+    "http://apt.pop-os.org/release",
+    "http://apt.pop-os.org/ubuntu",
+]
+signing_roots = [
+    { path = "/etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg", sha256 = "a228ba8145acf8c57afd44ad7e8eb2d11776b5a2ca5fe5174698110023952f07", fingerprints = ["63C46DF0140D738961429F4E204DD8AEC33A7AFF"] },
+    { path = "/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg", sha256 = "5ebbeeb474034b1fa7e50abbe6f136e177fc826219e01f314b3623f7b3097e96", fingerprints = ["F6ECB3762474EDA9D21B7022871920D1991BC93C"] },
+]
+
+[distros."pop-os-24.04".release_root.keyring_package]
+name = "pop-keyring"
+version = "1.0.0~1641313934~24.04~356a75e"
+url = "https://apt.pop-os.org/release/pool/noble/keyring/356a75e405d00a23889998d2e8f2508a9e67b535/pop-keyring_1.0.0~1641313934~24.04~356a75e_all.deb"
+sha256 = "c259ecb956c0eda137b3f71e2d547d5e3440b518f96b9fe7f925644039129081"
+
+[distros."pop-os-24.04".release_root.identity_package]
+name = "pop-default-settings"
+version = "7.0.0~1784333407~24.04~5005796"
+url = "https://apt.pop-os.org/release/pool/noble/default-settings/50057964f06bda2c961bc9960af6b5c2340a810e/pop-default-settings_7.0.0~1784333407~24.04~5005796_all.deb"
+sha256 = "da3b7a0b401ae74c6ae19af7037a7c5fa3ad614cb1068fb7be73e96a89b5148b"
+
+[distros."pop-os-24.04".release_root.expected_os_release]
+id = "pop"
+version_id = "24.04"
+version_codename = "noble"
+ubuntu_codename = "noble"
+
+[distros."pop-os-24.04".release_root.release_media]
+checksum_authority = "https-metadata"
+media_url = "https://iso.pop-os.org/24.04/amd64/generic/27/pop-os_24.04_amd64_generic_27.iso"
+media_sha256 = "8790eeb29088558d6dfafa5fb672c3650a9c20a64d0d79cbfc02e91ff5d7b559"
+metadata_url = "https://api.pop-os.org/builds/24.04/generic?arch=amd64"
+squashfs_path = "casper_pop-os_24.04_amd64_generic_debug_654/filesystem.squashfs"
+
 # Default repos to remove after init (avoid slow syncs)
 [setup]
 remove_default_repos = [
