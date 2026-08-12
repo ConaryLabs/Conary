@@ -290,6 +290,12 @@ fn authorize_static_ccs_repository(
     repository: &mut Repository,
     test_home: &Path,
 ) {
+    // This helper intentionally transitions fixtures from metadata ingestion to
+    // direct, signed CCS delivery. Static repositories have no foreign metadata
+    // grammar of their own; package provenance retains the source profile and
+    // version scheme independently.
+    repository.package_format = conary_core::repository::RepositoryFormat::Unspecified;
+    repository.parser_config = None;
     repository.default_strategy = Some("static".to_string());
     repository.update(conn).unwrap();
     let repository_id = repository.id.unwrap();
@@ -320,8 +326,6 @@ fn seed_fixture_update(
         "fedora-slice-b-fixture".to_string(),
         "https://example.invalid/fedora/repodata/".to_string(),
     );
-    repo.set_parser_config(conary_core::repository::RepositoryParserConfig::Json)
-        .unwrap();
     repo.default_strategy = Some("static".to_string());
     repo.source_profile = Some("fedora-44".to_string());
     repo.security_advisory_support = security_advisory_support;
