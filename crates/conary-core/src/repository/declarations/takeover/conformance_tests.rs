@@ -75,7 +75,7 @@ fn alpm_named_fixture(
             ),
             content_url: None,
             parser: RepositoryParserConfig::Arch {
-                database: "cachyos".to_string(),
+                database: repository_name.to_string(),
             },
             trust: RepositoryTrustPolicy::Arch {
                 keyring: ArchKeyringTrust {
