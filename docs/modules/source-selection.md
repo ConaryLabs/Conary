@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 37
+revision: 38
 summary: Document opaque native source identity, repository-scoped follow or pin authority, exact adopted-artifact conversion, capability-driven targets, Remi feed presets, and lifecycle handoff
 ---
 
@@ -49,6 +49,7 @@ repository declaration + authenticated trust
 | `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Request-scoped runtime policy with no ambient distro authority |
 | `DiscoveredRepositoryDeclarations` | `repository/declarations/discovery.rs` | Lossless, source-located APT, DNF5, libzypp, and ALPM declarations confined to an explicit selected root |
 | `NativeTrustImportPlan` | `repository/declarations/trust_import/` | Deterministic importable, ambiguous, or unsupported role-separated trust preview for discovered native repositories |
+| `NativeRepositoryTakeoverPlan` | `repository/declarations/takeover/` | Deterministic enrollment, owned-projection, follow/pin, ALPM keyring-binding, apply, and rollback authority |
 | `RepositorySourcePolicy` | `db/models/repository/source/policy.rs` | Exact native source, typed ecosystem/version ordering, stream, scope, and closed follow-or-pin decision |
 | `AuthenticatedSnapshotIdentity` | `repository/parsers/snapshot.rs` | SHA-256 identity of the exact top-level metadata bytes admitted by native trust |
 | `SystemAffinity` | `db/models/system_affinity.rs` | Informational installed-provenance measurement that never selects mutation authority |
@@ -228,6 +229,14 @@ selected-root escapes are unsupported. Neither status can silently become an
 enabled persisted repository. This slice does not fetch, persist, enable, or
 mutate; the pinned semantics and consumer boundary live in
 [`docs/specs/native-repository-trust-import.md`](../specs/native-repository-trust-import.md).
+
+Takeover consumes that preview plus explicit enrollment authority. Strict ALPM
+declarations can proceed only when the sole ambiguity is the missing native
+keyring binding and enrollment supplies exact pinned masters, certification
+threshold, revocation input, and the same effective `SigLevel`. It never turns
+an unsafe declaration or unrelated ambiguity into trust. The same takeover
+path preserves enabled state, priority, parser inputs, projection bytes, and
+follow-or-pin source policy for APT, DNF5, Zypper, and ALPM repositories.
 
 ## Native Source Identity And Update Policy
 

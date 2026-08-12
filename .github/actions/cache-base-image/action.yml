@@ -10,7 +10,7 @@ description: >-
   Containerfile is deliberately re-pinned (issue #323).
 inputs:
   distro:
-    description: Test distro slug (fedora44, ubuntu-26.04, arch).
+    description: Test distro slug (fedora44, ubuntu-26.04, arch, artix).
     required: true
 runs:
   using: composite

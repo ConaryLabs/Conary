@@ -380,8 +380,9 @@ impl TestRunner {
             });
 
             if let Some(corpus) = &test_def.corpus {
+                let corpus = variables::expand_corpus_case(corpus, &self.vars);
                 let corpus_result = crate::engine::corpus::capture_case(
-                    corpus,
+                    &corpus,
                     &test_def.id,
                     &self.distro,
                     status,
@@ -459,8 +460,9 @@ impl TestRunner {
 
     fn record_unrun_corpus(&self, suite: &mut TestSuite, test_def: &TestDef, reason: &str) {
         if let Some(corpus) = &test_def.corpus {
+            let corpus = variables::expand_corpus_case(corpus, &self.vars);
             suite.record_corpus(crate::engine::corpus::case_did_not_run(
-                corpus,
+                &corpus,
                 &test_def.id,
                 &self.distro,
                 reason,

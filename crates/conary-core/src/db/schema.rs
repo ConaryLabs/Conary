@@ -12,12 +12,11 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 34 of the current-only schema epoch.
+/// Revision 36 of the current-only schema epoch.
 ///
-/// Revision 34 removes the global distro pin and makes diagnostic affinity
-/// explicitly source-identity based. Earlier pre-alpha databases must be
-/// rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 35;
+/// Revision 36 adds an exact captured-OpenRC activation source kind. Earlier
+/// pre-alpha databases must be rebuilt; no compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 36;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -237,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_34_requires_rebuild_for_revision_35() {
+    fn revision_35_requires_rebuild_for_revision_36() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -245,19 +244,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 34);
+                VALUES ('conary-current-v1', 35);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (34);",
+            INSERT INTO schema_version (version) VALUES (35);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 34; this pre-alpha build supports only schema epoch conary-current-v1 revision 35"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 35; this pre-alpha build supports only schema epoch conary-current-v1 revision 36"
         );
     }
 

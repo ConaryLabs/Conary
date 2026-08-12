@@ -99,6 +99,14 @@ for command_name in mkdir getent groupadd useradd; do
 done
 copy_elf_closure /usr/bin/true
 
+# A selected root advertises OpenRC lifecycle support only when its provider
+# executable is part of that root. Preserve the target's actual provider and
+# runtime closure so foreign scriptlets cross the same typed capture boundary
+# that production generations use.
+if openrc_path="$(command -v rc-service 2>/dev/null)"; then
+  copy_elf_closure "${openrc_path}"
+fi
+
 for config_path in \
   /etc/default/useradd \
   /etc/login.defs \

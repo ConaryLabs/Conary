@@ -806,6 +806,7 @@ CREATE TABLE activation_requests (
             sequence INTEGER NOT NULL CHECK(sequence >= 0),
             source_kind TEXT NOT NULL CHECK(source_kind IN (
                 'captured-systemctl',
+                'captured-openrc',
                 'ccs-service',
                 'captured-selinux',
                 'captured-apparmor'

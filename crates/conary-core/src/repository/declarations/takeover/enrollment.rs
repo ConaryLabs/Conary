@@ -4,6 +4,9 @@
 
 use super::*;
 use crate::repository::declarations::apt::AptSourceKind;
+use crate::repository::{
+    ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel, RepositoryTrustPolicy,
+};
 use std::collections::BTreeSet;
 
 pub(super) fn validate_enrollments(
@@ -36,6 +39,10 @@ pub(super) fn validate_enrollments(
         validate_product_coverage(declarations, plan, repositories, &mut blockers)?;
         if plan.enabled.unwrap_or(true)
             && !matches!(plan.disposition, TrustImportDisposition::Importable)
+            && !repositories.iter().any(|input| {
+                input.declaration == plan.repository
+                    && explicit_alpm_trust_resolves(plan, &input.trust)
+            })
         {
             blockers.push(TakeoverBlocker::EnabledTrust {
                 repository: plan.repository.clone(),
@@ -89,21 +96,25 @@ fn validate_input_contract(
             requested: requested_format,
         });
     }
-    if requested_format == expected_format
-        && matches!(plan.disposition, TrustImportDisposition::Importable)
-        && expected_trust_policy(
-            &declarations.root,
-            declarations,
-            plan,
-            input.parser.format(),
-        )?
-        .as_ref()
-            != Some(&input.trust)
-    {
-        blockers.push(TakeoverBlocker::TrustPolicyMismatch {
-            repository: input.declaration.clone(),
-            name: input.name.clone(),
-        });
+    if requested_format == expected_format {
+        let trust_matches = if matches!(plan.disposition, TrustImportDisposition::Importable) {
+            expected_trust_policy(
+                &declarations.root,
+                declarations,
+                plan,
+                input.parser.format(),
+            )?
+            .as_ref()
+                == Some(&input.trust)
+        } else {
+            explicit_alpm_trust_resolves(plan, &input.trust)
+        };
+        if !trust_matches {
+            blockers.push(TakeoverBlocker::TrustPolicyMismatch {
+                repository: input.declaration.clone(),
+                name: input.name.clone(),
+            });
+        }
     }
     let declared = plan.enabled.unwrap_or(true);
     if declared != input.enabled {
@@ -121,6 +132,64 @@ fn validate_input_contract(
         });
     }
     Ok(())
+}
+
+/// Pacman declarations cannot bind their mutable keyring to exact master
+/// fingerprints. The takeover manifest closes that one native ambiguity with
+/// Conary's typed ALPM keyring contract. Unsupported native SigLevel settings
+/// remain non-overridable.
+fn explicit_alpm_trust_resolves(
+    plan: &NativeRepositoryTrustPlan,
+    trust: &RepositoryTrustPolicy,
+) -> bool {
+    let TrustImportDisposition::Ambiguous { findings } = &plan.disposition else {
+        return false;
+    };
+    if findings.is_empty()
+        || findings
+            .iter()
+            .any(|finding| finding.kind != TrustImportFindingKind::AlpmKeyringBindingMissing)
+    {
+        return false;
+    }
+    let RepositoryTrustPolicy::Arch { sig_level, .. } = trust else {
+        return false;
+    };
+    declared_alpm_sig_level(plan).is_some_and(|declared| declared == *sig_level)
+}
+
+fn declared_alpm_sig_level(plan: &NativeRepositoryTrustPlan) -> Option<ArchSigLevel> {
+    let values = plan
+        .evidence
+        .iter()
+        .find_map(|evidence| match &evidence.source {
+            TrustEvidenceSource::AlpmSigLevel { values } => Some(values.as_slice()),
+            _ => None,
+        })?;
+    let mut level = ArchSigLevel::distribution_default();
+    for value in values {
+        match value.as_str() {
+            "Required" => {
+                level.package = ArchSignatureRequirement::Required;
+                level.database = ArchSignatureRequirement::Required;
+            }
+            "Optional" => {
+                level.package = ArchSignatureRequirement::Optional;
+                level.database = ArchSignatureRequirement::Optional;
+            }
+            "PackageRequired" => level.package = ArchSignatureRequirement::Required,
+            "PackageOptional" => level.package = ArchSignatureRequirement::Optional,
+            "DatabaseRequired" => level.database = ArchSignatureRequirement::Required,
+            "DatabaseOptional" => level.database = ArchSignatureRequirement::Optional,
+            "TrustedOnly" | "PackageTrustedOnly" | "DatabaseTrustedOnly" => {
+                level.trust = ArchTrustLevel::TrustedOnly;
+            }
+            "Never" | "PackageNever" | "DatabaseNever" | "TrustAll" | "PackageTrustAll"
+            | "DatabaseTrustAll" => return None,
+            _ => return None,
+        }
+    }
+    (level.package == ArchSignatureRequirement::Required).then_some(level)
 }
 
 fn validate_product_coverage(

@@ -160,7 +160,7 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
     assert!(!job.strategy.fail_fast);
     assert_eq!(
         job.strategy.matrix.distro,
-        ["fedora44", "ubuntu-26.04", "arch"]
+        ["fedora44", "ubuntu-26.04", "arch", "artix"]
     );
 
     let runtime = named_step(&job.steps, "Require the hosted container runtime");

@@ -729,6 +729,7 @@ printf 'fixture\n' > "$output/$file"
             "Containerfile.fedora44",
             "Containerfile.ubuntu-26.04",
             "Containerfile.arch",
+            "Containerfile.artix",
         ] {
             let contents =
                 fs::read_to_string(containers.join(file)).expect("read distro containerfile");
@@ -764,6 +765,11 @@ printf 'fixture\n' > "$output/$file"
             ),
             (
                 "Containerfile.arch",
+                "conary-release.pkg.tar.zst",
+                "pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst",
+            ),
+            (
+                "Containerfile.artix",
                 "conary-release.pkg.tar.zst",
                 "pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst",
             ),

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-11
-revision: 2
+revision: 3
 summary: Define deterministic fail-closed trust-import planning for selected-root APT, DNF5, libzypp, and ALPM repository declarations
 ---
 
@@ -83,10 +83,12 @@ slice must surface them explicitly rather than treating an empty repository
 plan as complete.
 
 ALPM `Never`, `TrustAll`, and optional package signatures are unsupported.
-Strict `SigLevel` remains ambiguous until a later input binds the selected
-root's populated keyring snapshot to exact master fingerprints and a
-certification threshold. Repository names and keyring filenames cannot create
-that binding.
+Strict `SigLevel` remains ambiguous in preview because declarations cannot bind
+the selected root's populated keyring snapshot to exact master fingerprints
+and a certification threshold. Takeover may resolve exactly that one typed
+ambiguity from an explicit enrollment policy with an identical effective
+`SigLevel`; repository names and keyring filenames cannot create the binding,
+and unsafe or otherwise ambiguous native policy remains non-overridable.
 
 ## Selected-Root And Serialization Contract
 

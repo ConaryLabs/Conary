@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 2
+revision: 3
 summary: Define deterministic native repository takeover, owned projections, drift detection, and rollback
 ---
 
@@ -8,7 +8,8 @@ summary: Define deterministic native repository takeover, owned projections, dri
 
 ## Status And Boundary
 
-Issue #381 is the fourth bounded W10 slice. It consumes lossless selected-root
+Issue #381 established the fourth bounded W10 slice. Issue #384 extends its
+conformance boundary. Takeover consumes lossless selected-root
 declarations, their trust-import dispositions, and an explicit versioned
 enrollment manifest. It produces a complete preview before mutation and can
 then make Conary the sole repository authority while preserving the native
@@ -32,8 +33,15 @@ The takeover preview is versioned, serializable, and deterministic. It records:
 - every projected path with its exact SHA-256 and ownership transition; and
 - closed blockers, including ambiguous or unsupported enabled trust,
   dynamically generated libzypp service repositories, missing or duplicate
-  enrollment bindings, conflicting existing Conary authority, and projection
-  drift.
+enrollment bindings, conflicting existing Conary authority, and projection
+drift.
+
+For ALPM only, an enrollment manifest may resolve the single typed
+`AlpmKeyringBindingMissing` ambiguity by supplying Conary's exact Arch keyring
+policy: keyring format, pinned master fingerprints, certification threshold,
+revoked-key authority, and an effective `SigLevel` identical to the discovered
+native declaration. This cannot override optional package signatures,
+`TrustAll`, `Never`, another ambiguity, or any unsupported finding.
 
 Disabled repositories remain in the preview and projection universe. Their
 unresolved trust does not enable mutation authority, but their enrollment may
@@ -107,8 +115,9 @@ Schema revision 32 introduced `native-projection` repository ownership plus norm
 takeover, membership, and projection-state tables. Projection paths are unique
 within the current Conary database, content and prior bytes are stored as BLOBs,
 and SHA-256 values are lowercase exact-length values. Schema revision 33 retains
-that authority while adding package enrollment; revision 32 databases are
-retired pre-alpha state. Recovery is:
+that authority while adding package enrollment. Current revision 36 retains
+the same takeover authority; every earlier database is retired pre-alpha
+state. Recovery is:
 
 ```bash
 conary system rebuild-db --discard-state --yes
@@ -126,3 +135,9 @@ repeat apply, exact drift reporting, and rollback restoration of both database
 authority and prior projection bytes. The adoption interaction gate, workspace
 Clippy, formatting, current-schema rejection/rebuild proof, and documentation
 truth checks remain required.
+
+The named derivative conformance corpus additionally proves Mint and MX through
+APT, Manjaro/CachyOS/Artix through the shared ALPM path, and Tumbleweed through
+Zypper. It exercises follow advancement, exact-pin refusal and explicit
+re-enrollment, preserved repository fields, and the OpenRC lifecycle boundary
+without using a distro-name selector in product code.

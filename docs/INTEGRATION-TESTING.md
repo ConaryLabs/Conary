@@ -571,11 +571,13 @@ and confirms the persisted native lifecycle bundle. The execution path uses
 only CCS operations after publication and therefore never consults a source
 package manager or its database at runtime.
 The `pr-gate` workflow builds each configured distro image first and then runs
-that focused manifest across `fedora44`, `ubuntu-26.04`, and `arch`. Together,
-the required lanes authenticate all three checked-in source-ABI traces and run
-the full 3x3 Conary Cartesian product. Missing native manager authority,
-container support, an exact trace match, or an image build fails its matrix
-job; there is no manifest skip fallback. A stable
+that focused manifest across `fedora44`, `ubuntu-26.04`, `arch`, and the OpenRC
+`artix` lane. Together, the required lanes authenticate all three checked-in
+source-ABI traces and run the full 4x3 Conary Cartesian product. Corpus target
+facts resolve from explicit per-lane manifest authority, so Artix records
+OpenRC rather than inheriting a systemd default. Missing native manager
+authority, container support, an exact trace match, or an image build fails its
+matrix job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
 
@@ -597,7 +599,7 @@ default so the matrix uses the current checkout; set `CONARY_TEST_REUSE_IMAGE=1`
 only for local iterative debugging where stale-image risk is acceptable.
 
 Evidence from the former 18-test, host-native-only matrix does not certify the
-current 19-test cross-source contract. Record new evidence only after all three
+current 19-test cross-source contract. Record new evidence only after all four
 current distro jobs pass the result gate.
 
 Focused Goal 3 security advisory pipeline proof:
@@ -668,6 +670,7 @@ available. Review the generated bundle before attaching it. It does not copy
 | `fedora44` | `Containerfile.fedora44` | Fedora 44 | `static-binary` |
 | `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `static-binary` |
 | `arch` | `Containerfile.arch` | Arch Linux (rolling) | `static-binary` |
+| `artix` | `Containerfile.artix` | Artix Linux (rolling, OpenRC) | `static-binary` |
 
 `build_context` is a required typed distro capability in `config.toml` that
 selects which Conary binary an image receives. Distro names do not select this
@@ -947,14 +950,14 @@ the WAL. Wiring the streaming path is tracked in issue #354.
 Trusted integration validation belongs to GitHub Actions, with any runner used
 as execution capacity rather than as an independent control plane. The PR gate
 runs the focused native cross-source lifecycle on hosted Docker across all
-three distro images. The rest of the TOML inventory still requires a local or
+four distro images. The rest of the TOML inventory still requires a local or
 hosted container/QEMU-capable runner; do not describe a normal PR or merge run
 as having executed all 324 manifest tests unless that runner path is present in
 the specific workflow run.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused three-distro native lifecycle matrix |
+| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused four-distro native lifecycle matrix |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |

@@ -14,6 +14,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivationRequestSourceKind {
     CapturedSystemctl,
+    CapturedOpenRc,
     CcsService,
     CapturedSelinux,
     CapturedApparmor,
@@ -23,6 +24,7 @@ impl ActivationRequestSourceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CapturedSystemctl => "captured-systemctl",
+            Self::CapturedOpenRc => "captured-openrc",
             Self::CcsService => "ccs-service",
             Self::CapturedSelinux => "captured-selinux",
             Self::CapturedApparmor => "captured-apparmor",
@@ -32,6 +34,7 @@ impl ActivationRequestSourceKind {
     pub fn captured_for(invocation: &RuntimeActivationInvocation) -> Self {
         match invocation {
             RuntimeActivationInvocation::Systemd(_) => Self::CapturedSystemctl,
+            RuntimeActivationInvocation::OpenRc(_) => Self::CapturedOpenRc,
             RuntimeActivationInvocation::SecurityPolicy(
                 SecurityPolicyActivationInvocation::Selinux(_),
             ) => Self::CapturedSelinux,
@@ -44,6 +47,7 @@ impl ActivationRequestSourceKind {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "captured-systemctl" => Ok(Self::CapturedSystemctl),
+            "captured-openrc" => Ok(Self::CapturedOpenRc),
             "ccs-service" => Ok(Self::CcsService),
             "captured-selinux" => Ok(Self::CapturedSelinux),
             "captured-apparmor" => Ok(Self::CapturedApparmor),
@@ -80,9 +84,14 @@ impl NewActivationRequest {
         let compatible = matches!(
             (&self.source_kind, &self.invocation),
             (
-                ActivationRequestSourceKind::CapturedSystemctl
-                    | ActivationRequestSourceKind::CcsService,
+                ActivationRequestSourceKind::CapturedSystemctl,
                 RuntimeActivationInvocation::Systemd(_)
+            ) | (
+                ActivationRequestSourceKind::CapturedOpenRc,
+                RuntimeActivationInvocation::OpenRc(_)
+            ) | (
+                ActivationRequestSourceKind::CcsService,
+                RuntimeActivationInvocation::Systemd(_) | RuntimeActivationInvocation::OpenRc(_)
             ) | (
                 ActivationRequestSourceKind::CapturedSelinux,
                 RuntimeActivationInvocation::SecurityPolicy(
@@ -573,7 +582,9 @@ impl GenerationActivationIntent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activation::{SystemdActivationAction, SystemdJobMode};
+    use crate::activation::{
+        OpenRcActivationAction, OpenRcActivationInvocation, SystemdActivationAction, SystemdJobMode,
+    };
     use crate::db::models::{Changeset, ChangesetStatus, SystemState};
     use crate::db::testing::create_test_db;
 
@@ -729,5 +740,80 @@ mod tests {
                 .contains("does not match invocation provider"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn ccs_service_persists_and_loads_an_openrc_runtime_request() {
+        let (_temp, conn) = create_test_db();
+        let mut changeset = Changeset::new("install OpenRC service".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        let request = NewActivationRequest {
+            source_kind: ActivationRequestSourceKind::CcsService,
+            source_package: "openssh".to_string(),
+            source_version: "1".to_string(),
+            source_entry: "sshd".to_string(),
+            invocation: OpenRcActivationInvocation::simple(OpenRcActivationAction::Restart, "sshd")
+                .into(),
+        };
+
+        ActivationRequest::append_batch(&conn, changeset_id, &[request]).unwrap();
+        let loaded = ActivationRequest::find_by_id(&conn, 1).unwrap().unwrap();
+
+        assert_eq!(loaded.source_kind, ActivationRequestSourceKind::CcsService);
+        assert!(matches!(
+            loaded.invocation,
+            RuntimeActivationInvocation::OpenRc(OpenRcActivationInvocation {
+                action: OpenRcActivationAction::Restart,
+                ref service,
+                ..
+            }) if service == "sshd"
+        ));
+    }
+
+    #[test]
+    fn captured_openrc_uses_its_own_durable_source_kind() {
+        let invocation =
+            RuntimeActivationInvocation::OpenRc(OpenRcActivationInvocation::try_restart("sshd"));
+        assert_eq!(
+            ActivationRequestSourceKind::captured_for(&invocation),
+            ActivationRequestSourceKind::CapturedOpenRc
+        );
+
+        let (_temp, conn) = create_test_db();
+        let mut changeset = Changeset::new("capture OpenRC lifecycle".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        ActivationRequest::append_batch(
+            &conn,
+            changeset_id,
+            &[NewActivationRequest {
+                source_kind: ActivationRequestSourceKind::CapturedOpenRc,
+                source_package: "foreign-service".to_string(),
+                source_version: "1".to_string(),
+                source_entry: "post-install".to_string(),
+                invocation: invocation.clone(),
+            }],
+        )
+        .unwrap();
+
+        let loaded = ActivationRequest::find_by_id(&conn, 1).unwrap().unwrap();
+        assert_eq!(
+            loaded.source_kind,
+            ActivationRequestSourceKind::CapturedOpenRc
+        );
+        assert_eq!(loaded.invocation, invocation);
+    }
+
+    #[test]
+    fn captured_systemctl_cannot_claim_an_openrc_invocation() {
+        let request = NewActivationRequest {
+            source_kind: ActivationRequestSourceKind::CapturedSystemctl,
+            source_package: "foreign-service".to_string(),
+            source_version: "1".to_string(),
+            source_entry: "post-install".to_string(),
+            invocation: OpenRcActivationInvocation::try_restart("sshd").into(),
+        };
+
+        let error = request.validate().unwrap_err().to_string();
+        assert!(error.contains("does not match invocation provider 'openrc'"));
     }
 }

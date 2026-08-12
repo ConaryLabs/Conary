@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 45
+revision: 46
 summary: Describe workspace architecture, exact native source identity and update policy, source-authority projections, native trust-import planning, repository verification, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -130,6 +130,7 @@ crates/conary-core/      Core library crate
     +-- activation/      Exact runtime work projected onto immutable generations
     |   +-- systemd.rs   Typed systemctl invocation and canonical boot argv
     |   +-- systemd/grammar.rs Shared parser/proxy systemctl token grammar
+    |   +-- openrc.rs    Typed rc-service invocation and canonical boot argv
     |   +-- security_policy.rs SELinux/AppArmor provider union and live-edge split
     |   +-- security_policy/ Current upstream helper grammars and executable identity
     +-- scriptlet/       Exact selected-root lifecycle execution
@@ -191,7 +192,7 @@ crates/conary-core/      Core library crate
     |   +-- convert/     RPM/DEB/Arch-to-CCS conversion
     |   +-- enhancement/ Exact post-conversion provenance recording
     |   +-- export/      OCI image export
-    |   +-- hooks/       typed host capability inventory plus systemd, service, tmpfiles, sysctl, user/group, alternatives adapters
+    |   +-- hooks/       typed host capability inventory plus systemd/OpenRC service, tmpfiles, sysctl, user/group, alternatives adapters
     |   +-- policy.rs    Build policy engine
     +-- model/           Declarative system state
     |   +-- parser.rs    TOML model file parser
@@ -586,11 +587,12 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 34 retains signed package-repository enrollment and the
-fail-closed native source/takeover state, removes the retired global distro
-pin, and records diagnostic affinity by opaque source identity.
+Schema revision 36 retains signed package-repository enrollment, fail-closed
+native source/takeover state, exact installed-artifact architecture authority,
+and the distinct captured-OpenRC generation-activation source kind. It removes
+the retired global distro pin and records diagnostic affinity by opaque source identity.
 Native repositories do not use the fixed public-profile catalog as repository
-identity, eligibility, or refresh authority. This is a current-schema hard cut: revision 33
+identity, eligibility, or refresh authority. This is a current-schema hard cut: revision 35
 state must be rebuilt and native repositories re-enrolled
 from authoritative declarations, trust roots, source/repository identities,
 stream decisions, and pins.
