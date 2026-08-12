@@ -19,6 +19,9 @@ rust-s3 = { path = "third_party/rust-s3-0.37.2-patched" }
 resolvo = { path = "third_party/resolvo-0.12.0-patched" }
 
 [workspace.dependencies]
+# OpenPGP verification (RustCrypto backend)
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "limits"] }
 
