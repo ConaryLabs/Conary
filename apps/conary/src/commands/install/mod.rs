@@ -35,8 +35,10 @@ mod validation;
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use command::cmd_install;
 pub(crate) use command::cmd_install_replatform;
+pub(crate) use conversion::{NativeCcsConversion, convert_native_package_to_ccs};
 pub use ownership_mode::OwnershipMode;
 pub(crate) use package_set::{PackageSetRequest, install_package_set, validate_package_set};
+pub(crate) use payload_identity::resolve_native_payload_nodes;
 
 #[allow(unused_imports)]
 pub(crate) use ccs_transaction::{

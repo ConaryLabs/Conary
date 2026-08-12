@@ -223,6 +223,29 @@ fn installed_conversion_rejects_repository_serving_fields() {
 }
 
 #[test]
+fn installed_conversion_round_trips_a_durable_ccs_path() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = installed_package(&conn, "rpm", "sha256:installed-path");
+    converted
+        .set_installed_ccs_path("/var/lib/conary/packages/adopted/exact.ccs".to_string())
+        .unwrap();
+    converted.insert(&conn).unwrap();
+
+    let found = ConvertedPackage::find_by_trove(&conn, converted.trove_id.unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        found.ccs_path.as_deref(),
+        Some("/var/lib/conary/packages/adopted/exact.ccs")
+    );
+
+    let mut empty = installed_package(&conn, "deb", "sha256:empty-path");
+    assert!(empty.set_installed_ccs_path(String::new()).is_err());
+    empty.ccs_path = Some(String::new());
+    assert!(empty.insert(&conn).is_err());
+}
+
+#[test]
 fn repository_artifact_rejects_corrupt_chunk_json() {
     let (_temp, conn) = create_test_db();
     let mut converted = server_package("sha256:source", "sha256:chunk");

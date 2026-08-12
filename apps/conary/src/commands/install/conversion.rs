@@ -264,8 +264,14 @@ pub struct PendingInstalledConversion {
 }
 
 impl PendingInstalledConversion {
-    pub fn persist(self, db_path: &str, trove_id: i64) -> Result<()> {
-        let conn = open_db(db_path)?;
+    pub(crate) fn original_checksum(&self) -> &str {
+        &self.original_checksum
+    }
+
+    pub(crate) fn into_record(
+        self,
+        trove_id: i64,
+    ) -> Result<conary_core::db::models::ConvertedPackage> {
         let mut converted = conary_core::db::models::ConvertedPackage::new_installed(
             trove_id,
             self.original_format,
@@ -273,9 +279,27 @@ impl PendingInstalledConversion {
         );
         converted.set_scriptlet_metadata(&self.scriptlet_summary)?;
         converted.extracted_provenance_json = self.extracted_provenance_json;
+        Ok(converted)
+    }
+
+    pub fn persist(self, db_path: &str, trove_id: i64) -> Result<()> {
+        let conn = open_db(db_path)?;
+        let mut converted = self.into_record(trove_id)?;
         converted.insert(&conn)?;
         Ok(())
     }
+}
+
+/// Fully verified output of the canonical native-package conversion pipeline.
+///
+/// The temporary directory owns `ccs_path`. Callers must either consume the
+/// artifact while this value is alive or copy it into same-directory staging
+/// before publishing it durably.
+pub(crate) struct NativeCcsConversion {
+    pub(crate) ccs_path: std::path::PathBuf,
+    pub(crate) temp_dir: TempDir,
+    pub(crate) pending_record: PendingInstalledConversion,
+    pub(crate) signing_public_key: String,
 }
 
 pub struct CcsArtifactInstallOptions<'a> {
@@ -326,13 +350,6 @@ pub async fn try_convert_to_ccs(
             })?;
     let original_checksum_text = original_checksum.to_prefixed_string();
 
-    // Determine format string
-    let format_str = match format {
-        PackageFormatType::Rpm => "rpm",
-        PackageFormatType::Deb => "deb",
-        PackageFormatType::Arch => "arch",
-    };
-
     // Open database early to check for existing conversion
     let conn = open_db(db_path)?;
 
@@ -361,6 +378,69 @@ pub async fn try_convert_to_ccs(
         }
     }
 
+    let converted = convert_native_package_to_ccs_with_checksum(
+        pkg,
+        package_path,
+        format,
+        source_profile,
+        &original_checksum,
+    )?;
+    let ccs_path = converted.ccs_path.to_string_lossy().to_string();
+    Ok(ConversionResult::Converted {
+        ccs_path,
+        temp_dir: converted.temp_dir,
+        pending_record: converted.pending_record,
+        signing_public_key: converted.signing_public_key,
+    })
+}
+
+/// Convert one exact native artifact through the same parser/lifecycle/CCS
+/// pipeline used by direct installation.
+///
+/// This function performs no database mutation and returns only after the
+/// signed CCS archive has passed strict verification and capability-policy
+/// validation.
+pub(crate) fn convert_native_package_to_ccs(
+    pkg: &dyn PackageFormat,
+    package_path: &Path,
+    format: PackageFormatType,
+    source_profile: Option<&str>,
+) -> Result<NativeCcsConversion> {
+    let mut package_file = std::fs::File::open(package_path).with_context(|| {
+        format!(
+            "Failed to open package file for checksum: {}",
+            package_path.display()
+        )
+    })?;
+    let original_checksum =
+        conary_core::hash::hash_reader(conary_core::hash::HashAlgorithm::Sha256, &mut package_file)
+            .with_context(|| {
+                format!(
+                    "Failed to stream package checksum: {}",
+                    package_path.display()
+                )
+            })?;
+    convert_native_package_to_ccs_with_checksum(
+        pkg,
+        package_path,
+        format,
+        source_profile,
+        &original_checksum,
+    )
+}
+
+fn convert_native_package_to_ccs_with_checksum(
+    pkg: &dyn PackageFormat,
+    package_path: &Path,
+    format: PackageFormatType,
+    source_profile: Option<&str>,
+    original_checksum: &conary_core::hash::Hash,
+) -> Result<NativeCcsConversion> {
+    let format_str = match format {
+        PackageFormatType::Rpm => "rpm",
+        PackageFormatType::Deb => "deb",
+        PackageFormatType::Arch => "arch",
+    };
     // Extract files for conversion
     let extracted = pkg
         .package_payload()
@@ -382,7 +462,7 @@ pub async fn try_convert_to_ccs(
         converter = converter.with_source_profile(profile);
     }
     let conversion_result = converter
-        .convert_payload(&metadata, &extracted, format_str, &original_checksum)
+        .convert_payload(&metadata, &extracted, format_str, original_checksum)
         .with_context(|| format!("Failed to convert {} to CCS format", pkg.name()))?;
 
     // Get the package path
@@ -430,9 +510,8 @@ pub async fn try_convert_to_ccs(
         scriptlet_summary: conversion_result.scriptlet_metadata.clone(),
     };
 
-    let ccs_path = ccs_package_path.to_string_lossy().to_string();
-    Ok(ConversionResult::Converted {
-        ccs_path,
+    Ok(NativeCcsConversion {
+        ccs_path: ccs_package_path.to_path_buf(),
         temp_dir: ccs_temp,
         pending_record,
         signing_public_key: conversion_result.signing_public_key.clone(),

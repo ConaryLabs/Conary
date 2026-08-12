@@ -3201,6 +3201,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3862,13 +3871,13 @@ checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
 name = "num-derive"
-version = "0.4.2"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+checksum = "e4e98dc3b890f6c23a0f9d3d491a2823d0dea0fa656302a13dd225fa924112a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3918,7 +3927,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -4537,7 +4546,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph",
@@ -4556,7 +4565,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5140,17 +5149,16 @@ checksum = "323c417e1d9665a65b263ec744ba09030cfb277e9daa0b018a4ab62e57bc8189"
 
 [[package]]
 name = "rpm"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a5c5d43b95d73d6f0a1b8fbeab72a7ebebf618cdc99f2b9a28f269ee343766e"
+version = "0.27.1"
+source = "git+https://github.com/rpm-rs/rpm-rs?rev=283563a92383dd63cf92fe1d261d42ecdf71ff12#283563a92383dd63cf92fe1d261d42ecdf71ff12"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bitflags",
  "digest 0.10.7",
  "enum-display-derive",
  "enum-primitive-derive",
  "hex",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "log",
  "memchr",
  "nom 8.0.0",
@@ -5158,6 +5166,7 @@ dependencies = [
  "num-derive",
  "num-traits",
  "rpm-version",
+ "sequoia-openpgp",
  "sha1",
  "sha2 0.10.9",
  "sha3",
@@ -5594,7 +5603,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "argon2",
- "base64 0.22.1",
+ "base64 0.21.7",
  "block-padding",
  "blowfish",
  "buffered-reader",
@@ -5638,7 +5647,7 @@ dependencies = [
  "sha1collisiondetection",
  "sha2 0.10.9",
  "sha3",
- "thiserror 2.0.18",
+ "thiserror 1.0.69",
  "twofish",
  "typenum",
  "x25519-dalek",

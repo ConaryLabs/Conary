@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-03
-revision: 58
-summary: Convert foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
+last_updated: 2026-08-12
+revision: 59
+summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -230,6 +230,19 @@ The implemented hook inventory currently records init/systemd, sysusers,
 tmpfiles, sysctl, and ldconfig interfaces; the remaining capability families
 stay typed implementation work rather than distro-name fallbacks. Distro names
 do not select pairwise converters, compatibility profiles, or string gates.
+
+The adopted-package entrypoint is
+`apps/conary/src/commands/adopt/convert.rs`. It does not reconstruct a package
+from live files or installed database metadata. It re-resolves the exact
+authenticated RPM, Debian, or Arch source artifact from an enrolled repository
+or verified Conary cache, proves exact installed identity and payload
+equivalence, and then calls the same direct native converter above. The signed
+CCS is verified in same-directory staging before an installed-conversion row
+and durable path commit together. Conversion failure, archive verification
+failure, or SQLite failure removes the new output. Current installed
+conversion records are reusable only while their conversion version, source
+format/checksum, signed identity, architecture, version scheme, and lifecycle
+source checksum remain exact.
 
 `convert/converter.rs` is the conversion orchestration hub.
 `convert/scriptlet_bundle/{builder,entries,format_metadata,native_contracts}.rs`

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-11
-revision: 66
-summary: Route typed database rebuilds, exact native source identity and update policy, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
+last_updated: 2026-08-12
+revision: 67
+summary: Route typed database rebuilds, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -241,6 +241,11 @@ commands.
 - Single-package adoption preview and apply share the planner in
   `apps/conary/src/commands/adopt/packages.rs`; preview stops before every
   SQLite, checkpoint, CAS, native-PM, hook, generation, and live-root write.
+- Adopted-package CCS conversion starts in
+  `apps/conary/src/commands/adopt/convert.rs`; it requires exact enrolled
+  artifact authority and complete adopted-payload equivalence before reusing
+  the direct native converter, then verifies and atomically retains the signed
+  CCS without changing the adopted trove's external ownership.
 - Trust is typed authority, not a default toggle. Native repositories require
   their ecosystem-specific metadata-to-package chain; static repositories
   require TUF. Missing proof fails closed and has no runtime disable command.

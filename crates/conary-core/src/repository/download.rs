@@ -37,6 +37,14 @@ pub struct DownloadOptions {
     trust: PreparedOpenPgpTrust,
 }
 
+/// A verified package download plus any detached authority required for
+/// checksum-addressed offline cache verification.
+#[derive(Debug)]
+pub struct VerifiedPackageDownload {
+    pub path: PathBuf,
+    pub detached_authority: Option<Vec<u8>>,
+}
+
 impl DownloadOptions {
     pub fn for_repository(repo: &Repository, keyring_dir: &Path) -> Result<Self> {
         Ok(Self {
@@ -63,7 +71,7 @@ async fn download_package_inner(
     options: Option<&DownloadOptions>,
     progress: Option<&ProgressBar>,
     allow_local_file_reference: bool,
-) -> Result<PathBuf> {
+) -> Result<VerifiedPackageDownload> {
     let expected_size = u64::try_from(repo_pkg.size).map_err(|_| {
         Error::DownloadError("negative package size in repository metadata".to_string())
     })?;
@@ -77,24 +85,32 @@ async fn download_package_inner(
             repo_pkg.download_url
         )));
     }
-    let download_path = if is_local_file_reference {
-        staged_static_dest_path(&dest_path)
-    } else {
-        dest_path.clone()
-    };
+    std::fs::create_dir_all(dest_dir).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to create download directory {}: {error}",
+            dest_dir.display()
+        ))
+    })?;
+    let staging = tempfile::tempdir_in(dest_dir).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to create package staging directory in {}: {error}",
+            dest_dir.display()
+        ))
+    })?;
+    let download_path = staging.path().join(
+        dest_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("package")),
+    );
 
     // Download the file (with or without progress)
     if is_local_file_reference {
-        if let Err(e) = download_static_or_http_file_with_expected_size(
+        download_static_or_http_file_with_expected_size(
             &repo_pkg.download_url,
             &download_path,
             Some(expected_size),
         )
-        .await
-        {
-            let _ = std::fs::remove_file(&download_path);
-            return Err(e);
-        }
+        .await?;
     } else if let Some(pb) = progress {
         let client = RepositoryClient::new()?;
         client
@@ -110,43 +126,33 @@ async fn download_package_inner(
     }
 
     // Verify checksum - clean up invalid file on failure
-    if let Err(e) = verify_checksum(&download_path, &repo_pkg.checksum) {
-        let _ = std::fs::remove_file(&download_path);
-        return Err(e);
-    }
+    verify_checksum(&download_path, &repo_pkg.checksum)?;
 
-    if let Err(e) = verify_file_size(&download_path, expected_size) {
-        let _ = std::fs::remove_file(&download_path);
-        return Err(e);
-    }
-
-    if is_local_file_reference && let Err(e) = std::fs::rename(&download_path, &dest_path) {
-        let _ = std::fs::remove_file(&download_path);
-        return Err(Error::IoError(format!(
-            "Failed to move {} to {}: {e}",
-            download_path.display(),
-            dest_path.display()
-        )));
-    }
+    verify_file_size(&download_path, expected_size)?;
 
     // Native package authority is mandatory whenever this is not a static
     // TUF download.
-    if let Some(opts) = options
-        && let Err(error) = verify_native_package(repo_pkg, &dest_path, opts).await
-    {
-        let _ = std::fs::remove_file(&dest_path);
-        return Err(error);
-    }
+    let detached_authority = if let Some(opts) = options {
+        match verify_native_package(repo_pkg, &download_path, opts).await {
+            Ok(authority) => authority,
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
 
-    Ok(dest_path)
-}
+    std::fs::rename(&download_path, &dest_path).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to publish verified package {} as {}: {error}",
+            download_path.display(),
+            dest_path.display()
+        ))
+    })?;
 
-fn staged_static_dest_path(dest_path: &Path) -> PathBuf {
-    let file_name = dest_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("package");
-    dest_path.with_file_name(format!(".{file_name}.tmp"))
+    Ok(VerifiedPackageDownload {
+        path: dest_path,
+        detached_authority,
+    })
 }
 
 /// Extract and sanitize a filename from a URL, falling back to a default.
@@ -176,12 +182,12 @@ async fn verify_native_package(
     repo_pkg: &RepositoryPackage,
     dest_path: &Path,
     opts: &DownloadOptions,
-) -> Result<()> {
+) -> Result<Option<Vec<u8>>> {
     match opts.trust.policy() {
         RepositoryTrustPolicy::Debian { .. } => {
             // The authenticated Release -> Packages SHA256 -> package SHA256
             // chain terminates in the checksum already verified above.
-            Ok(())
+            Ok(None)
         }
         RepositoryTrustPolicy::Rpm { .. } => {
             let package = rpm::Package::open(dest_path).map_err(|error| {
@@ -197,33 +203,46 @@ async fn verify_native_package(
                         "embedded RPM signature verification failed for '{}': {error}",
                         repo_pkg.name
                     ))
-                })
+                })?;
+            Ok(None)
         }
         RepositoryTrustPolicy::Arch { sig_level, .. } => {
-            let signature_url = format!("{}.sig", repo_pkg.download_url);
-            let client = RepositoryClient::new()?;
-            match client.download_to_bytes(&signature_url).await {
-                Ok(signature) => opts.trust.verify_detached(
-                    TrustRole::ArchPackage,
-                    &std::fs::read(dest_path).map_err(|error| {
-                        Error::IoError(format!(
-                            "failed to read downloaded Arch package {}: {error}",
-                            dest_path.display()
-                        ))
-                    })?,
-                    &signature,
-                ),
-                Err(Error::HttpStatus {
-                    status: 403 | 404, ..
-                }) if sig_level.package == ArchSignatureRequirement::Optional => Ok(()),
-                Err(Error::HttpStatus {
-                    status: 403 | 404, ..
-                }) => Err(Error::GpgVerificationFailed(format!(
-                    "Arch SigLevel requires package signature {signature_url}"
-                ))),
-                Err(error) => Err(error),
-            }
+            fetch_and_verify_arch_signature(repo_pkg, dest_path, opts, sig_level.package).await
         }
+    }
+}
+
+async fn fetch_and_verify_arch_signature(
+    repo_pkg: &RepositoryPackage,
+    package_path: &Path,
+    options: &DownloadOptions,
+    requirement: ArchSignatureRequirement,
+) -> Result<Option<Vec<u8>>> {
+    let signature_url = format!("{}.sig", repo_pkg.download_url);
+    let client = RepositoryClient::new()?;
+    match client.download_to_bytes(&signature_url).await {
+        Ok(signature) => {
+            options.trust.verify_detached(
+                TrustRole::ArchPackage,
+                &std::fs::read(package_path).map_err(|error| {
+                    Error::IoError(format!(
+                        "failed to read downloaded Arch package {}: {error}",
+                        package_path.display()
+                    ))
+                })?,
+                &signature,
+            )?;
+            Ok(Some(signature))
+        }
+        Err(Error::HttpStatus {
+            status: 403 | 404, ..
+        }) if requirement == ArchSignatureRequirement::Optional => Ok(None),
+        Err(Error::HttpStatus {
+            status: 403 | 404, ..
+        }) => Err(Error::GpgVerificationFailed(format!(
+            "Arch SigLevel requires package signature {signature_url}"
+        ))),
+        Err(error) => Err(error),
     }
 }
 
@@ -237,7 +256,63 @@ pub async fn download_package_verified(
     dest_dir: &Path,
     options: &DownloadOptions,
 ) -> Result<PathBuf> {
+    download_package_with_authority_verified(repo_pkg, dest_dir, options)
+        .await
+        .map(|download| download.path)
+}
+
+/// Download a package and retain any detached authority needed for an offline
+/// checksum-addressed cache entry.
+pub async fn download_package_with_authority_verified(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    options: &DownloadOptions,
+) -> Result<VerifiedPackageDownload> {
     download_package_inner(repo_pkg, dest_dir, Some(options), None, false).await
+}
+
+/// Re-verify a checksum-addressed cached native artifact through the same
+/// checksum, size, and ecosystem-native package authority as a fresh download.
+pub async fn verify_cached_package_verified(
+    repo_pkg: &RepositoryPackage,
+    path: &Path,
+    options: &DownloadOptions,
+    detached_signature: Option<&Path>,
+) -> Result<()> {
+    verify_checksum(path, &repo_pkg.checksum)?;
+    let expected_size = u64::try_from(repo_pkg.size).map_err(|_| {
+        Error::DownloadError("negative package size in repository metadata".to_string())
+    })?;
+    verify_file_size(path, expected_size)?;
+    match options.trust.policy() {
+        RepositoryTrustPolicy::Arch { .. } => {
+            let signature_path = detached_signature.ok_or_else(|| {
+                Error::GpgVerificationFailed(format!(
+                    "cached Arch package {} has no detached package signature",
+                    path.display()
+                ))
+            })?;
+            let signature = std::fs::read(signature_path).map_err(|error| {
+                Error::IoError(format!(
+                    "failed to read cached Arch package signature {}: {error}",
+                    signature_path.display()
+                ))
+            })?;
+            options.trust.verify_detached(
+                TrustRole::ArchPackage,
+                &std::fs::read(path).map_err(|error| {
+                    Error::IoError(format!(
+                        "failed to read cached Arch package {}: {error}",
+                        path.display()
+                    ))
+                })?,
+                &signature,
+            )
+        }
+        _ => verify_native_package(repo_pkg, path, options)
+            .await
+            .map(|_| ()),
+    }
 }
 
 /// Download a package from a verified static repository.
@@ -251,7 +326,9 @@ pub async fn download_static_package_verified(
     dest_dir: &Path,
     options: Option<&DownloadOptions>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, None, true).await
+    download_package_inner(repo_pkg, dest_dir, options, None, true)
+        .await
+        .map(|download| download.path)
 }
 
 /// Download a delta update file
@@ -279,6 +356,23 @@ pub async fn download_delta(
     let filename = safe_filename_from_url(&delta_info.delta_url, &default_filename);
 
     let dest_path = dest_dir.join(filename);
+    std::fs::create_dir_all(dest_dir).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to create delta download directory {}: {error}",
+            dest_dir.display()
+        ))
+    })?;
+    let staging = tempfile::tempdir_in(dest_dir).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to create delta staging directory in {}: {error}",
+            dest_dir.display()
+        ))
+    })?;
+    let staged_path = staging.path().join(
+        dest_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("delta")),
+    );
 
     info!(
         "Downloading delta for {} ({} -> {})",
@@ -287,11 +381,18 @@ pub async fn download_delta(
 
     // Download the delta file
     client
-        .download_file(&delta_info.delta_url, &dest_path)
+        .download_file(&delta_info.delta_url, &staged_path)
         .await?;
 
     // Verify checksum
-    verify_checksum(&dest_path, &delta_info.delta_checksum)?;
+    verify_checksum(&staged_path, &delta_info.delta_checksum)?;
+    std::fs::rename(&staged_path, &dest_path).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to publish verified delta {} as {}: {error}",
+            staged_path.display(),
+            dest_path.display()
+        ))
+    })?;
 
     info!(
         "Delta downloaded successfully: {} bytes (compression ratio: {:.1}%)",
@@ -365,7 +466,9 @@ pub async fn download_package_verified_with_progress(
     options: &DownloadOptions,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, Some(options), progress_bar, false).await
+    download_package_inner(repo_pkg, dest_dir, Some(options), progress_bar, false)
+        .await
+        .map(|download| download.path)
 }
 
 /// Download a verified static-repository package with progress reporting.
@@ -375,7 +478,9 @@ pub async fn download_static_package_verified_with_progress(
     options: Option<&DownloadOptions>,
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
-    download_package_inner(repo_pkg, dest_dir, options, progress_bar, true).await
+    download_package_inner(repo_pkg, dest_dir, options, progress_bar, true)
+        .await
+        .map(|download| download.path)
 }
 
 /// Multi-progress manager for parallel downloads
@@ -492,6 +597,9 @@ impl Default for DownloadProgress {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod durability_tests;
 
 #[cfg(test)]
 mod tests {
@@ -669,6 +777,69 @@ mod tests {
             "expected size mismatch, got: {error}"
         );
         assert!(!dest_dir.join("generic-http.ccs").exists());
+    }
+
+    #[tokio::test]
+    async fn cached_debian_package_rechecks_checksum_and_size_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cached.deb");
+        let content = b"authenticated Debian package bytes";
+        std::fs::write(&path, content).unwrap();
+        let package = package_for_download(
+            "https://offline.example.test/cached.deb".to_string(),
+            content,
+            i64::try_from(content.len()).unwrap(),
+        );
+        let options = DownloadOptions {
+            trust: PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Debian {
+                release_keys: vec![crate::repository::OpenPgpTrustRoot {
+                    url: "https://keys.example.test/debian.gpg".to_string(),
+                    fingerprint: "A".repeat(40),
+                }],
+            }),
+        };
+
+        verify_cached_package_verified(&package, &path, &options, None)
+            .await
+            .unwrap();
+        std::fs::write(&path, b"different bytes").unwrap();
+        assert!(
+            verify_cached_package_verified(&package, &path, &options, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_arch_package_requires_detached_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cached.pkg.tar.zst");
+        let content = b"arch package placeholder";
+        std::fs::write(&path, content).unwrap();
+        let package = package_for_download(
+            "https://offline.example.test/cached.pkg.tar.zst".to_string(),
+            content,
+            i64::try_from(content.len()).unwrap(),
+        );
+        let options = DownloadOptions {
+            trust: PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Arch {
+                keyring: crate::repository::ArchKeyringTrust {
+                    url: "https://keys.example.test/archlinux-keyring.pkg.tar.zst".to_string(),
+                    format: crate::repository::ArchKeyringFormat::AlpmPackageZstd,
+                    master_fingerprints: vec!["A".repeat(40)],
+                    packager_key_threshold: 1,
+                },
+                sig_level: crate::repository::ArchSigLevel::distribution_default(),
+            }),
+        };
+
+        let error = verify_cached_package_verified(&package, &path, &options, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("no detached package signature"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
