@@ -49,18 +49,10 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
     --no-deps \
     --yes
 
-selected_root="${root}/current"
-runlevel_link="${selected_root}/etc/runlevels/default/conary-openrc-fixture"
-if [[ ! -L "${runlevel_link}" ]]; then
-  echo "Selected OpenRC generation is missing runlevel link ${runlevel_link}" >&2
-  find "${selected_root}/etc" -maxdepth 4 -printf '%y %m %p -> %l\n' >&2 || true
-  exit 1
-fi
-runlevel_target="$(readlink "${runlevel_link}")"
-if [[ "${runlevel_target}" != "../../init.d/conary-openrc-fixture" ]]; then
-  echo "OpenRC runlevel link has target ${runlevel_target}, expected ../../init.d/conary-openrc-fixture" >&2
-  exit 1
-fi
+"${script_dir}/assert-selected-generation.py" \
+  --root "${root}" \
+  --present /etc/init.d/conary-openrc-fixture \
+  --expect-symlink /etc/runlevels/default/conary-openrc-fixture=../../init.d/conary-openrc-fixture
 activation_count="$({
   sqlite3 "${db}" <<'SQL'
 SELECT COUNT(*)
