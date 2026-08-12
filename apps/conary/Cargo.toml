@@ -82,6 +82,6 @@ conary-core = { path = "../../crates/conary-core" }
 axum.workspace = true
 ed25519-dalek.workspace = true
 remi = { path = "../remi" }
-rpm = { workspace = true, features = ["signature-pgp"] }
+rpm = { workspace = true, features = ["signature-sequoia"] }
 sequoia-openpgp.workspace = true
 tower.workspace = true
