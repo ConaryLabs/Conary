@@ -50,8 +50,17 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
     --yes
 
 selected_root="${root}/current"
-test -L "${selected_root}/etc/runlevels/default/conary-openrc-fixture"
-test "$(readlink "${selected_root}/etc/runlevels/default/conary-openrc-fixture")" = "../../init.d/conary-openrc-fixture"
+runlevel_link="${selected_root}/etc/runlevels/default/conary-openrc-fixture"
+if [[ ! -L "${runlevel_link}" ]]; then
+  echo "Selected OpenRC generation is missing runlevel link ${runlevel_link}" >&2
+  find "${selected_root}/etc" -maxdepth 4 -printf '%y %m %p -> %l\n' >&2 || true
+  exit 1
+fi
+runlevel_target="$(readlink "${runlevel_link}")"
+if [[ "${runlevel_target}" != "../../init.d/conary-openrc-fixture" ]]; then
+  echo "OpenRC runlevel link has target ${runlevel_target}, expected ../../init.d/conary-openrc-fixture" >&2
+  exit 1
+fi
 activation_count="$({
   sqlite3 "${db}" <<'SQL'
 SELECT COUNT(*)
@@ -67,8 +76,18 @@ FROM generation_activation_intents
 WHERE status = 'pending';
 SQL
 })"
-test "${activation_count}" = "1"
-test "${pending_count}" = "1"
+if [[ "${activation_count}" != "1" ]]; then
+  echo "Expected one direct CCS OpenRC activation request, found ${activation_count}" >&2
+  sqlite3 -header -column "${db}" \
+    'SELECT source_kind, source_package, source_entry, invocation_json FROM activation_requests;' >&2
+  exit 1
+fi
+if [[ "${pending_count}" != "1" ]]; then
+  echo "Expected one pending generation activation intent, found ${pending_count}" >&2
+  sqlite3 -header -column "${db}" \
+    'SELECT request_id, generation, sequence, status FROM generation_activation_intents;' >&2
+  exit 1
+fi
 
 CONARY_BIN="${conary_bin}" "${script_dir}/build-native-fixtures.sh" \
   rpm "${foreign_output}" "${foreign_fixture}"
@@ -106,5 +125,15 @@ WHERE intent.status = 'pending'
   AND request.source_package = 'conary-openrc-foreign-lifecycle-fixture';
 SQL
 })"
-test "${foreign_capture_count}" = "1"
-test "${foreign_pending_count}" = "1"
+if [[ "${foreign_capture_count}" != "1" ]]; then
+  echo "Expected one captured foreign OpenRC activation request, found ${foreign_capture_count}" >&2
+  sqlite3 -header -column "${db}" \
+    'SELECT source_kind, source_package, source_entry, invocation_json FROM activation_requests;' >&2
+  exit 1
+fi
+if [[ "${foreign_pending_count}" != "1" ]]; then
+  echo "Expected one pending foreign OpenRC generation intent, found ${foreign_pending_count}" >&2
+  sqlite3 -header -column "${db}" \
+    'SELECT request_id, generation, sequence, status FROM generation_activation_intents;' >&2
+  exit 1
+fi
