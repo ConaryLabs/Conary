@@ -70,7 +70,7 @@ identity_packages = [
     { name = "cachyos-keyring", version = "20240331-1" },
     { name = "cachyos-mirrorlist", version = "27-1" },
     { name = "archlinux-keyring", version = "1:20260727-1" },
-    { name = "pacman", version = "20260610-1" },
+    { name = "pacman", version = "7.1.0.r9.g54d9411-4" },
 ]
 repository_declarations = [
     { path = "/etc/pacman.conf", sha256 = "ba79096e0f0dda0f275d809acb0ab5bd1ddceb526f4797a8fcf568a6993a3ad8", fingerprints = [] },
