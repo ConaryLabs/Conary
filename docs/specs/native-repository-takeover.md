@@ -40,7 +40,11 @@ unresolved trust does not enable mutation authority, but their enrollment may
 not be silently enabled. Every enabled declaration must have exactly one
 enrollment binding, and one declaration may expand into multiple exact Conary
 repository rows when the native grammar declares a typed product such as APT
-suite and component combinations.
+URI, suite, and component combinations. Coverage validation derives that
+product set from the parsed declaration, binds each manifest row through its
+exact Debian parser inputs and semantically identical base URI, and blocks both
+missing and duplicate products. A manifest cannot establish completeness merely
+by naming a declaration once.
 
 Preview reads the current-schema database and selected root only. It does not
 write SQLite, stage files, invoke a native package manager, fetch metadata or
@@ -74,8 +78,12 @@ mode mismatch is reported with its exact guest path and expected and observed
 state. Drift is never accepted as a new declaration.
 
 Takeover-created repository rows use the closed `native-projection` ownership
-value. Apply refuses to overwrite an operator- or Remi-owned row. A repeated
-apply with the same preview is an idempotent verification; it creates no new
+value. Apply refuses to overwrite an operator- or Remi-owned row. While a row
+belongs to a takeover, schema authority rejects generic repository-definition
+updates (including enablement, priority, parser, trust, endpoints, and source
+policy); authenticated snapshot and last-sync observations may still advance.
+Definition changes require a projection-enrollment transaction. A repeated apply
+with the same preview is an idempotent verification; it creates no new
 repository, policy, membership, or projection rows.
 
 ## Rollback

@@ -19,13 +19,14 @@ use crate::repository::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod enrollment;
 mod projection;
 mod trust_policy;
 
+use enrollment::validate_enrollments;
 use projection::{
     ProjectionContent, StagedProjection, collect_projection_content,
     ensure_projection_inputs_unchanged, load_current_projections, load_prior_projections,
@@ -155,6 +156,17 @@ pub struct NativeProjectionPreview {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum NativeEnrollmentProduct {
+    Repository,
+    Apt {
+        uri: String,
+        suite: String,
+        component: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum TakeoverBlocker {
     EnabledTrust {
         repository: NativeRepositoryReference,
@@ -162,13 +174,20 @@ pub enum TakeoverBlocker {
     },
     MissingEnrollment {
         repository: NativeRepositoryReference,
+        products: Vec<NativeEnrollmentProduct>,
     },
     UnknownEnrollment {
         repository: NativeRepositoryReference,
         name: String,
     },
+    UnknownEnrollmentProduct {
+        repository: NativeRepositoryReference,
+        name: String,
+        product: NativeEnrollmentProduct,
+    },
     DuplicateEnrollmentProduct {
         repository: NativeRepositoryReference,
+        product: NativeEnrollmentProduct,
         names: Vec<String>,
     },
     ParserFormatMismatch {
@@ -518,141 +537,6 @@ fn validate_manifest(manifest: &NativeRepositoryTakeoverManifest) -> Result<()> 
         repository.materialize()?;
     }
     Ok(())
-}
-
-fn validate_enrollments(
-    conn: &Connection,
-    declarations: &DiscoveredRepositoryDeclarations,
-    trust: &NativeTrustImportPlan,
-    repositories: &[TakeoverRepositoryInput],
-) -> Result<Vec<TakeoverBlocker>> {
-    let mut blockers = Vec::new();
-    let mut names = BTreeSet::new();
-    let mut identities = BTreeSet::new();
-    let mut products: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for input in repositories {
-        if !names.insert(input.name.clone()) {
-            blockers.push(TakeoverBlocker::DuplicateRepositoryName {
-                name: input.name.clone(),
-            });
-        }
-        let identity_key = (
-            input.source_identity.clone(),
-            match &input.scope {
-                TakeoverPolicyScope::Repository { identity } => {
-                    format!("repository:{identity}")
-                }
-                TakeoverPolicyScope::Group { identity } => format!("group:{identity}"),
-            },
-            input.repository_identity.clone(),
-        );
-        if !identities.insert(identity_key) {
-            blockers.push(TakeoverBlocker::DuplicateRepositoryIdentity {
-                identity: input.repository_identity.clone(),
-            });
-        }
-        let Some(plan) = trust
-            .repositories
-            .iter()
-            .find(|plan| plan.repository == input.declaration)
-        else {
-            blockers.push(TakeoverBlocker::UnknownEnrollment {
-                repository: input.declaration.clone(),
-                name: input.name.clone(),
-            });
-            continue;
-        };
-        let expected_format = match &input.declaration {
-            NativeRepositoryReference::Apt { .. } => RepositoryFormat::Debian,
-            NativeRepositoryReference::Dnf { .. } | NativeRepositoryReference::Zypper { .. } => {
-                RepositoryFormat::Fedora
-            }
-            NativeRepositoryReference::Alpm { .. } => RepositoryFormat::Arch,
-        };
-        let requested_format = input.parser.format();
-        if requested_format != expected_format {
-            blockers.push(TakeoverBlocker::ParserFormatMismatch {
-                repository: input.declaration.clone(),
-                name: input.name.clone(),
-                expected: expected_format,
-                requested: requested_format,
-            });
-        }
-        let product_key = serde_json::to_string(&(
-            &input.declaration,
-            &input.metadata_url,
-            &input.content_url,
-            &input.parser,
-        ))
-        .map_err(|error| {
-            Error::ParseError(format!(
-                "failed to serialize native enrollment product: {error}"
-            ))
-        })?;
-        products
-            .entry(product_key)
-            .or_default()
-            .push(input.name.clone());
-        if requested_format == expected_format
-            && matches!(plan.disposition, TrustImportDisposition::Importable)
-            && expected_trust_policy(
-                &declarations.root,
-                declarations,
-                plan,
-                input.parser.format(),
-            )?
-            .as_ref()
-                != Some(&input.trust)
-        {
-            blockers.push(TakeoverBlocker::TrustPolicyMismatch {
-                repository: input.declaration.clone(),
-                name: input.name.clone(),
-            });
-        }
-        let declared = plan.enabled.unwrap_or(true);
-        if declared != input.enabled {
-            blockers.push(TakeoverBlocker::EnabledStateMismatch {
-                repository: input.declaration.clone(),
-                name: input.name.clone(),
-                declared,
-                requested: input.enabled,
-            });
-        }
-        if let Some(existing) = Repository::find_by_name(conn, &input.name)? {
-            blockers.push(TakeoverBlocker::ExistingRepository {
-                name: input.name.clone(),
-                ownership: existing.managed_by.as_str().to_string(),
-            });
-        }
-    }
-    for names in products.values().filter(|names| names.len() > 1) {
-        let first = repositories
-            .iter()
-            .find(|input| input.name == names[0])
-            .expect("product names came from repository inputs");
-        blockers.push(TakeoverBlocker::DuplicateEnrollmentProduct {
-            repository: first.declaration.clone(),
-            names: names.clone(),
-        });
-    }
-    for plan in &trust.repositories {
-        let enabled = plan.enabled.unwrap_or(true);
-        let matching = repositories
-            .iter()
-            .any(|input| input.declaration == plan.repository);
-        if !matching {
-            blockers.push(TakeoverBlocker::MissingEnrollment {
-                repository: plan.repository.clone(),
-            });
-        }
-        if enabled && !matches!(plan.disposition, TrustImportDisposition::Importable) {
-            blockers.push(TakeoverBlocker::EnabledTrust {
-                repository: plan.repository.clone(),
-                disposition: plan.disposition.clone(),
-            });
-        }
-    }
-    Ok(blockers)
 }
 
 fn takeover_repository_ids(conn: &Connection, root_identity: &str) -> Result<Vec<i64>> {

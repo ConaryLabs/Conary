@@ -140,6 +140,36 @@ BEGIN
     SELECT CASE WHEN NEW.managed_by != 'native-projection'
         THEN RAISE(ABORT, 'native takeover repository ownership is immutable') END;
 END;
+CREATE TRIGGER native_repository_takeover_members_preserve_repository_authority
+BEFORE UPDATE ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM native_repository_takeover_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN
+        NEW.name IS NOT OLD.name
+        OR NEW.url IS NOT OLD.url
+        OR NEW.content_url IS NOT OLD.content_url
+        OR NEW.enabled IS NOT OLD.enabled
+        OR NEW.priority IS NOT OLD.priority
+        OR NEW.trust_policy_json IS NOT OLD.trust_policy_json
+        OR NEW.metadata_expire IS NOT OLD.metadata_expire
+        OR NEW.default_strategy IS NOT OLD.default_strategy
+        OR NEW.default_strategy_endpoint IS NOT OLD.default_strategy_endpoint
+        OR NEW.source_profile IS NOT OLD.source_profile
+        OR NEW.tuf_enabled IS NOT OLD.tuf_enabled
+        OR NEW.tuf_root_version IS NOT OLD.tuf_root_version
+        OR NEW.tuf_root_url IS NOT OLD.tuf_root_url
+        OR NEW.security_advisory_support IS NOT OLD.security_advisory_support
+        OR NEW.package_format IS NOT OLD.package_format
+        OR NEW.parser_config_json IS NOT OLD.parser_config_json
+        OR NEW.managed_by IS NOT OLD.managed_by
+        OR NEW.source_policy_id IS NOT OLD.source_policy_id
+        OR NEW.repository_identity IS NOT OLD.repository_identity
+        OR NEW.stream_binding_sha256 IS NOT OLD.stream_binding_sha256
+        THEN RAISE(ABORT, 'native takeover repository authority changes require projection enrollment') END;
+END;
 CREATE TABLE native_repository_projections (
             takeover_id INTEGER NOT NULL REFERENCES native_repository_takeovers(id) ON DELETE CASCADE,
             path TEXT NOT NULL,

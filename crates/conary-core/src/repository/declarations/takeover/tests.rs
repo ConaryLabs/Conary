@@ -320,6 +320,96 @@ fn embedded_apt_key_material_becomes_exact_inline_trust_authority() {
 }
 
 #[test]
+fn apt_enrollment_covers_every_uri_suite_component_product_exactly_once() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("etc/apt/sources.list.d")).unwrap();
+    let (armor, _) = armored_certificate();
+    let continuation = armor
+        .lines()
+        .map(|line| {
+            if line.is_empty() {
+                " .".to_string()
+            } else {
+                format!(" {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        root.path().join("etc/apt/sources.list.d/vendor.sources"),
+        format!(
+            "Types: deb\nURIs: https://apt.example\nSuites: stable\nComponents: main updates\nSigned-By:\n{continuation}\n"
+        ),
+    )
+    .unwrap();
+    let db_path = root.path().join("conary.db");
+    crate::db::init(&db_path).unwrap();
+    let conn = crate::db::open(&db_path).unwrap();
+    let declarations = discover_selected_root(root.path()).unwrap();
+    let trust = plan_selected_root_trust(&declarations);
+    let reference = trust.repositories[0].repository.clone();
+    let policy = expected_trust_policy(
+        root.path(),
+        &declarations,
+        &trust.repositories[0],
+        RepositoryFormat::Debian,
+    )
+    .unwrap()
+    .unwrap();
+    let input = |name: &str, component: &str| TakeoverRepositoryInput {
+        declaration: reference.clone(),
+        name: name.to_string(),
+        source_identity: "apt-vendor".to_string(),
+        repository_identity: name.to_string(),
+        scope: TakeoverPolicyScope::Group {
+            identity: "apt-vendor".to_string(),
+        },
+        stream: TakeoverSourceStream::Release {
+            identity: "stable".to_string(),
+        },
+        update: TakeoverUpdatePolicy::Follow,
+        metadata_url: "https://apt.example/".to_string(),
+        content_url: None,
+        parser: RepositoryParserConfig::Deb {
+            distribution: "stable".to_string(),
+            component: component.to_string(),
+            architecture: "amd64".to_string(),
+        },
+        trust: policy.clone(),
+        enabled: true,
+        priority: 40,
+        metadata_expire: 3600,
+        source_profile: None,
+    };
+    let mut manifest = NativeRepositoryTakeoverManifest {
+        schema: TAKEOVER_MANIFEST_SCHEMA,
+        repositories: vec![input("apt-main", "main")],
+    };
+    let incomplete = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
+    assert!(incomplete.blockers.iter().any(|blocker| matches!(
+        blocker,
+        TakeoverBlocker::MissingEnrollment { products, .. }
+            if products == &vec![NativeEnrollmentProduct::Apt {
+                uri: "https://apt.example".to_string(),
+                suite: "stable".to_string(),
+                component: Some("updates".to_string()),
+            }]
+    )));
+
+    manifest.repositories.push(input("apt-updates", "updates"));
+    let complete = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
+    assert!(complete.blockers.is_empty(), "{:?}", complete.blockers);
+    let outcome = apply_native_repository_takeover(
+        &conn,
+        root.path(),
+        &manifest,
+        &complete.sha256().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(outcome.repository_ids.len(), 2);
+}
+
+#[test]
 fn apply_repeat_drift_and_rollback_preserve_exact_authority() {
     let (root, conn, manifest) = fixture();
     let declaration_path = root.path().join("etc/yum.repos.d/vendor.repo");
@@ -335,6 +425,14 @@ fn apply_repeat_drift_and_rollback_preserve_exact_authority() {
             .managed_by,
         RepositoryOwnership::NativeProjection
     );
+    assert!(
+        crate::repository::set_repository_enabled(&conn, "vendor", false).is_err(),
+        "native projection authority cannot drift through generic repository mutation"
+    );
+    let mut sync_update = Repository::find_by_name(&conn, "vendor").unwrap().unwrap();
+    assert!(sync_update.enabled);
+    sync_update.last_sync = Some("2026-08-11T00:00:00Z".to_string());
+    sync_update.update(&conn).unwrap();
 
     let repeated =
         apply_native_repository_takeover(&conn, root.path(), &manifest, &digest).unwrap();
