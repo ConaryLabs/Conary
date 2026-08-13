@@ -81,10 +81,10 @@ conary-core = { path = "../../crates/conary-core" }
 [dev-dependencies]
 axum.workspace = true
 ed25519-dalek.workspace = true
-liblzma = "0.4"
+liblzma.workspace = true
 remi = { path = "../remi" }
 rpm = { workspace = true, features = ["signature-sequoia"] }
 sequoia-openpgp.workspace = true
 sha1.workspace = true
 tower.workspace = true
-zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip.workspace = true

@@ -24,6 +24,8 @@ sequoia-openpgp = { version = "2", default-features = false, features = ["crypto
 
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "limits"] }
+liblzma = "0.4"
+zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # Error handling
 thiserror = "2.0"
