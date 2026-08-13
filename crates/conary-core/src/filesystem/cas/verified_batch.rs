@@ -577,6 +577,45 @@ mod tests {
     }
 
     #[test]
+    fn warm_authority_requires_a_regular_object_with_the_signed_size() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        let bytes = b"trusted bytes";
+        let hash = crate::hash::sha256(bytes);
+        cas.store(bytes).unwrap();
+
+        let size_error = cas
+            .verified_object_batch([(hash.clone(), bytes.len() as u64 + 1)])
+            .err()
+            .unwrap();
+        assert!(size_error.to_string().contains("has size"));
+
+        let directory_hash = "0".repeat(64);
+        fs::create_dir_all(cas.hash_to_path(&directory_hash).unwrap()).unwrap();
+        let type_error = cas
+            .verified_object_batch([(directory_hash, 0)])
+            .err()
+            .unwrap();
+        assert!(type_error.to_string().contains("not a regular file"));
+    }
+
+    #[test]
+    fn warm_object_that_disappears_before_commit_exposes_no_verified_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        let bytes = b"removed during verification";
+        let hash = crate::hash::sha256(bytes);
+        cas.store(bytes).unwrap();
+        let mut batch = cas
+            .verified_object_batch([(hash.clone(), bytes.len() as u64)])
+            .unwrap();
+        batch.ingest(&hash, &mut Cursor::new(bytes)).unwrap();
+        fs::remove_file(cas.hash_to_path(&hash).unwrap()).unwrap();
+
+        assert!(batch.commit().is_err());
+    }
+
+    #[test]
     fn duplicate_signed_identity_is_deduplicated_but_conflicting_size_fails() {
         let temp = tempfile::tempdir().unwrap();
         let cas = CasStore::new(temp.path().join("objects")).unwrap();
