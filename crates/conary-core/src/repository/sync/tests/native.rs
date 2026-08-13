@@ -69,7 +69,7 @@ fn pin_refusal_leaves_native_rows_and_sync_state_untouched() {
     assert!(matches!(error, Error::TrustError(_)));
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].checksum, "old");
+    assert_eq!(stored[0].checksum, "sha256:old");
     let after = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
     assert_eq!(after.last_sync, before.last_sync);
     assert_eq!(after.authenticated_snapshot, before.authenticated_snapshot);

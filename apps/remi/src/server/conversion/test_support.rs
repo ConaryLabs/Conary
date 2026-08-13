@@ -5,9 +5,11 @@ use conary_core::ccs::convert::{ConversionResult, ScriptletBundleSummary};
 use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide};
 use conary_core::db::schema;
 use std::fs;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
+use zip::write::SimpleFileOptions;
 
 pub(super) fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
     let temp_file = NamedTempFile::new().unwrap();
@@ -46,6 +48,44 @@ pub(super) fn insert_package(
     );
     pkg.architecture = Some("x86_64".to_string());
     pkg.insert(conn).unwrap();
+}
+
+pub(super) fn eopkg_fixture() -> tempfile::NamedTempFile {
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_path("usr/bin/demo").unwrap();
+    header.set_size(5);
+    header.set_mode(0o755);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_cksum();
+    tar.append(&header, Cursor::new(b"hello")).unwrap();
+    let tar = tar.into_inner().unwrap();
+    let stream =
+        liblzma::stream::Stream::new_easy_encoder(6, liblzma::stream::Check::Crc64).unwrap();
+    let mut encoder = liblzma::read::XzEncoder::new_stream(tar.as_slice(), stream);
+    let mut compressed = Vec::new();
+    encoder.read_to_end(&mut compressed).unwrap();
+
+    let metadata = br#"<PISI><Package><Name>demo</Name><Summary>demo</Summary><History><Update release="2"><Version>1.0</Version></Update></History><Distribution>Solus</Distribution><DistributionRelease>1</DistributionRelease><Architecture>x86_64</Architecture><PackageFormat>1.2</PackageFormat></Package></PISI>"#;
+    let files = br#"<Files><File><Path>usr/bin/demo</Path><Type>executable</Type><Size>5</Size><Uid>0</Uid><Gid>0</Gid><Mode>0755</Mode><Hash>aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d</Hash></File></Files>"#;
+    let output = tempfile::NamedTempFile::new().unwrap();
+    {
+        let mut archive = zip::ZipWriter::new(output.reopen().unwrap());
+        for (name, bytes) in [
+            ("metadata.xml", metadata.as_slice()),
+            ("files.xml", files.as_slice()),
+            ("install.tar.xz", compressed.as_slice()),
+        ] {
+            archive
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+    output
 }
 
 /// Seed the exact repository source row that makes a converted fixture current,

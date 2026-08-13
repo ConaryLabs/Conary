@@ -21,7 +21,7 @@ use tracing::info;
 struct ParsedConversion {
     metadata: ForeignConversionInput,
     format: &'static str,
-    original_checksum: String,
+    source_checksum: String,
     conversion_result: ConversionResult,
     repo_pkg: RepositoryPackage,
     repository_provides_digest: String,
@@ -121,12 +121,12 @@ impl ConversionService {
 
         let checksum_path = pkg_path.clone();
         let started = Instant::now();
-        let original_checksum =
+        let artifact_sha256 =
             tokio::task::spawn_blocking(move || Self::calculate_sha256(&checksum_path))
                 .await
                 .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
         timing.record(ConversionPhase::Checksum, started.elapsed());
-        let original_checksum_text = original_checksum.to_prefixed_string();
+        let source_checksum = repo_pkg.checksum.clone();
 
         let started = Instant::now();
         let repository_metadata = self
@@ -136,7 +136,7 @@ impl ConversionService {
             .cached_conversion_result_async(
                 source_feed.id(),
                 &repo_pkg,
-                &original_checksum_text,
+                &source_checksum,
                 &repository_metadata.digest,
             )
             .await?
@@ -157,7 +157,7 @@ impl ConversionService {
                 repository_metadata,
                 pkg_path,
                 output_dir,
-                original_checksum,
+                artifact_sha256,
             )
         })
         .await
@@ -188,7 +188,7 @@ impl ConversionService {
                 source_profile: source_profile_owned,
                 metadata: parsed.metadata,
                 format: parsed.format,
-                original_checksum: parsed.original_checksum,
+                source_checksum: parsed.source_checksum,
                 conversion_result: parsed.conversion_result,
                 repo_pkg: parsed.repo_pkg,
                 repository_provides_digest: parsed.repository_provides_digest,
@@ -237,7 +237,7 @@ impl ConversionService {
         repository_metadata: RepositoryConversionMetadata,
         pkg_path: PathBuf,
         output_dir: PathBuf,
-        original_checksum: conary_core::hash::Hash,
+        artifact_sha256: conary_core::hash::Hash,
     ) -> Result<ParsedConversion> {
         let mut phase_timings = Vec::new();
         let mut skipped_phases = Vec::new();
@@ -284,7 +284,7 @@ impl ConversionService {
 
         let started = Instant::now();
         let conversion_result = converter
-            .convert_payload(&metadata, files.files(), format, &original_checksum)
+            .convert_payload(&metadata, files.files(), format, &artifact_sha256)
             .map_err(|e| anyhow!("Conversion failed: {}", e))?;
         phase_timings.push(ConversionPhaseTiming {
             phase: ConversionPhase::CcsEmission,
@@ -299,7 +299,7 @@ impl ConversionService {
         Ok(ParsedConversion {
             metadata,
             format,
-            original_checksum: original_checksum.to_prefixed_string(),
+            source_checksum: repo_pkg.checksum.clone(),
             conversion_result,
             repo_pkg,
             repository_provides_digest: repository_metadata.digest,
@@ -311,8 +311,13 @@ impl ConversionService {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::production_rust_sources;
-    use super::ConversionService;
+    use super::super::test_support::{eopkg_fixture, production_rust_sources};
+    use super::{ConversionService, RepositoryConversionMetadata};
+    use conary_core::ccs::SigningKeyPair;
+    use conary_core::db::models::RepositoryPackage;
+    use conary_core::repository::versioning::VersionScheme;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn remi_server_conversion_paths_do_not_block_on_async_work() {
@@ -330,5 +335,65 @@ mod tests {
         let feed =
             ConversionService::public_feed_for_route("fedora").expect("fedora repository feed");
         assert_eq!(feed.id(), "fedora-44");
+    }
+
+    #[test]
+    fn eopkg_conversion_separates_source_checksum_from_ccs_sha256() {
+        let fixture = eopkg_fixture();
+        let root = tempfile::tempdir().unwrap();
+        let keys_root = root.path().join("keys");
+        let profile_dir = keys_root.join("solus");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::set_permissions(&keys_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&profile_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let private = profile_dir.join("targets.private");
+        let public = profile_dir.join("targets.public");
+        SigningKeyPair::generate()
+            .with_key_id("targets")
+            .save_to_files(&private, &public)
+            .unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&public, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let service = ConversionService::new(
+            root.path().join("chunks"),
+            root.path().join("cache"),
+            root.path().join("remi.db"),
+            None,
+        )
+        .with_repository_keys_dir(Some(keys_root));
+        let source_checksum = "sha1:1826421aded2a344b7864ffff2fae2430778b1f0";
+        let mut package = RepositoryPackage::new(
+            1,
+            "demo".to_string(),
+            "1.0-2".to_string(),
+            VersionScheme::Eopkg,
+            source_checksum.to_string(),
+            fixture.as_file().metadata().unwrap().len() as i64,
+            "https://example.invalid/demo.eopkg".to_string(),
+        );
+        package.architecture = Some("x86_64".to_string());
+        package.source_profile = Some("solus".to_string());
+        let artifact_sha256 = ConversionService::calculate_sha256(fixture.path()).unwrap();
+        let artifact_sha256_text = artifact_sha256.to_prefixed_string();
+
+        let parsed = service
+            .parse_and_convert_package(
+                "solus",
+                package,
+                RepositoryConversionMetadata {
+                    digest: conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+                },
+                fixture.path().to_path_buf(),
+                root.path().join("output"),
+                artifact_sha256,
+            )
+            .unwrap();
+
+        assert_eq!(parsed.source_checksum, source_checksum);
+        assert_eq!(
+            parsed.conversion_result.original_checksum,
+            artifact_sha256_text
+        );
     }
 }

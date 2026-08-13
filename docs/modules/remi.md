@@ -324,6 +324,11 @@ metadata refresh removes mismatched conversion rows in the same SQLite
 transaction. Cold conversion carries one immutable repository-metadata digest
 through cache lookup and persistence, then revalidates it under the database
 write transaction so a concurrent refresh cannot publish stale source input.
+Repository conversion cache identity is the exact algorithm-prefixed checksum
+from authenticated repository metadata. The downloader verifies bytes against
+that checksum before conversion. Remi separately computes SHA-256 over the
+downloaded artifact for CCS provenance and emission; that CCS digest never
+replaces the repository checksum used for cache and refresh authority.
 CCS identity and capabilities come solely from the downloaded artifact. CCS
 cache files use their emitted content hash as the local filename
 instead of a mutable package-name/version slot. Lifecycle program content,

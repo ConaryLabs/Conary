@@ -184,6 +184,55 @@ fn repository_provide_change_invalidates_and_reconciles_conversion() {
 }
 
 #[test]
+fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
+    let (_temp, conn) = create_test_db();
+    let source_checksum = "sha1:1826421aded2a344b7864ffff2fae2430778b1f0";
+    conn.execute(
+        "INSERT INTO repositories (name, url, source_profile)
+         VALUES ('solus-source', 'https://example.test', 'solus')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repository_packages
+         (repository_id, name, version, architecture, checksum, size, download_url, version_scheme)
+         VALUES (1, 'fixture', '1.0-1', 'x86_64', ?1, 42,
+                 'https://example.test/fixture.eopkg', 'eopkg')",
+        [source_checksum],
+    )
+    .unwrap();
+    let mut converted = ConvertedPackage::new_repository(
+        "solus".to_string(),
+        "fixture".to_string(),
+        "1.0-1".to_string(),
+        "x86_64".to_string(),
+        "eopkg".to_string(),
+        source_checksum.to_string(),
+        &["sha256:chunk".to_string()],
+        42,
+        "sha256:content".to_string(),
+        "/tmp/fixture.ccs".to_string(),
+        EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+    );
+    converted.insert(&conn).unwrap();
+
+    assert!(converted.repository_metadata_is_current(&conn).unwrap());
+    assert_eq!(
+        ConvertedPackage::find_current_conversions(&conn, "solus", Some("fixture"))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    conn.execute(
+        "UPDATE repository_packages SET checksum = ?1 WHERE id = 1",
+        ["sha256:1826421aded2a344b7864ffff2fae2430778b1f0"],
+    )
+    .unwrap();
+    assert!(!converted.repository_metadata_is_current(&conn).unwrap());
+}
+
+#[test]
 fn repository_artifact_exposes_only_complete_serving_state() {
     let converted = server_package("sha256:source", "sha256:chunk");
     let artifact = converted.repository_artifact().unwrap();
@@ -268,7 +317,7 @@ fn repository_artifact_rejects_corrupt_chunk_json() {
 #[test]
 fn chunk_conversion_state_uses_current_typed_rows() {
     let (_temp, conn) = create_test_db();
-    seed_server_package_source(&conn, "source");
+    seed_server_package_source(&conn, "sha256:source");
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
 
@@ -281,7 +330,7 @@ fn chunk_conversion_state_uses_current_typed_rows() {
 #[test]
 fn chunk_conversion_state_errors_on_malformed_current_summary() {
     let (_temp, conn) = create_test_db();
-    seed_server_package_source(&conn, "source");
+    seed_server_package_source(&conn, "sha256:source");
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
     conn.execute(
