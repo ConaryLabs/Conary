@@ -163,6 +163,7 @@ pub(super) fn rpm_provide_constraint(
                     "RPM provide '{name}' uses the unsupported '!=' relation"
                 )));
             }
+            RepoVersionConstraint::Eopkg(_) => unreachable!("RPM parser selected RPM scheme"),
         };
     Ok(RpmProvideConstraint {
         native_constraint,

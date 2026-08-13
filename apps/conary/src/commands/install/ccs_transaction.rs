@@ -199,6 +199,7 @@ pub(crate) fn install_semantics_for_ccs_manifest(
         SourceFormat::Rpm => super::PackageFormatType::Rpm,
         SourceFormat::Deb => super::PackageFormatType::Deb,
         SourceFormat::Arch => super::PackageFormatType::Arch,
+        SourceFormat::Eopkg => super::PackageFormatType::Eopkg,
     };
     let semantics = InstallSemantics::native_package(format);
     if manifest.package.version_scheme != semantics.version_scheme {
@@ -670,6 +671,7 @@ mod tests {
                 SourceFormat::Rpm => NativeVersionScheme::Rpm,
                 SourceFormat::Deb => NativeVersionScheme::Deb,
                 SourceFormat::Arch => NativeVersionScheme::Arch,
+                SourceFormat::Eopkg => NativeVersionScheme::Eopkg,
             },
             conversion_tool: "conary-test".to_string(),
             conversion_tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -687,10 +689,11 @@ mod tests {
             SourceFormat::Rpm => VersionScheme::Rpm,
             SourceFormat::Deb => VersionScheme::Debian,
             SourceFormat::Arch => VersionScheme::Arch,
+            SourceFormat::Eopkg => VersionScheme::Eopkg,
         };
         manifest.package.debian_multi_arch = match format {
             SourceFormat::Deb => Some(DebianMultiArch::No),
-            SourceFormat::Rpm | SourceFormat::Arch => None,
+            SourceFormat::Rpm | SourceFormat::Arch | SourceFormat::Eopkg => None,
         };
         manifest.native_lifecycle = Some(native_free_bundle(format, version));
         let encoded = toml::to_string_pretty(&manifest).unwrap();

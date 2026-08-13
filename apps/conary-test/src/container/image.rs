@@ -211,6 +211,7 @@ fn canonical_native_package_name(format: ProfilePackageFormat) -> &'static str {
         ProfilePackageFormat::Rpm => "conary-release.rpm",
         ProfilePackageFormat::Deb => "conary-release.deb",
         ProfilePackageFormat::Arch => "conary-release.pkg.tar.zst",
+        ProfilePackageFormat::Eopkg => "conary-release.eopkg",
     }
 }
 

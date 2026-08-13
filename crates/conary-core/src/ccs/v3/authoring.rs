@@ -370,6 +370,8 @@ fn dependency_kind_order(kind: DependencyKindV3) -> u8 {
         DependencyKindV3::Binary => 4,
         DependencyKindV3::Soname => 5,
         DependencyKindV3::PkgConfig => 6,
+        DependencyKindV3::PkgConfig32 => 7,
+        DependencyKindV3::Comar => 8,
     }
 }
 

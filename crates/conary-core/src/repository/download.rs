@@ -15,6 +15,8 @@
 //!
 //! The public functions are thin wrappers providing ergonomic APIs.
 
+mod eopkg;
+
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::filesystem::path::sanitize_filename;
@@ -208,6 +210,10 @@ async fn verify_native_package(
         }
         RepositoryTrustPolicy::Arch { sig_level, .. } => {
             fetch_and_verify_arch_signature(repo_pkg, dest_path, opts, sig_level.package).await
+        }
+        RepositoryTrustPolicy::Eopkg { origin, .. } => {
+            eopkg::verify(repo_pkg, dest_path, origin)?;
+            Ok(None)
         }
     }
 }
@@ -416,10 +422,24 @@ pub fn verify_checksum(path: &Path, expected: &str) -> Result<()> {
 
     debug!("Verifying checksum for {}", path.display());
 
-    crate::hash::verify_file_sha256(path, expected).map_err(|e| Error::ChecksumMismatch {
-        expected: e.expected,
-        actual: e.actual,
-    })?;
+    if let Some(expected_sha1) = expected.strip_prefix("sha1:") {
+        use sha1::Digest as _;
+        let mut reader = std::fs::File::open(path)?;
+        let mut hasher = sha1::Sha1::new();
+        std::io::copy(&mut reader, &mut hasher)?;
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != expected_sha1 {
+            return Err(Error::ChecksumMismatch {
+                expected: expected.to_string(),
+                actual: format!("sha1:{actual}"),
+            });
+        }
+    } else {
+        crate::hash::verify_file_sha256(path, expected).map_err(|e| Error::ChecksumMismatch {
+            expected: e.expected,
+            actual: e.actual,
+        })?;
+    }
 
     debug!("Checksum verified: {}", expected);
     Ok(())

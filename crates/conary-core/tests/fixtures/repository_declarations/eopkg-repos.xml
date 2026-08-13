@@ -1,0 +1,8 @@
+<REPOS>
+    <Repo>
+        <Name>Solus</Name>
+        <Url>https://cdn.getsol.us/repo/polaris/eopkg-index.xml.xz</Url>
+        <Status>active</Status>
+        <Media>remote</Media>
+    </Repo>
+</REPOS>

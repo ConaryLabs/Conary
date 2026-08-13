@@ -150,6 +150,8 @@ fn capability_kind(kind: Option<RepositoryCapabilityKind>) -> String {
         RepositoryCapabilityKind::Path => "path",
         RepositoryCapabilityKind::Binary => "binary",
         RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32",
+        RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     }
     .to_string()

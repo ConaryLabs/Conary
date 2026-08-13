@@ -391,6 +391,7 @@ impl NativeLifecycleBundle {
             SourceFormat::Rpm => VersionScheme::Rpm,
             SourceFormat::Deb => VersionScheme::Deb,
             SourceFormat::Arch => VersionScheme::Arch,
+            SourceFormat::Eopkg => VersionScheme::Eopkg,
         };
         if self.version_scheme != expected_version_scheme {
             bail!(
@@ -418,6 +419,9 @@ impl NativeLifecycleBundle {
                 }
                 SourceFormat::Arch => {
                     crate::repository::supported_profiles::ProfilePackageFormat::Arch
+                }
+                SourceFormat::Eopkg => {
+                    crate::repository::supported_profiles::ProfilePackageFormat::Eopkg
                 }
             };
             if profile.package_format() != expected_format {

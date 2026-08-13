@@ -208,9 +208,24 @@ impl PayloadClaim {
             }
         }
 
+        self.persist(conn)
+    }
+
+    /// Persist a claim whose matching anchor was just inserted by the caller.
+    ///
+    /// The caller must own an outer transaction or savepoint that rolls the
+    /// anchor back if this insert fails. The new anchor and this typed claim
+    /// were built from the same `FileEntry`, so reloading the anchor and peer
+    /// set cannot establish any additional property.
+    pub(crate) fn insert_for_new_anchor(&self, conn: &Connection) -> Result<()> {
+        self.validate()?;
+        self.persist(conn)
+    }
+
+    fn persist(&self, conn: &Connection) -> Result<()> {
         let node_json = super::file_entry::canonical_node_json(&self.node)?;
         let content_size = persisted_content_size(self.content.as_ref())?;
-        conn.execute(
+        let mut statement = conn.prepare_cached(
             "INSERT INTO payload_claims (
                 path, trove_id, component_id, sharing_policy, anchor_policy,
                 materialization_target_path, payload_node_json,
@@ -224,18 +239,18 @@ impl PayloadClaim {
                 payload_node_json = excluded.payload_node_json,
                 content_sha256 = excluded.content_sha256,
                 content_size = excluded.content_size",
-            params![
-                &self.path,
-                self.trove_id,
-                self.component_id,
-                self.sharing_policy.as_str(),
-                self.anchor_policy.as_str(),
-                &self.materialization_target_path,
-                node_json,
-                self.content.as_ref().map(|content| &content.sha256),
-                content_size,
-            ],
         )?;
+        statement.execute(params![
+            &self.path,
+            self.trove_id,
+            self.component_id,
+            self.sharing_policy.as_str(),
+            self.anchor_policy.as_str(),
+            &self.materialization_target_path,
+            node_json,
+            self.content.as_ref().map(|content| &content.sha256),
+            content_size,
+        ])?;
         Ok(())
     }
 

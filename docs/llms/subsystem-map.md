@@ -162,11 +162,11 @@ commands.
   `docs/modules/feature-ownership.md` slugs `ccs`, `packaging`, and `profiles`,
   plus `docs/modules/ccs.md`,
   `docs/specs/source-package-authority.md`, and `docs/modules/recipe.md`.
-  The source-authority specification owns the W5 lossless RPM, Debian, ALPM,
-  and CCS models plus their resolution, conversion, and transaction
+  The source-authority specification owns the lossless RPM, Debian, ALPM,
+  eopkg, and CCS models plus their resolution, conversion, and transaction
   projections. Identity/provision work starts in
-  `crates/conary-core/src/packages/source_authority.rs` and the three
-  `packages/{rpm,deb,arch}/authority.rs` modules; CCS signing and verification
+  `crates/conary-core/src/packages/source_authority.rs` and the four
+  `packages/{rpm,deb,arch,eopkg}/authority.rs` modules; CCS signing and verification
   start in `crates/conary-core/src/ccs/v3/`. Native authoring
   content flow starts in `crates/conary-core/src/ccs/builder.rs`,
   `builder/source.rs`, `policy/content.rs`, and `builder/package_writer.rs`.
@@ -254,8 +254,9 @@ commands.
 
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
-- [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md) for lossless RPM, Debian, ALPM, and CCS authority plus explicit consumer projections
-- [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md) for authoritative RPM, Debian, and Arch lifecycle ABIs, transaction order, arguments, triggers, and payload visibility
+- [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md) for lossless RPM, Debian, ALPM, eopkg, and CCS authority plus explicit consumer projections
+- [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md) for authoritative RPM, Debian, Arch, and eopkg lifecycle ABIs, transaction order, arguments, triggers, and payload visibility
+- [`docs/specs/eopkg-source-abi.md`](../specs/eopkg-source-abi.md) for the pinned eopkg package, repository, trust, installed-state, configuration, and transaction mapping
 - [`docs/modules/feature-ownership.md`](../modules/feature-ownership.md) for feature ownership cards, neighboring systems, and interaction verification gates
 - [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows

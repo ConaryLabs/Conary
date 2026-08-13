@@ -14,6 +14,7 @@ pub mod alpm;
 pub mod apt;
 pub mod discovery;
 pub mod dnf;
+pub mod eopkg;
 mod ini;
 pub mod takeover;
 pub mod trust_import;
@@ -33,6 +34,7 @@ pub enum DeclarationEcosystem {
     ZypperRepository,
     ZypperService,
     Alpm,
+    Eopkg,
 }
 
 impl fmt::Display for DeclarationEcosystem {
@@ -43,6 +45,7 @@ impl fmt::Display for DeclarationEcosystem {
             Self::ZypperRepository => "zypper-repository",
             Self::ZypperService => "zypper-service",
             Self::Alpm => "alpm",
+            Self::Eopkg => "eopkg",
         })
     }
 }

@@ -7,6 +7,7 @@ pub enum PackageFormat {
     Rpm,
     Deb,
     Arch,
+    Eopkg,
 }
 
 /// Execution mode determines arguments passed to scriptlets

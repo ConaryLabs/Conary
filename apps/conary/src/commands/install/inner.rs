@@ -651,6 +651,7 @@ fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
             crate::commands::PackageFormatType::Rpm => ConfigSource::Rpm,
             crate::commands::PackageFormatType::Deb => ConfigSource::Deb,
             crate::commands::PackageFormatType::Arch => ConfigSource::Arch,
+            crate::commands::PackageFormatType::Eopkg => ConfigSource::Eopkg,
         },
         super::PreparedSourceKind::Ccs => ConfigSource::Auto,
     }

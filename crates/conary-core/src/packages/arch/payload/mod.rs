@@ -19,7 +19,7 @@ use std::io::{Read, Write};
 use tar::{Entry, EntryType};
 use xattrs::{PaxXattrFamily, PaxXattrRecords, decode_libarchive_base64};
 
-pub(super) struct ArchivePayloadEntry {
+pub(crate) struct ArchivePayloadEntry {
     path: String,
     node: PayloadNode,
     content_authority: Option<PayloadContentAuthority>,
@@ -68,7 +68,7 @@ impl ArchivePayloadEntry {
     }
 }
 
-pub(super) fn declared_spool_bytes<R: Read>(entry: &Entry<'_, R>) -> u64 {
+pub(crate) fn declared_spool_bytes<R: Read>(entry: &Entry<'_, R>) -> u64 {
     match entry.header().entry_type() {
         EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => entry.size(),
         EntryType::Link if entry.size() != 0 => entry.size(),
@@ -76,7 +76,7 @@ pub(super) fn declared_spool_bytes<R: Read>(entry: &Entry<'_, R>) -> u64 {
     }
 }
 
-pub(super) fn parse_entry<R: Read>(
+pub(crate) fn parse_entry<R: Read>(
     entry: &mut Entry<'_, R>,
     spool: &PayloadSpool,
     index: usize,
@@ -227,7 +227,7 @@ pub(super) fn parse_entry<R: Read>(
     })
 }
 
-pub(super) fn resolve_hardlinks(
+pub(crate) fn resolve_hardlinks(
     mut entries: Vec<ArchivePayloadEntry>,
 ) -> Result<Vec<PackagePayloadFile>> {
     let mut paths = HashMap::new();

@@ -253,6 +253,7 @@ impl RepositoryDefinition {
             ProfilePackageFormat::Rpm => RepositoryFormat::Fedora,
             ProfilePackageFormat::Deb => RepositoryFormat::Debian,
             ProfilePackageFormat::Arch => RepositoryFormat::Arch,
+            ProfilePackageFormat::Eopkg => RepositoryFormat::Eopkg,
         };
         if self.parser.format() != expected {
             bail!(
@@ -412,7 +413,7 @@ fn trust_roots(policy: &RepositoryTrustPolicy) -> Vec<&OpenPgpTrustRoot> {
             RpmMetadataAuthority::OpenPgp { keys } => keys.iter().chain(package_keys).collect(),
             RpmMetadataAuthority::Metalink { .. } => package_keys.iter().collect(),
         },
-        RepositoryTrustPolicy::Arch { .. } => Vec::new(),
+        RepositoryTrustPolicy::Arch { .. } | RepositoryTrustPolicy::Eopkg { .. } => Vec::new(),
     }
 }
 

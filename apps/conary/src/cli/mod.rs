@@ -191,7 +191,7 @@ pub enum Commands {
         #[arg(long)]
         allow_downgrade: bool,
 
-        /// Convert native-format packages (RPM/DEB/Arch) to CCS during install
+        /// Convert native-format packages (RPM/DEB/Arch/eopkg) to CCS during install
         #[arg(long)]
         convert_to_ccs: bool,
 

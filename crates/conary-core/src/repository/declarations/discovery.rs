@@ -5,6 +5,7 @@
 use super::alpm::AlpmConfigSet;
 use super::apt::{AptSourceDocument, AptSyntax};
 use super::dnf::DnfRepoDocument;
+use super::eopkg::EopkgRepositoryDocument;
 use super::zypper::{ZypperRepoDocument, ZypperServiceDocument};
 use super::{DeclarationEcosystem, DeclarationError, DeclarationErrorKind, Result};
 use crate::filesystem::path::safe_join;
@@ -21,6 +22,7 @@ const DNF_DIRECTORIES: &[&str] = &[
 const ZYPPER_REPOSITORY_DIRECTORY: &str = "/etc/zypp/repos.d";
 const ZYPPER_SERVICE_DIRECTORY: &str = "/etc/zypp/services.d";
 const ALPM_CONFIG: &str = "/etc/pacman.conf";
+const EOPKG_REPOSITORIES: &str = "/var/lib/eopkg/info/repos";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,6 +33,7 @@ pub struct DiscoveredRepositoryDeclarations {
     pub zypper_repositories: Vec<ZypperRepoDocument>,
     pub zypper_services: Vec<ZypperServiceDocument>,
     pub alpm: Option<AlpmConfigSet>,
+    pub eopkg: Option<EopkgRepositoryDocument>,
 }
 
 /// Discover only inside an explicit selected root; no native package-manager
@@ -49,6 +52,19 @@ pub fn discover_selected_root(root: impl AsRef<Path>) -> Result<DiscoveredReposi
     } else {
         None
     };
+    let eopkg = if selected_exists(
+        root,
+        Path::new(EOPKG_REPOSITORIES),
+        DeclarationEcosystem::Eopkg,
+    )? {
+        let path = Path::new(EOPKG_REPOSITORIES);
+        Some(EopkgRepositoryDocument::parse(
+            path,
+            &read_utf8(root, path, DeclarationEcosystem::Eopkg)?,
+        )?)
+    } else {
+        None
+    };
     Ok(DiscoveredRepositoryDeclarations {
         root: root.to_path_buf(),
         apt,
@@ -56,6 +72,7 @@ pub fn discover_selected_root(root: impl AsRef<Path>) -> Result<DiscoveredReposi
         zypper_repositories,
         zypper_services,
         alpm,
+        eopkg,
     })
 }
 
@@ -236,6 +253,7 @@ mod tests {
             "etc/yum.repos.d",
             "etc/zypp/repos.d",
             "etc/zypp/services.d",
+            "var/lib/eopkg/info",
         ];
         for path in paths {
             fs::create_dir_all(root.path().join(path)).unwrap();
@@ -265,6 +283,11 @@ mod tests {
             "[core]\nServer=https://alpm.example/$repo/$arch\n",
         )
         .unwrap();
+        fs::write(
+            root.path().join("var/lib/eopkg/info/repos"),
+            "<REPOS><Repo><Name>Solus</Name><Url>https://cdn.getsol.us/repo/polaris/eopkg-index.xml.xz</Url><Status>active</Status><Media>remote</Media></Repo></REPOS>",
+        )
+        .unwrap();
 
         let declarations = discover_selected_root(root.path()).unwrap();
         assert_eq!(declarations.apt.len(), 1);
@@ -272,6 +295,7 @@ mod tests {
         assert_eq!(declarations.zypper_repositories.len(), 1);
         assert_eq!(declarations.zypper_services.len(), 1);
         assert_eq!(declarations.alpm.unwrap().files.len(), 1);
+        assert_eq!(declarations.eopkg.unwrap().repositories.len(), 1);
     }
 
     #[test]

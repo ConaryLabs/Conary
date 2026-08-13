@@ -2,7 +2,7 @@
 
 //! Converted package tracking model
 //!
-//! Tracks packages converted from native formats (RPM/DEB/Arch) to CCS.
+//! Tracks packages converted from native formats (RPM/DEB/Arch/eopkg) to CCS.
 //! This enables:
 //! - Skip re-conversion of same package artifact (checksum-based dedup)
 //! - Persist typed lifecycle evidence

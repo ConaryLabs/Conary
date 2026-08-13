@@ -75,7 +75,13 @@ impl TroveSnapshot {
         }
         match (self.version_scheme, self.debian_multi_arch) {
             (VersionScheme::Debian, Some(_))
-            | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+            | (
+                VersionScheme::Conary
+                | VersionScheme::Rpm
+                | VersionScheme::Arch
+                | VersionScheme::Eopkg,
+                None,
+            ) => {}
             (VersionScheme::Debian, None) => {
                 bail!(
                     "rollback snapshot '{}' has Debian version authority without exact Multi-Arch metadata",

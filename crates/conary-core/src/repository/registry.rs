@@ -14,6 +14,7 @@ pub enum AnyParser {
     Arch(parsers::arch::ArchParser),
     Debian(parsers::debian::DebianParser),
     Fedora(parsers::fedora::FedoraParser),
+    Eopkg(parsers::eopkg::EopkgParser),
 }
 
 impl AnyParser {
@@ -22,6 +23,7 @@ impl AnyParser {
             Self::Arch(p) => p.sync_metadata(repo_url).await,
             Self::Debian(p) => p.sync_metadata(repo_url).await,
             Self::Fedora(p) => p.sync_metadata(repo_url).await,
+            Self::Eopkg(p) => p.sync_metadata(repo_url).await,
         }
     }
 }
@@ -58,6 +60,8 @@ pub enum RepositoryFormat {
     Debian,
     #[serde(rename = "rpm")]
     Fedora,
+    #[serde(rename = "eopkg")]
+    Eopkg,
     #[serde(rename = "json")]
     Json,
     #[default]
@@ -83,6 +87,9 @@ pub enum RepositoryParserConfig {
     Rpm {
         architecture: String,
     },
+    Eopkg {
+        architecture: String,
+    },
     Json,
 }
 
@@ -93,6 +100,7 @@ impl RepositoryParserConfig {
             Self::Arch { .. } => RepositoryFormat::Arch,
             Self::Deb { .. } => RepositoryFormat::Debian,
             Self::Rpm { .. } => RepositoryFormat::Fedora,
+            Self::Eopkg { .. } => RepositoryFormat::Eopkg,
             Self::Json => RepositoryFormat::Json,
         }
     }
@@ -111,6 +119,9 @@ impl RepositoryParserConfig {
             }
             Self::Rpm { architecture } => {
                 validate_source_identifier(architecture, "RPM architecture")
+            }
+            Self::Eopkg { architecture } => {
+                validate_source_identifier(architecture, "eopkg architecture")
             }
             Self::Json => Ok(()),
         }
@@ -157,6 +168,7 @@ impl RepositoryFormat {
             Self::Arch => "arch",
             Self::Debian => "deb",
             Self::Fedora => "rpm",
+            Self::Eopkg => "eopkg",
             Self::Json => "json",
             Self::Unspecified => "unspecified",
         }
@@ -167,6 +179,7 @@ impl RepositoryFormat {
             "arch" => Ok(Self::Arch),
             "deb" => Ok(Self::Debian),
             "rpm" => Ok(Self::Fedora),
+            "eopkg" => Ok(Self::Eopkg),
             "json" => Ok(Self::Json),
             "unspecified" => Ok(Self::Unspecified),
             other => Err(Error::ParseError(format!(
@@ -208,6 +221,9 @@ pub fn create_parser(
         )?)),
         RepositoryParserConfig::Rpm { architecture } => Ok(AnyParser::Fedora(
             parsers::fedora::FedoraParser::new(architecture.clone(), trust)?,
+        )),
+        RepositoryParserConfig::Eopkg { architecture } => Ok(AnyParser::Eopkg(
+            parsers::eopkg::EopkgParser::new(architecture.clone(), trust)?,
         )),
         RepositoryParserConfig::Json => Err(Error::ParseError(
             "JSON format has no native parser".to_string(),

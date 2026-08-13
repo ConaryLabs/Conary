@@ -3,7 +3,8 @@
 
 use super::*;
 use conary_core::ccs::signing::SigningKeyPair;
-use conary_core::db::models::{Repository, RepositoryPackageKey};
+use conary_core::db::models::{Repository, RepositoryPackageKey, SecurityAdvisorySupport};
+use std::path::PathBuf;
 
 fn remi_repo_options(
     name: &str,

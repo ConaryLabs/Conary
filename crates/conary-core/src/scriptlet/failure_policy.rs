@@ -209,7 +209,7 @@ impl FailurePosture {
             // errored, unconfigured state rather than proceeding, and libalpm
             // has no warning-only class. Both are transaction failures until
             // their own slice declares a class table.
-            SourceFormat::Deb | SourceFormat::Arch => Self::AbortsTransaction,
+            SourceFormat::Deb | SourceFormat::Arch | SourceFormat::Eopkg => Self::AbortsTransaction,
         }
     }
 

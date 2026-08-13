@@ -440,6 +440,7 @@ fn convert_native_package_to_ccs_with_checksum(
         PackageFormatType::Rpm => "rpm",
         PackageFormatType::Deb => "deb",
         PackageFormatType::Arch => "arch",
+        PackageFormatType::Eopkg => "eopkg",
     };
     // Extract files for conversion
     let extracted = pkg

@@ -53,10 +53,10 @@ Each fixture family should record:
 
 - **Owner:** source ABI:
   `crates/conary-core/src/packages/native_abi.rs`; format parsers under
-  `crates/conary-core/src/packages/{rpm,deb,arch}/`; durable bundle:
+  `crates/conary-core/src/packages/{rpm,deb,arch,eopkg}/`; durable bundle:
   `crates/conary-core/src/ccs/native_lifecycle.rs`; transaction planner:
   `crates/conary-core/src/ccs/native_transaction.rs`.
-- **Purpose:** Preserve the complete RPM, Debian, and Arch lifecycle ABI and
+- **Purpose:** Preserve the complete RPM, Debian, Arch, and eopkg lifecycle ABI and
   prove exact event selection, order, arguments, trigger input, and payload
   boundaries without deriving correctness from program-text heuristics.
 - **Fixture sources:** parser fixtures beside each format implementation;
@@ -260,9 +260,10 @@ Each fixture family should record:
   `crates/conary-core/src/repository/supported_profiles/`; CLI smoke:
   `apps/conary/tests/packaging_m4d.rs`; Remi route proof:
   `apps/remi/src/server/handlers/`.
-- **Purpose:** Prove the three currently configured upstream feed IDs
-  (`fedora-44`, `ubuntu-26.04`, and `arch`), route/feed agreement for `fedora`,
-  `ubuntu`, and `arch`, and exact parser/version-scheme selection.
+- **Purpose:** Prove the four currently configured upstream feed IDs
+  (`fedora-44`, `ubuntu-26.04`, `arch`, and `solus`), route/feed
+  agreement for `fedora`, `ubuntu`, `arch`, and `solus`, and exact
+  parser/version-scheme selection.
 - **Fast proof:** `cargo test -p conary-core supported_profiles`;
   `cargo test -p conary --test packaging_m4d`;
   `cargo test -p remi route`.
@@ -410,7 +411,7 @@ Each fixture family should record:
   repository declaration bytes, and signing roots before real pacman or Zypper
   package adoption and exact repository takeover. `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
-  `fedora-44`, `ubuntu-26.04`, and `arch`.
+  `fedora-44`, `ubuntu-26.04`, `arch`, and `solus`.
   Published artifacts use
   `cargo run -p conary-test -- images build --distro <distro> --native-package <path>`
   before the same focused suite. Only

@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::packages::arch::authority::AlpmPackageAuthority;
 use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::packages::deb::authority::DebianPackageAuthority;
+use crate::packages::eopkg::authority::EopkgPackageAuthority;
 use crate::packages::rpm::authority::RpmPackageAuthority;
 use crate::repository::dependency_model::{
     CapabilityProvenance, DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
@@ -29,6 +30,7 @@ pub enum SourcePackageAuthority {
     Rpm(RpmPackageAuthority),
     Debian(DebianPackageAuthority),
     Alpm(AlpmPackageAuthority),
+    Eopkg(EopkgPackageAuthority),
     Ccs(CcsPackageAuthority),
 }
 
@@ -53,6 +55,7 @@ impl SourcePackageAuthority {
             Self::Rpm(value) => &value.name,
             Self::Debian(value) => &value.name,
             Self::Alpm(value) => &value.name,
+            Self::Eopkg(value) => &value.name,
             Self::Ccs(value) => &value.name,
         }
     }
@@ -63,6 +66,7 @@ impl SourcePackageAuthority {
             Self::Rpm(value) => &value.evr,
             Self::Debian(value) => &value.version,
             Self::Alpm(value) => &value.version,
+            Self::Eopkg(value) => &value.version,
             Self::Ccs(value) => &value.version,
         }
     }
@@ -73,6 +77,7 @@ impl SourcePackageAuthority {
             Self::Rpm(_) => VersionScheme::Rpm,
             Self::Debian(_) => VersionScheme::Debian,
             Self::Alpm(_) => VersionScheme::Arch,
+            Self::Eopkg(_) => VersionScheme::Eopkg,
             Self::Ccs(value) => value.version_scheme,
         }
     }
@@ -83,6 +88,7 @@ impl SourcePackageAuthority {
             Self::Rpm(value) => Some(&value.architecture),
             Self::Debian(value) => Some(&value.architecture),
             Self::Alpm(value) => Some(&value.architecture),
+            Self::Eopkg(value) => Some(&value.architecture),
             Self::Ccs(value) => value.architecture.as_deref(),
         }
     }
@@ -92,7 +98,7 @@ impl SourcePackageAuthority {
         match self {
             Self::Debian(value) => Some(value.multi_arch),
             Self::Ccs(value) => value.debian_multi_arch,
-            Self::Rpm(_) | Self::Alpm(_) => None,
+            Self::Rpm(_) | Self::Alpm(_) | Self::Eopkg(_) => None,
         }
     }
 
@@ -102,6 +108,7 @@ impl SourcePackageAuthority {
             Self::Rpm(_) => SourcePackageFormat::Rpm,
             Self::Debian(_) => SourcePackageFormat::Debian,
             Self::Alpm(_) => SourcePackageFormat::Alpm,
+            Self::Eopkg(_) => SourcePackageFormat::Eopkg,
             Self::Ccs(_) => SourcePackageFormat::Ccs,
         }
     }
@@ -203,6 +210,22 @@ impl SourcePackageAuthority {
                     )
                 })
                 .collect(),
+            Self::Eopkg(value) => value
+                .provides
+                .iter()
+                .map(|entry| {
+                    project(
+                        SourcePackageFormat::Eopkg,
+                        VersionScheme::Eopkg,
+                        entry.metadata_index,
+                        entry.kind,
+                        &entry.name,
+                        &entry.version,
+                        entry.version_relation,
+                        &entry.architecture_qualifier,
+                    )
+                })
+                .collect(),
             Self::Ccs(_) => unreachable!(),
         }
     }
@@ -241,6 +264,12 @@ impl SourcePackageAuthority {
                 .iter()
                 .cloned()
                 .map(SourceConfigDeclaration::Alpm)
+                .collect(),
+            Self::Eopkg(value) => value
+                .config
+                .iter()
+                .cloned()
+                .map(SourceConfigDeclaration::Eopkg)
                 .collect(),
             Self::Ccs(value) => value.config.clone(),
         };

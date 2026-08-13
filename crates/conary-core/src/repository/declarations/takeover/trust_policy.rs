@@ -60,8 +60,18 @@ pub(super) fn expected_trust_policy(
             }))
         }
         RepositoryFormat::Arch => Ok(None),
+        RepositoryFormat::Eopkg => {
+            let NativeRepositoryReference::Eopkg { index_url, .. } = &plan.repository else {
+                return Err(Error::ConfigError(
+                    "eopkg trust projection requires an eopkg declaration".to_string(),
+                ));
+            };
+            Ok(Some(RepositoryTrustPolicy::Eopkg {
+                origin: crate::repository::eopkg_origin_from_index_url(index_url)?,
+            }))
+        }
         RepositoryFormat::Json | RepositoryFormat::Unspecified => Err(Error::ConfigError(
-            "native repository takeover requires an Arch, Debian, or RPM parser".to_string(),
+            "native repository takeover requires an Arch, Debian, eopkg, or RPM parser".to_string(),
         )),
     }
 }

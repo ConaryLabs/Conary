@@ -160,6 +160,8 @@ pub enum DependencyKindV3 {
     Binary,
     Soname,
     PkgConfig,
+    PkgConfig32,
+    Comar,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

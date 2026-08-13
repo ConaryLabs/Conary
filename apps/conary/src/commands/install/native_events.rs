@@ -894,6 +894,9 @@ fn executor_for_owner(owner: &NativeBundleOwner, root: &Path) -> Result<Scriptle
         conary_core::ccs::native_lifecycle::SourceFormat::Arch => {
             conary_core::scriptlet::PackageFormat::Arch
         }
+        conary_core::ccs::native_lifecycle::SourceFormat::Eopkg => {
+            conary_core::scriptlet::PackageFormat::Eopkg
+        }
     };
     let executor =
         ScriptletExecutor::new(root, &owner.package_name, &owner.package_version, format)

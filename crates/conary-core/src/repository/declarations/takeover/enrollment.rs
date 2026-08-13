@@ -358,5 +358,6 @@ fn reference_format(reference: &NativeRepositoryReference) -> RepositoryFormat {
             RepositoryFormat::Fedora
         }
         NativeRepositoryReference::Alpm { .. } => RepositoryFormat::Arch,
+        NativeRepositoryReference::Eopkg { .. } => RepositoryFormat::Eopkg,
     }
 }

@@ -53,6 +53,8 @@ pub enum ConfigSource {
     Deb,
     /// Arch package
     Arch,
+    /// Solus eopkg package
+    Eopkg,
 }
 
 impl ConfigSource {
@@ -571,7 +573,7 @@ mod tests {
                 status TEXT NOT NULL DEFAULT 'pristine',
                 modified_at TEXT,
                 source TEXT NOT NULL DEFAULT 'auto'
-                    CHECK(source IN ('rpm', 'deb', 'arch', 'auto'))
+                    CHECK(source IN ('rpm', 'deb', 'arch', 'eopkg', 'auto'))
                     CHECK(ghost = 0 OR source = 'rpm')
                     CHECK(remove_on_upgrade = 0 OR source = 'deb'),
                 CHECK(ghost = 0 OR remove_on_upgrade = 0),

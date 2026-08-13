@@ -117,6 +117,7 @@ impl ScriptletExecutor {
                     | ExecutionMode::UpgradeRemoval { .. } => Err(unsupported()),
                 }
             }
+            PackageFormat::Eopkg => Err(unsupported()),
         }
     }
 }
@@ -127,6 +128,7 @@ fn package_format_name(package_format: PackageFormat) -> &'static str {
         PackageFormat::Rpm => "rpm",
         PackageFormat::Deb => "deb",
         PackageFormat::Arch => "arch",
+        PackageFormat::Eopkg => "eopkg",
     }
 }
 

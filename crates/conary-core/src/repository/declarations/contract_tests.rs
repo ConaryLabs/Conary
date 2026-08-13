@@ -3,6 +3,7 @@
 use super::alpm::AlpmConfigFile;
 use super::apt::{AptSourceDocument, AptSyntax};
 use super::dnf::{DnfEndpointKind, DnfRepoDocument};
+use super::eopkg::EopkgRepositoryDocument;
 use super::zypper::{ZypperRepoDocument, ZypperServiceDocument};
 use super::{DeclarationEcosystem, DeclarationErrorKind};
 
@@ -59,6 +60,13 @@ fn source_derived_fixtures_round_trip_byte_for_byte() {
             .render_preserved(),
         alpm
     );
+    let eopkg = fixture("eopkg-repos.xml");
+    assert_eq!(
+        EopkgRepositoryDocument::parse("eopkg-repos.xml", &eopkg)
+            .unwrap()
+            .render_preserved(),
+        eopkg
+    );
 }
 
 #[test]
@@ -107,9 +115,17 @@ fn authority_name_mutations_fail_closed_in_every_grammar() {
             "deb [future-endpoint=https://x] https://repo stable main\n",
         )
         .unwrap_err(),
+        EopkgRepositoryDocument::parse(
+            "repos",
+            "<REPOS><Repo><Name>x</Name><Url>https://example/eopkg-index.xml.xz</Url><Status>active</Status><Media>remote</Media><FutureEndpoint>x</FutureEndpoint></Repo></REPOS>",
+        )
+        .unwrap_err(),
     ];
     for error in cases {
-        let expected_line = if error.ecosystem == DeclarationEcosystem::Apt {
+        let expected_line = if matches!(
+            error.ecosystem,
+            DeclarationEcosystem::Apt | DeclarationEcosystem::Eopkg
+        ) {
             1
         } else {
             2

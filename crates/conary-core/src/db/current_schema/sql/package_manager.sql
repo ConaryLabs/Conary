@@ -35,11 +35,11 @@ CREATE TABLE troves (
             orphan_since TEXT,
             source_profile TEXT
                 CHECK(source_profile IS NULL OR source_profile IN (
-                    'fedora-44', 'ubuntu-26.04', 'arch'
+                    'fedora-44', 'ubuntu-26.04', 'arch', 'solus'
                 )),
             version_scheme TEXT NOT NULL
                 CHECK(
-                    version_scheme IN ('conary', 'rpm', 'debian', 'arch')
+                    version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')
                     AND (
                         source_profile IS NULL
                         OR (
@@ -53,6 +53,10 @@ CREATE TABLE troves (
                         OR (
                             source_profile = 'arch'
                             AND version_scheme = 'arch'
+                        )
+                        OR (
+                            source_profile = 'solus'
+                            AND version_scheme = 'eopkg'
                         )
                     )
                 ),
@@ -74,7 +78,7 @@ CREATE TABLE troves (
                                 json_type(native_package_identity_json) = 'object'
                                 AND json_extract(
                                     native_package_identity_json, '$.manager'
-                                ) IN ('rpm', 'dpkg', 'pacman')
+                                ) IN ('rpm', 'dpkg', 'pacman', 'eopkg')
                                 AND json_type(
                                     native_package_identity_json, '$.selector'
                                 ) = 'text'
@@ -134,6 +138,15 @@ CREATE TABLE troves (
                                     ) = version
                                     WHEN 'pacman' THEN json_extract(
                                         native_package_identity_json, '$.version'
+                                    ) = version
+                                    WHEN 'eopkg' THEN (
+                                        json_extract(
+                                            native_package_identity_json, '$.version'
+                                        )
+                                        || '-'
+                                        || CAST(json_extract(
+                                            native_package_identity_json, '$.release'
+                                        ) AS TEXT)
                                     ) = version
                                     ELSE 0
                                 END
@@ -202,6 +215,18 @@ CREATE TABLE troves (
                                         ) = json_extract(
                                             native_package_identity_json, '$.name'
                                         )
+                                    WHEN 'eopkg' THEN
+                                        json_type(
+                                            native_package_identity_json, '$.release'
+                                        ) = 'integer'
+                                        AND json_extract(
+                                            native_package_identity_json, '$.release'
+                                        ) >= 0
+                                        AND json_extract(
+                                                native_package_identity_json, '$.selector'
+                                            ) = json_extract(
+                                                native_package_identity_json, '$.name'
+                                            )
                                     ELSE 0
                                 END
                             ) IS TRUE
@@ -291,10 +316,10 @@ CREATE TABLE provides (
                 CHECK(version_relation IN ('lt', 'le', 'eq', 'ge', 'gt')),
             kind TEXT NOT NULL CHECK(kind IN (
                 'package', 'virtual', 'soname', 'file',
-                'path', 'binary', 'pkgconfig', 'generic'
+                'path', 'binary', 'pkgconfig', 'pkgconfig32', 'comar', 'generic'
             )),
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')),
             architecture_qualifier_kind TEXT NOT NULL
                 CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
             architecture_qualifier TEXT,
@@ -330,7 +355,7 @@ CREATE TABLE package_requirement_groups (
                 'conflict', 'breaks', 'replace', 'obsolete'
             )),
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')),
             requirement_json TEXT NOT NULL,
             UNIQUE(trove_id, kind, requirement_json)
         );
@@ -491,7 +516,7 @@ CREATE TABLE config_files (
             modified_at TEXT,
             -- Package source that declared this as config (rpm, deb, arch, auto)
             source TEXT NOT NULL DEFAULT 'auto'
-                CHECK(source IN ('rpm', 'deb', 'arch', 'auto'))
+                CHECK(source IN ('rpm', 'deb', 'arch', 'eopkg', 'auto'))
                 CHECK(ghost = 0 OR source = 'rpm')
                 CHECK(remove_on_upgrade = 0 OR source = 'deb'),
             CHECK(ghost = 0 OR remove_on_upgrade = 0),
@@ -894,6 +919,10 @@ CREATE TABLE installed_native_lifecycle_bundles (
                     OR (
                         source_profile = 'arch'
                         AND source_format = 'arch'
+                    )
+                    OR (
+                        source_profile = 'solus'
+                        AND source_format = 'eopkg'
                     )
                 ),
             source_release TEXT,

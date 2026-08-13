@@ -177,7 +177,7 @@ Conversion and recipe builds load `targets` by the persisted exact source
 profile. Public native-release and timestamp routes first resolve their route
 slug through the supported-profile registry, then load the exact profile's
 role keys. `fedora` and `ubuntu` are therefore never key-directory aliases for
-`fedora-44` and `ubuntu-26.04`.
+`fedora-44`, `ubuntu-26.04`, and `solus`.
 
 The public half of each deployed `targets` key is the client-side CCS package
 authority. Conary releases track the current canonical
@@ -268,7 +268,7 @@ returns a conflict with the available releases instead of guessing.
 
 ## Native Lifecycle Metadata
 
-RPM, Debian, and Arch conversions embed the current `native_lifecycle` bundle
+RPM, Debian, Arch, and eopkg conversions embed the current `native_lifecycle` bundle
 in the generated CCS manifest and persist its aggregate summary on
 `converted_packages`. The row records lifecycle fidelity, evidence digest,
 formal unknown-command evidence, and diagnostic classes. Entry presence in the

@@ -1,0 +1,70 @@
+# tests/integration/remi/manifests/solus-eopkg-acceptance.toml
+
+[suite]
+name = "Solus eopkg Acceptance"
+phase = 4
+timeout = 7200
+
+[[test]]
+id = "TNPME01"
+name = "solus_boot_repository_and_adoption"
+description = "An official Solus root boots, imports Polaris exactly, and converts an authentic installed eopkg without native runtime fallback"
+timeout = 7200
+fatal = true
+group = "solus-eopkg-acceptance"
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "solus-4.9-polaris-2026-08-12-v3"
+memory_mb = 4096
+timeout_seconds = 6900
+ssh_port = 2251
+stage_conary = true
+copy_to_guest = [
+    { source = "apps/conary/tests/fixtures/distro-roots/solus-polaris-takeover.json", dest = "/tmp/solus-polaris-takeover.json" },
+    { source = "apps/conary/tests/fixtures/conary-test-fixture", dest = "/tmp/conary-test-fixture" },
+]
+commands = [
+    "test \"$(. /etc/os-release; printf %s \"$ID\")\" = solus",
+    "test \"$(uname -r)\" = 7.1.7-351.current",
+    "test \"$(eopkg --version | awk 'NR == 1 { print $NF }')\" = 5.0.0",
+    "eopkg list-upgrades 2>&1 | grep -Fq 'No packages to upgrade.'",
+    "for command in mount.composefs composefs-info dracut mkfs.erofs cpio depmod bootctl; do command -v \"$command\" >/dev/null; done",
+    "findmnt -no SOURCE / | xargs tune2fs -l | grep '^Filesystem features:' | grep -qw verity",
+    "conary system init",
+    "BEFORE=$(sha256sum /var/lib/eopkg/info/repos | awk '{print $1}'); test \"$BEFORE\" = 81b3ac0d54cd10020cbfbf6e6cbb59e17ea5006ef05bce1682faa6e525c0faae; echo \"$BEFORE\" >/tmp/repos-before",
+    "conary system repository-takeover --dry-run --manifest /tmp/solus-polaris-takeover.json >/tmp/takeover-preview.json",
+    "grep -Fq '\"blockers\": []' /tmp/takeover-preview.json; grep -Fq 'Preview SHA-256: 8f1d5c9d99a6cafe94a1299e466a0bdaa0edda1da3d42f238b1128f67e0fdcec' /tmp/takeover-preview.json",
+    "conary system repository-takeover --manifest /tmp/solus-polaris-takeover.json --preview-sha256 8f1d5c9d99a6cafe94a1299e466a0bdaa0edda1da3d42f238b1128f67e0fdcec --yes",
+    "conary system repository-takeover --manifest /tmp/solus-polaris-takeover.json --preview-sha256 8f1d5c9d99a6cafe94a1299e466a0bdaa0edda1da3d42f238b1128f67e0fdcec --yes | grep -Fq 'Verified existing native repository takeover'",
+    "test \"$(sha256sum /var/lib/eopkg/info/repos | awk '{print $1}')\" = \"$(cat /tmp/repos-before)\"",
+    "conary system repository-takeover --rollback --yes",
+    "test \"$(sha256sum /var/lib/eopkg/info/repos | awk '{print $1}')\" = \"$(cat /tmp/repos-before)\"",
+    "conary system repository-takeover --manifest /tmp/solus-polaris-takeover.json --preview-sha256 8f1d5c9d99a6cafe94a1299e466a0bdaa0edda1da3d42f238b1128f67e0fdcec --yes",
+    "conary repo sync solus-polaris --force | grep -Fq 'Synchronized 11907 packages'",
+    "eopkg --yes install jq",
+    "conary system adopt jq --package-manager eopkg --full --dry-run | grep -Fq 'jq 1.8.2-13 [x86_64]'",
+    "conary system adopt jq --package-manager eopkg --full",
+    "conary system adopt --convert --dry-run jq | grep -Fq 'checksum=sha1:98591d2acce52d110a1ae62b775079d79193ad01'",
+    "conary system adopt --convert jq | grep -Fq 'Converted jq to verified CCS'",
+    "conary system adopt --convert jq 2>&1 | grep -Fq 'already has a verified current CCS artifact'",
+    "sqlite3 /var/lib/conary/conary.db \"select original_format || '|' || original_checksum from converted_packages where artifact_kind='installed'\" | grep -Fx 'eopkg|sha256:33b3d0e36fdeacfc05ea085ea1da87e198bc5aa8e174242e8cb54b6c3100731b'",
+    "conary system takeover --package-manager eopkg --yes | tee /tmp/solus-takeover.log",
+    "grep -Fq 'system takeover built generation 1 and is ready to activate' /tmp/solus-takeover.log",
+    "test \"$(find /var/lib/eopkg/package -mindepth 1 -maxdepth 1 -type d | wc -l)\" -eq 0",
+    "test \"$(sqlite3 /var/lib/conary/conary.db \"select count(*) from troves where install_source='taken'\")\" -ge 949",
+    "test -f /conary/generations/1/root.erofs; test -f /conary/generations/1/.conary-artifact.json; test -f /conary/generations/1/boot-assets/vmlinuz; test -f /conary/generations/1/boot-assets/initramfs.img",
+    "conary system generation switch 1 --yes",
+    "test \"$(readlink -f /conary/current)\" = /conary/generations/1",
+    "! command -v rpm >/dev/null; ! command -v dpkg >/dev/null",
+    "mkdir -p /tmp/rpm-v1 /tmp/rpm-v2 /tmp/deb-v1; conary ccs build /tmp/conary-test-fixture/v1/ccs.toml --source /tmp/conary-test-fixture/v1/stage --target rpm --output /tmp/rpm-v1; conary ccs build /tmp/conary-test-fixture/v2/ccs.toml --source /tmp/conary-test-fixture/v2/stage --target rpm --output /tmp/rpm-v2; conary ccs build /tmp/conary-test-fixture/v1/ccs.toml --source /tmp/conary-test-fixture/v1/stage --target deb --output /tmp/deb-v1",
+    "RPM_V1=$(find /tmp/rpm-v1 -type f -name '*.rpm' -print -quit); RPM_V2=$(find /tmp/rpm-v2 -type f -name '*.rpm' -print -quit); test -n \"$RPM_V1\"; test -n \"$RPM_V2\"; conary install \"$RPM_V1\" --convert-to-ccs --from fedora-44 --no-deps --yes; grep -Fx hello-v1 /usr/share/conary-test/hello.txt; conary install \"$RPM_V2\" --convert-to-ccs --from fedora-44 --no-deps --yes; grep -Fx hello-v2 /usr/share/conary-test/hello.txt; RPM_UPDATE_CHANGESET=$(sqlite3 /var/lib/conary/conary.db 'select max(id) from changesets'); conary system state rollback \"$RPM_UPDATE_CHANGESET\" --yes; grep -Fx hello-v1 /usr/share/conary-test/hello.txt; conary remove conary-test-fixture --yes; test ! -e /usr/share/conary-test/hello.txt",
+    "DEB_V1=$(find /tmp/deb-v1 -type f -name '*.deb' -print -quit); test -n \"$DEB_V1\"; conary install \"$DEB_V1\" --convert-to-ccs --from ubuntu-26.04 --no-deps --yes; grep -Fx hello-v1 /usr/share/conary-test/hello.txt; conary remove conary-test-fixture --yes; test ! -e /usr/share/conary-test/hello.txt",
+    "echo solus-eopkg-acceptance-ok",
+]
+expect_output = [
+    "solus-eopkg-acceptance-ok",
+]
+
+[test.step.assert]
+exit_code = 0

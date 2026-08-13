@@ -7,7 +7,10 @@
 use super::super::create_state_snapshot;
 use super::super::open_db;
 use super::super::progress::{AdoptPhase, AdoptProgress};
-use super::cas_capture::{CapturedAdoptionFile, capture_package_files};
+use super::cas_capture::{
+    CapturedAdoptionFile, SelectedRootPayloadIndex, capture_package_files,
+    capture_package_files_from_selected_root,
+};
 use super::checkpoint::write_db_checkpoint;
 use super::outcome::{BulkAdoptionFailure, BulkAdoptionFailureStage, BulkAdoptionOutcome};
 use anyhow::Result;
@@ -27,8 +30,7 @@ use tracing::warn;
 mod captured_root;
 mod live_root;
 use captured_root::{
-    bind_package_payloads_to_selected_root, capture_live_selected_root,
-    ensure_complete_native_partition, synchronize_captured_root,
+    capture_live_selected_root, ensure_complete_native_partition, synchronize_captured_root,
 };
 use live_root::adopt_live_root_as_full_package;
 
@@ -135,7 +137,7 @@ pub async fn cmd_adopt_system(
             });
         }
         return Err(anyhow::anyhow!(
-            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
+            "No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg."
         ));
     }
 
@@ -149,6 +151,11 @@ pub async fn cmd_adopt_system(
     let include_pattern = parse_package_pattern("--pattern", pattern)?;
     let exclude_pattern = parse_package_pattern("--exclude", exclude)?;
     let complete_full_root_scope = full && pattern.is_none() && exclude.is_none() && !explicit_only;
+    let eopkg_database = if pkg_mgr == SystemPackageManager::Eopkg {
+        Some(conary_core::packages::eopkg::query::InstalledEopkgDatabase::load()?)
+    } else {
+        None
+    };
 
     let mut conn = open_db(db_path)?;
 
@@ -191,6 +198,16 @@ pub async fn cmd_adopt_system(
                 description: record.info.description,
             })
             .collect(),
+        SystemPackageManager::Eopkg => eopkg_database
+            .as_ref()
+            .expect("eopkg manager owns installed database snapshot")
+            .packages()
+            .into_iter()
+            .map(|record| InstalledSystemPackage {
+                identity: record.identity,
+                description: record.info.description,
+            })
+            .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
     if complete_full_root_scope {
@@ -210,6 +227,11 @@ pub async fn cmd_adopt_system(
             .map_err(|error| anyhow::anyhow!("dpkg install-reason query failed: {error}"))?,
         SystemPackageManager::Pacman => pacman_query::query_user_installed()
             .map_err(|error| anyhow::anyhow!("pacman install-reason query failed: {error}"))?,
+        SystemPackageManager::Eopkg => eopkg_database
+            .as_ref()
+            .expect("eopkg manager owns installed database snapshot")
+            .user_installed()
+            .map_err(|error| anyhow::anyhow!("eopkg install-reason query failed: {error}"))?,
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
 
@@ -313,6 +335,20 @@ pub async fn cmd_adopt_system(
     } else {
         None
     };
+    let cas_batch = cas.as_ref().map(|cas| cas.private_copy_batch());
+    let captured_selected_root = if complete_full_root_scope {
+        Some(capture_live_selected_root(
+            db_path,
+            cas_batch
+                .as_ref()
+                .expect("complete full-root capture requires an initialized CAS"),
+        )?)
+    } else {
+        None
+    };
+    let selected_root_index = captured_selected_root
+        .as_ref()
+        .map(SelectedRootPayloadIndex::new);
 
     // Create a single changeset for the entire adoption
     let mut changeset = Changeset::new(format!(
@@ -363,43 +399,54 @@ pub async fn cmd_adopt_system(
         progress.set_phase(selector, AdoptPhase::Querying);
 
         // Query ALL PM metadata before opening the DB transaction.
-        let files: Vec<FileInfoTuple> = match query_pm_files(pkg_mgr, selector) {
-            Ok(f) => f,
-            Err(e) => {
-                warn!("Failed to query files for '{}': {}; skipping", selector, e);
-                progress.fail_package(selector, &e.to_string());
-                error_count += 1;
-                failures.push(BulkAdoptionFailure::new(
-                    selector,
-                    BulkAdoptionFailureStage::FileQuery,
-                    e.to_string(),
-                ));
-                continue;
-            }
-        };
+        let files: Vec<FileInfoTuple> =
+            match query_pm_files(pkg_mgr, selector, eopkg_database.as_ref()) {
+                Ok(f) => f,
+                Err(e) => {
+                    warn!("Failed to query files for '{}': {}; skipping", selector, e);
+                    progress.fail_package(selector, &e.to_string());
+                    error_count += 1;
+                    failures.push(BulkAdoptionFailure::new(
+                        selector,
+                        BulkAdoptionFailureStage::FileQuery,
+                        e.to_string(),
+                    ));
+                    continue;
+                }
+            };
         let (requirements, mut provides) = if promote_trove_id.is_some() {
             // Track adoption already persisted the native metadata. Promotion
             // changes only its payload authority from discovery hashes to
             // privately captured CAS content.
             (Vec::new(), Vec::new())
         } else {
-            let requirements =
-                match super::requirements::query_package_requirements(pkg_mgr, selector) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        warn!("Failed to query deps for '{}': {}; skipping", selector, e);
-                        progress.fail_package(selector, &e.to_string());
-                        error_count += 1;
-                        failures.push(BulkAdoptionFailure::new(
-                            selector,
-                            BulkAdoptionFailureStage::RequirementQuery,
-                            e.to_string(),
-                        ));
-                        continue;
-                    }
-                };
-            let provides = match super::provides::query_package_provides(pkg_mgr, &package.identity)
-            {
+            let requirement_result = match eopkg_database.as_ref() {
+                Some(database) => database
+                    .package_requirement_groups(selector)
+                    .map_err(anyhow::Error::from),
+                None => super::requirements::query_package_requirements(pkg_mgr, selector),
+            };
+            let requirements = match requirement_result {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("Failed to query deps for '{}': {}; skipping", selector, e);
+                    progress.fail_package(selector, &e.to_string());
+                    error_count += 1;
+                    failures.push(BulkAdoptionFailure::new(
+                        selector,
+                        BulkAdoptionFailureStage::RequirementQuery,
+                        e.to_string(),
+                    ));
+                    continue;
+                }
+            };
+            let provide_result = match eopkg_database.as_ref() {
+                Some(database) => database
+                    .package_provides(&package.identity)
+                    .map_err(anyhow::Error::from),
+                None => super::provides::query_package_provides(pkg_mgr, &package.identity),
+            };
+            let provides = match provide_result {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(
@@ -424,24 +471,40 @@ pub async fn cmd_adopt_system(
         if full {
             progress.set_phase(selector, AdoptPhase::CasStorage);
         }
-        let captured_files =
-            match capture_package_files(selector, &files, if full { cas.as_ref() } else { None }) {
-                Ok(files) => files,
-                Err(error) => {
-                    warn!(
-                        "Failed to capture exact files for '{}': {}",
-                        selector, error
-                    );
-                    progress.fail_package(selector, &error.to_string());
-                    error_count += 1;
-                    failures.push(BulkAdoptionFailure::new(
-                        selector,
-                        BulkAdoptionFailureStage::PayloadCapture,
-                        error.to_string(),
-                    ));
-                    continue;
-                }
-            };
+        let capture_result = match selected_root_index.as_ref() {
+            Some(index) => capture_package_files_from_selected_root(
+                selector,
+                &files,
+                index,
+                cas_batch
+                    .as_ref()
+                    .expect("selected-root package binding requires CAS batch"),
+            ),
+            None => capture_package_files(
+                selector,
+                &files,
+                cas_batch
+                    .as_ref()
+                    .map(|batch| batch as &dyn conary_core::filesystem::PrivateCasWriter),
+            ),
+        };
+        let captured_files = match capture_result {
+            Ok(files) => files,
+            Err(error) => {
+                warn!(
+                    "Failed to capture exact files for '{}': {}",
+                    selector, error
+                );
+                progress.fail_package(selector, &error.to_string());
+                error_count += 1;
+                failures.push(BulkAdoptionFailure::new(
+                    selector,
+                    BulkAdoptionFailureStage::PayloadCapture,
+                    error.to_string(),
+                ));
+                continue;
+            }
+        };
         conary_core::repository::dependency_model::extend_materialized_file_provides(
             &mut provides,
             package.identity.source_package_format(),
@@ -461,26 +524,8 @@ pub async fn cmd_adopt_system(
         });
     }
 
-    // A complete, unfiltered full adoption captures one global selected-root
-    // snapshot after every package payload was captured successfully. The
-    // database transaction below partitions that exact snapshot without using
-    // package names or the native database as generation-time authority.
-    let captured_selected_root = if complete_full_root_scope && error_count == 0 {
-        Some(capture_live_selected_root(
-            db_path,
-            cas.as_ref()
-                .expect("complete full-root capture requires an initialized CAS"),
-        )?)
-    } else {
-        None
-    };
-    if let Some(captured) = captured_selected_root.as_ref() {
-        bind_package_payloads_to_selected_root(
-            captured,
-            pre_collected
-                .iter_mut()
-                .flat_map(|package| package.files.iter_mut()),
-        )?;
+    if let Some(batch) = cas_batch {
+        batch.commit()?;
     }
 
     // DB-only transaction: all PM queries and CAS writes are already done.
@@ -532,7 +577,10 @@ pub async fn cmd_adopt_system(
                     let file_path = &captured.source.0;
                     let mut file_entry = captured.file_entry(trove_id);
                     file_entry
-                        .insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)
+                        .insert_or_replace_in_savepoint(
+                            tx,
+                            ExistingDirectoryMaterialization::ApplyIncoming,
+                        )
                         .map_err(|error| PackagePersistenceFailure {
                             stage: BulkAdoptionFailureStage::MetadataInsert,
                             message: format!("file {file_path}: {error}"),
@@ -719,7 +767,11 @@ fn promote_track_package(
 
 const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
 
-fn query_pm_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileInfoTuple>> {
+fn query_pm_files(
+    pkg_mgr: SystemPackageManager,
+    name: &str,
+    eopkg_database: Option<&conary_core::packages::eopkg::query::InstalledEopkgDatabase>,
+) -> Result<Vec<FileInfoTuple>> {
     let raw = match pkg_mgr {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
             .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
@@ -727,6 +779,10 @@ fn query_pm_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileI
             .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
             .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
+        SystemPackageManager::Eopkg => eopkg_database
+            .ok_or_else(|| anyhow::anyhow!("eopkg installed database snapshot is absent"))?
+            .package_files(name)
+            .map_err(|e| anyhow::anyhow!("eopkg file query failed for '{name}': {e}"))?,
         _ => return Ok(Vec::new()),
     };
     Ok(raw

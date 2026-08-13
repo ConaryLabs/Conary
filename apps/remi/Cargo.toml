@@ -73,6 +73,8 @@ flate2.workspace = true
 
 [dev-dependencies]
 tar.workspace = true
+liblzma = "0.4"
+zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [[bin]]
 name = "remi"

@@ -544,6 +544,8 @@ fn capability_kind_to_db(kind: RepositoryCapabilityKind) -> &'static str {
         RepositoryCapabilityKind::Path => "path",
         RepositoryCapabilityKind::Binary => "binary",
         RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32",
+        RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     }
 }
@@ -557,6 +559,8 @@ fn capability_kind_from_db(value: &str) -> rusqlite::Result<RepositoryCapability
         "path" => Ok(RepositoryCapabilityKind::Path),
         "binary" => Ok(RepositoryCapabilityKind::Binary),
         "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "pkgconfig32" => Ok(RepositoryCapabilityKind::PkgConfig32),
+        "comar" => Ok(RepositoryCapabilityKind::Comar),
         "generic" => Ok(RepositoryCapabilityKind::Generic),
         other => Err(rusqlite::Error::FromSqlConversionFailure(
             4,

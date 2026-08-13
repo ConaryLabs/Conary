@@ -39,6 +39,8 @@ fn insert_repository_requirement(
         RepositoryCapabilityKind::Path => "path",
         RepositoryCapabilityKind::Binary => "binary",
         RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32",
+        RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     };
     let mut requirement = RepositoryRequirement::new(

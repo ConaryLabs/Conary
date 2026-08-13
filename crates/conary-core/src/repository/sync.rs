@@ -138,9 +138,10 @@ async fn fetch_repository_sync_snapshot(
 ) -> Result<RepositorySyncSnapshot> {
     match repo.require_parser_config()?.format() {
         RepositoryFormat::Json => fetch_repository_json_snapshot(repo).await,
-        RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora => {
-            fetch_repository_native_snapshot(repo, keyring_dir).await
-        }
+        RepositoryFormat::Arch
+        | RepositoryFormat::Debian
+        | RepositoryFormat::Fedora
+        | RepositoryFormat::Eopkg => fetch_repository_native_snapshot(repo, keyring_dir).await,
         RepositoryFormat::Unspecified => Err(Error::InitError(format!(
             "repository '{}' has an unspecified parser configuration",
             repo.name
@@ -285,9 +286,10 @@ pub async fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result
     } else {
         match repo.require_parser_config()?.format() {
             RepositoryFormat::Json => sync_repository_json(conn, repo).await?,
-            RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora => {
-                sync_repository_native(conn, repo).await?
-            }
+            RepositoryFormat::Arch
+            | RepositoryFormat::Debian
+            | RepositoryFormat::Fedora
+            | RepositoryFormat::Eopkg => sync_repository_native(conn, repo).await?,
             RepositoryFormat::Unspecified => {
                 return Err(Error::InitError(format!(
                     "repository '{}' has an unspecified parser configuration",

@@ -4,7 +4,7 @@
 //! This module provides an HTTP server that:
 //! - Serves repository metadata (proxied through Cloudflare)
 //! - Serves CCS chunks (direct from origin)
-//! - Converts native package formats (RPM/DEB/Arch) to CCS on demand
+//! - Converts native package formats (RPM/DEB/Arch/eopkg) to CCS on demand
 //! - Uses LRU cache eviction to manage disk space
 //!
 //! Phase 0 hardening features:

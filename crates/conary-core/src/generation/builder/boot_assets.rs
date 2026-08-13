@@ -7,7 +7,7 @@ use super::cas::artifact_root_for_generations_root;
 use super::initramfs::generate_runtime_initramfs;
 use super::kernel::{
     collect_boot_kernel_releases, collect_module_kernel_releases, kernel_module_dir,
-    module_kernel_path, regular_file_exists, system_root_for_boot_root,
+    module_kernel_path, regular_file_exists, solus_kernel_path, system_root_for_boot_root,
 };
 use super::runtime_inputs;
 use super::sysroot::materialize_runtime_generation_sysroot;
@@ -237,7 +237,7 @@ fn resolve_runtime_boot_asset_sources_with_tools_and_policy(
     let system_root = system_root_for_boot_root(boot_root)?;
     let mut candidate_releases = Vec::new();
     collect_boot_kernel_releases(boot_root, &mut candidate_releases)?;
-    collect_module_kernel_releases(&system_root, &mut candidate_releases)?;
+    collect_module_kernel_releases(&system_root, boot_root, &mut candidate_releases)?;
     if candidate_releases.is_empty() {
         return Err(crate::error::Error::NotFound(format!(
             "generation boot root {} has no exact versioned kernel identity in /boot or /lib/modules",
@@ -297,9 +297,10 @@ fn runtime_boot_asset_sources_for_release(
         versioned_kernel
     } else {
         module_kernel_path(system_root, release)
+            .or_else(|| solus_kernel_path(boot_root, release))
             .ok_or_else(|| {
                 crate::error::Error::NotFound(format!(
-                    "missing exact versioned boot asset kernel for {release}; expected {} or a module kernel at lib/modules/{release}/vmlinuz",
+                    "missing exact versioned boot asset kernel for {release}; expected {}, a module kernel at lib/modules/{release}/vmlinuz, or the exact Solus module-release pair",
                     boot_root.join(format!("vmlinuz-{release}")).display(),
                 ))
             })?

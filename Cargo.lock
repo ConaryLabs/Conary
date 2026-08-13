@@ -1022,6 +1022,7 @@ dependencies = [
  "indicatif",
  "inotify",
  "libc",
+ "liblzma",
  "nix",
  "pem",
  "remi",
@@ -1036,6 +1037,7 @@ dependencies = [
  "sequoia-openpgp",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.11.0",
  "sigstore",
  "tar",
@@ -1051,6 +1053,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "x509-cert",
+ "zip",
 ]
 
 [[package]]
@@ -1154,6 +1157,7 @@ dependencies = [
  "x509-cert",
  "xattr",
  "xxhash-rust",
+ "zip",
  "zstd",
 ]
 
@@ -2170,6 +2174,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -3927,7 +3932,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http",
@@ -4546,7 +4551,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -4565,7 +4570,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -4920,6 +4925,7 @@ dependencies = [
  "governor",
  "hex",
  "libc",
+ "liblzma",
  "log",
  "nix",
  "parking_lot",
@@ -4948,6 +4954,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "zip",
 ]
 
 [[package]]
@@ -5603,7 +5610,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "argon2",
- "base64 0.21.7",
+ "base64 0.22.1",
  "block-padding",
  "blowfish",
  "buffered-reader",
@@ -5647,7 +5654,7 @@ dependencies = [
  "sha1collisiondetection",
  "sha2 0.10.9",
  "sha3",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "twofish",
  "typenum",
  "x25519-dalek",
@@ -6953,6 +6960,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8032,6 +8045,25 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.0",
+ "memchr",
+ "typed-path",
+]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

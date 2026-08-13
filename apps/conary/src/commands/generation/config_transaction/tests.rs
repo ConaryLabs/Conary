@@ -102,6 +102,14 @@ fn source_config(source: ConfigSource, path: &str) -> SourceConfigDeclaration {
                 payload: ConfigPayloadAssociation::Matched,
             },
         ),
+        ConfigSource::Eopkg => SourceConfigDeclaration::Eopkg(
+            conary_core::packages::eopkg::authority::EopkgConfigDeclaration {
+                files_index: 0,
+                path: path.to_string(),
+                permanent: true,
+                payload: ConfigPayloadAssociation::Matched,
+            },
+        ),
         ConfigSource::Auto => SourceConfigDeclaration::Ccs(
             conary_core::packages::config_authority::CcsConfigDeclaration {
                 path: path.to_string(),

@@ -455,6 +455,7 @@ fn transaction_after_stage(stage: NativeEventStage) -> bool {
             | NativeEventStage::DebAwaitedTriggerProcessing
             | NativeEventStage::DebTriggerProcessing
             | NativeEventStage::ArchPostTransaction
+            | NativeEventStage::EopkgSystemConfiguration
     )
 }
 
@@ -501,7 +502,8 @@ fn element_boundary(stage: NativeEventStage) -> Option<ElementBoundary> {
         | NativeEventStage::RpmTransactionFileTriggerPostUninstall
         | NativeEventStage::RpmTransactionFileTriggerInstall
         | NativeEventStage::DebTriggerProcessing
-        | NativeEventStage::ArchPostTransaction => None,
+        | NativeEventStage::ArchPostTransaction
+        | NativeEventStage::EopkgSystemConfiguration => None,
     }
 }
 

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-11
-revision: 6
-summary: Define lossless RPM, Debian, ALPM, and CCS package authority plus explicit consumer projections
+revision: 7
+summary: Define lossless RPM, Debian, ALPM, eopkg, and CCS package authority plus explicit consumer projections
 ---
 
 # Source Package Authority And Consumer Projections
@@ -17,7 +17,7 @@ have shipped the source-specific identity, provision, and configuration
 records, CCS v3 provenance, resolver distinction, provider and config
 persistence, and transaction projections. W5 is one complete hard cut.
 
-RPM, Debian, and ALPM identity and declared provisions now live in their
+RPM, Debian, ALPM, and eopkg identity and declared provisions now live in their
 format-specific authority modules behind `SourcePackageAuthority`.
 `PackageFormat::resolution_capabilities()` and
 `PackageFormat::config_declarations()` are explicit fallible consumer
@@ -37,9 +37,9 @@ the current signed CCS v3 envelope.
 > Normalize at the boundary of one named consumer, never while initially
 > parsing source authority.
 
-An RPM fact remains an RPM fact, a Debian fact remains a Debian fact, and an
-ALPM fact remains an ALPM fact until a fallible consumer projection asks for a
-specific target contract. Similar spelling does not establish shared
+An RPM fact remains an RPM fact, a Debian fact remains a Debian fact, an ALPM
+fact remains an ALPM fact, and an eopkg fact remains an eopkg fact until a
+fallible consumer projection asks for a specific target contract. Similar spelling does not establish shared
 semantics. In particular:
 
 - exact package identity is not an entry in a package's declared-provision
@@ -197,7 +197,7 @@ Capability provenance is a closed enum with at least these roles:
 | Role | Meaning |
 |---|---|
 | `author-declared` | Explicit capability in a directly authored CCS package |
-| `source-declared` | Exact RPM, Debian, or ALPM provision with source-format identity and source-record position |
+| `source-declared` | Exact RPM, Debian, ALPM, or eopkg provision with source-format identity and source-record position |
 | `source-derived-file` | Capability derived by one pinned source-format rule from an exact payload record |
 | `source-promised-path` | A path the source package owns but ships no content for, materialized by its own lifecycle |
 
@@ -267,8 +267,8 @@ queue, source-package-manager fallback, or best-effort transaction.
 
 The implementation decomposition is ownership-based:
 
-- `packages/rpm/authority.rs`, `packages/deb/authority.rs`, and
-  `packages/arch/authority.rs` own source-format identity, relations,
+- `packages/rpm/authority.rs`, `packages/deb/authority.rs`,
+  `packages/arch/authority.rs`, and `packages/eopkg/authority.rs` own source-format identity, relations,
   provisions, and config declarations. Existing parser hubs retain dispatch
   and re-exports only.
 - `packages/source_authority.rs` owns the closed format-dispatch enum. It does
@@ -277,7 +277,7 @@ The implementation decomposition is ownership-based:
   their existing shared payload-stream, node, and byte-exact path ownership.
 - `repository/dependency_model.rs` remains a resolution-consumer DTO. Native
   parsers stop constructing it as their source authority.
-- `ccs/convert/source_projection/` owns the explicit RPM, Debian, and ALPM to
+- `ccs/convert/source_projection/` owns the explicit RPM, Debian, ALPM, and eopkg to
   CCS projections; `convert/converter.rs` remains orchestration only.
 - the current signed CCS schema directory is replaced by `ccs/v3/`, with
   identity/capability validation and configuration-declaration validation in

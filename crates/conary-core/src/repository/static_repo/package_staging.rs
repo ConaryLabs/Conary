@@ -342,6 +342,8 @@ const fn project_v3_capability(kind: DependencyKindV3) -> RepositoryCapabilityKi
         DependencyKindV3::Binary => RepositoryCapabilityKind::Binary,
         DependencyKindV3::Soname => RepositoryCapabilityKind::Soname,
         DependencyKindV3::PkgConfig => RepositoryCapabilityKind::PkgConfig,
+        DependencyKindV3::PkgConfig32 => RepositoryCapabilityKind::PkgConfig32,
+        DependencyKindV3::Comar => RepositoryCapabilityKind::Comar,
     }
 }
 

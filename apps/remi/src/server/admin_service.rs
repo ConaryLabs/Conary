@@ -799,7 +799,7 @@ fn repository_trust_roots(policy: &RepositoryTrustPolicy) -> Vec<&OpenPgpTrustRo
             RpmMetadataAuthority::OpenPgp { keys } => keys.iter().chain(package_keys).collect(),
             RpmMetadataAuthority::Metalink { .. } => package_keys.iter().collect(),
         },
-        RepositoryTrustPolicy::Arch { .. } => Vec::new(),
+        RepositoryTrustPolicy::Arch { .. } | RepositoryTrustPolicy::Eopkg { .. } => Vec::new(),
     }
 }
 

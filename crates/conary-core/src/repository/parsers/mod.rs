@@ -10,6 +10,7 @@
 pub mod arch;
 pub mod common;
 pub mod debian;
+pub mod eopkg;
 pub mod fedora;
 mod snapshot;
 
@@ -88,6 +89,8 @@ pub struct PackageMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChecksumType {
+    /// SHA-1 carried by the authenticated eopkg index.
+    Sha1,
     /// SHA-256 (preferred)
     Sha256,
 

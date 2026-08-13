@@ -23,6 +23,9 @@ use std::time::SystemTime;
 use tracing::{debug, warn};
 
 mod stream;
+mod write_batch;
+
+pub use write_batch::{PrivateCasWriter, PrivateCopyBatch};
 
 /// Compute the CAS object path for a hex hash under a root directory.
 ///
@@ -456,6 +459,15 @@ impl CasStore {
             debug!("Private CAS object already exists: {}", hash);
         }
         Ok(hash)
+    }
+
+    /// Begin a transaction-scoped batch of private live-file captures.
+    ///
+    /// New objects remain under ignored temporary names until
+    /// [`PrivateCopyBatch::commit`] makes the complete batch durable and
+    /// publishes it. Callers must commit before persisting references.
+    pub fn private_copy_batch(&self) -> PrivateCopyBatch<'_> {
+        PrivateCopyBatch::new(self)
     }
 
     /// Atomically store content into a private CAS inode.

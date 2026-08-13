@@ -85,6 +85,7 @@ liblzma = "0.4"                  # XZ/LZMA compression (for Arch)
 rfc822-like = "0.2"             # RFC 822 parser for Debian/Ubuntu Packages files
 quick-xml = "0.41"              # XML parser for Fedora/RPM repodata
 ar = "0.9"                      # AR archive parsing for DEB packages
+zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 glob.workspace = true
 log.workspace = true                      # Logging facade for transaction module
 

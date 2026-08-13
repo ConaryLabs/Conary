@@ -212,7 +212,7 @@ source-RPM verification database. The adopted-package `--rpm` verification
 path delegates to the installed RPM database, while native Conary verification
 uses the projected node and CAS authority.
 
-**convert/** -- RPM, Debian, and Arch to CCS conversion. Source package parsers
+**convert/** -- RPM, Debian, Arch, and eopkg to CCS conversion. Source package parsers
 produce a typed native ABI before conversion: exact lifecycle slots, body
 bytes, interpreters, invocation contracts, trigger/control metadata, and
 package-manager ordering. Source-defined strong requirement order, including
@@ -224,7 +224,7 @@ inspecting the script body and it does not suppress an entry because a command
 appears to have a declarative replacement. The resulting CCS is executed by
 Conary on any supported target; conversion and install do not delegate
 lifecycle planning, database mutation, or transaction completion to `rpm`,
-`dpkg`, or `pacman`.
+`dpkg`, `pacman`, or `eopkg`.
 Source format and target host are orthogonal: the running system exposes typed
 ABI/libc/loader, init, LSM, filesystem, boot/kernel, and helper capabilities.
 The implemented hook inventory currently records init/systemd/OpenRC, sysusers,
@@ -235,7 +235,7 @@ do not select pairwise converters, compatibility profiles, or string gates.
 The adopted-package entrypoint is
 `apps/conary/src/commands/adopt/convert.rs`. It does not reconstruct a package
 from live files or installed database metadata. It re-resolves the exact
-authenticated RPM, Debian, or Arch source artifact from an enrolled repository
+authenticated RPM, Debian, Arch, or eopkg source artifact from an enrolled repository
 or verified Conary cache, proves exact installed identity and payload
 equivalence, and then calls the same direct native converter above. The signed
 CCS is verified in same-directory staging before an installed-conversion row
@@ -261,7 +261,7 @@ The authoritative package-manager surface, invocation matrices, event order,
 and payload visibility contract is
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
-**native_lifecycle.rs** -- Current persisted RPM, Debian, and Arch lifecycle
+**native_lifecycle.rs** -- Current persisted RPM, Debian, Arch, and eopkg lifecycle
 ABI. The schema-revision-19 bundle lives in the TOML manifest as
 `[native_lifecycle]` and records source identity and version scheme, exact
 entries with typed executable/control-artifact kind, body digests,

@@ -10,6 +10,65 @@ use std::fs;
 use std::io::{Read, Write};
 
 impl CasStore {
+    /// Store an exact private copy from a reader with bounded memory.
+    pub fn store_private_reader(
+        &self,
+        reader: &mut dyn Read,
+        expected_size: u64,
+    ) -> Result<String> {
+        let temp_path = self.objects_dir().join(format!(
+            ".tmp.{}.{}.private-reader",
+            std::process::id(),
+            Self::next_temp_id()
+        ));
+        let result = (|| -> Result<String> {
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)?;
+            let mut hasher = Hasher::new(self.algorithm());
+            let mut total = 0_u64;
+            let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                total = total.checked_add(read as u64).ok_or_else(|| {
+                    crate::Error::IoError("CAS capture size overflow".to_string())
+                })?;
+                if total > expected_size {
+                    return Err(crate::Error::IoError(format!(
+                        "CAS capture exceeds expected size {expected_size}"
+                    )));
+                }
+                hasher.update(&buffer[..read]);
+                output.write_all(&buffer[..read])?;
+            }
+            if total != expected_size {
+                return Err(crate::Error::IoError(format!(
+                    "CAS capture size mismatch: expected {expected_size}, got {total}"
+                )));
+            }
+            output.sync_all()?;
+            drop(output);
+
+            let hash = hasher.finalize().value;
+            let path = self.hash_to_path(&hash)?;
+            if path.exists() && !super::cas_object_appears_shared(&path)? {
+                return Ok(hash);
+            }
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::rename(&temp_path, &path)?;
+            sync_parent_dir(&path)?;
+            Ok(hash)
+        })();
+        let _ = fs::remove_file(&temp_path);
+        result
+    }
+
     /// Store one reader under an already authoritative SHA-256 identity.
     ///
     /// The source is consumed with a fixed buffer, and both exact size and

@@ -44,6 +44,11 @@ pub enum NativeRepositoryReference {
         name: String,
         location: DeclarationLocation,
     },
+    Eopkg {
+        name: String,
+        index_url: String,
+        location: DeclarationLocation,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,9 +215,45 @@ pub fn plan_selected_root_trust(
     if let Some(config) = &declarations.alpm {
         repositories.extend(plan_alpm(config));
     }
+    if let Some(document) = &declarations.eopkg {
+        repositories.extend(document.repositories.iter().map(plan_eopkg));
+    }
     NativeTrustImportPlan {
         selected_root: declarations.root.clone(),
         repositories,
+    }
+}
+
+fn plan_eopkg(repository: &super::eopkg::EopkgRepository) -> NativeRepositoryTrustPlan {
+    let mut findings = PlanFindings::default();
+    if repository.media != "remote" {
+        findings.unsupported(finding(
+            TrustImportFindingKind::UnsupportedTrustValue,
+            None,
+            &repository.location,
+            format!(
+                "eopkg repository media '{}' is not the authenticated remote-index contract",
+                repository.media
+            ),
+        ));
+    }
+    if crate::repository::eopkg_origin_from_index_url(&repository.index_url).is_err() {
+        findings.unsupported(finding(
+            TrustImportFindingKind::MissingRequiredAuthority,
+            None,
+            &repository.location,
+            "eopkg repository must declare an exact HTTPS eopkg-index.xml.xz URL",
+        ));
+    }
+    NativeRepositoryTrustPlan {
+        repository: NativeRepositoryReference::Eopkg {
+            name: repository.name.clone(),
+            index_url: repository.index_url.clone(),
+            location: repository.location.clone(),
+        },
+        enabled: Some(repository.enabled),
+        evidence: Vec::new(),
+        disposition: findings.finish(),
     }
 }
 

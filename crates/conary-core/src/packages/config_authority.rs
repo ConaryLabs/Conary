@@ -5,6 +5,7 @@
 use crate::db::models::ConfigSource;
 use crate::packages::arch::authority::AlpmConfigDeclaration;
 use crate::packages::deb::authority::DebianConfigDeclaration;
+use crate::packages::eopkg::authority::EopkgConfigDeclaration;
 use crate::packages::rpm::authority::RpmConfigDeclaration;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,7 @@ pub enum SourceConfigDeclaration {
     Rpm(RpmConfigDeclaration),
     Debian(DebianConfigDeclaration),
     Alpm(AlpmConfigDeclaration),
+    Eopkg(EopkgConfigDeclaration),
     Ccs(CcsConfigDeclaration),
 }
 
@@ -44,6 +46,7 @@ impl SourceConfigDeclaration {
             Self::Rpm(value) => &value.path,
             Self::Debian(value) => &value.path,
             Self::Alpm(value) => &value.path,
+            Self::Eopkg(value) => &value.path,
             Self::Ccs(value) => &value.path,
         }
     }
@@ -54,6 +57,7 @@ impl SourceConfigDeclaration {
             Self::Rpm(value) => value.payload,
             Self::Debian(value) => value.payload,
             Self::Alpm(value) => value.payload,
+            Self::Eopkg(value) => value.payload,
             Self::Ccs(value) => value.payload,
         }
     }
@@ -64,6 +68,7 @@ impl SourceConfigDeclaration {
             Self::Rpm(_) => ConfigSource::Rpm,
             Self::Debian(_) => ConfigSource::Deb,
             Self::Alpm(_) => ConfigSource::Arch,
+            Self::Eopkg(_) => ConfigSource::Eopkg,
             Self::Ccs(_) => ConfigSource::Auto,
         }
     }
@@ -72,7 +77,7 @@ impl SourceConfigDeclaration {
     pub const fn noreplace(&self) -> bool {
         match self {
             Self::Rpm(value) => value.noreplace,
-            Self::Debian(_) | Self::Alpm(_) => true,
+            Self::Debian(_) | Self::Alpm(_) | Self::Eopkg(_) => true,
             Self::Ccs(value) => value.noreplace,
         }
     }
@@ -126,7 +131,7 @@ impl SourceConfigDeclaration {
                     )));
                 }
             }
-            Self::Alpm(_) => {}
+            Self::Alpm(_) | Self::Eopkg(_) => {}
             Self::Ccs(value) if value.payload == ConfigPayloadAssociation::Absent => {
                 return Err(crate::Error::ConfigError(format!(
                     "direct CCS config declaration {path} cannot omit its payload"

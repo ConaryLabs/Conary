@@ -65,7 +65,10 @@ pub(super) fn validate_identity(
         authority.identity.debian_multi_arch,
     ) {
         (VersionScheme::Debian, Some(_))
-        | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+        | (
+            VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Eopkg,
+            None,
+        ) => {}
         (VersionScheme::Debian, None) => diagnostics.push(V3Diagnostic::error(
             V3DiagnosticCode::MissingAuthority,
             "Debian v3 package identity requires exact Multi-Arch authority",
@@ -120,6 +123,8 @@ pub(super) fn validate_capabilities(
                 DependencyKindV3::Binary => RepositoryCapabilityKind::Binary,
                 DependencyKindV3::Soname => RepositoryCapabilityKind::Soname,
                 DependencyKindV3::PkgConfig => RepositoryCapabilityKind::PkgConfig,
+                DependencyKindV3::PkgConfig32 => RepositoryCapabilityKind::PkgConfig32,
+                DependencyKindV3::Comar => RepositoryCapabilityKind::Comar,
             },
             name: entry.name.clone(),
             version: entry.provider_version.clone(),

@@ -85,7 +85,7 @@ replatform may need to realign.
 The repository feed catalog makes
 `crates/conary-core/src/repository/supported_profiles/` the source of truth for
 configured feed IDs, package format, version scheme, and Remi route-family
-mapping. Fedora 44, Ubuntu 26.04, and Arch are the currently configured public
+mapping. Fedora 44, Ubuntu 26.04, Arch, and Solus are the currently configured public
 feeds, not the only destination systems Conary supports. Internal route slugs
 such as `fedora` and `ubuntu` are not feed IDs. The
 `repo add --source-profile` surface accepts only those exact public IDs and
@@ -614,9 +614,11 @@ exact name/version/architecture, requires its persisted native identity and
 complete `AdoptedFull` payload ownership (`conary system adopt <pkg> --full`
 establishes it), and resolves one exact package row from an enabled,
 stream-bound enrolled native repository. The artifact is acquired into the
-Conary cache under its authenticated SHA-256 authority; cached RPM, Debian,
-and Arch artifacts are reverified with their ecosystem-specific package
-authority before reuse. The parser identity and every adopted payload node,
+Conary cache under its typed authenticated source-digest authority; eopkg
+retains the index's SHA-1 while conversion separately computes the internal
+SHA-256 artifact identity. Cached RPM, Debian, Arch, and eopkg artifacts are
+reverified with their ecosystem-specific package authority before reuse. The
+parser identity and every adopted payload node,
 resolved owner, content digest, symlink, hardlink topology edge, and explicit
 directory must match before the canonical native converter runs.
 

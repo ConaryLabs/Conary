@@ -3,7 +3,7 @@
 //! CCS package parser implementing PackageFormat trait
 //!
 //! This module provides a PackageFormat implementation for CCS packages,
-//! enabling them to be installed using the same infrastructure as RPM/DEB/Arch.
+//! enabling them to be installed using the same infrastructure as RPM/DEB/Arch/eopkg.
 
 mod v3_projection;
 

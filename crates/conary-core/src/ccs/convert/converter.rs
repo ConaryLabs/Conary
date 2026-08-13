@@ -79,7 +79,7 @@ pub struct ConversionResult {
     pub signing_public_key: String,
 }
 
-/// Converts native packages (RPM/DEB/Arch) to CCS format.
+/// Converts native packages (RPM/DEB/Arch/eopkg) to CCS format.
 pub struct NativePackageConverter {
     options: ConversionOptions,
     source_profile: Option<String>,
@@ -150,6 +150,7 @@ impl NativePackageConverter {
             "rpm" => VersionScheme::Rpm,
             "deb" => VersionScheme::Debian,
             "arch" => VersionScheme::Arch,
+            "eopkg" => VersionScheme::Eopkg,
             other => {
                 return Err(ConversionError::ManifestError(format!(
                     "unsupported source package format '{other}'"
@@ -525,6 +526,8 @@ fn project_source_capabilities(
                 RepositoryCapabilityKind::Binary => DependencyKindV3::Binary,
                 RepositoryCapabilityKind::Soname => DependencyKindV3::Soname,
                 RepositoryCapabilityKind::PkgConfig => DependencyKindV3::PkgConfig,
+                RepositoryCapabilityKind::PkgConfig32 => DependencyKindV3::PkgConfig32,
+                RepositoryCapabilityKind::Comar => DependencyKindV3::Comar,
             },
             name: provide.name.clone(),
             provider_version: provide.version.clone(),

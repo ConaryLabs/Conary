@@ -87,6 +87,7 @@ fn build_ccs_fixture(
             SourceFormat::Rpm => conary_core::repository::versioning::VersionScheme::Rpm,
             SourceFormat::Deb => conary_core::repository::versioning::VersionScheme::Debian,
             SourceFormat::Arch => conary_core::repository::versioning::VersionScheme::Arch,
+            SourceFormat::Eopkg => conary_core::repository::versioning::VersionScheme::Eopkg,
         };
     }
     manifest.native_lifecycle = bundle;

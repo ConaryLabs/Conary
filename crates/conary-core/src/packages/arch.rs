@@ -7,7 +7,7 @@
 mod alpm_hook;
 pub mod authority;
 mod install_script;
-mod payload;
+pub(crate) mod payload;
 
 pub(crate) use alpm_hook::{
     package_hook_basename, split_alpm_words as alpm_hook_wordsplit,

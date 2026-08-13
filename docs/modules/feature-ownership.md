@@ -767,6 +767,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/packages/rpm/*`;
 `crates/conary-core/src/packages/deb/*`;
 `crates/conary-core/src/packages/arch/*`;
+`crates/conary-core/src/packages/eopkg/*`;
 `crates/conary-core/src/scriptlet/*`;
 `crates/conary-core/tests/native_abi.rs`;
 `apps/conary/src/commands/ccs/*`;
@@ -775,7 +776,8 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `packaging/ccs/*`;
 `docs/specs/ccs-format-v3.md`;
 `docs/specs/source-package-authority.md`;
-`docs/specs/foreign-package-lifecycle-contracts.md`.
+`docs/specs/foreign-package-lifecycle-contracts.md`;
+`docs/specs/eopkg-source-abi.md`.
 
 **Focused proof:** `cargo test -p conary-core ccs::budget`;
 `cargo test -p conary-core ccs::v3`;
@@ -1103,8 +1105,8 @@ or native release upload.
 `docs/llms/subsystem-map.md`.
 
 **Safety notes:** configured public feed IDs are exact and narrow:
-`fedora-44`, `ubuntu-26.04`, and `arch`. Remi route slugs are
-`fedora`, `ubuntu`, and `arch`; generic route slugs such as `fedora` and
+`fedora-44`, `ubuntu-26.04`, `arch`, and `solus`. Remi route slugs are
+`fedora`, `ubuntu`, `arch`, and `solus`; generic route slugs such as `fedora` and
 `ubuntu` are not feed IDs. This catalog is not a list of destination distros
 Conary supports.
 

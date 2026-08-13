@@ -11,13 +11,14 @@ use crate::repository::{
 };
 use serde::Serialize;
 
-pub const STREAM_BINDING_SCHEMA_REVISION: u32 = 31;
+pub const STREAM_BINDING_SCHEMA_REVISION: u32 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeSourceEcosystem {
     Rpm,
     Deb,
     Alpm,
+    Eopkg,
 }
 
 impl NativeSourceEcosystem {
@@ -26,6 +27,7 @@ impl NativeSourceEcosystem {
             Self::Rpm => "rpm",
             Self::Deb => "deb",
             Self::Alpm => "alpm",
+            Self::Eopkg => "eopkg",
         }
     }
 
@@ -34,6 +36,7 @@ impl NativeSourceEcosystem {
             Self::Rpm => VersionScheme::Rpm,
             Self::Deb => VersionScheme::Debian,
             Self::Alpm => VersionScheme::Arch,
+            Self::Eopkg => VersionScheme::Eopkg,
         }
     }
 
@@ -42,6 +45,7 @@ impl NativeSourceEcosystem {
             Self::Rpm => RepositoryFormat::Fedora,
             Self::Deb => RepositoryFormat::Debian,
             Self::Alpm => RepositoryFormat::Arch,
+            Self::Eopkg => RepositoryFormat::Eopkg,
         }
     }
 
@@ -50,6 +54,7 @@ impl NativeSourceEcosystem {
             RepositoryFormat::Fedora => Ok(Self::Rpm),
             RepositoryFormat::Debian => Ok(Self::Deb),
             RepositoryFormat::Arch => Ok(Self::Alpm),
+            RepositoryFormat::Eopkg => Ok(Self::Eopkg),
             RepositoryFormat::Json | RepositoryFormat::Unspecified => Err(Error::ConfigError(
                 format!("'{}' is not a native repository ecosystem", format.as_str()),
             )),
@@ -61,6 +66,7 @@ impl NativeSourceEcosystem {
             "rpm" => Ok(Self::Rpm),
             "deb" => Ok(Self::Deb),
             "alpm" => Ok(Self::Alpm),
+            "eopkg" => Ok(Self::Eopkg),
             other => Err(format!(
                 "unknown persisted native source ecosystem '{other}'"
             )),
@@ -296,6 +302,10 @@ enum SnapshotAuthority<'a> {
         database_signature: ArchSignatureRequirement,
         trust: ArchTrustLevel,
     },
+    Eopkg {
+        origin: &'a str,
+        index_digest_authority: &'static str,
+    },
 }
 
 pub(crate) fn calculate_stream_binding(
@@ -327,6 +337,10 @@ pub(crate) fn calculate_stream_binding(
             keyring,
             database_signature: sig_level.database,
             trust: sig_level.trust,
+        },
+        RepositoryTrustPolicy::Eopkg { origin } => SnapshotAuthority::Eopkg {
+            origin,
+            index_digest_authority: "same-origin-sha256-sidecar",
         },
     };
     let document = StreamBindingDocument {

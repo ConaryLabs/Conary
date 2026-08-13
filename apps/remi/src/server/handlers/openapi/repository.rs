@@ -20,7 +20,7 @@ pub(super) fn schemas() -> Map<String, Value> {
             "description": "Exact tagged metadata grammar. Required on create and replace.",
             "required": ["package_format"],
             "properties": {
-                "package_format": { "type": "string", "enum": ["rpm", "deb", "arch", "json"] },
+                "package_format": { "type": "string", "enum": ["rpm", "deb", "arch", "eopkg", "json"] },
                 "distribution": { "type": "string" },
                 "component": { "type": "string" },
                 "architecture": { "type": "string" },
