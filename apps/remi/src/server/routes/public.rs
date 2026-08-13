@@ -57,7 +57,6 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/health", get(health_check))
         .route("/health/ready", get(readiness_check))
         .route("/v1/federation/directory", get(federation::directory))
-        .route("/v1/{distro}/metadata", get(index::get_metadata))
         .route("/v1/{distro}/packages/{name}", get(packages::get_package))
         .route(
             "/v1/{distro}/packages/{name}/download",
@@ -442,9 +441,9 @@ mod tests {
         assert_eq!(body, "<svg/>");
     }
 
-    /// The API is unaffected: routes under `/v1` keep answering, and a query
-    /// against a distro the server does not carry keeps its own typed status
-    /// rather than falling through to the web fallback.
+    /// The API is unaffected: owned routes under `/v1` keep answering, and a
+    /// removed API route stays an empty 404 rather than falling through to the
+    /// web fallback.
     #[tokio::test]
     async fn api_routes_are_unaffected_by_the_web_fallback() {
         let (_temp, app) = web_app().await;
@@ -462,8 +461,13 @@ mod tests {
             "federation directory must stay JSON"
         );
 
-        let (status, _, _) = get_path(&app, "/v1/not-supported/metadata").await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, content_type, body) = get_path(&app, "/v1/not-supported/metadata").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(
+            !content_type.unwrap_or_default().starts_with("text/html"),
+            "removed API route must not be answered by the SPA"
+        );
+        assert!(!body.contains("Conary package index"));
     }
 
     /// `SPA_ROUTE_PREFIXES` is the server's copy of a fact the SPA owns, so the

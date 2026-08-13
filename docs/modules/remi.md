@@ -106,8 +106,11 @@ version plus the exact normalized provides and grouped native requirements
 needed for offline resolution, together with persisted package metadata such
 as explicitly trusted security advisories. Conversion-cache state, diagnostic
 scriptlet summaries, and content hashes stay on other public projections
-because sync does not consume them.
-`GET /v1/{distro}/metadata` is not a client-sync fallback.
+because sync does not consume them. Both sparse list projections identify the
+exact `source_profile` behind the stable family route, and the client rejects a
+page whose profile disagrees with its configured target. The former unbounded
+`GET /v1/{distro}/metadata` route has been removed; health and sync use bounded
+sparse pages rather than constructing repository-wide JSON.
 
 For Fedora, normalized provides include every package-owned `<file>` record
 from authenticated `primary.xml` and `filelists.xml` as `kind = "file"` with
@@ -304,8 +307,8 @@ or a missing CCS object is data corruption or stale conversion state and
 returns an error or triggers reconversion. It is not converted into a human
 review outcome.
 
-Package detail, monolithic metadata, generated indexes, search, OCI, delta, and
-download routes expose the sanitized `scriptlets` projection. Sparse index
+Package detail, generated indexes, search, OCI, delta, and download routes
+expose the sanitized `scriptlets` projection. Sparse index
 documents carry resolution authority—versions, provides, requirements,
 architecture, size, persisted package metadata, conversion state, and public
 content hash—rather than the diagnostic scriptlet summary. Program bodies and

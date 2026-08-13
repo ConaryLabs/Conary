@@ -17,9 +17,8 @@
 //! - Recipe build moved to admin API
 
 use crate::server::handlers::{
-    admin as admin_handlers, artifacts, canonical, chunks, derivations, detail, federation, index,
-    jobs, models, oci, openapi, packages, profiles, recipes, search, seeds, self_update, sparse,
-    tuf,
+    admin as admin_handlers, artifacts, canonical, chunks, derivations, detail, federation, jobs,
+    models, oci, openapi, packages, profiles, recipes, search, seeds, self_update, sparse, tuf,
 };
 use crate::server::readiness::{self, ReadinessInputs};
 use crate::server::security::RateLimiter;
@@ -587,7 +586,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn metadata_signature_route_is_absent_while_owned_routes_remain() {
+    async fn legacy_metadata_routes_are_absent_while_owned_routes_remain() {
         let temp = tempfile::TempDir::new().unwrap();
         let db_path = temp.path().join("remi.db");
         let chunk_dir = temp.path().join("chunks");
@@ -627,8 +626,17 @@ mod tests {
             .unwrap();
         assert!(body.is_empty(), "removed route must not run a handler");
 
-        let response = request(app.clone(), "/v1/not-supported/metadata").await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        for uri in ["/v1/not-supported/metadata", "/v1/fedora/metadata"] {
+            let response = request(app.clone(), uri).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(
+                body.is_empty(),
+                "removed route {uri} must not run a handler"
+            );
+        }
 
         let response = request(app, "/v1/not-supported/tuf/root.json").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
