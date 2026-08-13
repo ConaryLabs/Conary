@@ -586,7 +586,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_metadata_routes_are_absent_while_owned_routes_remain() {
+    async fn obsolete_metadata_routes_are_absent_while_owned_routes_remain() {
         let temp = tempfile::TempDir::new().unwrap();
         let db_path = temp.path().join("remi.db");
         let chunk_dir = temp.path().join("chunks");
