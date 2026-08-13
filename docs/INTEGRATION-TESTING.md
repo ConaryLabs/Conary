@@ -635,9 +635,13 @@ The bounded `selected-root-overlay-profile-solus` QEMU suite reuses that
 immutable fixture without running takeover. It functionally mounts the exact
 selected-root OverlayFS profile and proves indexed hardlink copy-up, complete
 metadata copy-up, character-device whiteouts, logical opaque replacement, and
-`EXDEV` for lower-directory rename. This is the positive kernel/filesystem
-counterpart to the runtime typed preflight; a kernel version or registered
-filesystem name alone is not capability evidence.
+`EXDEV` for lower-directory rename. It then stages the current static Conary
+binary, installs and removes a signed lifecycle-free CCS through the real
+selected-root session, verifies the changed path appears and disappears in
+successive manifest-only candidates, and proves that no session mount or
+workspace survives either commit. This is the positive kernel/filesystem and
+transaction counterpart to the runtime typed preflight; a kernel version or
+registered filesystem name alone is not capability evidence.
 
 Each full parity run must pass `scripts/check-conary-test-result-gate.sh` and
 `scripts/check-conary-corpus-result-gate.sh`,

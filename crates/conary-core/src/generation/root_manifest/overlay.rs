@@ -5,14 +5,16 @@
 mod probe;
 
 pub use probe::{
-    OverlayHardlinkCopyUp, OverlayLowerDirectoryRename, OverlayMetadataCopyUp,
-    OverlayOpaqueDirectory, OverlayWhiteoutEncoding, SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION,
-    SelectedRootOverlayCapabilities, probe_selected_root_overlay_profile,
+    MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,
+    OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding,
+    SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SelectedRootOverlayCapabilities,
+    probe_selected_root_overlay_profile,
 };
 
+use super::scan::scan_selected_root_overlay_upper;
 use super::{
     CapturedSelectedRoot, GenerationRootEntry, SELECTED_ROOT_MANIFEST_DELTA_VERSION,
-    SelectedRootManifestDelta, scan_payload_tree,
+    SelectedRootManifestDelta,
 };
 use crate::filesystem::PrivateCasWriter;
 use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
@@ -110,6 +112,32 @@ impl SelectedRootOverlayProfile {
     }
 }
 
+/// Encode payload xattrs on the upper root so OverlayFS does not interpret a
+/// payload-owned name in its private namespace as transaction bookkeeping.
+pub fn encode_selected_root_overlay_upper_node(
+    node: &ResolvedPayloadNode,
+    profile: &SelectedRootOverlayProfile,
+) -> crate::Result<ResolvedPayloadNode> {
+    profile.validate()?;
+    let prefix = profile.private_prefix();
+    let mut encoded = node.clone();
+    let mut xattrs = BTreeMap::new();
+    for (name, value) in &node.source.xattrs {
+        let encoded_name = if let Some(suffix) = name.strip_prefix(prefix) {
+            format!("{prefix}overlay.{suffix}")
+        } else {
+            name.clone()
+        };
+        if xattrs.insert(encoded_name.clone(), value.clone()).is_some() {
+            return Err(crate::Error::InvalidPath(format!(
+                "overlay upper-root xattr escaping produces duplicate {encoded_name}"
+            )));
+        }
+    }
+    encoded.source.xattrs = xattrs;
+    Ok(encoded)
+}
+
 /// Capture and decode one frozen transaction upper without reading unchanged
 /// lower content.
 ///
@@ -125,7 +153,7 @@ pub fn decode_selected_root_overlay_upper(
     profile.validate()?;
     prior.generation.validate()?;
     prior.state.validate()?;
-    let (root, entries) = scan_payload_tree(upper, cas, "selected-root-overlay-v1")?;
+    let (root, entries) = scan_selected_root_overlay_upper(upper, cas, "selected-root-overlay-v1")?;
     decode_captured_upper(root, entries, prior, profile)
 }
 
@@ -186,7 +214,7 @@ fn decode_captured_upper(
                     entry.path
                 )));
             }
-            if opaque == OpaqueMarker::Logical {
+            if opaque == OpaqueMarker::Logical && prior_directory_exists(prior, &entry.path) {
                 opaque_directories.push(entry.path.clone());
             }
         }
@@ -217,6 +245,17 @@ fn decode_captured_upper(
     // persist this changed-path representation.
     delta.apply(prior)?;
     Ok(delta)
+}
+
+fn prior_directory_exists(prior: &CapturedSelectedRoot, path: &str) -> bool {
+    prior
+        .generation
+        .entries
+        .iter()
+        .chain(&prior.state.entries)
+        .any(|entry| {
+            entry.path == path && matches!(entry.node.source.kind, PayloadNodeKind::Directory)
+        })
 }
 
 fn decode_overlay_xattrs(
@@ -534,6 +573,57 @@ mod tests {
     }
 
     #[test]
+    fn upper_root_encoding_round_trips_payload_private_namespace() {
+        let profile = user_profile();
+        let mut root = directory_node();
+        root.source
+            .xattrs
+            .insert("user.overlay.payload-owned".into(), b"exact".to_vec());
+        let encoded = encode_selected_root_overlay_upper_node(&root, &profile).unwrap();
+        assert_eq!(
+            encoded
+                .source
+                .xattrs
+                .get("user.overlay.overlay.payload-owned"),
+            Some(&b"exact".to_vec())
+        );
+        assert_eq!(
+            decode_captured_upper(encoded, Vec::new(), &captured(Vec::new()), &profile)
+                .unwrap()
+                .root,
+            Some(root)
+        );
+    }
+
+    #[test]
+    fn upper_capture_prunes_ephemeral_subtrees_before_delta_decode() {
+        let workspace = tempfile::tempdir().unwrap();
+        let upper = workspace.path().join("upper");
+        std::fs::create_dir_all(upper.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(upper.join("run/conary-private")).unwrap();
+        std::fs::write(upper.join("usr/lib/changed"), b"publish").unwrap();
+        std::fs::write(upper.join("run/conary-private/ignored"), b"ephemeral").unwrap();
+        let cas = CasStore::new(workspace.path().join("objects")).unwrap();
+        let prior = captured(vec![directory_entry("/usr"), directory_entry("/usr/lib")]);
+
+        let delta =
+            decode_selected_root_overlay_upper(&upper, &prior, &cas, &user_profile()).unwrap();
+
+        assert!(
+            delta
+                .upserts
+                .iter()
+                .any(|entry| entry.path == "/usr/lib/changed")
+        );
+        assert!(
+            delta
+                .upserts
+                .iter()
+                .all(|entry| !entry.path.starts_with("/run"))
+        );
+    }
+
+    #[test]
     fn decodes_documented_whiteouts_and_opaque_markers() {
         let prior = captured(vec![
             directory_entry("/opt"),
@@ -583,6 +673,37 @@ mod tests {
                 .unwrap();
         assert!(delta.opaque_directories.is_empty());
         assert!(entry(&delta.apply(&prior).unwrap(), "/opt/tree/lower").is_some());
+    }
+
+    #[test]
+    fn opaque_y_on_new_upper_only_directory_is_redundant() {
+        let profile = user_profile();
+        let mut directory = directory_entry("/usr");
+        directory
+            .node
+            .source
+            .xattrs
+            .insert("user.overlay.opaque".into(), b"y".to_vec());
+
+        let delta = decode_captured_upper(
+            directory_node(),
+            vec![directory],
+            &captured(Vec::new()),
+            &profile,
+        )
+        .unwrap();
+
+        assert!(delta.opaque_directories.is_empty());
+        assert_eq!(delta.upserts[0].path, "/usr");
+        assert!(
+            delta
+                .apply(&captured(Vec::new()))
+                .unwrap()
+                .generation
+                .entries
+                .iter()
+                .any(|entry| entry.path == "/usr")
+        );
     }
 
     #[test]

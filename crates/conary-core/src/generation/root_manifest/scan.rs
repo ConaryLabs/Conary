@@ -144,6 +144,31 @@ pub fn scan_payload_tree(
     Ok((root_node, entries))
 }
 
+/// Capture only publishable paths from one selected-root OverlayFS upper.
+///
+/// Runtime-only `/dev`, `/proc`, `/run`, `/sys`, `/tmp`, and user-domain
+/// mutations are deliberately absent from generation authority. Keeping this
+/// filter inside the scanner also prunes those subtrees before any node or
+/// content capture work occurs.
+pub(super) fn scan_selected_root_overlay_upper(
+    root: &Path,
+    cas: &dyn PrivateCasWriter,
+    hardlink_namespace: &str,
+) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
+    let (root_node, candidates) = capture_payload_tree(
+        root,
+        cas,
+        false,
+        hardlink_namespace,
+        &SelectedRootCaptureExclusions::empty(),
+    )?;
+    let entries = candidates
+        .into_iter()
+        .map(|candidate| candidate.entry)
+        .collect();
+    Ok((root_node, entries))
+}
+
 fn capture_payload_tree(
     root: &Path,
     cas: &dyn PrivateCasWriter,

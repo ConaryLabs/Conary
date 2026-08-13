@@ -22,6 +22,7 @@ use std::process::{Command, Output};
 
 fn run_conary(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_conary"))
+        .env("CONARY_TEST_SKIP_GENERATION_MOUNT", "1")
         .args(args)
         .output()
         .expect("failed to run conary")
