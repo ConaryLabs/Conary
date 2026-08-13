@@ -358,37 +358,78 @@ fn expand_prior_hardlink_authority(
 
     for (identity, mut members) in groups {
         members.sort_by(|left, right| left.path.cmp(&right.path));
-        let affected_by_copy_up = members.iter().find_map(|member| {
-            copied_up_origins
-                .contains(&member.path)
-                .then_some(member.path.as_str())
-        });
-        let primary_removed = members.iter().any(|member| {
-            matches!(
-                member.node.source.kind,
-                PayloadNodeKind::Regular {
-                    hardlink_identity: Some(_)
-                }
-            ) && path_removed(&member.path, removals, opaque_directories)
-        });
-        if affected_by_copy_up.is_none() && !primary_removed {
-            continue;
-        }
-
-        let survivors = members
+        let copied_prior_paths = members
             .iter()
-            .copied()
-            .filter(|member| !path_removed(&member.path, removals, opaque_directories))
+            .filter(|member| copied_up_origins.contains(&member.path))
+            .map(|member| member.path.as_str())
             .collect::<Vec<_>>();
-        if survivors.is_empty() {
+        let upper_identities = copied_prior_paths
+            .iter()
+            .filter_map(|path| upserts.get(*path).and_then(entry_hardlink_identity))
+            .collect::<BTreeSet<_>>();
+        if upper_identities.len() > 1
+            || (copied_prior_paths.len() > 1 && upper_identities.is_empty())
+        {
+            return Err(crate::Error::InvalidPath(format!(
+                "OverlayFS index did not preserve copied-up prior hardlink group {identity}"
+            )));
+        }
+        let upper_identity = upper_identities.first().copied();
+        let upper_group_paths = if let Some(upper_identity) = upper_identity {
+            upserts
+                .values()
+                .filter(|entry| entry_hardlink_identity(entry) == Some(upper_identity))
+                .map(|entry| entry.path.clone())
+                .collect::<BTreeSet<_>>()
+        } else {
+            copied_prior_paths
+                .iter()
+                .map(|path| (*path).to_string())
+                .collect::<BTreeSet<_>>()
+        };
+
+        let mut membership_changed = false;
+        let mut member_paths = BTreeSet::new();
+        for member in &members {
+            if path_removed(&member.path, removals, opaque_directories) {
+                membership_changed = true;
+                continue;
+            }
+            if upserts.contains_key(&member.path) && !upper_group_paths.contains(&member.path) {
+                // Replacing one name with a new inode intentionally breaks
+                // that name out of the prior group. The remaining names still
+                // need a valid primary if the replaced path owned it.
+                membership_changed = true;
+                continue;
+            }
+            member_paths.insert(member.path.clone());
+        }
+        for path in &upper_group_paths {
+            if !members.iter().any(|member| member.path == *path) {
+                membership_changed = true;
+            }
+            if !path_removed(path, removals, opaque_directories) {
+                member_paths.insert(path.clone());
+            }
+        }
+        let copied_up = !copied_prior_paths.is_empty();
+        if !copied_up && !membership_changed {
             continue;
         }
-        let source = if let Some(path) = affected_by_copy_up {
-            upserts.get(path).cloned().ok_or_else(|| {
-                crate::Error::InvalidPath(format!(
-                    "overlay origin marker on {path} has no surviving complete upsert"
-                ))
-            })?
+        if member_paths.is_empty() {
+            continue;
+        }
+        let source = if copied_up {
+            upper_group_paths
+                .iter()
+                .filter_map(|path| upserts.get(path))
+                .find(|entry| entry.content.is_some())
+                .cloned()
+                .ok_or_else(|| {
+                    crate::Error::InvalidPath(format!(
+                        "copied-up hardlink group {identity} lacks complete content authority"
+                    ))
+                })?
         } else {
             members
                 .iter()
@@ -400,13 +441,15 @@ fn expand_prior_hardlink_authority(
                     ))
                 })?
         };
-        let Some(content) = source.content.clone() else {
-            return Err(crate::Error::InvalidPath(format!(
-                "copied-up hardlink group {identity} lacks complete content authority"
-            )));
-        };
-        let primary_path = survivors[0].path.clone();
-        let has_aliases = survivors.len() > 1;
+        let content = source.content.clone().ok_or_else(|| {
+            crate::Error::InvalidPath(format!(
+                "hardlink group {identity} lacks complete content authority"
+            ))
+        })?;
+        let primary_path = member_paths.first().cloned().ok_or_else(|| {
+            crate::Error::InvalidPath(format!("hardlink group {identity} has no surviving member"))
+        })?;
+        let has_aliases = member_paths.len() > 1;
         let mut primary_node = source.node.clone();
         primary_node.source.kind = PayloadNodeKind::Regular {
             hardlink_identity: has_aliases.then(|| identity.clone()),
@@ -419,16 +462,16 @@ fn expand_prior_hardlink_authority(
                 content: Some(content),
             },
         );
-        for member in survivors.into_iter().skip(1) {
+        for path in member_paths.into_iter().skip(1) {
             let mut node = primary_node.clone();
             node.source.kind = PayloadNodeKind::Hardlink {
                 target: primary_path.clone(),
                 identity: identity.clone(),
             };
             upserts.insert(
-                member.path.clone(),
+                path.clone(),
                 GenerationRootEntry {
-                    path: member.path.clone(),
+                    path,
                     node,
                     content: None,
                 },
@@ -436,6 +479,16 @@ fn expand_prior_hardlink_authority(
         }
     }
     Ok(())
+}
+
+fn entry_hardlink_identity(entry: &GenerationRootEntry) -> Option<&str> {
+    match &entry.node.source.kind {
+        PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity),
+        }
+        | PayloadNodeKind::Hardlink { identity, .. } => Some(identity),
+        _ => None,
+    }
 }
 
 fn path_removed(path: &str, removals: &[String], opaque_directories: &[String]) -> bool {
@@ -674,6 +727,149 @@ mod tests {
                 hardlink_identity: None
             }
         ));
+    }
+
+    #[test]
+    fn removing_only_prior_alias_clears_primary_group_identity() {
+        let identity = "prior:hardlink:1";
+        let mut primary = regular_entry("/usr/lib/a", content('a', 4));
+        primary.node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.into()),
+        };
+        let mut alias = primary.clone();
+        alias.path = "/usr/lib/b".into();
+        alias.content = None;
+        alias.node.source.kind = PayloadNodeKind::Hardlink {
+            target: primary.path.clone(),
+            identity: identity.into(),
+        };
+        let prior = captured(vec![
+            directory_entry("/usr"),
+            directory_entry("/usr/lib"),
+            primary,
+            alias,
+        ]);
+        let mut whiteout = regular_entry("/usr/lib/b", content('0', 0));
+        whiteout
+            .node
+            .source
+            .xattrs
+            .insert("user.overlay.whiteout".into(), Vec::new());
+        let applied =
+            decode_captured_upper(directory_node(), vec![whiteout], &prior, &user_profile())
+                .unwrap()
+                .apply(&prior)
+                .unwrap();
+        assert!(entry(&applied, "/usr/lib/b").is_none());
+        assert!(matches!(
+            &entry(&applied, "/usr/lib/a").unwrap().node.source.kind,
+            PayloadNodeKind::Regular {
+                hardlink_identity: None
+            }
+        ));
+    }
+
+    #[test]
+    fn new_alias_joins_copied_up_prior_hardlink_group() {
+        let prior_identity = "prior:hardlink:1";
+        let upper_identity = "selected-root-overlay-v1:hardlink:1";
+        let mut primary = regular_entry("/usr/lib/a", content('a', 4));
+        primary.node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(prior_identity.into()),
+        };
+        let mut alias = primary.clone();
+        alias.path = "/usr/lib/b".into();
+        alias.content = None;
+        alias.node.source.kind = PayloadNodeKind::Hardlink {
+            target: primary.path.clone(),
+            identity: prior_identity.into(),
+        };
+        let prior = captured(vec![
+            directory_entry("/usr"),
+            directory_entry("/usr/lib"),
+            primary,
+            alias,
+        ]);
+        let mut copied = regular_entry("/usr/lib/a", content('c', 7));
+        copied.node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(upper_identity.into()),
+        };
+        copied
+            .node
+            .source
+            .xattrs
+            .insert("user.overlay.origin".into(), b"opaque-handle".to_vec());
+        let mut new_alias = copied.clone();
+        new_alias.path = "/usr/lib/c".into();
+        new_alias.content = None;
+        new_alias.node.source.kind = PayloadNodeKind::Hardlink {
+            target: copied.path.clone(),
+            identity: upper_identity.into(),
+        };
+        let applied = decode_captured_upper(
+            directory_node(),
+            vec![copied, new_alias],
+            &prior,
+            &user_profile(),
+        )
+        .unwrap()
+        .apply(&prior)
+        .unwrap();
+        for path in ["/usr/lib/b", "/usr/lib/c"] {
+            assert!(matches!(
+                &entry(&applied, path).unwrap().node.source.kind,
+                PayloadNodeKind::Hardlink { target, identity }
+                    if target == "/usr/lib/a" && identity == prior_identity
+            ));
+        }
+    }
+
+    #[test]
+    fn independent_primary_replacement_reanchors_old_alias() {
+        let identity = "prior:hardlink:1";
+        let mut primary = regular_entry("/usr/lib/a", content('a', 4));
+        primary.node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.into()),
+        };
+        let mut alias = primary.clone();
+        alias.path = "/usr/lib/b".into();
+        alias.content = None;
+        alias.node.source.kind = PayloadNodeKind::Hardlink {
+            target: primary.path.clone(),
+            identity: identity.into(),
+        };
+        let prior = captured(vec![
+            directory_entry("/usr"),
+            directory_entry("/usr/lib"),
+            primary,
+            alias,
+        ]);
+        let replacement = regular_entry("/usr/lib/a", content('c', 9));
+        let applied =
+            decode_captured_upper(directory_node(), vec![replacement], &prior, &user_profile())
+                .unwrap()
+                .apply(&prior)
+                .unwrap();
+        assert_eq!(
+            entry(&applied, "/usr/lib/a")
+                .and_then(|entry| entry.content.as_ref())
+                .map(|content| content.size),
+            Some(9)
+        );
+        assert_eq!(
+            entry(&applied, "/usr/lib/b")
+                .and_then(|entry| entry.content.as_ref())
+                .map(|content| content.size),
+            Some(4)
+        );
+        for path in ["/usr/lib/a", "/usr/lib/b"] {
+            assert!(matches!(
+                &entry(&applied, path).unwrap().node.source.kind,
+                PayloadNodeKind::Regular {
+                    hardlink_identity: None
+                }
+            ));
+        }
     }
 
     #[test]
