@@ -638,6 +638,10 @@ metadata copy-up, character-device whiteouts, logical opaque replacement, and
 `EXDEV` for lower-directory rename. Against the fixture's selected generation,
 it proves the verified composefs image is mounted directly beneath typed mutable
 state and that both nested mounts are gone before publication failure returns.
+The bounded artifact is reconstructed by
+`apps/conary/tests/fixtures/selected-root-current-generation/prepare.py`; a
+core integration test loads that exact artifact contract before the privileged
+lane consumes it.
 It also stages an isolated first-generation runtime, installs and removes a
 signed lifecycle-free CCS through the materialized-candidate path, verifies the
 changed path appears and disappears in successive manifest-only candidates,
