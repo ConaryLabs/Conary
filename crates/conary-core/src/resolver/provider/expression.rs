@@ -24,7 +24,7 @@ struct Literal {
 
 #[derive(Debug, Clone)]
 enum NormalExpression {
-    Literal(Literal),
+    Literal(Box<Literal>),
     And(Vec<NormalExpression>),
     Or(Vec<NormalExpression>),
 }
@@ -183,10 +183,10 @@ impl ConaryProvider<'_> {
 
 fn to_normal_form(expression: &SolverExpression, negated: bool) -> NormalExpression {
     match expression {
-        SolverExpression::Atom(atom) => NormalExpression::Literal(Literal {
+        SolverExpression::Atom(atom) => NormalExpression::Literal(Box::new(Literal {
             atom: atom.clone(),
             positive: !negated,
-        }),
+        })),
         SolverExpression::And(operands) => {
             let operands = operands
                 .iter()
@@ -215,7 +215,7 @@ fn to_normal_form(expression: &SolverExpression, negated: bool) -> NormalExpress
 
 fn to_cnf(expression: &NormalExpression) -> Vec<Vec<Literal>> {
     match expression {
-        NormalExpression::Literal(literal) => vec![vec![literal.clone()]],
+        NormalExpression::Literal(literal) => vec![vec![literal.as_ref().clone()]],
         NormalExpression::And(operands) => operands.iter().flat_map(to_cnf).collect(),
         NormalExpression::Or(operands) => {
             let mut operands = operands.iter();
