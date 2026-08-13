@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 60
+revision: 61
 summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -63,6 +63,13 @@ Apply typed install prefix (default `/`) to source-root children
 | `NativeExport` | manifest.rs, native_export/ | Format-specific RPM, Debian, and Arch export overrides and generators |
 | `BuildPolicy` (trait) | policy.rs | Pluggable build policy (DenyPaths, StripBinaries, FixShebangs, etc.) |
 | `EnhancementEngine` (trait) | enhancement/ | Exact post-conversion provenance recording |
+
+The `local-dev` signing authority is initialized under one process- and
+thread-safe file lock. Its private key is the sole persisted authority; every
+successful load atomically regenerates the public projection from that private
+key before signing or constructing a trust policy. Concurrent first use cannot
+replace an established signer, and a missing or mismatched public file never
+becomes independent trust authority.
 
 ## Submodules
 
