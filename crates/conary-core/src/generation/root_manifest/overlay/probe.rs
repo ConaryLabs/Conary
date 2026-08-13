@@ -165,6 +165,76 @@ fn mount_data(
     Ok(components.join(","))
 }
 
+/// One mounted selected-root OverlayFS view.
+///
+/// A successful `freeze` is a strict synchronization and unmount boundary.
+/// `Drop` uses lazy detach only as crash-tail containment; callers may not
+/// decode or publish an upper unless strict unmount succeeded.
+pub struct MountedSelectedRootOverlay {
+    target: PathBuf,
+    mounted: bool,
+}
+
+impl MountedSelectedRootOverlay {
+    pub fn mount(
+        lower: &Path,
+        upper: &Path,
+        work: &Path,
+        target: &Path,
+        profile: &SelectedRootOverlayProfile,
+    ) -> crate::Result<Self> {
+        let options = mount_data(lower, upper, work, profile)?;
+        mount(
+            Some("overlay"),
+            target,
+            Some("overlay"),
+            MsFlags::empty(),
+            Some(options.as_str()),
+        )
+        .map_err(|error| {
+            crate::Error::NotImplemented(format!(
+                "selected-root OverlayFS mount failed at {}: {error}",
+                target.display()
+            ))
+        })?;
+        Ok(Self {
+            target: target.to_path_buf(),
+            mounted: true,
+        })
+    }
+
+    pub fn freeze(mut self, upper: &Path) -> crate::Result<()> {
+        sync_filesystem(upper)?;
+        umount2(&self.target, MntFlags::empty()).map_err(|error| {
+            crate::Error::IoError(format!(
+                "failed to strictly unmount selected-root OverlayFS {}: {error}",
+                self.target.display()
+            ))
+        })?;
+        self.mounted = false;
+        Ok(())
+    }
+
+    pub fn unmount(mut self) -> crate::Result<()> {
+        umount2(&self.target, MntFlags::empty()).map_err(|error| {
+            crate::Error::IoError(format!(
+                "failed to unmount selected-root OverlayFS {}: {error}",
+                self.target.display()
+            ))
+        })?;
+        self.mounted = false;
+        Ok(())
+    }
+}
+
+impl Drop for MountedSelectedRootOverlay {
+    fn drop(&mut self) {
+        if self.mounted {
+            let _ = umount2(&self.target, MntFlags::MNT_DETACH);
+        }
+    }
+}
+
 fn prove_hardlink_copy_up(
     merged: &Path,
     upper: &Path,

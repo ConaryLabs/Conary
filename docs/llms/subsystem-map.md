@@ -68,7 +68,9 @@ commands.
   `crates/conary-core/src/config_transaction/`; selected-root config capture
   and publication are owned by
   `apps/conary/src/commands/generation/config_transaction.rs`,
-  `apps/conary/src/commands/generation/selected_root.rs`, and
+  `apps/conary/src/commands/generation/selected_root.rs`,
+  `apps/conary/src/commands/generation/selected_root/overlay_session.rs`,
+  `apps/conary/src/commands/generation/selected_root/publication_candidate.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
   execution starts in
   `apps/conary/src/commands/install/transaction/selected_root.rs`; declarative
@@ -107,8 +109,11 @@ commands.
   and declared in `docs/specs/foreign-package-lifecycle-contracts.md`. Exact
   source-independent payload nodes start in
   `crates/conary-core/src/payload.rs`.
-  `apps/conary/src/commands/live_root/recovery.rs` is confined to the
-  selected-root session journal implementation.
+  `apps/conary/src/commands/live_root.rs` owns mutation orchestration;
+  `apps/conary/src/commands/live_root/path.rs` owns selected-root path
+  resolution, `apps/conary/src/commands/live_root/durability.rs` owns durable
+  filesystem primitives, and `apps/conary/src/commands/live_root/recovery.rs`
+  is confined to the journal recovery implementation.
 - Declarative models, source selection, and replatforming:
   `docs/modules/feature-ownership.md` slug `model`, plus
   `docs/modules/source-selection.md`.

@@ -102,6 +102,7 @@ fn live_root_transaction_from_journal(
             .map(PathBuf::from)
             .collect(),
         modified_directories: journal.modified_directories,
+        recovery: LiveRootRecovery::Journaled,
         committed: false,
     }
 }

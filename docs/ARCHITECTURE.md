@@ -425,16 +425,16 @@ consulting a native package manager or its database.
 ```
 Generation-aware package mutation
        |
-  materialize latest authoritative selected root
+  materialize latest typed authority as immutable lower
        |
   +-----------+
-  | Isolated  |-- Apply payload, native lifecycle, CCS hooks, triggers,
-  | Root      |-- and config decisions without mutating the live root
+  | OverlayFS |-- Probed profile + transaction-owned upper/work
+  | Root      |-- Apply payload, lifecycle, hooks, triggers, and config
   +-----------+
        |
   +-----------+
-  | Capture   |-- Exact typed generation-root + mutable-state manifests
-  +-----------+-- Candidate is durable before the SQLite transaction commits
+  |  Decode   |-- Freeze/unmount, scan changed upper paths, apply typed delta
+  +-----------+-- Manifest-only candidate is durable before SQLite commit
        |
   +-----------+
   |  EROFS    |-- composefs-rs serializes the generation-root manifest
@@ -460,13 +460,22 @@ delta-sized selected-root transition. Overlay artifacts must be decoded into
 exact removals, opaque-directory replacement, complete node upserts, and
 optional root metadata before this boundary. Applying a delta preserves prior
 CAS identities for unchanged content, routes changed paths through the finite
-publication domains, and revalidates the complete resulting manifests. Runtime
-selected-root sessions still use complete materialization and capture until the
-overlay capability and upper-tree decoder slices replace that path.
+publication domains, and revalidates the complete resulting manifests. Normal
+runtime selected-root sessions mount the functionally proven OverlayFS profile
+over an immutable materialized lower, freeze and strictly unmount before
+decoding the transaction upper, and never perform complete before/after
+selected-root scans. Retained try-session trees remain an explicit
+materialization consumer until their namespace contract is migrated; they are
+not a fallback for normal mutation.
 
-1. **Select**: Materialize the latest cumulative selected-root candidate, or the current generation when no publication debt is pending
+Publication candidates are now manifest-only. A pre-alpha candidate carrying
+the retired copied `root/` tree fails closed and must be discarded and rebuilt
+from current typed generation/database authority; runtime code does not retain
+a dual reader for the superseded storage shape.
+
+1. **Select**: Materialize the latest cumulative selected-root candidate, or the current generation when no publication debt is pending, as immutable lower authority
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
-3. **Record**: Capture exact immutable and mutable-state manifests, persist the selected-root candidate, and record recoverable publication debt before committing package state
+3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, apply it to the prior manifests, persist a manifest-only selected-root candidate, and record recoverable publication debt before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
 5. **Materialize state**: Project `/etc/...` manifest paths into the generation-local `/etc` overlay upper without retaining the `/etc` prefix, then apply the ordered typed config transactions; `/var` and `/srv` remain live mutable-root state
 6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
