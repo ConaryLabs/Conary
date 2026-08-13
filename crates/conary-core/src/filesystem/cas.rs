@@ -23,8 +23,12 @@ use std::time::SystemTime;
 use tracing::{debug, warn};
 
 mod stream;
+mod verified_batch;
 mod write_batch;
 
+pub use verified_batch::{
+    VerifiedObjectBatch, VerifiedObjectBatchMetrics, VerifiedObjectDisposition, VerifiedObjectSet,
+};
 pub use write_batch::{PrivateCasWriter, PrivateCopyBatch};
 
 /// Compute the CAS object path for a hex hash under a root directory.
@@ -88,7 +92,7 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
 }
 
 /// Content-addressable storage manager
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CasStore {
     /// Root directory for object storage (e.g., /var/lib/conary/objects)
     objects_dir: PathBuf,
@@ -468,6 +472,19 @@ impl CasStore {
     /// publishes it. Callers must commit before persisting references.
     pub fn private_copy_batch(&self) -> PrivateCopyBatch<'_> {
         PrivateCopyBatch::new(self)
+    }
+
+    /// Begin a transaction-scoped batch backed by signed SHA-256 object authority.
+    ///
+    /// Existing canonical objects with the exact signed size are trusted local
+    /// hits. Missing objects remain under ignored temporary names until the
+    /// complete batch has been verified, made durable, and committed.
+    pub fn verified_object_batch<I, S>(&self, expected: I) -> Result<VerifiedObjectBatch<'_>>
+    where
+        I: IntoIterator<Item = (S, u64)>,
+        S: Into<String>,
+    {
+        VerifiedObjectBatch::new(self, expected)
     }
 
     /// Atomically store content into a private CAS inode.

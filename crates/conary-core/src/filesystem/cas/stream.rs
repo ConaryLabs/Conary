@@ -144,8 +144,18 @@ impl CasStore {
     }
 }
 
-fn verify_existing_object(path: &std::path::Path, size: u64, sha256: &str) -> Result<()> {
-    let metadata = fs::metadata(path)?;
+pub(super) fn verify_existing_object(
+    path: &std::path::Path,
+    size: u64,
+    sha256: &str,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(crate::Error::IoError(format!(
+            "existing CAS object {} is not a regular file",
+            path.display()
+        )));
+    }
     if metadata.len() != size {
         return Err(crate::Error::IoError(format!(
             "existing CAS object {} has size {}, expected {size}",
