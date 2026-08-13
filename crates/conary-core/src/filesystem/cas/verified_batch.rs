@@ -64,6 +64,12 @@ impl VerifiedObjectSet {
     pub fn metrics(&self) -> VerifiedObjectBatchMetrics {
         self.metrics
     }
+
+    pub(crate) fn authorizes(&self, cas: &CasStore, sha256: &str, size: u64) -> bool {
+        self.cas.algorithm == cas.algorithm
+            && self.cas.objects_dir == cas.objects_dir
+            && self.objects.get(sha256) == Some(&size)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

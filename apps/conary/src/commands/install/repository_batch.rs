@@ -11,7 +11,7 @@ use super::conversion::{
 };
 use super::{
     CcsEnvelopeAuthority, InstallIntent, repository_install_provenance_from_package,
-    verify_ccs_package_authority,
+    verify_ccs_package_authority, verify_ccs_package_authority_into_cas,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -28,6 +28,12 @@ pub(super) struct RepositoryBatchSelection {
     pub(super) selection_reason: String,
     pub(super) allow_downgrade: bool,
     pub(super) intent: InstallIntent,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum RepositoryBatchMode {
+    Validate,
+    Install,
 }
 
 pub(super) struct PreparedRepositoryBatch {
@@ -59,6 +65,7 @@ impl PreparedRepositoryBatch {
 pub(super) async fn prepare_repository_batch(
     db_path: &str,
     selections: Vec<RepositoryBatchSelection>,
+    mode: RepositoryBatchMode,
 ) -> Result<PreparedRepositoryBatch> {
     let selected = selections
         .iter()
@@ -82,6 +89,13 @@ pub(super) async fn prepare_repository_batch(
             selections.len()
         );
     }
+
+    let permanent_cas = matches!(mode, RepositoryBatchMode::Install)
+        .then(|| {
+            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        })
+        .transpose()?;
 
     let mut packages = Vec::with_capacity(selections.len());
     for (((expected_name, package_with_repo), (downloaded_name, path)), selection) in
@@ -107,12 +121,21 @@ pub(super) async fn prepare_repository_batch(
             let ccs_path = path
                 .to_str()
                 .context("Invalid CCS package path (non-UTF8)")?;
-            let verified = verify_ccs_package_authority(
-                db_path,
-                path,
-                &CcsEnvelopeAuthority::Repository,
-                Some(&provenance),
-            )?;
+            let verified = match &permanent_cas {
+                Some(cas) => verify_ccs_package_authority_into_cas(
+                    db_path,
+                    path,
+                    &CcsEnvelopeAuthority::Repository,
+                    Some(&provenance),
+                    cas,
+                )?,
+                None => verify_ccs_package_authority(
+                    db_path,
+                    path,
+                    &CcsEnvelopeAuthority::Repository,
+                    Some(&provenance),
+                )?,
+            };
             let package =
                 CcsPackage::from_verified_archive(ccs_path, &verified).with_context(|| {
                     format!("Failed to construct verified CCS package {downloaded_name}")

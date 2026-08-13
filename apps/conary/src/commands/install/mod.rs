@@ -52,7 +52,7 @@ pub(crate) use native_lifecycle::NativeLifecycleInstallState;
 pub use options::InstallOptions;
 pub(crate) use options::{
     CcsEnvelopeAuthority, RepositoryInstallProvenance, repository_install_provenance_from_package,
-    verify_ccs_package_authority,
+    verify_ccs_package_authority, verify_ccs_package_authority_into_cas,
 };
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{

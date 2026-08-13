@@ -304,6 +304,50 @@ fn store_install_files_in_cas_preserves_symlink_targets() {
 }
 
 #[test]
+fn store_install_files_reuses_typed_verified_cas_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let cas = conary_core::filesystem::CasStore::new(temp.path().join("objects")).unwrap();
+    let bytes = b"already verified canonical bytes";
+    let hash = conary_core::hash::sha256(bytes);
+    let mut batch = cas
+        .verified_object_batch([(hash.clone(), bytes.len() as u64)])
+        .unwrap();
+    batch
+        .ingest(&hash, &mut std::io::Cursor::new(bytes))
+        .unwrap();
+    let set = std::sync::Arc::new(batch.commit().unwrap());
+    let source = conary_core::packages::payload::ReopenablePayload::from_verified_cas_object(
+        set,
+        hash.clone(),
+        bytes.len() as u64,
+    )
+    .unwrap();
+    // Prove storage does not open or reread the canonical object after it has
+    // consumed the exact typed identity. Metadata admission remains allowed.
+    let canonical = cas.hash_to_path(&hash).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&canonical, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let payload = conary_core::packages::payload::PackagePayloadFile::new(
+        "/usr/bin/verified".to_string(),
+        PayloadNode::regular(0o755),
+        Some(PayloadContentAuthority {
+            sha256: hash.clone(),
+            size: bytes.len() as u64,
+        }),
+        Some(source),
+    )
+    .unwrap();
+
+    let stored = store_extracted_files_in_cas(&cas, &[payload]).unwrap();
+
+    assert_eq!(stored[0].cas_hash.as_deref(), Some(hash.as_str()));
+    assert!(canonical.exists());
+}
+
+#[test]
 fn install_inner_persists_declared_config_metadata() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");

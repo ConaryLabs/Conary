@@ -64,8 +64,17 @@ pub async fn cmd_ccs_install(
             "CCS install requires --policy or an initialized local-dev signing key; unsigned and untrusted packages cannot be installed"
         );
     };
-    let verification = verify::verify_package(package_path, &trust_policy)
-        .context("CCS package authority verification failed")?;
+    let permanent_cas = (!dry_run)
+        .then(|| {
+            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        })
+        .transpose()?;
+    let verification = match &permanent_cas {
+        Some(cas) => verify::verify_package_into_cas(package_path, &trust_policy, cas),
+        None => verify::verify_package(package_path, &trust_policy),
+    }
+    .context("CCS package authority verification failed")?;
     println!(
         "Verified signed CCS v3 authority ({} payload files)",
         verification.files_checked()
