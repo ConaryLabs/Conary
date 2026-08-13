@@ -91,7 +91,7 @@ pub fn probe_selected_root_overlay_profile(
     }
     seed_lower(&lower)?;
 
-    let options = mount_data(&lower, &upper, &work, profile)?;
+    let options = mount_data(&[&lower], &upper, &work, profile)?;
     mount(
         Some("overlay"),
         &merged,
@@ -137,32 +137,46 @@ fn seed_lower(lower: &Path) -> crate::Result<()> {
 }
 
 fn mount_data(
-    lower: &Path,
+    lowers: &[&Path],
     upper: &Path,
     work: &Path,
     profile: &SelectedRootOverlayProfile,
 ) -> crate::Result<String> {
+    if lowers.is_empty() {
+        return Err(crate::Error::InvalidPath(
+            "selected-root OverlayFS requires at least one lowerdir".to_string(),
+        ));
+    }
     let mut components = Vec::new();
-    for (name, path) in [("lowerdir", lower), ("upperdir", upper), ("workdir", work)] {
-        let value = path.to_str().ok_or_else(|| {
-            crate::Error::NotImplemented(format!(
-                "selected-root OverlayFS {name} is not UTF-8: {}",
-                path.display()
-            ))
-        })?;
-        if value
-            .bytes()
-            .any(|byte| matches!(byte, b',' | b':' | b'\\' | b'\n' | b'\r'))
-        {
-            return Err(crate::Error::InvalidPath(format!(
-                "selected-root OverlayFS {name} contains a mount-option delimiter: {}",
-                path.display()
-            )));
-        }
-        components.push(format!("{name}={value}"));
+    let mut lower_values = Vec::with_capacity(lowers.len());
+    for path in lowers {
+        lower_values.push(mount_path_value("lowerdir", path)?);
+    }
+    components.push(format!("lowerdir={}", lower_values.join(":")));
+    for (name, path) in [("upperdir", upper), ("workdir", work)] {
+        components.push(format!("{name}={}", mount_path_value(name, path)?));
     }
     components.extend(profile.mount_options()?.into_iter().map(str::to_string));
     Ok(components.join(","))
+}
+
+fn mount_path_value<'a>(name: &str, path: &'a Path) -> crate::Result<&'a str> {
+    let value = path.to_str().ok_or_else(|| {
+        crate::Error::NotImplemented(format!(
+            "selected-root OverlayFS {name} is not UTF-8: {}",
+            path.display()
+        ))
+    })?;
+    if value
+        .bytes()
+        .any(|byte| matches!(byte, b',' | b':' | b'\\' | b'\n' | b'\r'))
+    {
+        return Err(crate::Error::InvalidPath(format!(
+            "selected-root OverlayFS {name} contains a mount-option delimiter: {}",
+            path.display()
+        )));
+    }
+    Ok(value)
 }
 
 /// One mounted selected-root OverlayFS view.
@@ -183,7 +197,23 @@ impl MountedSelectedRootOverlay {
         target: &Path,
         profile: &SelectedRootOverlayProfile,
     ) -> crate::Result<Self> {
-        let options = mount_data(lower, upper, work, profile)?;
+        Self::mount_lowers(&[lower], upper, work, target, profile)
+    }
+
+    /// Mount one writable upper over ordered immutable lower directories.
+    ///
+    /// OverlayFS resolves the first lower as the topmost layer. Keeping the
+    /// ordering explicit lets selected-root sessions project mutable-state
+    /// authority above the immutable composefs generation without copying the
+    /// generation payload into the transaction workspace.
+    pub fn mount_lowers(
+        lowers: &[&Path],
+        upper: &Path,
+        work: &Path,
+        target: &Path,
+        profile: &SelectedRootOverlayProfile,
+    ) -> crate::Result<Self> {
+        let options = mount_data(lowers, upper, work, profile)?;
         mount(
             Some("overlay"),
             target,
@@ -396,7 +426,7 @@ mod tests {
         };
         assert_eq!(
             mount_data(
-                Path::new("/probe/lower"),
+                &[Path::new("/probe/lower")],
                 Path::new("/probe/upper"),
                 Path::new("/probe/work"),
                 &profile,
@@ -406,7 +436,26 @@ mod tests {
         );
         assert!(
             mount_data(
-                Path::new("/probe/with,comma"),
+                &[Path::new("/probe/with,comma")],
+                Path::new("/probe/upper"),
+                Path::new("/probe/work"),
+                &profile,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            mount_data(
+                &[Path::new("/probe/state"), Path::new("/probe/generation")],
+                Path::new("/probe/upper"),
+                Path::new("/probe/work"),
+                &profile,
+            )
+            .unwrap(),
+            "lowerdir=/probe/state:/probe/generation,upperdir=/probe/upper,workdir=/probe/work,index=on,redirect_dir=nofollow,metacopy=off,xino=off,nfs_export=off,verity=off,userxattr"
+        );
+        assert!(
+            mount_data(
+                &[],
                 Path::new("/probe/upper"),
                 Path::new("/probe/work"),
                 &profile,

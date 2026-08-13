@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 67
+last_updated: 2026-08-13
+revision: 68
 summary: Route typed database rebuilds, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
 ---
 
@@ -78,8 +78,11 @@ commands.
   `apps/conary/src/commands/install/package_set.rs` and
   `apps/conary/src/commands/install/repository_batch.rs`; removal starts in
   `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
-  session acquires and owns the canonical runtime mutation lock before
-  materialization; the lock implementation starts in
+  session acquires and owns the canonical runtime mutation lock before lower
+  preparation. Current-generation immutable content mounts directly from its
+  verified composefs artifact; pending-candidate, first-generation, and
+  retained-try paths keep explicit materialization boundaries. The lock
+  implementation starts in
   `crates/conary-core/src/transaction/mod.rs`. Exact rollback execution and
   typed compensating lineage start in
   `apps/conary/src/commands/system/rollback_command.rs` and

@@ -19,6 +19,7 @@ use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::GenerationPublication;
 use conary_core::filesystem::CasStore;
+use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, materialize_captured_selected_root, scan_selected_root,
 };
@@ -36,6 +37,22 @@ enum SelectedRootBacking {
     /// Try sessions retain a complete tree for later namespace exposure. The
     /// test mount bypass exercises that same explicit non-production boundary.
     Materialized,
+}
+
+enum PreparedSelectedRoot {
+    Materialized(CapturedSelectedRoot),
+    CurrentGeneration {
+        artifact: GenerationArtifact,
+        captured: CapturedSelectedRoot,
+    },
+}
+
+impl PreparedSelectedRoot {
+    fn captured(&self) -> &CapturedSelectedRoot {
+        match self {
+            Self::Materialized(captured) | Self::CurrentGeneration { captured, .. } => captured,
+        }
+    }
 }
 
 /// One isolated selected-root view with one transaction-owned rollback authority.
@@ -141,40 +158,48 @@ impl LockedRuntimeRoot {
             session_id,
             transaction_engine,
         } = self;
-        let materialization_root = if materialized_backing {
-            session_dir.join("root")
-        } else {
-            session_dir.join("lower")
-        };
-        fs::create_dir_all(&materialization_root).with_context(|| {
-            format!(
-                "failed to create selected-root materialization destination {}",
-                materialization_root.display()
-            )
-        })?;
-        let materialized =
-            match materialize_current_root(conn, &runtime_root, &materialization_root) {
-                Ok(materialized) => materialized,
+        let prepared =
+            match prepare_current_root(conn, &runtime_root, &session_dir, materialized_backing) {
+                Ok(prepared) => prepared,
                 Err(error) => {
                     let _ = fs::remove_dir_all(&session_dir);
                     return Err(error);
                 }
             };
-        let deferred_ima = match DeferredImaAuthority::from_captured(&materialized) {
+        let prior = prepared.captured().clone();
+        let deferred_ima = match DeferredImaAuthority::from_captured(&prior) {
             Ok(authority) => authority,
             Err(error) => {
                 let _ = fs::remove_dir_all(&session_dir);
                 return Err(error);
             }
         };
-        let mut backing = if materialized_backing {
-            SelectedRootBacking::Materialized
-        } else {
-            match SelectedRootOverlaySession::begin(&session_dir, &materialized) {
-                Ok(overlay) => SelectedRootBacking::Overlay(overlay),
-                Err(error) => {
-                    let _ = fs::remove_dir_all(&session_dir);
-                    return Err(error);
+        let mut backing = match prepared {
+            PreparedSelectedRoot::Materialized(_) if materialized_backing => {
+                SelectedRootBacking::Materialized
+            }
+            PreparedSelectedRoot::Materialized(_) => {
+                match SelectedRootOverlaySession::begin_materialized(&session_dir, &prior) {
+                    Ok(overlay) => SelectedRootBacking::Overlay(overlay),
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&session_dir);
+                        return Err(error);
+                    }
+                }
+            }
+            PreparedSelectedRoot::CurrentGeneration { artifact, .. } => {
+                let cas = transaction_engine.cas();
+                match SelectedRootOverlaySession::begin_current_generation(
+                    &session_dir,
+                    &prior,
+                    &artifact,
+                    cas,
+                ) {
+                    Ok(overlay) => SelectedRootBacking::Overlay(overlay),
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&session_dir);
+                        return Err(error);
+                    }
                 }
             }
         };
@@ -207,7 +232,7 @@ impl LockedRuntimeRoot {
             transaction: Some(transaction),
             transaction_engine,
             deferred_ima,
-            prior: materialized,
+            prior,
             backing,
         })
     }
@@ -394,37 +419,70 @@ impl Drop for SelectedRootSession {
     }
 }
 
-fn materialize_current_root(
+fn prepare_current_root(
     conn: &rusqlite::Connection,
     runtime_root: &ConaryRuntimeRoot,
-    selected_root: &Path,
-) -> Result<CapturedSelectedRoot> {
+    session_dir: &Path,
+    require_materialized: bool,
+) -> Result<PreparedSelectedRoot> {
     let cas = CasStore::new(runtime_root.objects_dir())?;
     if let Some(candidate) = latest_selected_root_candidate(conn, runtime_root)? {
-        materialize_captured_selected_root(&candidate, &cas, selected_root)?;
-        return Ok(candidate);
+        let selected_root =
+            selected_root_materialization_destination(session_dir, require_materialized)?;
+        materialize_captured_selected_root(&candidate, &cas, &selected_root)?;
+        return Ok(PreparedSelectedRoot::Materialized(candidate));
     }
 
     if let Some(generation) =
         conary_core::generation::mount::current_generation(runtime_root.root())?
     {
-        let artifact = conary_core::generation::artifact::load_generation_artifact(
-            &runtime_root.generation_path(generation),
-        )?;
-        let captured = CapturedSelectedRoot {
-            generation: artifact.generation_root,
-            state: artifact.mutable_state,
+        let generation_path = runtime_root.generation_path(generation);
+        let artifact = if require_materialized {
+            conary_core::generation::artifact::load_generation_artifact(&generation_path)?
+        } else {
+            conary_core::generation::artifact::load_generation_artifact_for_activation(
+                &generation_path,
+            )?
         };
-        materialize_captured_selected_root(&captured, &cas, selected_root)?;
-        return Ok(captured);
+        let captured = CapturedSelectedRoot {
+            generation: artifact.generation_root.clone(),
+            state: artifact.mutable_state.clone(),
+        };
+        if require_materialized {
+            let selected_root = selected_root_materialization_destination(session_dir, true)?;
+            materialize_captured_selected_root(&captured, &cas, &selected_root)?;
+            return Ok(PreparedSelectedRoot::Materialized(captured));
+        }
+        return Ok(PreparedSelectedRoot::CurrentGeneration { artifact, captured });
     }
 
-    conary_core::generation::builder::materialize_selected_root_from_db_with_authority(
-        conn,
-        &runtime_root.objects_dir(),
-        selected_root,
-    )
-    .map_err(Into::into)
+    let selected_root =
+        selected_root_materialization_destination(session_dir, require_materialized)?;
+    let captured =
+        conary_core::generation::builder::materialize_selected_root_from_db_with_authority(
+            conn,
+            &runtime_root.objects_dir(),
+            &selected_root,
+        )?;
+    Ok(PreparedSelectedRoot::Materialized(captured))
+}
+
+fn selected_root_materialization_destination(
+    session_dir: &Path,
+    retained: bool,
+) -> Result<PathBuf> {
+    let destination = if retained {
+        session_dir.join("root")
+    } else {
+        session_dir.join("lower")
+    };
+    fs::create_dir_all(&destination).with_context(|| {
+        format!(
+            "failed to create selected-root materialization destination {}",
+            destination.display()
+        )
+    })?;
+    Ok(destination)
 }
 
 fn remove_session_dir(path: &Path) -> Result<()> {

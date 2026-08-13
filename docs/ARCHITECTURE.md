@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 47
+last_updated: 2026-08-13
+revision: 48
 summary: Describe workspace architecture, exact native source authority, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
@@ -425,7 +425,8 @@ consulting a native package manager or its database.
 ```
 Generation-aware package mutation
        |
-  materialize latest typed authority as immutable lower
+  select latest typed authority as immutable lower
+  (current root.erofs mounts directly; typed state layers above it)
        |
   +-----------+
   | OverlayFS |-- Probed profile + transaction-owned upper/work
@@ -462,9 +463,14 @@ optional root metadata before this boundary. Applying a delta preserves prior
 CAS identities for unchanged content, routes changed paths through the finite
 publication domains, and revalidates the complete resulting manifests. Normal
 runtime selected-root sessions mount the functionally proven OverlayFS profile
-over an immutable materialized lower, freeze and strictly unmount before
+over exact immutable lower authority, freeze and strictly unmount before
 decoding the transaction upper, and never perform complete before/after
-selected-root scans. Retained try-session trees remain an explicit
+selected-root scans. With no pending publication debt, the current verified
+generation `root.erofs` mounts directly as the immutable-content lower and the
+typed `/etc`, `/var`, and `/srv` manifest is the top lower layer; the session
+strictly unmounts the transaction overlay before that nested composefs mount.
+Recoverable candidates and first-generation database authority still use an
+explicit materialized lower. Retained try-session trees remain a separate
 materialization consumer until their namespace contract is migrated; they are
 not a fallback for normal mutation.
 
@@ -473,7 +479,7 @@ the retired copied `root/` tree fails closed and must be discarded and rebuilt
 from current typed generation/database authority; runtime code does not retain
 a dual reader for the superseded storage shape.
 
-1. **Select**: Materialize the latest cumulative selected-root candidate, or the current generation when no publication debt is pending, as immutable lower authority
+1. **Select**: Use the latest cumulative selected-root candidate as lower authority when publication debt is pending. Otherwise mount the current generation's verified composefs image directly beneath its typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
 3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, apply it to the prior manifests, persist a manifest-only selected-root candidate, and record recoverable publication debt before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
