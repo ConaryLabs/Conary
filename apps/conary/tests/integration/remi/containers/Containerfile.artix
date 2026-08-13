@@ -11,7 +11,14 @@ FROM docker.io/artixlinux/artixlinux:base-openrc@sha256:56c8369263d83ef9b0ba4d95
 
 ARG INSTALL_MODE=binary
 
-RUN pacman -Syu --noconfirm \
+# Normal Artix mirrors can lag the OCI image during a repository publication.
+# Prefer the two official core mirrors, which sync directly from the build
+# server, so package synchronization cannot select an older repository view.
+RUN printf '%s\n' \
+        'Server = https://mirror1.artixlinux.org/repos/$repo/os/$arch' \
+        'Server = https://ftp.sh.cvut.cz/artix-linux/$repo/os/$arch' \
+        > /etc/pacman.d/mirrorlist \
+    && pacman -Syyu --noconfirm \
         ca-certificates \
         curl \
         diffutils \

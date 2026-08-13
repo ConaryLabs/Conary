@@ -586,6 +586,12 @@ matrix job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
 
+The Artix lane keeps both sides of its rolling package view deliberate: the OCI
+base is digest-pinned, and the container selects Artix's two official core
+mirrors before forcing a package-database refresh. Normal mirrors sync from
+those core mirrors and can briefly advertise packages older than the pinned
+image during publication, so they are not image-build authority for this lane.
+
 The two Debian-derivative jobs also run `debian-derivative-acceptance`. Their
 shared Containerfile starts from one digest-pinned Ubuntu transport root, then
 installs exact release-owned identity and keyring packages and restores the

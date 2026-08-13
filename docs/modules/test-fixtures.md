@@ -451,6 +451,9 @@ Each fixture family should record:
   artifact identities, signing fingerprints, and preflight stages; configuration
   alone is not acceptance evidence. Artifact digest provenance remains typed as
   pinned release authority, pinned build input, or running-target bytes.
+  The rolling Artix image is digest-pinned and configures the two official core
+  mirrors before package synchronization; normal-mirror lag must not determine
+  whether its required lifecycle lane can start.
 
 ### supported-host-generation-export
 
