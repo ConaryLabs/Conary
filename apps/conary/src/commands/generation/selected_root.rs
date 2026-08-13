@@ -38,7 +38,7 @@ enum SelectedRootBacking {
     Materialized,
 }
 
-/// One isolated selected-root view backed by a single filesystem journal.
+/// One isolated selected-root view with one transaction-owned rollback authority.
 ///
 /// The caller retains its SQLite transaction. This session never changes the
 /// host's `current` generation link; final generation publication happens only

@@ -250,7 +250,9 @@ impl LiveRootTransaction {
             }
             Ok(_) => {
                 self.backup_existing(&target)?;
-                self.created_paths.push(target.clone());
+                if self.recovery == LiveRootRecovery::Journaled {
+                    self.created_paths.push(target.clone());
+                }
                 self.write_journal("in_progress")?;
                 create_dir_and_sync(&target)?;
                 stats.dirs_created += 1;

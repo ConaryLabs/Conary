@@ -22,8 +22,8 @@ pub(super) struct SelectedRootOverlaySession {
 }
 
 impl SelectedRootOverlaySession {
-    /// Probe the actual workspace, materialize the immutable lower, and mount
-    /// the exact admitted profile before lifecycle mutation can begin.
+    /// Probe the actual workspace, admit the materialized immutable lower, and
+    /// mount the exact profile before lifecycle mutation can begin.
     pub(super) fn begin(session_dir: &Path, prior: &CapturedSelectedRoot) -> Result<Self> {
         fs::create_dir_all(session_dir).with_context(|| {
             format!(
