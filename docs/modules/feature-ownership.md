@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 69
+last_updated: 2026-08-13
+revision: 70
 summary: Route feature ownership through typed database rebuilds, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -315,8 +315,11 @@ redaction, the old-only payload visibility boundary, and execution without a
 source package manager or its database. Diagnostic shell or command
 classifications must not select, suppress, or reorder lifecycle events.
 The selected-root session owns the single runtime mutation lock before it
-materializes database or generation authority and retains that lock through
-candidate persistence, SQLite commit, and publication. Rollback is one
+prepares database or generation authority. A debt-free current generation uses
+its verified composefs artifact plus typed mutable state directly; recoverable
+candidates, first-generation database state, and retained try sessions keep
+explicit materialization boundaries. The lock remains held through candidate
+persistence, SQLite commit, and publication. Rollback is one
 serialized immediate SQLite transaction: forward mutations and compensating
 rollback rows have distinct typed lineage, and applied rollback rows never
 block the next effective LIFO rollback.
@@ -662,9 +665,9 @@ authority, and seed images before any deletion; every live digest must exist
 in the local CAS. `conary system generation gc` is the sole GC surface and
 runs under the canonical mutation lock. Runtime
 Selected-root mutation reads are serialized by the lock owned in
-`apps/conary/src/commands/generation/selected_root.rs`; a candidate may not be
-materialized before that lock is held, and it remains held until the matching
-database state and publication outcome are durable. Runtime
+`apps/conary/src/commands/generation/selected_root.rs`; lower authority may not
+be prepared or mounted before that lock is held, and it remains held until the
+matching database state and publication outcome are durable. Runtime
 lifecycle work is consumed only for the single generation proven by the kernel
 command line, matching artifact, and database state; skipped generations must
 carry forward unapplied requests. Booted-generation host-interface drift is

@@ -176,7 +176,7 @@ fn preflight_autoremove_round(
                 );
             }
         };
-        let selected = locked_root.materialize(
+        let selected = locked_root.prepare(
             conn,
             format!("Autoremove preflight {}-{}", trove.name, trove.version),
         )?;

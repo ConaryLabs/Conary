@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 48
+last_updated: 2026-08-13
+revision: 49
 summary: Document authenticated derivative targets, transport normalization, typed release evidence, and native lifecycle gates
 ---
 
@@ -635,13 +635,20 @@ The bounded `selected-root-overlay-profile-solus` QEMU suite reuses that
 immutable fixture without running takeover. It functionally mounts the exact
 selected-root OverlayFS profile and proves indexed hardlink copy-up, complete
 metadata copy-up, character-device whiteouts, logical opaque replacement, and
-`EXDEV` for lower-directory rename. It then stages the current static Conary
-binary, installs and removes a signed lifecycle-free CCS through the real
-selected-root session, verifies the changed path appears and disappears in
-successive manifest-only candidates, and proves that no session mount or
-workspace survives either commit. This is the positive kernel/filesystem and
-transaction counterpart to the runtime typed preflight; a kernel version or
-registered filesystem name alone is not capability evidence.
+`EXDEV` for lower-directory rename. Against the fixture's selected generation,
+it proves the verified composefs image is mounted directly beneath typed mutable
+state and that both nested mounts are gone before publication failure returns.
+The bounded artifact is reconstructed by
+`apps/conary/tests/fixtures/selected-root-current-generation/prepare.py`; a
+core integration test loads that exact artifact contract before the privileged
+lane consumes it.
+It also stages an isolated first-generation runtime, installs and removes a
+signed lifecycle-free CCS through the materialized-candidate path, verifies the
+changed path appears and disappears in successive manifest-only candidates,
+and proves that no session mount or workspace survives either commit. This is
+the positive kernel/filesystem and transaction counterpart to the runtime typed
+preflight; a kernel version or registered filesystem name alone is not
+capability evidence.
 
 Each full parity run must pass `scripts/check-conary-test-result-gate.sh` and
 `scripts/check-conary-corpus-result-gate.sh`,
