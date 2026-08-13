@@ -21,8 +21,11 @@ pub use materialize::{
     overlay_payload_entries,
 };
 pub use overlay::{
-    OverlayXattrNamespace, SELECTED_ROOT_OVERLAY_PROFILE_VERSION, SelectedRootOverlayProfile,
-    decode_selected_root_overlay_upper,
+    OverlayHardlinkCopyUp, OverlayLowerDirectoryRename, OverlayMetadataCopyUp,
+    OverlayOpaqueDirectory, OverlayWhiteoutEncoding, OverlayXattrNamespace,
+    SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SELECTED_ROOT_OVERLAY_PROFILE_VERSION,
+    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile,
+    decode_selected_root_overlay_upper, probe_selected_root_overlay_profile,
 };
 pub use scan::{
     SelectedRootCaptureExclusions, capture_existing_payload_node, capture_root_node,

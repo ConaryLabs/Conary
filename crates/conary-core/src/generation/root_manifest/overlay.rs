@@ -2,6 +2,14 @@
 
 //! OverlayFS upper-tree decoding for delta-sized selected-root transactions.
 
+mod probe;
+
+pub use probe::{
+    OverlayHardlinkCopyUp, OverlayLowerDirectoryRename, OverlayMetadataCopyUp,
+    OverlayOpaqueDirectory, OverlayWhiteoutEncoding, SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION,
+    SelectedRootOverlayCapabilities, probe_selected_root_overlay_profile,
+};
+
 use super::{
     CapturedSelectedRoot, GenerationRootEntry, SELECTED_ROOT_MANIFEST_DELTA_VERSION,
     SelectedRootManifestDelta, scan_payload_tree,
