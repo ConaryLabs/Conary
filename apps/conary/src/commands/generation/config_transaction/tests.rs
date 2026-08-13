@@ -282,6 +282,7 @@ fn alpm_materialized_to_absent_preserves_modified_content_and_rolls_back_exactly
             OverlayMutation::Remove("/etc/demo/declared.conf.conary-save".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.dpkg-dist".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.dpkg-old".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.newconfig".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.pacnew".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.pacsave".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.rpmnew".to_string()),

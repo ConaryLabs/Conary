@@ -993,6 +993,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(error.to_string().contains("explicit rpm, deb, or arch"));
+        assert!(
+            error
+                .to_string()
+                .contains("explicit rpm, deb, arch, or eopkg")
+        );
     }
 }
