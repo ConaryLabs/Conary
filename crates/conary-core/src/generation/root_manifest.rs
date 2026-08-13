@@ -5,6 +5,7 @@
 mod composefs;
 mod delta;
 mod materialize;
+mod overlay;
 mod scan;
 
 use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode};
@@ -18,6 +19,10 @@ pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
     materialize_config_state_upper, materialize_generation_root, materialize_state_root,
     overlay_payload_entries,
+};
+pub use overlay::{
+    OverlayXattrNamespace, SELECTED_ROOT_OVERLAY_PROFILE_VERSION, SelectedRootOverlayProfile,
+    decode_selected_root_overlay_upper,
 };
 pub use scan::{
     SelectedRootCaptureExclusions, capture_existing_payload_node, capture_root_node,
