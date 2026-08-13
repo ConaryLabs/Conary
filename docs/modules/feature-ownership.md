@@ -1166,7 +1166,8 @@ feed profiles.
 `cargo test -p remi conversion`;
 `cargo test -p remi test_upload_fixture`;
 `cargo test -p remi test_public_fixture_get_and_head`;
-`bash scripts/test-remi-deploy-helper.sh`.
+`bash scripts/test-remi-deploy-helper.sh`;
+`bash scripts/test-remi-health.sh`.
 
 **Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary --test conversion_integration golden_conversion` when

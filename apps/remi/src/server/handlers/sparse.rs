@@ -637,6 +637,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(fetchable, vec!["fetchable", "mixed"]);
+        assert_eq!(list.source_profile, "fedora-44");
+        assert_eq!(page.source_profile, "fedora-44");
         assert_eq!(list.packages, fetchable);
         assert_eq!(page_names, fetchable);
         assert_eq!(list.total, fetchable.len());
