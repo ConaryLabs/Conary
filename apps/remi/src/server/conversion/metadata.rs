@@ -166,62 +166,18 @@ pub(super) fn repository_package_conversion_inputs_match(
         && expected.package_release == current.package_release
         && expected.architecture == current.architecture
         && expected.debian_multi_arch == current.debian_multi_arch
-        && bare_sha256(&expected.checksum) == bare_sha256(&current.checksum)
+        && expected.checksum == current.checksum
         && expected.source_profile == current.source_profile
         && expected.version_scheme == current.version_scheme
 }
 
-fn bare_sha256(value: &str) -> &str {
-    value.strip_prefix("sha256:").unwrap_or(value)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{create_test_db, insert_repo};
+    use super::super::test_support::{create_test_db, eopkg_fixture, insert_repo};
     use super::*;
     use conary_core::ccs::convert::ForeignConversionInput;
     use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
-    use std::io::{Cursor, Read, Write};
     use std::path::PathBuf;
-    use zip::write::SimpleFileOptions;
-
-    fn eopkg_fixture() -> tempfile::NamedTempFile {
-        let mut tar = tar::Builder::new(Vec::new());
-        let mut header = tar::Header::new_gnu();
-        header.set_path("usr/bin/demo").unwrap();
-        header.set_size(5);
-        header.set_mode(0o755);
-        header.set_uid(0);
-        header.set_gid(0);
-        header.set_mtime(0);
-        header.set_cksum();
-        tar.append(&header, Cursor::new(b"hello")).unwrap();
-        let tar = tar.into_inner().unwrap();
-        let stream =
-            liblzma::stream::Stream::new_easy_encoder(6, liblzma::stream::Check::Crc64).unwrap();
-        let mut encoder = liblzma::read::XzEncoder::new_stream(tar.as_slice(), stream);
-        let mut compressed = Vec::new();
-        encoder.read_to_end(&mut compressed).unwrap();
-
-        let metadata = br#"<PISI><Package><Name>demo</Name><Summary>demo</Summary><History><Update release="2"><Version>1.0</Version></Update></History><Distribution>Solus</Distribution><DistributionRelease>1</DistributionRelease><Architecture>x86_64</Architecture><PackageFormat>1.2</PackageFormat></Package></PISI>"#;
-        let files = br#"<Files><File><Path>usr/bin/demo</Path><Type>executable</Type><Size>5</Size><Uid>0</Uid><Gid>0</Gid><Mode>0755</Mode><Hash>aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d</Hash></File></Files>"#;
-        let output = tempfile::NamedTempFile::new().unwrap();
-        {
-            let mut archive = zip::ZipWriter::new(output.reopen().unwrap());
-            for (name, bytes) in [
-                ("metadata.xml", metadata.as_slice()),
-                ("files.xml", files.as_slice()),
-                ("install.tar.xz", compressed.as_slice()),
-            ] {
-                archive
-                    .start_file(name, SimpleFileOptions::default())
-                    .unwrap();
-                archive.write_all(bytes).unwrap();
-            }
-            archive.finish().unwrap();
-        }
-        output
-    }
 
     #[test]
     fn remi_parses_eopkg_through_the_exact_solus_profile() {

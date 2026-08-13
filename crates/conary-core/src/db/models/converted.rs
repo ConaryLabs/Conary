@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use strum_macros::{AsRefStr, Display, EnumString};
 
 mod validation;
-use validation::{bare_sha256, default_scriptlet_summary_json, validate_current_scriptlet_summary};
+use validation::{default_scriptlet_summary_json, validate_current_scriptlet_summary};
 
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
@@ -63,7 +63,8 @@ pub struct ConvertedPackage {
     pub trove_id: Option<i64>,
     /// Original package format (rpm, deb, arch)
     pub original_format: String,
-    /// Checksum of original package file (skip if already converted)
+    /// Exact repository checksum identity for repository artifacts, or the
+    /// verified native artifact checksum for installed conversions.
     pub original_checksum: String,
     /// Digest of the exact repository-provide cache projection. It invalidates
     /// stale conversions but never mutates source artifact authority.
@@ -367,14 +368,13 @@ impl ConvertedPackage {
             artifact.package_architecture,
         )?
         .into_iter()
-        .map(|(checksum, digest)| (bare_sha256(&checksum).to_string(), digest))
         .collect::<BTreeSet<_>>();
         if current_inputs.len() > 1 {
             return Ok(false);
         }
 
         Ok(current_inputs.contains(&(
-            bare_sha256(&self.original_checksum).to_string(),
+            self.original_checksum.clone(),
             artifact.repository_provides_digest.to_string(),
         )))
     }
