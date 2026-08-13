@@ -1017,6 +1017,7 @@ dependencies = [
  "const-oid 0.10.2",
  "ed25519-dalek",
  "flate2",
+ "fs2",
  "glob",
  "hex",
  "indicatif",
