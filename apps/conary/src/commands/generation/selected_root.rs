@@ -42,7 +42,7 @@ enum SelectedRootBacking {
 enum PreparedSelectedRoot {
     Materialized(CapturedSelectedRoot),
     CurrentGeneration {
-        artifact: GenerationArtifact,
+        artifact: Box<GenerationArtifact>,
         captured: CapturedSelectedRoot,
     },
 }
@@ -453,7 +453,10 @@ fn prepare_current_root(
             materialize_captured_selected_root(&captured, &cas, &selected_root)?;
             return Ok(PreparedSelectedRoot::Materialized(captured));
         }
-        return Ok(PreparedSelectedRoot::CurrentGeneration { artifact, captured });
+        return Ok(PreparedSelectedRoot::CurrentGeneration {
+            artifact: Box::new(artifact),
+            captured,
+        });
     }
 
     let selected_root =
