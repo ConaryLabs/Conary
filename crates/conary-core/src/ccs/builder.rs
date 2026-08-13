@@ -100,7 +100,7 @@ pub struct FileEntry {
     pub content: Option<PayloadContentAuthority>,
     pub component: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunks: Option<Vec<String>>,
+    pub chunks: Option<Vec<crate::ccs::chunking::ChunkReference>>,
 }
 
 /// Component data in a built package.
@@ -206,10 +206,22 @@ pub fn payloads_from_bounded_memory_for_tests(
                     .context("bounded fixture payload size exceeds usize")?;
                 let mut assembled = Vec::with_capacity(capacity);
                 for chunk in chunks {
-                    let bytes = blobs.get(chunk).with_context(|| {
-                        format!("missing bounded fixture chunk {chunk} for {}", file.path)
+                    let bytes = blobs.get(&chunk.sha256).with_context(|| {
+                        format!(
+                            "missing bounded fixture chunk {} for {}",
+                            chunk.sha256, file.path
+                        )
                     })?;
-                    used.insert(chunk.as_str());
+                    if bytes.len() != chunk.size as usize {
+                        anyhow::bail!(
+                            "bounded fixture chunk {} for {} has {} bytes, expected {}",
+                            chunk.sha256,
+                            file.path,
+                            bytes.len(),
+                            chunk.size
+                        );
+                    }
+                    used.insert(chunk.sha256.as_str());
                     assembled.extend_from_slice(bytes);
                 }
                 Arc::<[u8]>::from(assembled)
@@ -450,10 +462,10 @@ impl CcsBuilder {
             .chunker
             .as_ref()
             .ok_or(BuilderError::ChunkerNotInitialized)?;
-        let mut chunk_hashes = Vec::new();
+        let mut chunk_references = Vec::new();
         let processed = chunker.visit_reader_chunks(source.open()?, |chunk| {
             let hash = chunk.hash_hex();
-            chunk_hashes.push(hash.clone());
+            chunk_references.push(chunk.reference());
             stats.total_chunks += 1;
             if !unique_chunks.insert(hash) {
                 stats.dedup_savings = stats
@@ -471,7 +483,7 @@ impl CcsBuilder {
                 processed
             );
         }
-        entry.chunks = Some(chunk_hashes);
+        entry.chunks = Some(chunk_references);
         stats.chunked_files += 1;
         Ok(())
     }

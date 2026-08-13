@@ -170,11 +170,38 @@ pub struct FileAuthorityV3 {
     pub node: PayloadNode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<PayloadContentAuthority>,
+    /// Required signed storage/reconstruction authority for regular files.
+    ///
+    /// This field intentionally has no serde default: current v3 is hard-cut,
+    /// so an older document that omitted layout authority is not current v3.
+    pub content_layout: FileContentLayoutV3,
     pub component: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigSemanticsV3>,
     #[serde(default)]
     pub conflict: ConflictPolicyV3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum FileContentLayoutV3 {
+    NoContent,
+    WholeObject,
+    FastCdcV2020 {
+        min_size: u32,
+        average_size: u32,
+        max_size: u32,
+        chunks: Vec<crate::ccs::chunking::ChunkReference>,
+    },
+}
+
+impl FileContentLayoutV3 {
+    pub fn chunks(&self) -> Option<&[crate::ccs::chunking::ChunkReference]> {
+        match self {
+            Self::FastCdcV2020 { chunks, .. } => Some(chunks),
+            Self::NoContent | Self::WholeObject => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -449,6 +476,7 @@ impl AuthorityDocumentV3 {
                     sha256: crate::hash::sha256(b"hello world\n"),
                     size: 12,
                 }),
+                content_layout: FileContentLayoutV3::WholeObject,
                 component: "main".to_string(),
                 config: None,
                 conflict: ConflictPolicyV3::Error,

@@ -346,6 +346,7 @@ mod tests {
     use super::*;
     use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
+    use std::io::Read;
 
     fn package(signer: &SigningKeyPair) -> (tempfile::TempDir, std::path::PathBuf, TrustPolicy) {
         let temp = tempfile::tempdir().unwrap();
@@ -358,6 +359,56 @@ mod tests {
         .unwrap();
         let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
         (temp, path, policy)
+    }
+
+    fn chunked_package(
+        signer: &SigningKeyPair,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        TrustPolicy,
+        Vec<u8>,
+        usize,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("chunked.ccs");
+        let bytes = (0..(crate::ccs::chunking::MAX_CHUNK_SIZE as usize * 4))
+            .map(|index| ((index * 19 + index / 97) % 256) as u8)
+            .collect::<Vec<_>>();
+        let chunks = crate::ccs::chunking::Chunker::new()
+            .chunk_bytes(&bytes)
+            .iter()
+            .map(crate::ccs::chunking::Chunk::reference)
+            .collect::<Vec<_>>();
+        let unique = chunks
+            .iter()
+            .map(|chunk| chunk.sha256.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let mut authority =
+            crate::ccs::v3::test_support::package_authority_with_one_file("chunked");
+        let crate::ccs::v3::PackageKindV3::Package(package) = &mut authority.kind else {
+            unreachable!()
+        };
+        let file = &mut package.files[0];
+        file.content = Some(crate::payload::PayloadContentAuthority {
+            sha256: crate::hash::sha256(&bytes),
+            size: bytes.len() as u64,
+        });
+        file.content_layout = crate::ccs::v3::FileContentLayoutV3::FastCdcV2020 {
+            min_size: crate::ccs::chunking::MIN_CHUNK_SIZE,
+            average_size: crate::ccs::chunking::AVG_CHUNK_SIZE,
+            max_size: crate::ccs::chunking::MAX_CHUNK_SIZE,
+            chunks,
+        };
+        authority.components.get_mut("main").unwrap().total_size = bytes.len() as u64;
+        let payloads = std::collections::BTreeMap::from([(file.path.clone(), bytes.clone())]);
+        write_v3_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, signer, None, None, None,
+        )
+        .unwrap();
+        let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
+        (temp, path, policy, bytes, unique)
     }
 
     #[test]
@@ -406,6 +457,40 @@ mod tests {
         assert_eq!(warm_metrics.persistent_bytes_written, 0);
         assert_eq!(warm_metrics.canonical_bytes_reread, 0);
         assert!(warm_metrics.incoming_bytes_hashed > 0);
+    }
+
+    #[test]
+    fn permanent_chunk_verification_reuses_objects_and_defers_whole_file_cas_to_installer() {
+        let signer = SigningKeyPair::generate().with_key_id("release");
+        let (temp, path, policy, bytes, unique) = chunked_package(&signer);
+        let cas = crate::filesystem::CasStore::new(temp.path().join("permanent-objects")).unwrap();
+
+        let cold = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let cold_metrics = cold.verified_object_metrics().unwrap();
+        assert_eq!(cold_metrics.misses, unique as u64);
+        assert_eq!(cold_metrics.hits, 0);
+        let file = &cold.payload().files()[0];
+        assert_eq!(
+            file.source()
+                .unwrap()
+                .verified_cas_identity_for(&cas, file.content_authority.as_ref().unwrap())
+                .unwrap(),
+            None,
+            "a chunk set is not the whole-file CAS identity generation needs"
+        );
+        let mut reconstructed = Vec::new();
+        file.open_content()
+            .unwrap()
+            .read_to_end(&mut reconstructed)
+            .unwrap();
+        assert_eq!(reconstructed, bytes);
+
+        let warm = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let warm_metrics = warm.verified_object_metrics().unwrap();
+        assert_eq!(warm_metrics.hits, unique as u64);
+        assert_eq!(warm_metrics.misses, 0);
+        assert_eq!(warm_metrics.persistent_bytes_written, 0);
+        assert_eq!(warm_metrics.canonical_bytes_reread, 0);
     }
 
     #[test]

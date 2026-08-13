@@ -1,6 +1,7 @@
 // conary-core/src/ccs/v3/validation.rs
 
 mod config;
+mod content_layout;
 mod file_capabilities;
 mod identity;
 
@@ -8,6 +9,7 @@ use super::diagnostics::{V3Diagnostic, V3DiagnosticCode, V3ValidationError};
 use super::schema::*;
 use crate::ccs::budget::{AuthorityCensus, CCS_BUDGET};
 use config::{validate_config_authority, validate_package_policy};
+use content_layout::validate_file_content_layout;
 use file_capabilities::validate_file_capabilities;
 use identity::{validate_capabilities, validate_identity};
 
@@ -298,6 +300,7 @@ fn validate_files(
                 "attach digest and size only to regular payload nodes",
             ));
         }
+        validate_file_content_layout(file, diagnostics);
         if !authority.components.contains_key(&file.component) {
             diagnostics.push(V3Diagnostic::error(
                 V3DiagnosticCode::ComponentAuthorityMismatch,

@@ -17,6 +17,14 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+/// One ordered content-object reference produced by the canonical chunker.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChunkReference {
+    pub sha256: String,
+    pub size: u32,
+}
+
 /// Default chunk size parameters (in bytes)
 /// These should be chosen carefully and kept stable - changing them
 /// invalidates all existing chunks in the store.
@@ -47,6 +55,14 @@ impl Chunk {
     pub fn cas_path(&self) -> PathBuf {
         crate::filesystem::object_path(Path::new(""), &self.hash_hex())
             .expect("hex-encoded chunk hash should always produce a valid CAS path")
+    }
+
+    /// Project the streamed chunk into signed content authority.
+    pub fn reference(&self) -> ChunkReference {
+        ChunkReference {
+            sha256: self.hash_hex(),
+            size: self.length,
+        }
     }
 }
 
@@ -467,30 +483,6 @@ impl DeltaStats {
     /// What would actually need to be downloaded
     pub fn download_size(&self) -> u64 {
         self.new_bytes
-    }
-}
-
-/// Manifest entry for a chunked file (for serialization)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ChunkManifestEntry {
-    /// File path (relative)
-    pub path: String,
-    /// File size
-    pub size: u64,
-    /// SHA-256 of complete file
-    pub file_hash: String,
-    /// Ordered list of chunk hashes
-    pub chunks: Vec<String>,
-}
-
-impl From<&ChunkedFile> for ChunkManifestEntry {
-    fn from(cf: &ChunkedFile) -> Self {
-        Self {
-            path: cf.path.to_string_lossy().to_string(),
-            size: cf.size,
-            file_hash: hex::encode(cf.file_hash),
-            chunks: cf.chunks.iter().map(|c| c.hash_hex()).collect(),
-        }
     }
 }
 

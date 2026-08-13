@@ -255,17 +255,18 @@ fn projection_rejects_ambiguous_or_missing_default_component_authority() {
 
 #[test]
 fn projection_preserves_reopenable_payload_when_chunk_metadata_is_present() {
-    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", b"hello\n");
+    let bytes = vec![b'x'; crate::ccs::chunking::MIN_CHUNK_SIZE as usize + 4096];
+    let mut build = test_support::minimal_file_build_result("hello", "0.1.0", &bytes);
     build.manifest.package.release = "1".to_string();
     build.manifest.package.kind = crate::ccs::v3::PackageKindTagV3::Package;
 
-    let chunks = [b"hel".to_vec(), b"lo\n".to_vec()];
-    let chunk_hashes = chunks
+    let chunk_references = crate::ccs::chunking::Chunker::new()
+        .chunk_bytes(&bytes)
         .iter()
-        .map(|chunk| crate::hash::sha256(chunk))
+        .map(crate::ccs::chunking::Chunk::reference)
         .collect::<Vec<_>>();
-    build.files[0].chunks = Some(chunk_hashes.clone());
-    build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
+    build.files[0].chunks = Some(chunk_references.clone());
+    build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_references);
     build.chunked = true;
 
     let projected = project_build_result_to_v3(V3AuthoringInput {
@@ -275,13 +276,38 @@ fn projection_preserves_reopenable_payload_when_chunk_metadata_is_present() {
     })
     .unwrap();
 
+    let PackageKindV3::Package(package) = &projected.authority.kind else {
+        panic!("fixture must project package authority")
+    };
+    let FileContentLayoutV3::FastCdcV2020 {
+        min_size,
+        average_size,
+        max_size,
+        chunks,
+    } = &package.files[0].content_layout
+    else {
+        panic!("default chunk metadata must survive v3 projection")
+    };
+    assert_eq!(
+        (*min_size, *average_size, *max_size),
+        (
+            crate::ccs::chunking::MIN_CHUNK_SIZE,
+            crate::ccs::chunking::AVG_CHUNK_SIZE,
+            crate::ccs::chunking::MAX_CHUNK_SIZE,
+        )
+    );
+    assert_eq!(chunks, build.files[0].chunks.as_ref().unwrap());
+
     let mut bytes = Vec::new();
     projected.payloads[0]
         .open_content()
         .unwrap()
         .read_to_end(&mut bytes)
         .unwrap();
-    assert_eq!(bytes, b"hello\n");
+    assert_eq!(
+        bytes,
+        vec![b'x'; crate::ccs::chunking::MIN_CHUNK_SIZE as usize + 4096]
+    );
 }
 
 #[test]

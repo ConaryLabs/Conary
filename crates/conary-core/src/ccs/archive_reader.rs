@@ -323,6 +323,18 @@ impl InspectionState {
             .manifest_raw
             .context("CCS package is missing required current v3 MANIFEST bytes")?;
 
+        if self.payload_objects != self.census.payload_objects
+            || self.payload_bytes != self.census.payload_bytes
+        {
+            anyhow::bail!(
+                "CCS archived object census is {}/{} bytes but signed authority requires {}/{} bytes",
+                self.payload_objects,
+                self.payload_bytes,
+                self.census.payload_objects,
+                self.census.payload_bytes
+            );
+        }
+
         if let Some(expected) = &authority.provenance.foreign_conversion_boundary_hash {
             let boundary = self.boundary.as_ref().context(
                 "v3 foreign conversion boundary hash present but MANIFEST.conversion-boundary.json is missing",

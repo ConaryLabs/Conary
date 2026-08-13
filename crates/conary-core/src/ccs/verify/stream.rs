@@ -6,7 +6,7 @@ use super::{PackageSignature, TrustPolicy, VerifyError};
 use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
-use crate::ccs::v3::schema::{AuthorityDocumentV3, PackageKindV3};
+use crate::ccs::v3::schema::{AuthorityDocumentV3, FileContentLayoutV3, PackageKindV3};
 use crate::packages::payload::{PackagePayload, PackagePayloadFile, ReopenablePayload};
 use anyhow::{Context, Result};
 use flate2::bufread::GzDecoder;
@@ -207,15 +207,27 @@ fn expected_objects(authority: &AuthorityDocumentV3) -> Result<(BTreeMap<String,
                     file.path
                 ))
             })?;
-        if let Some(content) = &file.content
-            && let Some(previous) = objects.insert(content.sha256.clone(), content.size)
-            && previous != content.size
-        {
-            return Err(VerifyError::PayloadInvalid(format!(
-                "signed object {} carries conflicting sizes {previous} and {}",
-                content.sha256, content.size
-            ))
-            .into());
+        let declared = match &file.content_layout {
+            FileContentLayoutV3::NoContent => Vec::new(),
+            FileContentLayoutV3::WholeObject => file
+                .content
+                .as_ref()
+                .map(|content| vec![(content.sha256.as_str(), content.size)])
+                .unwrap_or_default(),
+            FileContentLayoutV3::FastCdcV2020 { chunks, .. } => chunks
+                .iter()
+                .map(|chunk| (chunk.sha256.as_str(), u64::from(chunk.size)))
+                .collect(),
+        };
+        for (sha256, size) in declared {
+            if let Some(previous) = objects.insert(sha256.to_string(), size)
+                && previous != size
+            {
+                return Err(VerifyError::PayloadInvalid(format!(
+                    "signed object {sha256} carries conflicting sizes {previous} and {size}"
+                ))
+                .into());
+            }
         }
     }
     Ok((objects, package.files.len()))
@@ -392,18 +404,7 @@ fn payload_from_authority(
         .files
         .iter()
         .map(|file| {
-            let source = file
-                .content
-                .as_ref()
-                .map(|content| {
-                    objects.get(&content.sha256).cloned().ok_or_else(|| {
-                        VerifyError::PayloadInvalid(format!(
-                            "missing authenticated object {} for {}",
-                            content.sha256, file.path
-                        ))
-                    })
-                })
-                .transpose()?;
+            let source = payload_source(file, objects)?;
             PackagePayloadFile::new(
                 file.path.clone(),
                 file.node.clone(),
@@ -414,6 +415,105 @@ fn payload_from_authority(
         })
         .collect::<Result<Vec<_>>>()
         .map(PackagePayload::new)
+}
+
+fn payload_source(
+    file: &crate::ccs::v3::schema::FileAuthorityV3,
+    objects: &HashMap<String, ReopenablePayload>,
+) -> Result<Option<ReopenablePayload>> {
+    let source = match &file.content_layout {
+        FileContentLayoutV3::NoContent => return Ok(None),
+        FileContentLayoutV3::WholeObject => {
+            let content = file
+                .content
+                .as_ref()
+                .context("whole-object layout has no content")?;
+            objects.get(&content.sha256).cloned().ok_or_else(|| {
+                VerifyError::PayloadInvalid(format!(
+                    "missing authenticated object {} for {}",
+                    content.sha256, file.path
+                ))
+            })?
+        }
+        FileContentLayoutV3::FastCdcV2020 { chunks, .. } => {
+            let parts = chunks
+                .iter()
+                .map(|chunk| -> Result<ReopenablePayload> {
+                    objects.get(&chunk.sha256).cloned().ok_or_else(|| {
+                        VerifyError::PayloadInvalid(format!(
+                            "missing authenticated chunk {} for {}",
+                            chunk.sha256, file.path
+                        ))
+                        .into()
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ReopenablePayload::from_concatenated_objects(parts)?
+        }
+    };
+    verify_reconstructed_file(file, &source)?;
+    Ok(Some(source))
+}
+
+fn verify_reconstructed_file(
+    file: &crate::ccs::v3::schema::FileAuthorityV3,
+    source: &ReopenablePayload,
+) -> Result<()> {
+    let FileContentLayoutV3::FastCdcV2020 {
+        min_size,
+        average_size,
+        max_size,
+        chunks,
+    } = &file.content_layout
+    else {
+        return Ok(());
+    };
+    let content = file
+        .content
+        .as_ref()
+        .context("chunked layout has no content")?;
+    let chunker = crate::ccs::chunking::Chunker::with_sizes(*min_size, *average_size, *max_size);
+    let mut whole_hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+    let mut index = 0_usize;
+    let processed = chunker.visit_reader_chunks(source.open()?, |chunk| {
+        let signed = chunks.get(index).with_context(|| {
+            format!(
+                "reconstructed {} produces an unsigned chunk at index {index}",
+                file.path
+            )
+        })?;
+        let actual = chunk.reference();
+        if &actual != signed {
+            anyhow::bail!(
+                "reconstructed {} chunk {index} is {}/{}, signed authority requires {}/{}",
+                file.path,
+                actual.sha256,
+                actual.size,
+                signed.sha256,
+                signed.size
+            );
+        }
+        whole_hasher.update(&chunk.data);
+        index += 1;
+        Ok(())
+    })?;
+    if index != chunks.len() {
+        return Err(VerifyError::PayloadInvalid(format!(
+            "reconstructed {} produces {index} chunks, signed authority requires {}",
+            file.path,
+            chunks.len()
+        ))
+        .into());
+    }
+    let actual = whole_hasher.finalize().value;
+    if processed != content.size || actual != content.sha256 {
+        return Err(VerifyError::PayloadInvalid(format!(
+            "reconstructed {} is {actual}/{processed}, signed whole-file authority requires {}/{}",
+            file.path, content.sha256, content.size
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn read_control(entry: &mut impl Read, limit: u64, label: &str) -> Result<Vec<u8>> {
@@ -637,6 +737,102 @@ mod tests {
         (temp, entries, policy, path)
     }
 
+    fn chunked_fixture() -> (
+        tempfile::TempDir,
+        Vec<TestEntry>,
+        SigningKeyPair,
+        std::path::PathBuf,
+        Vec<u8>,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("chunked.ccs");
+        let bytes = (0..(crate::ccs::chunking::MAX_CHUNK_SIZE as usize * 5))
+            .map(|index| ((index * 31 + index / 251) % 256) as u8)
+            .collect::<Vec<_>>();
+        let chunk_references = crate::ccs::chunking::Chunker::new()
+            .chunk_bytes(&bytes)
+            .iter()
+            .map(crate::ccs::chunking::Chunk::reference)
+            .collect::<Vec<_>>();
+        assert!(chunk_references.len() > 2, "fixture must span chunks");
+
+        let mut authority =
+            crate::ccs::v3::test_support::package_authority_with_one_file("chunked-stream");
+        let PackageKindV3::Package(package) = &mut authority.kind else {
+            unreachable!()
+        };
+        let file = &mut package.files[0];
+        file.content = Some(crate::payload::PayloadContentAuthority {
+            sha256: crate::hash::sha256(&bytes),
+            size: bytes.len() as u64,
+        });
+        file.content_layout = FileContentLayoutV3::FastCdcV2020 {
+            min_size: crate::ccs::chunking::MIN_CHUNK_SIZE,
+            average_size: crate::ccs::chunking::AVG_CHUNK_SIZE,
+            max_size: crate::ccs::chunking::MAX_CHUNK_SIZE,
+            chunks: chunk_references,
+        };
+        let mut copy = file.clone();
+        copy.path = "/usr/bin/hello-copy".to_string();
+        let first_path = file.path.clone();
+        let copy_path = copy.path.clone();
+        package.files.push(copy);
+        let component = authority.components.get_mut("main").unwrap();
+        component.file_count = 2;
+        component.total_size = (bytes.len() as u64) * 2;
+
+        let payloads = BTreeMap::from([(first_path, bytes.clone()), (copy_path, bytes.clone())]);
+        let signer = SigningKeyPair::generate();
+        write_v3_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, &signer, None, None, None,
+        )
+        .unwrap();
+        let entries = read_entries(&path);
+        (temp, entries, signer, path, bytes)
+    }
+
+    fn read_entries(path: &Path) -> Vec<TestEntry> {
+        let mut archive = Archive::new(ReadGzDecoder::new(File::open(path).unwrap()));
+        archive
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                let mut entry = entry.unwrap();
+                let path = std::str::from_utf8(entry.path_bytes().as_ref())
+                    .unwrap()
+                    .to_string();
+                let entry_type = entry.header().entry_type();
+                let mut content = Vec::new();
+                entry.read_to_end(&mut content).unwrap();
+                TestEntry {
+                    path,
+                    entry_type,
+                    content,
+                }
+            })
+            .collect()
+    }
+
+    fn resign_authority(
+        entries: &mut [TestEntry],
+        signer: &SigningKeyPair,
+        mutate: impl FnOnce(&mut AuthorityDocumentV3),
+    ) {
+        let manifest = entries
+            .iter_mut()
+            .find(|entry| entry.path == "MANIFEST")
+            .unwrap();
+        let mut authority = CCS_BUDGET.decode_authority(&manifest.content).unwrap();
+        mutate(&mut authority);
+        manifest.content = authority.to_cbor().unwrap();
+        let signature = serde_json::to_vec_pretty(&signer.sign(&manifest.content)).unwrap();
+        entries
+            .iter_mut()
+            .find(|entry| entry.path == "MANIFEST.sig")
+            .unwrap()
+            .content = signature;
+    }
+
     fn write_fixture(path: &Path, entries: &[TestEntry]) {
         let encoder = GzEncoder::new(File::create(path).unwrap(), Compression::default());
         let mut archive = Builder::new(encoder);
@@ -656,6 +852,92 @@ mod tests {
                 .unwrap();
         }
         archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn chunked_archive_emits_unique_objects_and_reconstructs_signed_whole_file() {
+        let (_temp, entries, signer, path, bytes) = chunked_fixture();
+        let manifest = entries
+            .iter()
+            .find(|entry| entry.path == "MANIFEST")
+            .unwrap();
+        let authority = CCS_BUDGET.decode_authority(&manifest.content).unwrap();
+        let PackageKindV3::Package(package) = &authority.kind else {
+            unreachable!()
+        };
+        let FileContentLayoutV3::FastCdcV2020 { chunks, .. } = &package.files[0].content_layout
+        else {
+            panic!("fixture must carry signed chunks")
+        };
+        let unique = chunks
+            .iter()
+            .map(|chunk| chunk.sha256.as_str())
+            .collect::<BTreeSet<_>>();
+        let archived_paths = entries
+            .iter()
+            .filter(|entry| entry.path.starts_with("objects/") && entry.entry_type.is_file())
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(archived_paths.len(), unique.len());
+        assert!(
+            archived_paths.windows(2).all(|pair| pair[0] < pair[1]),
+            "layout objects must have one deterministic canonical order: {archived_paths:?}"
+        );
+        assert!(!unique.contains(crate::hash::sha256(&bytes).as_str()));
+
+        let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
+        let verified = verify_archive(
+            &path,
+            &policy,
+            super::super::object_sink::ObjectDestination::Spool,
+        )
+        .unwrap();
+        assert_eq!(verified.payload.files().len(), 2);
+        for file in verified.payload.files() {
+            let mut reconstructed = Vec::new();
+            file.open_content()
+                .unwrap()
+                .read_to_end(&mut reconstructed)
+                .unwrap();
+            assert_eq!(reconstructed, bytes);
+        }
+    }
+
+    #[test]
+    fn chunked_verification_rejects_reordered_authority_and_wrong_whole_digest() {
+        let (temp, entries, signer, _, _) = chunked_fixture();
+        let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
+
+        let mut reordered = entries.clone();
+        resign_authority(&mut reordered, &signer, |authority| {
+            let PackageKindV3::Package(package) = &mut authority.kind else {
+                unreachable!()
+            };
+            let FileContentLayoutV3::FastCdcV2020 { chunks, .. } =
+                &mut package.files[0].content_layout
+            else {
+                unreachable!()
+            };
+            chunks.swap(0, 1);
+        });
+        let path = temp.path().join("reordered-chunks.ccs");
+        write_fixture(&path, &reordered);
+        let error = error_text(&path, &policy);
+        assert!(
+            error.contains("reconstructed") || error.contains("streamed chunk"),
+            "{error}"
+        );
+
+        let mut wrong_whole = entries;
+        resign_authority(&mut wrong_whole, &signer, |authority| {
+            let PackageKindV3::Package(package) = &mut authority.kind else {
+                unreachable!()
+            };
+            package.files[0].content.as_mut().unwrap().sha256 = crate::hash::sha256(b"wrong");
+        });
+        let path = temp.path().join("wrong-whole-digest.ccs");
+        write_fixture(&path, &wrong_whole);
+        assert!(error_text(&path, &policy).contains("signed whole-file authority"));
     }
 
     fn error_text(path: &Path, policy: &TrustPolicy) -> String {
