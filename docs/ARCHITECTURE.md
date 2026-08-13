@@ -114,6 +114,7 @@ crates/conary-core/      Core library crate
     |   +-- builder/sysroot.rs CAS-backed runtime sysroot materialization
     |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification, validation, and security.capability xattr attachment for persisted file capabilities
     |   +-- root_manifest.rs Exact immutable-root and mutable-state manifest contract
+    |   +-- root_manifest/delta.rs Normalized changed-path manifest delta and deterministic application
     |   +-- root_manifest/scan.rs Selected-root capture and CAS ingestion
     |   +-- root_manifest/materialize.rs Exact typed-root reconstruction
     |   +-- root_manifest/composefs.rs Typed manifest to EROFS serialization
@@ -453,6 +454,15 @@ Generation-aware package mutation
 ```
 
 ### Generation Lifecycle
+
+`root_manifest/delta.rs` owns the normalized changed-path contract used by the
+delta-sized selected-root transition. Overlay artifacts must be decoded into
+exact removals, opaque-directory replacement, complete node upserts, and
+optional root metadata before this boundary. Applying a delta preserves prior
+CAS identities for unchanged content, routes changed paths through the finite
+publication domains, and revalidates the complete resulting manifests. Runtime
+selected-root sessions still use complete materialization and capture until the
+overlay capability and upper-tree decoder slices replace that path.
 
 1. **Select**: Materialize the latest cumulative selected-root candidate, or the current generation when no publication debt is pending
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root

@@ -547,6 +547,7 @@ and export raw/qcow2/ISO carriers.
 
 **Start here:** `crates/conary-core/src/generation/builder.rs`;
 `crates/conary-core/src/generation/root_manifest.rs`;
+`crates/conary-core/src/generation/root_manifest/delta.rs`;
 `crates/conary-core/src/generation/root_manifest/scan.rs`;
 `crates/conary-core/src/generation/root_manifest/materialize.rs`;
 `crates/conary-core/src/generation/root_manifest/composefs.rs`;
