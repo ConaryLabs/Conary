@@ -72,17 +72,17 @@ pub(crate) struct SelectedRootSession {
 
 /// The runtime mutation lock, held before any package authority is read.
 ///
-/// [`SelectedRootSession::begin`] takes this lock and materializes the selected
+/// [`SelectedRootSession::begin`] takes this lock and prepares the selected
 /// root in one step, which is what a caller whose planning is already complete
 /// wants. A caller that must certify a transaction against installed state --
 /// requirement satisfaction, promise reliance, negative relation effects --
 /// acquires this first and reads those facts with the lock already held, so
-/// nothing it certifies can change before it commits. Materialization is the
-/// expensive half, so keeping it separate also lets a rejected transaction fail
-/// without paying for a root it will never mutate.
+/// nothing it certifies can change before it commits. Root preparation is the
+/// expensive half, so keeping it separate also lets a rejected transaction
+/// fail without paying for a root it will never mutate.
 ///
-/// Dropping without materializing releases the lock and leaves no session
-/// directory behind, because the directory is created by `materialize`.
+/// Dropping without preparing releases the lock and leaves no session
+/// directory behind, because the directory is created by `prepare`.
 pub(crate) struct LockedRuntimeRoot {
     runtime_root: ConaryRuntimeRoot,
     session_dir: PathBuf,
@@ -113,7 +113,7 @@ impl LockedRuntimeRoot {
         // The runtime transaction lock is acquired before reading either
         // SQLite package authority or the selected generation. Holding it
         // through candidate persistence and the caller-owned DB commit makes
-        // the materialized root a serializable mutation base.
+        // the prepared root a serializable mutation base.
         let mut transaction_engine =
             TransactionEngine::new(TransactionConfig::for_runtime_root(&runtime_root))?;
         transaction_engine.begin()?;
@@ -125,28 +125,28 @@ impl LockedRuntimeRoot {
         })
     }
 
-    /// Materialize installed package state into a writable selected root.
+    /// Prepare installed package state as a writable selected root.
     ///
     /// Consumes the lock holder: the lock is not released here, it moves into
     /// the returned session and is released when that session finishes.
-    pub(crate) fn materialize(
+    pub(crate) fn prepare(
         self,
         conn: &rusqlite::Connection,
         operation: impl Into<String>,
     ) -> Result<SelectedRootSession> {
         let materialized_backing = use_materialized_selected_root_backing();
-        self.materialize_with_backing(conn, operation, materialized_backing)
+        self.prepare_with_backing(conn, operation, materialized_backing)
     }
 
-    fn materialize_retained(
+    fn prepare_retained(
         self,
         conn: &rusqlite::Connection,
         operation: impl Into<String>,
     ) -> Result<SelectedRootSession> {
-        self.materialize_with_backing(conn, operation, true)
+        self.prepare_with_backing(conn, operation, true)
     }
 
-    fn materialize_with_backing(
+    fn prepare_with_backing(
         self,
         conn: &rusqlite::Connection,
         operation: impl Into<String>,
@@ -276,7 +276,7 @@ impl SelectedRootSession {
         validate_try_session_dir(runtime_root, &session_dir)?;
         let session_id = uuid::Uuid::new_v4().to_string();
         LockedRuntimeRoot::acquire_in_session_dir(runtime_root.clone(), session_dir, session_id)?
-            .materialize_retained(conn, operation)
+            .prepare_retained(conn, operation)
     }
 
     fn begin_in_session_dir(
@@ -287,7 +287,7 @@ impl SelectedRootSession {
         operation: impl Into<String>,
     ) -> Result<Self> {
         LockedRuntimeRoot::acquire_in_session_dir(runtime_root.clone(), session_dir, session_id)?
-            .materialize(conn, operation)
+            .prepare(conn, operation)
     }
 
     pub(crate) fn selected_root(&self) -> &Path {

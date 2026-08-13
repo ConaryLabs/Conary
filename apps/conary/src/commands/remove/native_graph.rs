@@ -45,8 +45,7 @@ pub(crate) fn execute_installed_trove_remove_graph(
     )?;
     conary_core::repository::enrollment::transaction::preflight_removal(conn, trove_id)
         .context("Package repository removal preflight failed")?;
-    let selected =
-        locked_root.materialize(conn, format!("Remove {}-{}", trove.name, trove.version))?;
+    let selected = locked_root.prepare(conn, format!("Remove {}-{}", trove.name, trove.version))?;
     native_transaction.preflight(selected.selected_root(), &ExecutionMode::Remove)?;
 
     execute_selected_root_graph(

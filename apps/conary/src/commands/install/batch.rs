@@ -334,7 +334,7 @@ impl<'a> BatchInstaller<'a> {
         let locked_root =
             crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(self.db_path)?;
         let mut promise_plan = self.validate_batch_transaction(&conn, &mut packages)?;
-        let mut selected_root = locked_root.materialize(&conn, &tx_description)?;
+        let mut selected_root = locked_root.prepare(&conn, &tx_description)?;
         let selected_path = selected_root.selected_root().to_path_buf();
         for package in &mut packages {
             package.normalize_ccs_for_selected_root(&selected_path)?;

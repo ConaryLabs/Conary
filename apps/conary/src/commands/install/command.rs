@@ -259,7 +259,7 @@ async fn cmd_install_with_intent(
     );
     let mut selected_root = locked_root
         .context("real install has no locked runtime root")?
-        .materialize(&conn, format!("Install {}-{}", pkg.name(), pkg.version()))?;
+        .prepare(&conn, format!("Install {}-{}", pkg.name(), pkg.version()))?;
     let transaction_root = selected_root.selected_root().to_string_lossy().into_owned();
     native_transaction.preflight(Path::new(&transaction_root), &native_execution_mode)?;
     let preflighted_ccs_removal_hooks =

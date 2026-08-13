@@ -391,10 +391,10 @@ fn install_ccs_package_transactionally_inner(
         | UpgradeCheck::Replatform(trove) => Some(trove.as_ref()),
     };
     // Dry-run remains filesystem-read-only. Every real CCS mutation receives
-    // either its caller-owned try root or a freshly materialized selected root.
+    // either its caller-owned try root or a freshly prepared selected root.
     let mut owned_selected_root = locked_root
         .map(|locked_root| {
-            locked_root.materialize(conn, format!("Install {}-{}", pkg.name(), pkg.version()))
+            locked_root.prepare(conn, format!("Install {}-{}", pkg.name(), pkg.version()))
         })
         .transpose()?;
     let selected_root = match selected_root {
