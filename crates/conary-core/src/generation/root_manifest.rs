@@ -3,6 +3,7 @@
 //! Authoritative selected-root capture for generation and mutable-state publication.
 
 mod composefs;
+mod delta;
 mod materialize;
 mod scan;
 
@@ -12,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 pub use composefs::build_erofs_image_from_root_manifest;
+pub use delta::{SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta};
 pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
     materialize_config_state_upper, materialize_generation_root, materialize_state_root,
