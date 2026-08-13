@@ -54,11 +54,16 @@ pub(super) fn upgrade_to_cas_backed(
     pm: &SystemPackageManager,
 ) -> Result<Vec<String>> {
     let cas = CasStore::new(objects_dir(db_path))?;
+    let eopkg_database = if *pm == SystemPackageManager::Eopkg {
+        Some(conary_core::packages::eopkg::query::InstalledEopkgDatabase::load()?)
+    } else {
+        None
+    };
 
     let mut entries: Vec<PreparedTakeoverEntry> = Vec::with_capacity(packages.len());
     let mut skipped = Vec::new();
     for selector in packages {
-        let identity = match query_package_identity(*pm, selector) {
+        let identity = match query_package_identity(*pm, selector, eopkg_database.as_ref()) {
             Ok(identity) => identity,
             Err(error) => {
                 warn!("Skipping CAS upgrade for '{selector}': {error}");
@@ -66,7 +71,7 @@ pub(super) fn upgrade_to_cas_backed(
                 continue;
             }
         };
-        let files = match query_package_files(*pm, selector) {
+        let files = match query_package_files(*pm, selector, eopkg_database.as_ref()) {
             Ok(files) => files,
             Err(error) => {
                 warn!("Skipping CAS upgrade for '{selector}': {error}");
@@ -145,12 +150,16 @@ pub(super) fn take_ownership(
     packages: &[String],
     pm: SystemPackageManager,
 ) -> Result<OwnershipTransferReport> {
-    let cas = CasStore::new(objects_dir(db_path))?;
+    let eopkg_database = if pm == SystemPackageManager::Eopkg {
+        Some(conary_core::packages::eopkg::query::InstalledEopkgDatabase::load()?)
+    } else {
+        None
+    };
 
-    let mut entries: Vec<PreparedTakeoverEntry> = Vec::with_capacity(packages.len());
+    let mut identities = Vec::with_capacity(packages.len());
     let mut report = OwnershipTransferReport::default();
     for selector in packages {
-        let identity = match query_package_identity(pm, selector) {
+        let identity = match query_package_identity(pm, selector, eopkg_database.as_ref()) {
             Ok(identity) => identity,
             Err(error) => {
                 warn!("Ownership identity query failed for '{selector}': {error}");
@@ -158,19 +167,7 @@ pub(super) fn take_ownership(
                 continue;
             }
         };
-        match query_package_files(pm, selector) {
-            Ok(files) => match prepare_takeover_entry(identity, files, &cas) {
-                Ok(entry) => entries.push(entry),
-                Err(error) => {
-                    warn!("Ownership capture failed for '{selector}': {error}");
-                    report.query_failures.push(format!("{selector}: {error}"));
-                }
-            },
-            Err(error) => {
-                warn!("Ownership query failed for '{selector}': {error}");
-                report.query_failures.push(format!("{selector}: {error}"));
-            }
-        }
+        identities.push(identity);
     }
     if !report.query_failures.is_empty() {
         return Ok(report);
@@ -187,29 +184,23 @@ pub(super) fn take_ownership(
                 .id
                 .ok_or_else(|| conary_core::Error::MissingId("changeset".into()))?;
 
-            for entry in &entries {
-                let trove = find_trove_for_identity(tx, &entry.identity)?.ok_or_else(|| {
+            for identity in &identities {
+                let trove = find_trove_for_identity(tx, identity)?.ok_or_else(|| {
                     conary_core::Error::NotFound(format!(
                         "trove '{}' disappeared before ownership commit",
-                        entry.identity.selector()
+                        identity.selector()
                     ))
                 })?;
                 let trove_id = trove.id.ok_or_else(|| {
-                    conary_core::Error::MissingId(format!("trove '{}'", entry.identity.selector()))
+                    conary_core::Error::MissingId(format!("trove '{}'", identity.selector()))
                 })?;
 
-                if trove.install_source == InstallSource::AdoptedTrack {
-                    for captured in &entry.files {
-                        if FileEntry::find_by_path(tx, &captured.source.0)?
-                            .is_some_and(|file| file.trove_id == trove_id)
-                        {
-                            let mut file = captured.file_entry(trove_id);
-                            file.insert_or_replace(
-                                tx,
-                                ExistingDirectoryMaterialization::ApplyIncoming,
-                            )?;
-                        }
-                    }
+                if trove.install_source != InstallSource::AdoptedFull {
+                    return Err(conary_core::Error::ConflictError(format!(
+                        "native identity '{}' must be CAS-backed as adopted-full before ownership transfer, found '{}'",
+                        identity.selector(),
+                        trove.install_source
+                    )));
                 }
 
                 tx.execute(
@@ -224,22 +215,38 @@ pub(super) fn take_ownership(
         })?;
     }
 
-    let mut failed_identities = Vec::new();
-    for entry in &entries {
-        println!(
-            "  Removing {} from {} database ...",
-            entry.identity.selector(),
-            pm.display_name()
-        );
-        if let Err(error) = remove_from_system_pm(pm, entry.identity.selector()) {
-            warn!(
-                "Failed to remove {} from PM: {error}",
-                entry.identity.selector()
-            );
+    if pm == SystemPackageManager::Eopkg {
+        let selectors = identities
+            .iter()
+            .map(|identity| identity.selector().to_string())
+            .collect::<Vec<_>>();
+        if let Err(error) = conary_core::packages::eopkg::takeover::remove_all_from_db(&selectors) {
+            if conary_core::packages::eopkg::takeover::authority_removal_pending() {
+                return Err(anyhow!(
+                    "eopkg authority-removal batch is durably pending and will resume on the next takeover run: {error}"
+                ));
+            }
+            restore_native_manager_authority(db_path, &identities)?;
             report
                 .pm_removal_failures
-                .push(format!("{}: {error}", entry.identity.selector()));
-            failed_identities.push(entry.identity.clone());
+                .push(format!("eopkg authority removal did not start: {error}"));
+        }
+        return Ok(report);
+    }
+
+    let mut failed_identities = Vec::new();
+    for identity in &identities {
+        println!(
+            "  Removing {} from {} database ...",
+            identity.selector(),
+            pm.display_name()
+        );
+        if let Err(error) = remove_from_system_pm(pm, identity.selector()) {
+            warn!("Failed to remove {} from PM: {error}", identity.selector());
+            report
+                .pm_removal_failures
+                .push(format!("{}: {error}", identity.selector()));
+            failed_identities.push(identity.clone());
         }
     }
     if !failed_identities.is_empty() {
@@ -305,11 +312,16 @@ fn find_trove_for_identity(
 fn query_package_identity(
     package_manager: SystemPackageManager,
     selector: &str,
+    eopkg_database: Option<&conary_core::packages::eopkg::query::InstalledEopkgDatabase>,
 ) -> Result<InstalledPackageIdentity> {
     match package_manager {
         SystemPackageManager::Rpm => Ok(rpm_query::query_package(selector)?.identity),
         SystemPackageManager::Dpkg => Ok(dpkg_query::query_package(selector)?.identity),
         SystemPackageManager::Pacman => Ok(pacman_query::query_package(selector)?.identity),
+        SystemPackageManager::Eopkg => Ok(eopkg_database
+            .ok_or_else(|| anyhow!("eopkg installed database snapshot is absent"))?
+            .package(selector)?
+            .identity),
         SystemPackageManager::Unknown => Err(anyhow!("No supported package manager")),
     }
 }
@@ -317,6 +329,7 @@ fn query_package_identity(
 fn query_package_files(
     package_manager: SystemPackageManager,
     name: &str,
+    eopkg_database: Option<&conary_core::packages::eopkg::query::InstalledEopkgDatabase>,
 ) -> Result<Vec<FileInfoTuple>> {
     let raw_files = match package_manager {
         SystemPackageManager::Rpm => rpm_query::query_package_files(name)
@@ -325,6 +338,10 @@ fn query_package_files(
             .map_err(|error| anyhow!("DPKG file query failed for '{name}': {error}"))?,
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
             .map_err(|error| anyhow!("Pacman file query failed for '{name}': {error}"))?,
+        SystemPackageManager::Eopkg => eopkg_database
+            .ok_or_else(|| anyhow!("eopkg installed database snapshot is absent"))?
+            .package_files(name)
+            .map_err(|error| anyhow!("eopkg file query failed for '{name}': {error}"))?,
         SystemPackageManager::Unknown => {
             return Err(anyhow!("No supported package manager"));
         }
@@ -357,6 +374,9 @@ fn remove_from_system_pm(package_manager: SystemPackageManager, name: &str) -> R
         SystemPackageManager::Pacman => {
             pacman_query::remove_from_db_only(name).map_err(|error| anyhow!("{error}"))
         }
+        SystemPackageManager::Eopkg => Err(anyhow!(
+            "eopkg ownership removal must use its transaction-wide batch"
+        )),
         SystemPackageManager::Unknown => Err(anyhow!("No supported package manager")),
     }
 }

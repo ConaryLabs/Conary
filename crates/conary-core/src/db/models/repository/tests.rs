@@ -433,7 +433,7 @@ fn stream_binding_rejects_endpoint_drift_but_ignores_rpm_package_key_rotation() 
 }
 
 #[test]
-fn stream_binding_encoding_is_stable_for_revision_31() {
+fn stream_binding_encoding_is_stable_for_revision_32() {
     let identity = "binding:x86_64";
     let repository = rpm_repository(
         "binding",
@@ -446,7 +446,7 @@ fn stream_binding_encoding_is_stable_for_revision_31() {
 
     assert_eq!(
         repository.stream_binding_sha256.as_deref(),
-        Some("d1c40eb96eb4184704fa17447c410362d098a96b64f072ff8e6eafa406b962b1")
+        Some("5b53c4deefa564cf07900256d28b142f1390c29dcae7e599368de35d8d96135d")
     );
 }
 

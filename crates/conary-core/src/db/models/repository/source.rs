@@ -394,6 +394,7 @@ impl Repository {
             (RepositoryFormat::Fedora, ProfilePackageFormat::Rpm)
                 | (RepositoryFormat::Debian, ProfilePackageFormat::Deb)
                 | (RepositoryFormat::Arch, ProfilePackageFormat::Arch)
+                | (RepositoryFormat::Eopkg, ProfilePackageFormat::Eopkg)
                 | (RepositoryFormat::Json | RepositoryFormat::Unspecified, _)
         );
         if !compatible {
@@ -508,7 +509,10 @@ impl Repository {
             ))),
             (
                 Some(_),
-                RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora,
+                RepositoryFormat::Arch
+                | RepositoryFormat::Debian
+                | RepositoryFormat::Fedora
+                | RepositoryFormat::Eopkg,
             ) => {
                 self.require_parser_config()?;
                 self.require_trust_policy()?;

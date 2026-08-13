@@ -232,6 +232,18 @@ fn configured_source(
                 })
                 .unwrap();
         }
+        NativeSourceEcosystem::Eopkg => {
+            repository
+                .set_parser_config(RepositoryParserConfig::Eopkg {
+                    architecture: "x86_64".to_string(),
+                })
+                .unwrap();
+            repository
+                .set_trust_policy(RepositoryTrustPolicy::Eopkg {
+                    origin: "https://metadata.example.test/".to_string(),
+                })
+                .unwrap();
+        }
     }
     let identity = format!("test:{}", repository.name);
     let policy = RepositorySourcePolicy::new(

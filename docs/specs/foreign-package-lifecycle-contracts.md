@@ -1,13 +1,13 @@
 ---
 last_updated: 2026-08-12
-revision: 46
-summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
+revision: 47
+summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
 # Foreign Package Lifecycle Contracts
 
 This specification defines how Conary preserves and executes lifecycle behavior
-from RPM, Debian, and Arch packages. The package managers expose finite,
+from RPM, Debian, Arch, and eopkg packages. The package managers expose finite,
 documented lifecycle ABIs around arbitrary program bodies. Conary models those
 ABIs directly; it does not infer lifecycle meaning from program text or
 delegate execution to the source package manager.
@@ -30,7 +30,7 @@ inferred by scraping a completed root or classifying script text.
 Foreign-package conversion is a primary acquisition path:
 
 ```text
-RPM, DEB, or Arch artifact
+RPM, DEB, Arch, or eopkg artifact
         |
         v
 Conary parser -> CCS lifecycle bundle -> Conary transaction planner/executor
@@ -39,9 +39,9 @@ Conary parser -> CCS lifecycle bundle -> Conary transaction planner/executor
 any supported Conary target
 ```
 
-RPM, dpkg, and libalpm documentation and source define the input contract.
+RPM, dpkg, libalpm, and eopkg documentation and source define the input contract.
 Conary owns the runtime implementation. Conversion and installation must not
-invoke `rpm`, `dpkg`, `apt`, `pacman`, or another source package manager to
+invoke `rpm`, `dpkg`, `apt`, `pacman`, `eopkg`, or another source package manager to
 decide lifecycle events, mutate its database, or complete the transaction. A
 Debian package installed on Fedora, an RPM installed on Arch, and an Arch
 package installed on Ubuntu use the same Conary planner and transaction engine
@@ -51,7 +51,7 @@ The program body may require an interpreter or helper runtime. Conary must
 satisfy that requirement through declared dependencies, a Conary-owned
 compatibility implementation, or a complete typed lowering. It must not assume
 that the target happens to provide the source distribution's package manager or
-helper behavior. Every documented RPM, Debian, and ALPM lifecycle semantic in
+helper behavior. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
 this specification is required implementation for the supported-format
 contract.
 
@@ -75,7 +75,7 @@ equivalence.
 
 ### Orthogonal Source And Target Axes
 
-RPM, Debian, and Arch are source ABI families, not target-distro restrictions.
+RPM, Debian, Arch, and eopkg are source ABI families, not target-distro restrictions.
 The running system exposes a typed host-capability inventory; a distro name is
 neither a compatibility fact nor a runtime selector. Nothing selects a pairwise
 converter, script-text classifier, or hard-coded source/target exception.
@@ -395,8 +395,8 @@ The planner consumes a complete transaction change set:
 - lifecycle bundles for installing, removing, and trigger-owning packages.
 
 Every installed package row has one mandatory typed version scheme.
-Conary-authored packages are constructed with `conary`; RPM, Debian, and Arch
-packages are constructed with `rpm`, `debian`, or `arch` from the parser or
+Conary-authored packages are constructed with `conary`; RPM, Debian, Arch, and
+eopkg packages are constructed with `rpm`, `debian`, `arch`, or `eopkg` from the parser or
 selected repository contract. There is no placeholder scheme to patch after
 construction. Repository provenance, parsed package identity, install
 semantics, and an adopted package's exact native identity must agree before
@@ -599,6 +599,7 @@ directory is handled:
 | RPM | Apply the incoming directory metadata |
 | Debian/dpkg | Preserve the existing directory metadata |
 | Arch/libalpm | Preserve the existing directory metadata |
+| eopkg | Apply the incoming directory metadata |
 | Conary-authored CCS | Apply the incoming directory metadata |
 
 These choices are encoded from immutable upstream inputs in
@@ -613,7 +614,7 @@ and libalpm
 Their revisions, paths, SHA-256 digests, and typed results are one production
 contract. A CCS archive converted from a native package remains governed by
 its validated `native_lifecycle.source_format` and matching version scheme;
-the CCS container does not erase the RPM, Debian, or Arch source ABI.
+the CCS container does not erase the RPM, Debian, Arch, or eopkg source ABI.
 
 Compatible overlap materializes the path once. Removing or upgrading a package
 deletes only its claims while peers remain. Each affected `files` row is
@@ -697,7 +698,7 @@ remove-on-upgrade. Verified CCS construction projects those signed values into
 the named fallible `PackageFormat::config_declarations()` transaction
 projection used by direct native installation. Each declaration retains its
 source kind and matched/absent payload association; the signed native source
-format must agree and selects the exact RPM, Debian, or Arch transaction table
+format must agree and selects the exact RPM, Debian, Arch, or eopkg transaction table
 below. An absent ALPM backup declaration is durable authority but performs no
 filesystem mutation and supplies no content identity.
 
@@ -1634,9 +1635,12 @@ Current ownership:
   `db/models/repository_capability.rs`, and `resolver/provider/matching.rs`;
 - Arch extraction: `crates/conary-core/src/packages/arch.rs`,
   `packages/arch/install_script.rs`, and `packages/arch/alpm_hook.rs`;
+- eopkg archive, installed-state, and configuration extraction:
+  `crates/conary-core/src/packages/eopkg/`; its pinned upstream mapping is
+  [`eopkg-source-abi.md`](eopkg-source-abi.md);
 - durable CCS bundle: `crates/conary-core/src/ccs/native_lifecycle.rs`;
 - typed planner: `crates/conary-core/src/ccs/native_transaction.rs` with
-  RPM, Debian, and Arch ownership modules under `ccs/native_transaction/`;
+  RPM, Debian, Arch, and eopkg ownership modules under `ccs/native_transaction/`;
 - install-stage executor: `apps/conary/src/commands/install/native_events.rs`;
 - closed systemd activation grammar and durable generation projection:
   `crates/conary-core/src/activation/systemd.rs` and
@@ -1706,4 +1710,4 @@ unavailable, ambiguous, identity-mismatched, and path-specific payload drift;
 directory, symlink, and hardlink topology; lifecycle-bearing conversion; and
 failure-atomic publication for each source format. Its target-root test must
 consume the published signed CCS through install, update, rollback, and remove
-for RPM, Debian, and Arch without entering any native query or mutation module.
+for RPM, Debian, Arch, and eopkg without entering any native query or mutation module.

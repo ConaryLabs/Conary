@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::FileEntry;
-use conary_core::filesystem::CasStore;
+use conary_core::filesystem::PrivateCasWriter;
 use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 
 use super::FileInfoTuple;
@@ -35,6 +35,31 @@ struct CapturedFile {
     hardlink_key: Option<HardlinkKey>,
 }
 
+/// Path-indexed authority from one complete selected-root capture.
+pub(crate) struct SelectedRootPayloadIndex {
+    entries: BTreeMap<String, (ResolvedPayloadNode, Option<PayloadContentAuthority>)>,
+}
+
+impl SelectedRootPayloadIndex {
+    pub(crate) fn new(
+        captured: &conary_core::generation::root_manifest::CapturedSelectedRoot,
+    ) -> Self {
+        let entries = captured
+            .generation
+            .entries
+            .iter()
+            .chain(&captured.state.entries)
+            .map(|entry| {
+                (
+                    entry.path.clone(),
+                    (entry.node.clone(), entry.content.clone()),
+                )
+            })
+            .collect();
+        Self { entries }
+    }
+}
+
 impl CapturedAdoptionFile {
     pub(crate) fn file_entry(&self, trove_id: i64) -> FileEntry {
         FileEntry::new(
@@ -49,7 +74,7 @@ impl CapturedAdoptionFile {
 pub(crate) fn capture_package_files(
     package_name: &str,
     files: &[FileInfoTuple],
-    cas: Option<&CasStore>,
+    cas: Option<&dyn PrivateCasWriter>,
 ) -> Result<Vec<CapturedAdoptionFile>> {
     let mut captured = files
         .iter()
@@ -69,6 +94,46 @@ pub(crate) fn capture_package_files(
     Ok(captured.into_iter().map(|captured| captured.file).collect())
 }
 
+/// Bind package declarations to a previously captured complete root.
+///
+/// Only paths intentionally absent from that capture (runtime exclusions and
+/// ephemeral domains) are read separately. This keeps the selected-root scan
+/// as the sole byte read for ordinary package-owned paths.
+pub(crate) fn capture_package_files_from_selected_root(
+    package_name: &str,
+    files: &[FileInfoTuple],
+    selected_root: &SelectedRootPayloadIndex,
+    cas: &dyn PrivateCasWriter,
+) -> Result<Vec<CapturedAdoptionFile>> {
+    let mut captured = files
+        .iter()
+        .map(|file| {
+            let path = Path::new(&file.0);
+            if is_selected_root_anchor(path) || permitted_native_absence(file, path) {
+                return Ok(None);
+            }
+            if let Some((node, content)) = selected_root.entries.get(&file.0) {
+                return Ok(Some(CapturedFile {
+                    file: CapturedAdoptionFile {
+                        source: file.clone(),
+                        node: node.clone(),
+                        content: content.clone(),
+                    },
+                    hardlink_key: None,
+                }));
+            }
+            capture_file(file, Some(cas))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    bind_package_hardlinks(&mut captured).map_err(|error| {
+        anyhow!("package {package_name} has invalid excluded-path hardlink authority: {error}")
+    })?;
+    Ok(captured.into_iter().map(|captured| captured.file).collect())
+}
+
 pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]) -> Result<()> {
     for file in files {
         validate_file(file).map_err(|error| {
@@ -81,7 +146,10 @@ pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]
     Ok(())
 }
 
-fn capture_file(file: &FileInfoTuple, cas: Option<&CasStore>) -> Result<Option<CapturedFile>> {
+fn capture_file(
+    file: &FileInfoTuple,
+    cas: Option<&dyn PrivateCasWriter>,
+) -> Result<Option<CapturedFile>> {
     let path = Path::new(&file.0);
     if is_selected_root_anchor(path) {
         return Ok(None);
@@ -345,6 +413,53 @@ mod tests {
         std::fs::write(&source, b"mutated bytes").unwrap();
 
         assert_eq!(cas.retrieve(hash).unwrap(), b"original bytes");
+    }
+
+    #[test]
+    fn complete_adoption_binds_package_to_captured_root_without_rereading_path() {
+        use conary_core::generation::root_manifest::{
+            CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
+            GenerationRootManifest, MutableStateManifest,
+        };
+
+        let tmp = tempdir_in_target();
+        let source = tmp.path().join("selected-root-source");
+        std::fs::write(&source, b"captured bytes").unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let source_arg = source.strip_prefix(&cwd).unwrap().to_str().unwrap();
+        let node =
+            conary_core::generation::root_manifest::capture_existing_payload_node(&source).unwrap();
+        let content = PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"captured bytes"),
+            size: 14,
+        };
+        let captured_root = CapturedSelectedRoot {
+            generation: GenerationRootManifest {
+                version: GENERATION_ROOT_MANIFEST_VERSION,
+                root: conary_core::generation::root_manifest::capture_root_node(&cwd).unwrap(),
+                entries: vec![GenerationRootEntry {
+                    path: source_arg.to_string(),
+                    node: node.clone(),
+                    content: Some(content.clone()),
+                }],
+            },
+            state: MutableStateManifest::empty(),
+        };
+        let index = SelectedRootPayloadIndex::new(&captured_root);
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        std::fs::remove_file(&source).unwrap();
+
+        let captured = capture_package_files_from_selected_root(
+            "fixture",
+            &[file_tuple(source_arg, 14, 0o100644, None, None)],
+            &index,
+            &cas,
+        )
+        .unwrap();
+
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].node, node);
+        assert_eq!(captured[0].content.as_ref(), Some(&content));
     }
 
     #[test]

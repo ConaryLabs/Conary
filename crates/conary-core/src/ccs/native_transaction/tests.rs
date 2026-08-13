@@ -22,6 +22,7 @@ fn bundle(format: SourceFormat, entries: Vec<NativeLifecycleEntry>) -> NativeLif
         SourceFormat::Rpm => VersionScheme::Rpm,
         SourceFormat::Deb => VersionScheme::Deb,
         SourceFormat::Arch => VersionScheme::Arch,
+        SourceFormat::Eopkg => VersionScheme::Eopkg,
     };
     if format == SourceFormat::Rpm {
         for entry in &mut entries {
@@ -355,6 +356,7 @@ fn event_stages_and_args(plan: &NativeTransactionPlan) -> Vec<(NativeEventStage,
 }
 
 mod debian;
+mod eopkg;
 
 #[test]
 fn rpm_upgrade_uses_typed_transaction_and_package_lifecycle_order() {

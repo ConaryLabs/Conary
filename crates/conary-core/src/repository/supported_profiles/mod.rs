@@ -30,7 +30,7 @@ fn validate_catalog(profiles: Vec<types::ProfileDocument>) -> Vec<SupportedProfi
         .iter()
         .map(SupportedProfile::id)
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["fedora-44", "ubuntu-26.04", "arch"]);
+    assert_eq!(ids, ["fedora-44", "ubuntu-26.04", "arch", "solus"]);
 
     for profile in &supported {
         assert!(

@@ -77,6 +77,9 @@ pub(super) fn collect_projection_content(
                 .map(|document| (document.path.clone(), document.source.as_bytes().to_vec())),
         );
     }
+    if let Some(eopkg) = &declarations.eopkg {
+        sources.push((eopkg.path.clone(), eopkg.source.as_bytes().to_vec()));
+    }
     for plan in &trust.repositories {
         for evidence in &plan.evidence {
             if let TrustEvidenceSource::SelectedRootFile { path } = &evidence.source {

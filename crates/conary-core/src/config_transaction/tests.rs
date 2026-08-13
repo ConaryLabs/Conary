@@ -113,6 +113,27 @@ fn dpkg_remove_on_upgrade_removes_pristine_and_saves_modified() {
 }
 
 #[test]
+fn eopkg_conflicting_updates_use_newconfig_and_removal_retains_edits() {
+    assert_eq!(
+        decide_config_install(ConfigSource::Eopkg, false, Some(OLD), Some(OLD), NEW),
+        ConfigInstallDecision::Install
+    );
+    assert_eq!(
+        decide_config_install(ConfigSource::Eopkg, false, Some(OLD), Some(LOCAL), NEW),
+        ConfigInstallDecision::InstallAlternative(ConfigSuffix::EopkgNew)
+    );
+    assert_eq!(ConfigSuffix::EopkgNew.as_str(), ".newconfig");
+    assert_eq!(
+        decide_config_removal(ConfigSource::Eopkg, false, false, Some(OLD), Some(LOCAL)),
+        ConfigRemovalDecision::KeepResidual
+    );
+    assert_eq!(
+        decide_config_removal(ConfigSource::Eopkg, false, true, Some(OLD), Some(LOCAL)),
+        ConfigRemovalDecision::Remove
+    );
+}
+
+#[test]
 fn removal_contracts_cover_residuals_purge_and_native_backups() {
     assert_eq!(
         decide_config_removal(ConfigSource::Deb, false, false, Some(OLD), Some(LOCAL)),

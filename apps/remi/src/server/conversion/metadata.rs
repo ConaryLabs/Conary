@@ -8,6 +8,7 @@ use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
+use conary_core::packages::eopkg::EopkgPackage;
 use conary_core::packages::payload::PackagePayload;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::PackageFormat;
@@ -110,6 +111,15 @@ impl ConversionService {
                 let metadata = Self::build_metadata(&pkg)?;
                 Ok((metadata, files, "deb"))
             }
+            ProfilePackageFormat::Eopkg => {
+                let pkg = EopkgPackage::parse(path_str)
+                    .map_err(|e| anyhow!("Failed to parse eopkg package: {}", e))?;
+                let files = pkg
+                    .package_payload()
+                    .map_err(|e| anyhow!("Failed to open eopkg package payload: {}", e))?;
+                let metadata = Self::build_metadata(&pkg)?;
+                Ok((metadata, files, "eopkg"))
+            }
         }
     }
 
@@ -171,7 +181,67 @@ mod tests {
     use super::*;
     use conary_core::ccs::convert::ForeignConversionInput;
     use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
+    use std::io::{Cursor, Read, Write};
     use std::path::PathBuf;
+    use zip::write::SimpleFileOptions;
+
+    fn eopkg_fixture() -> tempfile::NamedTempFile {
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_path("usr/bin/demo").unwrap();
+        header.set_size(5);
+        header.set_mode(0o755);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        tar.append(&header, Cursor::new(b"hello")).unwrap();
+        let tar = tar.into_inner().unwrap();
+        let stream =
+            liblzma::stream::Stream::new_easy_encoder(6, liblzma::stream::Check::Crc64).unwrap();
+        let mut encoder = liblzma::read::XzEncoder::new_stream(tar.as_slice(), stream);
+        let mut compressed = Vec::new();
+        encoder.read_to_end(&mut compressed).unwrap();
+
+        let metadata = br#"<PISI><Package><Name>demo</Name><Summary>demo</Summary><History><Update release="2"><Version>1.0</Version></Update></History><Distribution>Solus</Distribution><DistributionRelease>1</DistributionRelease><Architecture>x86_64</Architecture><PackageFormat>1.2</PackageFormat></Package></PISI>"#;
+        let files = br#"<Files><File><Path>usr/bin/demo</Path><Type>executable</Type><Size>5</Size><Uid>0</Uid><Gid>0</Gid><Mode>0755</Mode><Hash>aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d</Hash></File></Files>"#;
+        let output = tempfile::NamedTempFile::new().unwrap();
+        {
+            let mut archive = zip::ZipWriter::new(output.reopen().unwrap());
+            for (name, bytes) in [
+                ("metadata.xml", metadata.as_slice()),
+                ("files.xml", files.as_slice()),
+                ("install.tar.xz", compressed.as_slice()),
+            ] {
+                archive
+                    .start_file(name, SimpleFileOptions::default())
+                    .unwrap();
+                archive.write_all(bytes).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+        output
+    }
+
+    #[test]
+    fn remi_parses_eopkg_through_the_exact_solus_profile() {
+        let fixture = eopkg_fixture();
+        let root = tempfile::tempdir().unwrap();
+        let service = ConversionService::new(
+            root.path().join("chunks"),
+            root.path().join("cache"),
+            root.path().join("remi.db"),
+            None,
+        );
+        let (metadata, payload, format) = service.parse_package(fixture.path(), "solus").unwrap();
+
+        assert_eq!(metadata.name(), "demo");
+        assert_eq!(metadata.version(), "1.0-2");
+        assert_eq!(metadata.version_scheme(), VersionScheme::Eopkg);
+        assert_eq!(metadata.architecture(), Some("x86_64"));
+        assert_eq!(payload.files().len(), 1);
+        assert_eq!(format, "eopkg");
+    }
 
     #[test]
     fn test_safe_ccs_filename_normal() {

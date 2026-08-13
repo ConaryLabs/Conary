@@ -6,8 +6,8 @@ CREATE TABLE repository_source_policies (
             source_identity TEXT NOT NULL,
             scope_kind TEXT NOT NULL CHECK(scope_kind IN ('repository', 'group')),
             scope_identity TEXT NOT NULL,
-            ecosystem TEXT NOT NULL CHECK(ecosystem IN ('rpm', 'deb', 'alpm')),
-            version_scheme TEXT NOT NULL CHECK(version_scheme IN ('rpm', 'debian', 'arch')),
+            ecosystem TEXT NOT NULL CHECK(ecosystem IN ('rpm', 'deb', 'alpm', 'eopkg')),
+            version_scheme TEXT NOT NULL CHECK(version_scheme IN ('rpm', 'debian', 'arch', 'eopkg')),
             stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
             stream_identity TEXT NOT NULL,
             update_mode TEXT NOT NULL CHECK(update_mode IN ('follow', 'pin')),
@@ -18,6 +18,7 @@ CREATE TABLE repository_source_policies (
                 (ecosystem = 'rpm' AND version_scheme = 'rpm')
                 OR (ecosystem = 'deb' AND version_scheme = 'debian')
                 OR (ecosystem = 'alpm' AND version_scheme = 'arch')
+                OR (ecosystem = 'eopkg' AND version_scheme = 'eopkg')
             ),
             UNIQUE(source_identity, scope_kind, scope_identity)
         );
@@ -40,7 +41,7 @@ CREATE TABLE repositories (
             security_advisory_support TEXT NOT NULL DEFAULT 'unknown'
             CHECK(security_advisory_support IN ('unknown', 'unsupported', 'supported')),
             package_format TEXT NOT NULL DEFAULT 'unspecified'
-                CHECK(package_format IN ('arch', 'deb', 'rpm', 'json', 'unspecified')),
+                CHECK(package_format IN ('arch', 'deb', 'rpm', 'eopkg', 'json', 'unspecified')),
             parser_config_json TEXT,
             managed_by TEXT NOT NULL DEFAULT 'operator'
                 CHECK(managed_by IN ('operator', 'remi-config', 'native-projection', 'package-projection')),
@@ -53,11 +54,11 @@ CREATE TABLE repositories (
                 OR (package_format != 'unspecified' AND parser_config_json IS NOT NULL)
             ),
             CHECK(
-                (package_format IN ('arch', 'deb', 'rpm')
+                (package_format IN ('arch', 'deb', 'rpm', 'eopkg')
                     AND source_policy_id IS NOT NULL
                     AND repository_identity IS NOT NULL
                     AND stream_binding_sha256 IS NOT NULL)
-                OR (package_format NOT IN ('arch', 'deb', 'rpm')
+                OR (package_format NOT IN ('arch', 'deb', 'rpm', 'eopkg')
                     AND source_policy_id IS NULL
                     AND repository_identity IS NULL
                     AND stream_binding_sha256 IS NULL
@@ -294,7 +295,7 @@ CREATE TABLE repository_packages (
             synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_security_update INTEGER NOT NULL DEFAULT 0, severity TEXT, cve_ids TEXT, advisory_id TEXT, advisory_url TEXT,
             source_profile TEXT,
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')), canonical_id INTEGER
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')), canonical_id INTEGER
             REFERENCES canonical_packages(id) ON DELETE SET NULL, package_release TEXT NOT NULL DEFAULT '',
             CHECK(
                 (version_scheme = 'debian' AND debian_multi_arch IS NOT NULL)
@@ -506,7 +507,7 @@ CREATE INDEX idx_federation_stats_date ON federation_stats(date DESC);
 CREATE TABLE download_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             package_name TEXT NOT NULL,
             package_version TEXT,
             downloaded_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -519,7 +520,7 @@ CREATE INDEX idx_download_stats_time
             ON download_stats(downloaded_at);
 CREATE TABLE download_counts (
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             package_name TEXT NOT NULL,
             total_count INTEGER NOT NULL DEFAULT 0,
             count_30d INTEGER NOT NULL DEFAULT 0,
@@ -606,7 +607,7 @@ CREATE INDEX idx_mirror_health_repo ON mirror_health(repository_id);
 CREATE TABLE delta_manifests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             package_name TEXT NOT NULL,
             from_version TEXT NOT NULL,
             to_version TEXT NOT NULL,
@@ -631,7 +632,7 @@ CREATE TABLE package_implementations (
             id INTEGER PRIMARY KEY,
             canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id) ON DELETE CASCADE,
             distro TEXT NOT NULL
-                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             distro_name TEXT NOT NULL,
             source TEXT NOT NULL
                 CHECK(source IN ('contract', 'remi')),
@@ -651,7 +652,7 @@ CREATE TABLE repository_provides (
             kind TEXT NOT NULL DEFAULT 'package',
             raw TEXT,
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')),
             architecture_qualifier_kind TEXT NOT NULL
                 CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
             architecture TEXT,
@@ -803,7 +804,7 @@ CREATE TABLE native_package_publications (
             repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
             repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             name TEXT NOT NULL,
             version TEXT NOT NULL,
             package_release TEXT NOT NULL,

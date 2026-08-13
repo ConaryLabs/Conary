@@ -65,6 +65,7 @@ fn native_free_bundle(
             SourceFormat::Rpm => NativeVersionScheme::Rpm,
             SourceFormat::Deb => NativeVersionScheme::Deb,
             SourceFormat::Arch => NativeVersionScheme::Arch,
+            SourceFormat::Eopkg => NativeVersionScheme::Eopkg,
         },
         conversion_tool: "conary-test".to_string(),
         conversion_tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -86,7 +87,7 @@ fn write_converted_directory_package(
     manifest.package.version_scheme = version_scheme;
     manifest.package.debian_multi_arch = match format {
         SourceFormat::Deb => Some(DebianMultiArch::No),
-        SourceFormat::Rpm | SourceFormat::Arch => None,
+        SourceFormat::Rpm | SourceFormat::Arch | SourceFormat::Eopkg => None,
     };
     manifest.native_lifecycle = Some(native_free_bundle(format, &name, version));
     manifest.components.default = vec!["runtime".to_string()];

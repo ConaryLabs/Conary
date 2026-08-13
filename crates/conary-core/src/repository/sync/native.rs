@@ -139,12 +139,18 @@ pub(in crate::repository) fn synced_package_row(
     let provides = normalized_repository_capabilities(&pkg_meta);
     let download_url = super::rebase_download_url(&pkg_meta.download_url, repo_url, content_url);
     let version_scheme = pkg_meta.version_scheme;
+    let checksum = match pkg_meta.checksum_type {
+        crate::repository::parsers::ChecksumType::Sha1 => format!("sha1:{}", pkg_meta.checksum),
+        crate::repository::parsers::ChecksumType::Sha256
+        | crate::repository::parsers::ChecksumType::Sha512
+        | crate::repository::parsers::ChecksumType::Md5 => pkg_meta.checksum,
+    };
     let mut repo_pkg = RepositoryPackage::new(
         repo_id,
         pkg_meta.name,
         pkg_meta.version,
         version_scheme,
-        pkg_meta.checksum,
+        checksum,
         pkg_meta.size as i64,
         download_url,
     );
@@ -217,6 +223,8 @@ pub(in crate::repository) fn capability_kind_to_db(kind: RepositoryCapabilityKin
         RepositoryCapabilityKind::Path => "path".to_string(),
         RepositoryCapabilityKind::Binary => "binary".to_string(),
         RepositoryCapabilityKind::PkgConfig => "pkgconfig".to_string(),
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32".to_string(),
+        RepositoryCapabilityKind::Comar => "comar".to_string(),
         RepositoryCapabilityKind::Generic => "generic".to_string(),
     }
 }

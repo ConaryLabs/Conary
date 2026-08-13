@@ -102,7 +102,7 @@ pub async fn cmd_adopt_convert(
     let mut conn = open_db(db_path)?;
     for package in packages {
         let plan = plan_conversion(&conn, package, version, architecture)?;
-        if current_conversion_is_usable(&conn, &plan)? {
+        if current_conversion_is_usable(&conn, db_path, &plan)? {
             crate::ui::note(&format!(
                 "{} already has a verified current CCS artifact",
                 plan.identity.selector()
@@ -130,6 +130,7 @@ pub async fn cmd_adopt_convert(
         validate_converted_source_checksum(
             converted.pending_record.original_checksum(),
             &plan.source.package.checksum,
+            &acquired.path,
         )?;
         publish_conversion(&mut conn, db_path, &plan, converted)?;
         crate::ui::status(
@@ -239,6 +240,7 @@ fn repository_format(identity: &InstalledPackageIdentity) -> RepositoryFormat {
         InstalledPackageIdentity::Rpm { .. } => RepositoryFormat::Fedora,
         InstalledPackageIdentity::Dpkg { .. } => RepositoryFormat::Debian,
         InstalledPackageIdentity::Pacman { .. } => RepositoryFormat::Arch,
+        InstalledPackageIdentity::Eopkg { .. } => RepositoryFormat::Eopkg,
     }
 }
 
@@ -247,6 +249,7 @@ fn package_format(identity: &InstalledPackageIdentity) -> PackageFormatType {
         InstalledPackageIdentity::Rpm { .. } => PackageFormatType::Rpm,
         InstalledPackageIdentity::Dpkg { .. } => PackageFormatType::Deb,
         InstalledPackageIdentity::Pacman { .. } => PackageFormatType::Arch,
+        InstalledPackageIdentity::Eopkg { .. } => PackageFormatType::Eopkg,
     }
 }
 
@@ -266,17 +269,17 @@ async fn acquire_exact_artifact(
     db_path: &str,
     source: &PackageWithRepo,
 ) -> Result<AcquiredArtifact> {
-    let digest = exact_sha256(&source.package.checksum)?;
+    let checksum = SourceChecksum::parse(&source.package.checksum)?;
     let cache_dir = conary_core::db::paths::db_dir(db_path)
         .join("native-artifacts")
-        .join("sha256");
+        .join(checksum.algorithm());
     fs::create_dir_all(&cache_dir).with_context(|| {
         format!(
             "failed to create native artifact cache {}",
             cache_dir.display()
         )
     })?;
-    let cache_path = cache_dir.join(digest);
+    let cache_path = cache_dir.join(checksum.value());
     let signature_path = cache_path.with_extension("sig");
     if !cache_path.exists() && signature_path.exists() {
         fs::remove_file(&signature_path).with_context(|| {
@@ -400,8 +403,45 @@ fn exact_sha256(checksum: &str) -> Result<String> {
     Ok(hash.value)
 }
 
-fn validate_converted_source_checksum(actual: &str, expected: &str) -> Result<()> {
-    let expected = format!("sha256:{}", exact_sha256(expected)?);
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceChecksum {
+    Sha1(String),
+    Sha256(String),
+}
+
+impl SourceChecksum {
+    fn parse(checksum: &str) -> Result<Self> {
+        if let Some(value) = checksum.strip_prefix("sha1:") {
+            if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                bail!("repository source checksum is not an exact SHA-1 digest");
+            }
+            return Ok(Self::Sha1(value.to_ascii_lowercase()));
+        }
+        Ok(Self::Sha256(exact_sha256(checksum)?))
+    }
+
+    fn algorithm(&self) -> &'static str {
+        match self {
+            Self::Sha1(_) => "sha1",
+            Self::Sha256(_) => "sha256",
+        }
+    }
+
+    fn value(&self) -> &str {
+        match self {
+            Self::Sha1(value) | Self::Sha256(value) => value,
+        }
+    }
+
+    fn canonical(&self) -> String {
+        format!("{}:{}", self.algorithm(), self.value())
+    }
+}
+
+fn validate_converted_source_checksum(actual: &str, expected: &str, path: &Path) -> Result<()> {
+    let source = SourceChecksum::parse(expected)?;
+    conary_core::repository::verify_checksum(path, &source.canonical())?;
+    let expected = format!("sha256:{}", file_sha256(path)?);
     if actual != expected {
         return Err(AdoptedConversionError::SourceChecksumMismatch {
             expected,
@@ -548,6 +588,7 @@ fn validate_payload_entries(
             installed_content.or_else(|| installed_entry.content.clone()),
             artifact_group.is_some(),
             installed_entry,
+            format,
         )?;
     }
     Ok(())
@@ -639,16 +680,29 @@ fn compare_payload_entry(
     installed_content: Option<PayloadContentAuthority>,
     hardlink_member: bool,
     installed: &PackagePayloadEntry,
+    format: PackageFormatType,
 ) -> Result<()> {
-    let comparable = |node: &PayloadNode| {
+    let comparable = |node: &PayloadNode, source_artifact: bool| {
+        let timestamp = if matches!(format, PackageFormatType::Eopkg)
+            && matches!(node.kind, PayloadNodeKind::Symlink { .. })
+        {
+            // Python tarfile creates the symlink but cannot apply its archived
+            // timestamp, so installed eopkg symlink mtimes are not source
+            // package authority.
+            None
+        } else if source_artifact && matches!(format, PackageFormatType::Eopkg) {
+            Some(eopkg_installed_timestamp(node.mtime))
+        } else {
+            Some(node.mtime)
+        };
         (
             comparable_kind(&node.kind, hardlink_member),
             node.mode,
-            node.mtime,
+            timestamp,
             node.xattrs.clone(),
         )
     };
-    if comparable(&artifact_node.source) != comparable(&installed.node.source) {
+    if comparable(&artifact_node.source, true) != comparable(&installed.node.source, false) {
         return Err(AdoptedConversionError::PayloadMismatch {
             path: path.to_string(),
             detail: "node kind, mode, timestamp, or xattrs differ".to_string(),
@@ -673,6 +727,21 @@ fn compare_payload_entry(
         .into());
     }
     Ok(())
+}
+
+/// eopkg extracts PAX timestamps through Python `tarfile`, whose `TarInfo.mtime`
+/// is a binary64 float passed to `os.utime`. Project the exact source archive
+/// timestamp through that ABI before comparing it with the installed inode.
+fn eopkg_installed_timestamp(
+    timestamp: conary_core::payload::PayloadTimestamp,
+) -> conary_core::payload::PayloadTimestamp {
+    let value = timestamp.seconds as f64 + f64::from(timestamp.nanoseconds) / 1_000_000_000_f64;
+    let seconds = value.floor() as i64;
+    let nanoseconds = ((value - seconds as f64) * 1_000_000_000_f64) as u32;
+    conary_core::payload::PayloadTimestamp {
+        seconds,
+        nanoseconds,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -716,6 +785,7 @@ fn comparable_kind(kind: &PayloadNodeKind, hardlink_member: bool) -> ComparableN
 
 fn current_conversion_is_usable(
     conn: &rusqlite::Connection,
+    db_path: &str,
     plan: &AdoptedConversionPlan,
 ) -> Result<bool> {
     let Some(existing) = ConvertedPackage::find_by_trove(conn, plan.trove_id)? else {
@@ -724,12 +794,32 @@ fn current_conversion_is_usable(
     if existing.needs_reconversion() {
         return Ok(false);
     }
-    let expected_checksum = exact_sha256(&plan.source.package.checksum)?;
+    let source_checksum = SourceChecksum::parse(&plan.source.package.checksum)?;
+    let expected_checksum = match &source_checksum {
+        SourceChecksum::Sha256(value) => value.clone(),
+        SourceChecksum::Sha1(_) => {
+            let cache_path = conary_core::db::paths::db_dir(db_path)
+                .join("native-artifacts")
+                .join(source_checksum.algorithm())
+                .join(source_checksum.value());
+            if !cache_path.is_file()
+                || conary_core::repository::verify_checksum(
+                    &cache_path,
+                    &source_checksum.canonical(),
+                )
+                .is_err()
+            {
+                return Ok(false);
+            }
+            file_sha256(&cache_path)?
+        }
+    };
     let existing_checksum = exact_sha256(&existing.original_checksum)?;
     let expected_format = match package_format(&plan.identity) {
         PackageFormatType::Rpm => "rpm",
         PackageFormatType::Deb => "deb",
         PackageFormatType::Arch => "arch",
+        PackageFormatType::Eopkg => "eopkg",
     };
     if existing_checksum != expected_checksum || existing.original_format != expected_format {
         return Ok(false);
@@ -775,7 +865,7 @@ fn publish_conversion(
         .join("packages")
         .join("adopted");
     fs::create_dir_all(&output_dir)?;
-    let checksum = exact_sha256(&plan.source.package.checksum)?;
+    let checksum = exact_sha256(converted.pending_record.original_checksum())?;
     let file_name = conary_core::filesystem::path::sanitize_filename(&format!(
         "{}-{}-{}-v{}-{}.ccs",
         plan.identity.name(),

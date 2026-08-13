@@ -19,6 +19,9 @@ pub(super) fn query_package_requirements(
         SystemPackageManager::Pacman => {
             pacman_query::query_package_requirement_groups(package_name)
         }
+        SystemPackageManager::Eopkg => {
+            conary_core::packages::eopkg::query::query_package_requirement_groups(package_name)
+        }
         SystemPackageManager::Unknown => bail!("unsupported native package manager"),
     }
     .with_context(|| format!("could not inspect exact requirements for '{package_name}'"))

@@ -31,6 +31,7 @@ pub enum CliRepositoryFormat {
     Rpm,
     Deb,
     Arch,
+    Eopkg,
     Json,
 }
 
@@ -58,6 +59,7 @@ impl From<CliRepositoryFormat> for conary_core::repository::RepositoryFormat {
             CliRepositoryFormat::Rpm => Self::Fedora,
             CliRepositoryFormat::Deb => Self::Debian,
             CliRepositoryFormat::Arch => Self::Arch,
+            CliRepositoryFormat::Eopkg => Self::Eopkg,
             CliRepositoryFormat::Json => Self::Json,
         }
     }
@@ -119,7 +121,7 @@ pub struct RepoAddArgs {
     #[arg(long)]
     pub component: Option<String>,
 
-    /// Exact package-manager architecture (required for rpm and deb)
+    /// Exact package-manager architecture (required for rpm, deb, and eopkg)
     #[arg(long)]
     pub architecture: Option<String>,
 
@@ -236,7 +238,7 @@ pub struct RepoAddArgs {
 
     /// Exact public distro profile served by this repository
     ///
-    /// Examples: fedora-44, ubuntu-26.04, arch
+    /// Examples: fedora-44, ubuntu-26.04, arch, solus
     #[arg(long, value_name = "PROFILE", value_parser = parse_public_profile_id)]
     pub source_profile: Option<String>,
 

@@ -57,7 +57,7 @@ impl InstallSemantics {
                 format: PackageFormatType::Rpm,
             } => conary_core::payload::PayloadSharingPolicy::Rpm,
             PreparedSourceKind::NativePackage {
-                format: PackageFormatType::Deb | PackageFormatType::Arch,
+                format: PackageFormatType::Deb | PackageFormatType::Arch | PackageFormatType::Eopkg,
             }
             | PreparedSourceKind::Ccs => conary_core::payload::PayloadSharingPolicy::Exclusive,
         }

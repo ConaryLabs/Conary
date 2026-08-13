@@ -189,6 +189,9 @@ fn print_native_scriptlets(
         PackageFormatType::Rpm => Box::new(RpmPackage::parse(package_path)?),
         PackageFormatType::Deb => Box::new(DebPackage::parse(package_path)?),
         PackageFormatType::Arch => Box::new(ArchPackage::parse(package_path)?),
+        PackageFormatType::Eopkg => Box::new(conary_core::packages::eopkg::EopkgPackage::parse(
+            package_path,
+        )?),
     };
 
     let scriptlets = package.native_scriptlet_abi();

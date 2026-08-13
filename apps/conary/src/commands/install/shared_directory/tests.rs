@@ -749,7 +749,7 @@ fn rollback_capture_still_rejects_missing_non_ephemeral_materialization() {
 
 #[test]
 fn pinned_upstream_directory_sources_are_exact() {
-    assert_eq!(UPSTREAM_DIRECTORY_MATERIALIZATION_INPUTS.len(), 4);
+    assert_eq!(UPSTREAM_DIRECTORY_MATERIALIZATION_INPUTS.len(), 5);
     let mut formats = BTreeSet::new();
     let mut behaviors = BTreeSet::new();
     let mut urls = BTreeSet::new();
@@ -776,11 +776,14 @@ fn pinned_upstream_directory_sources_are_exact() {
             ) | (
                 PackageFormatType::Arch,
                 UpstreamDirectoryBehavior::LibalpmInstallPreservesDirectoryAndReplacesSymlink
+            ) | (
+                PackageFormatType::Eopkg,
+                UpstreamDirectoryBehavior::EopkgTarInstallAppliesDirectoryMetadata
             )
         ));
     }
-    assert_eq!(formats, BTreeSet::from(["arch", "deb", "rpm"]));
-    assert_eq!(behaviors.len(), 4);
+    assert_eq!(formats, BTreeSet::from(["arch", "deb", "eopkg", "rpm"]));
+    assert_eq!(behaviors.len(), 5);
 }
 
 #[tokio::test]

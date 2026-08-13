@@ -8,7 +8,84 @@ use conary_core::db::models::{
 };
 use conary_core::repository::selector::PackageWithRepo;
 use conary_core::repository::versioning::VersionScheme;
+use sha1::Digest as _;
 use std::collections::HashMap;
+use std::io::{Cursor, Read, Write};
+use zip::write::SimpleFileOptions;
+
+fn generate_eopkg_fixture(path: &Path, version: &str) {
+    let payload_path = "usr/share/exact-lifecycle/version";
+    let payload = version.as_bytes();
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_path(payload_path).unwrap();
+    header.set_size(u64::try_from(payload.len()).unwrap());
+    header.set_mode(0o644);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_cksum();
+    tar.append(&header, Cursor::new(payload)).unwrap();
+    let tar = tar.into_inner().unwrap();
+    let stream =
+        liblzma::stream::Stream::new_easy_encoder(6, liblzma::stream::Check::Crc64).unwrap();
+    let mut encoder = liblzma::read::XzEncoder::new_stream(tar.as_slice(), stream);
+    let mut compressed = Vec::new();
+    encoder.read_to_end(&mut compressed).unwrap();
+
+    let metadata = format!(
+        "<PISI><Package><Name>exact-lifecycle</Name><Summary>exact lifecycle</Summary>\
+         <History><Update release=\"1\"><Version>{version}</Version></Update></History>\
+         <Distribution>Solus</Distribution><DistributionRelease>1</DistributionRelease>\
+         <Architecture>x86_64</Architecture><PackageFormat>1.2</PackageFormat></Package></PISI>"
+    );
+    let files = format!(
+        "<Files><File><Path>{payload_path}</Path><Type>data</Type><Size>{}</Size>\
+         <Uid>0</Uid><Gid>0</Gid><Mode>0644</Mode><Hash>{:x}</Hash></File></Files>",
+        payload.len(),
+        sha1::Sha1::digest(payload)
+    );
+    let output = std::fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(output);
+    for (name, bytes) in [
+        ("metadata.xml", metadata.as_bytes()),
+        ("files.xml", files.as_bytes()),
+        ("install.tar.xz", compressed.as_slice()),
+    ] {
+        zip.start_file(name, SimpleFileOptions::default()).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+fn generate_native_fixture(
+    result: &BuildResult,
+    format: PackageFormatType,
+    path: &Path,
+    version: &str,
+) {
+    match format {
+        PackageFormatType::Rpm => {
+            conary_core::ccs::native_export::rpm::generate(result, path).unwrap();
+        }
+        PackageFormatType::Deb => {
+            conary_core::ccs::native_export::deb::generate(result, path).unwrap();
+        }
+        PackageFormatType::Arch => {
+            conary_core::ccs::native_export::arch::generate(result, path).unwrap();
+        }
+        PackageFormatType::Eopkg => generate_eopkg_fixture(path, version),
+    }
+}
+
+fn source_profile(format: PackageFormatType) -> &'static str {
+    match format {
+        PackageFormatType::Rpm => "fedora-44",
+        PackageFormatType::Deb => "ubuntu-26.04",
+        PackageFormatType::Arch => "arch",
+        PackageFormatType::Eopkg => "solus",
+    }
+}
 
 fn lifecycle_build_result(version: &str) -> BuildResult {
     let mut manifest = CcsManifest::new_minimal("exact-lifecycle", version);
@@ -74,6 +151,17 @@ fn lifecycle_identity(
             architecture,
         )
         .unwrap(),
+        VersionScheme::Eopkg => {
+            let (version, release) = version.rsplit_once('-').unwrap();
+            InstalledPackageIdentity::eopkg(
+                "exact-lifecycle",
+                "exact-lifecycle",
+                version,
+                release.parse().unwrap(),
+                architecture,
+            )
+            .unwrap()
+        }
         other => panic!("unsupported native test scheme {other:?}"),
     }
 }
@@ -85,42 +173,36 @@ fn canonical_conversion_preserves_lifecycle_for_all_native_formats() {
         (PackageFormatType::Rpm, "rpm"),
         (PackageFormatType::Deb, "deb"),
         (PackageFormatType::Arch, "pkg.tar.zst"),
+        (PackageFormatType::Eopkg, "eopkg"),
     ] {
         let package_path = temp.path().join(format!("exact-lifecycle.{extension}"));
         let result = lifecycle_build_result("1.2.3");
-        match format {
-            PackageFormatType::Rpm => {
-                conary_core::ccs::native_export::rpm::generate(&result, &package_path).unwrap();
-            }
-            PackageFormatType::Deb => {
-                conary_core::ccs::native_export::deb::generate(&result, &package_path).unwrap();
-            }
-            PackageFormatType::Arch => {
-                conary_core::ccs::native_export::arch::generate(&result, &package_path).unwrap();
-            }
-        }
+        generate_native_fixture(&result, format, &package_path, "1.2.3");
         let parsed = conary_core::packages::parse_package(&package_path).unwrap();
-        assert!(
-            parsed.native_scriptlet_abi().len() >= 2,
-            "{format:?} fixture lost its lifecycle ABI before conversion"
-        );
+        if format == PackageFormatType::Eopkg {
+            assert!(parsed.native_scriptlet_abi().is_empty());
+        } else {
+            assert!(
+                parsed.native_scriptlet_abi().len() >= 2,
+                "{format:?} fixture lost its lifecycle ABI before conversion"
+            );
+        }
 
-        let source_profile = match format {
-            PackageFormatType::Rpm => "fedora-44",
-            PackageFormatType::Deb => "ubuntu-26.04",
-            PackageFormatType::Arch => "arch",
-        };
         let converted = convert_native_package_to_ccs(
             parsed.as_ref(),
             &package_path,
             format,
-            Some(source_profile),
+            Some(source_profile(format)),
         )
         .unwrap();
         assert!(converted.ccs_path.exists());
         let record = converted.pending_record.into_record(42).unwrap();
         let summary = record.scriptlet_summary().unwrap();
-        assert_ne!(summary.scriptlet_fidelity, "native-free");
+        if format == PackageFormatType::Eopkg {
+            assert_eq!(summary.scriptlet_fidelity, "native-free");
+        } else {
+            assert_ne!(summary.scriptlet_fidelity, "native-free");
+        }
         assert!(summary.evidence_digest.is_some());
     }
 }
@@ -132,33 +214,19 @@ fn persistence_failure_rolls_back_record_changeset_and_artifact_for_all_formats(
         (PackageFormatType::Rpm, VersionScheme::Rpm, "rpm"),
         (PackageFormatType::Deb, VersionScheme::Debian, "deb"),
         (PackageFormatType::Arch, VersionScheme::Arch, "pkg.tar.zst"),
+        (PackageFormatType::Eopkg, VersionScheme::Eopkg, "eopkg"),
     ] {
         let case_dir = temp.path().join(format!("failure-{}", scheme.as_str()));
         std::fs::create_dir_all(&case_dir).unwrap();
         let package_path = case_dir.join(format!("exact-lifecycle.{extension}"));
         let result = lifecycle_build_result("1.2.3");
-        match format {
-            PackageFormatType::Rpm => {
-                conary_core::ccs::native_export::rpm::generate(&result, &package_path).unwrap();
-            }
-            PackageFormatType::Deb => {
-                conary_core::ccs::native_export::deb::generate(&result, &package_path).unwrap();
-            }
-            PackageFormatType::Arch => {
-                conary_core::ccs::native_export::arch::generate(&result, &package_path).unwrap();
-            }
-        }
+        generate_native_fixture(&result, format, &package_path, "1.2.3");
         let parsed = conary_core::packages::parse_package(&package_path).unwrap();
-        let source_profile = match format {
-            PackageFormatType::Rpm => "fedora-44",
-            PackageFormatType::Deb => "ubuntu-26.04",
-            PackageFormatType::Arch => "arch",
-        };
         let converted = convert_native_package_to_ccs(
             parsed.as_ref(),
             &package_path,
             format,
-            Some(source_profile),
+            Some(source_profile(format)),
         )
         .unwrap();
 
@@ -250,14 +318,14 @@ fn persistence_failure_rolls_back_record_changeset_and_artifact_for_all_formats(
             parsed.as_ref(),
             &package_path,
             format,
-            Some(source_profile),
+            Some(source_profile(format)),
         )
         .unwrap();
         publish_conversion(&mut conn, db_path.to_str().unwrap(), &plan, converted).unwrap();
         let record = conary_core::db::models::ConvertedPackage::find_by_trove(&conn, trove_id)
             .unwrap()
             .unwrap();
-        let usable = current_conversion_is_usable(&conn, &plan).unwrap();
+        let usable = current_conversion_is_usable(&conn, db_path.to_str().unwrap(), &plan).unwrap();
         if !usable {
             let key = crate::commands::ccs::load_or_create_local_dev_key().unwrap();
             let path = record.ccs_path.as_deref().unwrap();
@@ -306,26 +374,15 @@ fn publish_lifecycle_conversion(
     std::fs::create_dir_all(case_dir).unwrap();
     let package_path = case_dir.join(format!("exact-lifecycle-{version}.{extension}"));
     let result = lifecycle_build_result(version);
-    match format {
-        PackageFormatType::Rpm => {
-            conary_core::ccs::native_export::rpm::generate(&result, &package_path).unwrap();
-        }
-        PackageFormatType::Deb => {
-            conary_core::ccs::native_export::deb::generate(&result, &package_path).unwrap();
-        }
-        PackageFormatType::Arch => {
-            conary_core::ccs::native_export::arch::generate(&result, &package_path).unwrap();
-        }
-    }
+    generate_native_fixture(&result, format, &package_path, version);
     let parsed = conary_core::packages::parse_package(&package_path).unwrap();
-    let source_profile = match format {
-        PackageFormatType::Rpm => "fedora-44",
-        PackageFormatType::Deb => "ubuntu-26.04",
-        PackageFormatType::Arch => "arch",
-    };
-    let converted =
-        convert_native_package_to_ccs(parsed.as_ref(), &package_path, format, Some(source_profile))
-            .unwrap();
+    let converted = convert_native_package_to_ccs(
+        parsed.as_ref(),
+        &package_path,
+        format,
+        Some(source_profile(format)),
+    )
+    .unwrap();
     let signing_public_key = converted.signing_public_key.clone();
 
     let db_path = case_dir.join("source/conary.db");
@@ -429,6 +486,15 @@ fn seed_target_shell_runtime(db_path: &Path) {
             None,
         );
     }
+    crate::commands::test_helpers::insert_test_regular_file_with_parents(
+        &conn,
+        db_path,
+        "/usr/sbin/usysconf",
+        b"#!/bin/sh\nexit 0\n",
+        0o100755,
+        trove_id,
+        None,
+    );
 }
 
 fn run_target_root_lifecycle_test(test_name: &str) -> bool {
@@ -484,6 +550,7 @@ async fn published_adopted_ccs_drives_full_lifecycle_without_native_manager_runt
         (PackageFormatType::Rpm, VersionScheme::Rpm, "rpm"),
         (PackageFormatType::Deb, VersionScheme::Debian, "deb"),
         (PackageFormatType::Arch, VersionScheme::Arch, "pkg.tar.zst"),
+        (PackageFormatType::Eopkg, VersionScheme::Eopkg, "eopkg"),
     ] {
         let format_dir = temp.path().join(scheme.as_str());
         let (v1_ccs, public_key, v1_version) = publish_lifecycle_conversion(

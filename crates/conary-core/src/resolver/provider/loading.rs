@@ -409,6 +409,8 @@ fn capability_kind_from_db(kind: &str) -> Result<RepositoryCapabilityKind> {
         "path" => Ok(RepositoryCapabilityKind::Path),
         "binary" => Ok(RepositoryCapabilityKind::Binary),
         "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "pkgconfig32" => Ok(RepositoryCapabilityKind::PkgConfig32),
+        "comar" => Ok(RepositoryCapabilityKind::Comar),
         "generic" => Ok(RepositoryCapabilityKind::Generic),
         other => Err(Error::ConfigError(format!(
             "unsupported persisted repository capability kind '{other}'"

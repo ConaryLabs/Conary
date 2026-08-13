@@ -73,7 +73,7 @@ pub fn build_direct_native_lifecycle_bundle(
     source_profile_id: Option<&str>,
 ) -> anyhow::Result<Option<NativeLifecycleBundle>> {
     let native_entries = package.native_scriptlet_abi();
-    if native_entries.is_empty() {
+    if native_entries.is_empty() && source_format != "eopkg" {
         return Ok(None);
     }
 
@@ -123,6 +123,7 @@ fn source_format(value: &str) -> anyhow::Result<SourceFormat> {
         "rpm" => Ok(SourceFormat::Rpm),
         "deb" => Ok(SourceFormat::Deb),
         "arch" => Ok(SourceFormat::Arch),
+        "eopkg" => Ok(SourceFormat::Eopkg),
         other => anyhow::bail!("unsupported scriptlet source format '{other}'"),
     }
 }
@@ -132,6 +133,7 @@ fn source_family(format: SourceFormat) -> &'static str {
         SourceFormat::Rpm => "rpm",
         SourceFormat::Deb => "deb",
         SourceFormat::Arch => "arch",
+        SourceFormat::Eopkg => "eopkg",
     }
 }
 
@@ -140,6 +142,7 @@ fn version_scheme(format: SourceFormat) -> VersionScheme {
         SourceFormat::Rpm => VersionScheme::Rpm,
         SourceFormat::Deb => VersionScheme::Deb,
         SourceFormat::Arch => VersionScheme::Arch,
+        SourceFormat::Eopkg => VersionScheme::Eopkg,
     }
 }
 

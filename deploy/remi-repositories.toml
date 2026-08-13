@@ -96,6 +96,27 @@ package = "required"
 trust = "trusted-only"
 
 [[repositories]]
+name = "solus-polaris"
+url = "https://cdn.getsol.us/repo/polaris/"
+profile = "solus"
+source_identity = "solus-project"
+repository_identity = "solus-polaris-x86_64"
+stream_kind = "rolling"
+stream_identity = "polaris"
+update_mode = "follow"
+enabled = true
+priority = 50
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "eopkg"
+architecture = "x86_64"
+
+[repositories.trust]
+ecosystem = "eopkg"
+origin = "https://cdn.getsol.us/repo/polaris/"
+
+[[repositories]]
 name = "arch-extra"
 url = "https://geo.mirror.pkgbuild.com/extra/os/x86_64"
 profile = "arch"

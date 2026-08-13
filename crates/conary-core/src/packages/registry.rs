@@ -9,7 +9,7 @@ use crate::ccs::CCS_BUDGET;
 use crate::compression::{self, CompressionFormat};
 use crate::error::{Error, Result};
 use crate::packages::traits::PackageFormat;
-use crate::packages::{arch, deb, rpm};
+use crate::packages::{arch, deb, eopkg, rpm};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -20,6 +20,7 @@ pub enum PackageFormatType {
     Rpm,
     Deb,
     Arch,
+    Eopkg,
 }
 
 impl PackageFormatType {
@@ -29,6 +30,7 @@ impl PackageFormatType {
             Self::Rpm => "rpm",
             Self::Deb => "deb",
             Self::Arch => "arch",
+            Self::Eopkg => "eopkg",
         }
     }
 
@@ -62,9 +64,18 @@ pub fn detect_format(path: impl AsRef<Path>) -> Result<PackageFormatType> {
     if compression != CompressionFormat::None && has_arch_pkginfo(path, compression)? {
         return Ok(PackageFormatType::Arch);
     }
+    if bytes_read >= 4
+        && matches!(
+            &magic[..4],
+            [b'P', b'K', 3, 4] | [b'P', b'K', 5, 6] | [b'P', b'K', 7, 8]
+        )
+        && eopkg::has_package_contract(path)?
+    {
+        return Ok(PackageFormatType::Eopkg);
+    }
 
     Err(Error::InitError(format!(
-        "file does not contain a supported RPM, Debian, or ALPM package contract: {}",
+        "file does not contain a supported RPM, Debian, ALPM, or eopkg package contract: {}",
         path.display()
     )))
 }
@@ -129,6 +140,7 @@ pub fn parse_package(path: impl AsRef<Path>) -> Result<Box<dyn PackageFormat + S
         PackageFormatType::Rpm => Ok(Box::new(rpm::RpmPackage::parse(path_str)?)),
         PackageFormatType::Deb => Ok(Box::new(deb::DebPackage::parse(path_str)?)),
         PackageFormatType::Arch => Ok(Box::new(arch::ArchPackage::parse(path_str)?)),
+        PackageFormatType::Eopkg => Ok(Box::new(eopkg::EopkgPackage::parse(path_str)?)),
     }
 }
 

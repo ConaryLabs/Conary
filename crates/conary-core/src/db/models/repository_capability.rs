@@ -2,11 +2,13 @@
 
 //! Normalized repository-native capability tables.
 
+mod kind;
+mod projection;
+
 use crate::error::Result;
 use crate::repository::dependency_model::ProvidedCapability;
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
-    RepositoryCapabilityKind,
 };
 use crate::repository::distro::version_scheme_from_db;
 use crate::repository::versioning::VersionScheme;
@@ -259,7 +261,7 @@ impl RepositoryProvide {
         conn: &Connection,
         repository_package_id: i64,
     ) -> Result<(Vec<ProvidedCapability>, String)> {
-        Self::project_conversion_capabilities(Self::find_by_repository_package(
+        projection::project(Self::find_by_repository_package(
             conn,
             repository_package_id,
         )?)
@@ -312,34 +314,10 @@ impl RepositoryProvide {
         package_inputs
             .into_values()
             .map(|(checksum, provides)| {
-                let (_, digest) = Self::project_conversion_capabilities(provides)?;
+                let (_, digest) = projection::project(provides)?;
                 Ok((checksum, digest))
             })
             .collect()
-    }
-
-    fn project_conversion_capabilities(
-        provides: impl IntoIterator<Item = Self>,
-    ) -> Result<(Vec<ProvidedCapability>, String)> {
-        let mut capabilities = BTreeMap::<Vec<u8>, ProvidedCapability>::new();
-        for provide in provides {
-            let capability = provide.as_provided_capability()?;
-            capability.validate()?;
-            let canonical = crate::json::canonical_json(&capability).map_err(|error| {
-                crate::Error::InternalError(format!(
-                    "failed to canonicalize repository provide projection: {error}"
-                ))
-            })?;
-            capabilities.entry(canonical).or_insert(capability);
-        }
-        let capabilities = capabilities.into_values().collect::<Vec<_>>();
-        let canonical = crate::json::canonical_json(&capabilities).map_err(|error| {
-            crate::Error::InternalError(format!(
-                "failed to canonicalize repository conversion metadata: {error}"
-            ))
-        })?;
-        let digest = crate::hash::sha256_prefixed(&canonical);
-        Ok((capabilities, digest))
     }
 
     /// Digest repository metadata that invalidates a cached native conversion
@@ -353,21 +331,7 @@ impl RepositoryProvide {
     }
 
     fn as_provided_capability(&self) -> Result<ProvidedCapability> {
-        let kind = match self.kind.as_str() {
-            "package" => RepositoryCapabilityKind::PackageName,
-            "virtual" => RepositoryCapabilityKind::Virtual,
-            "soname" => RepositoryCapabilityKind::Soname,
-            "file" => RepositoryCapabilityKind::File,
-            "path" => RepositoryCapabilityKind::Path,
-            "binary" => RepositoryCapabilityKind::Binary,
-            "pkgconfig" => RepositoryCapabilityKind::PkgConfig,
-            "generic" => RepositoryCapabilityKind::Generic,
-            other => {
-                return Err(crate::Error::InternalError(format!(
-                    "unsupported normalized repository provide kind '{other}'"
-                )));
-            }
-        };
+        let kind = kind::decode(&self.kind)?;
         Ok(ProvidedCapability {
             kind,
             name: self.capability.clone(),

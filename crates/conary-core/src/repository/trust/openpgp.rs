@@ -223,6 +223,7 @@ fn policy_roles(policy: &RepositoryTrustPolicy) -> Vec<(TrustRole, &[OpenPgpTrus
             roles
         }
         RepositoryTrustPolicy::Arch { .. } => Vec::new(),
+        RepositoryTrustPolicy::Eopkg { .. } => Vec::new(),
     }
 }
 

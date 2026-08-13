@@ -18,7 +18,7 @@ pub mod selected_root;
 pub mod source_path;
 pub mod vfs;
 
-pub use cas::{CasStore, object_path};
+pub use cas::{CasStore, PrivateCasWriter, PrivateCopyBatch, object_path};
 pub use path::{safe_join, sanitize_filename, sanitize_path};
 pub use source_path::{DeploymentPath, SourcePathBytes};
 pub use vfs::{NodeId, NodeKind, VfsNode, VfsStats, VfsTree};

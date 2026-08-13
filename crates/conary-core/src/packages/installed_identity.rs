@@ -36,6 +36,13 @@ pub enum InstalledPackageIdentity {
         version: String,
         architecture: String,
     },
+    Eopkg {
+        selector: String,
+        name: String,
+        version: String,
+        release: u64,
+        architecture: String,
+    },
 }
 
 impl InstalledPackageIdentity {
@@ -45,6 +52,7 @@ impl InstalledPackageIdentity {
             Self::Rpm { .. } => SourcePackageFormat::Rpm,
             Self::Dpkg { .. } => SourcePackageFormat::Debian,
             Self::Pacman { .. } => SourcePackageFormat::Alpm,
+            Self::Eopkg { .. } => SourcePackageFormat::Eopkg,
         }
     }
 
@@ -101,6 +109,22 @@ impl InstalledPackageIdentity {
         })
     }
 
+    pub fn eopkg(
+        selector: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+        release: u64,
+        architecture: impl Into<String>,
+    ) -> Result<Self> {
+        Self::validated(Self::Eopkg {
+            selector: selector.into(),
+            name: name.into(),
+            version: version.into(),
+            release,
+            architecture: architecture.into(),
+        })
+    }
+
     pub fn validate(&self) -> Result<()> {
         let required: Vec<(&str, &str)> = match self {
             Self::Rpm {
@@ -129,6 +153,18 @@ impl InstalledPackageIdentity {
                 name,
                 version,
                 architecture,
+            } => vec![
+                ("selector", selector.as_str()),
+                ("name", name.as_str()),
+                ("version", version.as_str()),
+                ("architecture", architecture.as_str()),
+            ],
+            Self::Eopkg {
+                selector,
+                name,
+                version,
+                architecture,
+                ..
             } => vec![
                 ("selector", selector.as_str()),
                 ("name", name.as_str()),
@@ -170,6 +206,7 @@ impl InstalledPackageIdentity {
                 ..
             } => selector == name || *selector == format!("{name}:{architecture}"),
             Self::Pacman { selector, name, .. } => selector == name,
+            Self::Eopkg { selector, name, .. } => selector == name,
         };
         if !selector_matches_fields {
             return Err(Error::ParseError(format!(
@@ -185,12 +222,16 @@ impl InstalledPackageIdentity {
             Self::Rpm { selector, .. }
             | Self::Dpkg { selector, .. }
             | Self::Pacman { selector, .. } => selector,
+            Self::Eopkg { selector, .. } => selector,
         }
     }
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Rpm { name, .. } | Self::Dpkg { name, .. } | Self::Pacman { name, .. } => name,
+            Self::Rpm { name, .. }
+            | Self::Dpkg { name, .. }
+            | Self::Pacman { name, .. }
+            | Self::Eopkg { name, .. } => name,
         }
     }
 
@@ -214,6 +255,9 @@ impl InstalledPackageIdentity {
                 value
             }
             Self::Dpkg { version, .. } | Self::Pacman { version, .. } => version.clone(),
+            Self::Eopkg {
+                version, release, ..
+            } => format!("{version}-{release}"),
         }
     }
 
@@ -222,6 +266,7 @@ impl InstalledPackageIdentity {
             Self::Rpm { architecture, .. }
             | Self::Dpkg { architecture, .. }
             | Self::Pacman { architecture, .. } => architecture,
+            Self::Eopkg { architecture, .. } => architecture,
         }
     }
 
@@ -229,7 +274,7 @@ impl InstalledPackageIdentity {
     pub const fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
         match self {
             Self::Dpkg { multi_arch, .. } => Some(*multi_arch),
-            Self::Rpm { .. } | Self::Pacman { .. } => None,
+            Self::Rpm { .. } | Self::Pacman { .. } | Self::Eopkg { .. } => None,
         }
     }
 
@@ -242,7 +287,9 @@ impl InstalledPackageIdentity {
             Self::Rpm {
                 name, architecture, ..
             } => format!("{name}.{architecture}"),
-            Self::Dpkg { selector, .. } | Self::Pacman { selector, .. } => selector.clone(),
+            Self::Dpkg { selector, .. }
+            | Self::Pacman { selector, .. }
+            | Self::Eopkg { selector, .. } => selector.clone(),
         }
     }
 

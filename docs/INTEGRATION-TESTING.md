@@ -619,6 +619,18 @@ filename, and makes the image install that package through `dnf`, `apt`, or
 digest before the installed `/usr/bin/conary` runs all three source formats.
 Source-built PR evidence is not a substitute for this published-byte lane.
 
+Solus uses the separate `solus-eopkg-acceptance` QEMU suite because its
+release authority is an official bootable image rather than a container
+facsimile. The suite boots the pinned current Polaris root, proves native
+eopkg and update state, applies/repeats/rolls back exact repository takeover,
+syncs the authenticated 11,907-record index, and converts an authentic
+installed eopkg only after exact adopted-payload equivalence. Its image is the
+published `solus-4.9-polaris-2026-08-12-v3.qcow2` test artifact; a skipped
+download or QEMU step is not acceptance evidence. The published image's ext4
+root carries the `verity` feature before the suite starts, and the suite proves
+that fixture contract before Conary initialization so generation publication
+cannot degrade to an unprotected composefs mount.
+
 Each full parity run must pass `scripts/check-conary-test-result-gate.sh` and
 `scripts/check-conary-corpus-result-gate.sh`,
 which requires zero failed, skipped, and cancelled results before the matrix
@@ -702,6 +714,7 @@ available. Review the generated bundle before attaching it. It does not copy
 | `artix` | `Containerfile.artix` | Artix Linux (rolling, OpenRC) | `static-binary` |
 | `linux-mint-22.3` | `Containerfile.debian-derivative` | Linux Mint 22.3 release-owned root | `static-binary` |
 | `pop-os-24.04` | `Containerfile.debian-derivative` | Pop!_OS 24.04 release-owned root | `static-binary` |
+| `solus` | QEMU artifact | Solus 4.9 updated to current Polaris | `static-binary` |
 
 `build_context` is a required typed distro capability in `config.toml` that
 selects which Conary binary an image receives. Distro names do not select this

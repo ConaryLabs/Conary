@@ -33,8 +33,10 @@ pub mod trust;
 
 pub mod declarations;
 pub mod dependency_model;
+mod dependency_source;
 pub mod effective_policy;
 pub mod enrollment;
+mod eopkg_version;
 pub mod package_relation;
 pub mod parsers;
 pub mod requirement;
@@ -82,6 +84,7 @@ pub use sync::{
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,
     OpenPgpTrustRoot, RepositoryTrustPolicy, RpmMetadataAuthority, TrustRole,
+    eopkg_origin_from_index_url,
 };
 
 pub use chunk_fetcher::{

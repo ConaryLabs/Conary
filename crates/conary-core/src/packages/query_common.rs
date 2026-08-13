@@ -14,6 +14,8 @@ pub enum InstalledFileAbsencePolicy {
     RpmMissingOk,
     /// The RPM record carries both `%ghost` and `missingok`.
     RpmGhostAndMissingOk,
+    /// An eopkg permanent record may remain declared without live payload.
+    EopkgPermanent,
 }
 
 impl InstalledFileAbsencePolicy {

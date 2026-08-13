@@ -2,7 +2,7 @@
 
 //! Remi client for fetching CCS packages from conversion proxies
 //!
-//! Remi converts native package formats (RPM/DEB/Arch) to CCS
+//! Remi converts native package formats (RPM/DEB/Arch/eopkg) to CCS
 //! format on-demand. When a package isn't cached, the server returns 202 Accepted
 //! with a job ID that the client polls until conversion completes.
 //!

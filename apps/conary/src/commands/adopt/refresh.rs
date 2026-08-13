@@ -135,7 +135,7 @@ pub async fn cmd_adopt_refresh(
     let pkg_mgr = SystemPackageManager::resolve(requested_manager)?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
-            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
+            "No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg."
         ));
     }
 
@@ -631,6 +631,13 @@ fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<Vec<CurrentNativeP
                 description: record.info.description,
             })
             .collect(),
+        SystemPackageManager::Eopkg => conary_core::packages::eopkg::query::query_all_packages()?
+            .into_iter()
+            .map(|record| CurrentNativePackage {
+                identity: record.identity,
+                description: record.info.description,
+            })
+            .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
     Ok(packages)
@@ -648,6 +655,10 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<
             .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
             .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
+        SystemPackageManager::Eopkg => {
+            conary_core::packages::eopkg::query::query_package_files(name)
+                .map_err(|e| anyhow::anyhow!("eopkg file query failed for '{name}': {e}"))?
+        }
         _ => return Ok(Vec::new()),
     };
     Ok(raw

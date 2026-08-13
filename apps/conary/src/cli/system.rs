@@ -28,6 +28,7 @@ pub enum NativePackageManager {
     Rpm,
     Dpkg,
     Pacman,
+    Eopkg,
 }
 
 impl From<NativePackageManager> for conary_core::packages::SystemPackageManager {
@@ -36,6 +37,7 @@ impl From<NativePackageManager> for conary_core::packages::SystemPackageManager 
             NativePackageManager::Rpm => Self::Rpm,
             NativePackageManager::Dpkg => Self::Dpkg,
             NativePackageManager::Pacman => Self::Pacman,
+            NativePackageManager::Eopkg => Self::Eopkg,
         }
     }
 }

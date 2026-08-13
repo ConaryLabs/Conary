@@ -217,6 +217,9 @@ fn identity_for(scheme: VersionScheme) -> InstalledPackageIdentity {
         VersionScheme::Arch => {
             InstalledPackageIdentity::pacman("exact", "exact", "1.2.3-4", "x86_64").unwrap()
         }
+        VersionScheme::Eopkg => {
+            InstalledPackageIdentity::eopkg("exact", "exact", "1.2.3", 4, "x86_64").unwrap()
+        }
         other => panic!("unsupported native test scheme {other:?}"),
     }
 }
@@ -226,6 +229,7 @@ fn format_for(scheme: VersionScheme) -> PackageFormatType {
         VersionScheme::Rpm => PackageFormatType::Rpm,
         VersionScheme::Debian => PackageFormatType::Deb,
         VersionScheme::Arch => PackageFormatType::Arch,
+        VersionScheme::Eopkg => PackageFormatType::Eopkg,
         other => panic!("unsupported native test scheme {other:?}"),
     }
 }
@@ -240,6 +244,7 @@ fn insert_repository_package(
         VersionScheme::Rpm => NativeSourceEcosystem::Rpm,
         VersionScheme::Debian => NativeSourceEcosystem::Deb,
         VersionScheme::Arch => NativeSourceEcosystem::Alpm,
+        VersionScheme::Eopkg => NativeSourceEcosystem::Eopkg,
         other => panic!("unsupported native test scheme {other:?}"),
     };
     let root = OpenPgpTrustRoot {
@@ -299,6 +304,18 @@ fn insert_repository_package(
                 })
                 .unwrap();
         }
+        NativeSourceEcosystem::Eopkg => {
+            repository
+                .set_parser_config(RepositoryParserConfig::Eopkg {
+                    architecture: "x86_64".to_string(),
+                })
+                .unwrap();
+            repository
+                .set_trust_policy(RepositoryTrustPolicy::Eopkg {
+                    origin: "https://packages.example.test/".to_string(),
+                })
+                .unwrap();
+        }
     }
     let repository_identity = format!("test:{name}");
     let policy = RepositorySourcePolicy::new(
@@ -342,11 +359,19 @@ fn payload_paths_are_normalized_without_accepting_dot_segments() {
 }
 
 #[test]
-fn artifact_cache_identity_requires_an_exact_sha256() {
-    let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    assert_eq!(exact_sha256(digest).unwrap(), digest);
-    assert_eq!(exact_sha256(&format!("sha256:{digest}")).unwrap(), digest);
-    assert!(exact_sha256("sha256:abcd").is_err());
+fn artifact_cache_identity_preserves_the_typed_source_checksum() {
+    let sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    assert_eq!(
+        SourceChecksum::parse(sha256).unwrap(),
+        SourceChecksum::Sha256(sha256.to_string())
+    );
+    let sha1 = "0123456789abcdef0123456789abcdef01234567";
+    assert_eq!(
+        SourceChecksum::parse(&format!("sha1:{sha1}")).unwrap(),
+        SourceChecksum::Sha1(sha1.to_string())
+    );
+    assert!(SourceChecksum::parse("sha256:abcd").is_err());
+    assert!(SourceChecksum::parse("sha1:abcd").is_err());
 }
 
 #[test]
@@ -359,12 +384,26 @@ fn conversion_requires_complete_adopted_payload_authority() {
 
 #[test]
 fn conversion_rejects_bytes_other_than_the_selected_repository_artifact() {
-    let expected = format!("sha256:{}", "a".repeat(64));
+    let mut artifact = tempfile::NamedTempFile::new().unwrap();
+    artifact.write_all(b"selected repository artifact").unwrap();
+    artifact.flush().unwrap();
+    let expected = "sha1:91bdcc799e3e18b44b2d714242685ca142be11af".to_string();
     let actual = format!("sha256:{}", "b".repeat(64));
-    let error = validate_converted_source_checksum(&actual, &expected).unwrap_err();
-    assert!(error.to_string().contains(&expected), "{error}");
+    let error =
+        validate_converted_source_checksum(&actual, &expected, artifact.path()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("sha256:72dd206233bdec419e461fc00a21bf1a9aa26aa87d92cfacfbec7fadd72af345"),
+        "{error}"
+    );
     assert!(error.to_string().contains(&actual), "{error}");
-    validate_converted_source_checksum(&expected, &expected).unwrap();
+    validate_converted_source_checksum(
+        "sha256:72dd206233bdec419e461fc00a21bf1a9aa26aa87d92cfacfbec7fadd72af345",
+        &expected,
+        artifact.path(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -378,6 +417,21 @@ fn hardlink_comparison_uses_topology_not_capture_specific_identity() {
         identity: "adopted-group-9".to_string(),
     };
     assert_eq!(comparable_kind(&left, true), comparable_kind(&right, true));
+}
+
+#[test]
+fn eopkg_timestamp_projection_matches_python_tarfile_installation() {
+    let source = PayloadTimestamp {
+        seconds: 1_782_010_753,
+        nanoseconds: 707_114_200,
+    };
+    assert_eq!(
+        eopkg_installed_timestamp(source),
+        PayloadTimestamp {
+            seconds: 1_782_010_753,
+            nanoseconds: 707_114_219,
+        }
+    );
 }
 
 #[test]
@@ -412,6 +466,7 @@ fn exact_identity_and_payload_equivalence_cover_all_native_formats() {
         VersionScheme::Rpm,
         VersionScheme::Debian,
         VersionScheme::Arch,
+        VersionScheme::Eopkg,
     ] {
         let package = package_for(scheme);
         let format = format_for(scheme);
@@ -426,6 +481,7 @@ fn identity_mismatch_is_typed_for_all_native_formats() {
         VersionScheme::Rpm,
         VersionScheme::Debian,
         VersionScheme::Arch,
+        VersionScheme::Eopkg,
     ] {
         let mut package = package_for(scheme);
         package.architecture = "aarch64".to_string();
@@ -446,6 +502,7 @@ fn payload_drift_is_path_specific_for_all_native_formats() {
         VersionScheme::Rpm,
         VersionScheme::Debian,
         VersionScheme::Arch,
+        VersionScheme::Eopkg,
     ] {
         let package = package_for(scheme);
         let format = format_for(scheme);
@@ -469,6 +526,7 @@ fn exact_repository_resolution_covers_all_native_formats() {
         VersionScheme::Rpm,
         VersionScheme::Debian,
         VersionScheme::Arch,
+        VersionScheme::Eopkg,
     ] {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();

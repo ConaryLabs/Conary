@@ -276,6 +276,45 @@ pub enum RepositoryTrustPolicy {
         keyring: ArchKeyringTrust,
         sig_level: ArchSigLevel,
     },
+    /// Current eopkg repositories publish no signature. The exact HTTPS
+    /// origin authenticates its SHA-256 sidecar, which authenticates the
+    /// compressed index and its per-package SHA-1 identities.
+    Eopkg { origin: String },
+}
+
+/// Derive the exact HTTPS repository origin from eopkg's native index URL.
+pub fn eopkg_origin_from_index_url(index_url: &str) -> Result<String> {
+    let mut url = Url::parse(index_url)
+        .map_err(|error| Error::ConfigError(format!("eopkg index URL is invalid: {error}")))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::ConfigError(
+            "eopkg index URL must be an absolute HTTPS URL without credentials, query, or fragment"
+                .to_string(),
+        ));
+    }
+    let origin_path = url
+        .path()
+        .strip_suffix("eopkg-index.xml.xz")
+        .ok_or_else(|| {
+            Error::ConfigError(
+                "eopkg index URL must end with exact eopkg-index.xml.xz basename".to_string(),
+            )
+        })?
+        .to_string();
+    if !origin_path.ends_with('/') {
+        return Err(Error::ConfigError(
+            "eopkg index URL must place eopkg-index.xml.xz below a repository directory"
+                .to_string(),
+        ));
+    }
+    url.set_path(&origin_path);
+    Ok(url.to_string())
 }
 
 impl RepositoryTrustPolicy {
@@ -284,6 +323,7 @@ impl RepositoryTrustPolicy {
             Self::Debian { .. } => RepositoryFormat::Debian,
             Self::Rpm { .. } => RepositoryFormat::Fedora,
             Self::Arch { .. } => RepositoryFormat::Arch,
+            Self::Eopkg { .. } => RepositoryFormat::Eopkg,
         }
     }
 
@@ -302,6 +342,24 @@ impl RepositoryTrustPolicy {
             Self::Arch { keyring, sig_level } => {
                 keyring.validate()?;
                 sig_level.validate()?;
+            }
+            Self::Eopkg { origin } => {
+                let url = Url::parse(origin).map_err(|error| {
+                    Error::ConfigError(format!("eopkg repository origin is invalid: {error}"))
+                })?;
+                if url.scheme() != "https" || url.host_str().is_none() || !url.path().ends_with('/')
+                {
+                    return Err(Error::ConfigError(
+                        "eopkg trust origin must be an absolute HTTPS base URL ending in '/'"
+                            .to_string(),
+                    ));
+                }
+                let index_url = format!("{origin}eopkg-index.xml.xz");
+                if eopkg_origin_from_index_url(&index_url)? != *origin {
+                    return Err(Error::ConfigError(
+                        "eopkg trust origin is not canonical".to_string(),
+                    ));
+                }
             }
         }
         Ok(())

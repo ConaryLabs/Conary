@@ -16,7 +16,7 @@ use tracing::info;
 ///
 /// Revision 36 adds an exact captured-OpenRC activation source kind. Earlier
 /// pre-alpha databases must be rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 36;
+pub const SCHEMA_VERSION: i32 = 37;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_35_requires_rebuild_for_revision_36() {
+    fn revision_36_requires_rebuild_for_revision_37() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -244,19 +244,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 35);
+                VALUES ('conary-current-v1', 36);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (35);",
+            INSERT INTO schema_version (version) VALUES (36);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 35; this pre-alpha build supports only schema epoch conary-current-v1 revision 36"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 36; this pre-alpha build supports only schema epoch conary-current-v1 revision 37"
         );
     }
 
@@ -631,6 +631,20 @@ mod tests {
         )
         .unwrap();
 
+        conn.execute(
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 source_profile, version_scheme, native_package_identity_json
+             ) VALUES (
+                 'jq', '1.8.2-13', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'solus', 'eopkg',
+                 '{\"manager\":\"eopkg\",\"selector\":\"jq\",\"name\":\"jq\",
+                   \"version\":\"1.8.2\",\"release\":13,\"architecture\":\"x86_64\"}'
+             )",
+            [],
+        )
+        .unwrap();
+
         for sql in [
             "INSERT INTO troves (
                  name, version, type, architecture, install_source, install_reason,
@@ -667,6 +681,26 @@ mod tests {
                  'adopted-track', 'explicit', 'debian',
                  '{\"manager\":\"dpkg\",\"selector\":\"libc6:amd64\",\"name\":\"libc6\",
                    \"version\":\"2.41-12\",\"architecture\":\"i386\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 source_profile, version_scheme, native_package_identity_json
+             ) VALUES (
+                 'missing-eopkg-release', '1.0-1', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'solus', 'eopkg',
+                 '{\"manager\":\"eopkg\",\"selector\":\"missing-eopkg-release\",
+                   \"name\":\"missing-eopkg-release\",\"version\":\"1.0\",
+                   \"architecture\":\"x86_64\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 source_profile, version_scheme, native_package_identity_json
+             ) VALUES (
+                 'wrong-eopkg-release', '1.0-2', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'solus', 'eopkg',
+                 '{\"manager\":\"eopkg\",\"selector\":\"wrong-eopkg-release\",
+                   \"name\":\"wrong-eopkg-release\",\"version\":\"1.0\",\"release\":1,
+                   \"architecture\":\"x86_64\"}'
              )",
         ] {
             assert!(conn.execute(sql, []).is_err(), "{sql}");

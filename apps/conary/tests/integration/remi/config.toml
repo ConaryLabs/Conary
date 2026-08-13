@@ -53,6 +53,16 @@ test_packages = [
     { package = "jq", binary = "/usr/bin/jq" },
 ]
 
+[distros.solus]
+remi_distro = "solus"
+repo_name = "remi-solus"
+build_context = "static-binary"
+test_packages = [
+    { package = "which", binary = "/usr/bin/which" },
+    { package = "tree", binary = "/usr/bin/tree" },
+    { package = "jq", binary = "/usr/bin/jq" },
+]
+
 [distros.cachyos]
 remi_distro = "arch"
 repo_name = "remi-arch"

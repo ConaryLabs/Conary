@@ -73,6 +73,8 @@ flate2.workspace = true
 
 [dev-dependencies]
 tar.workspace = true
+liblzma.workspace = true
+zip.workspace = true
 
 [[bin]]
 name = "remi"
