@@ -763,6 +763,33 @@ printf 'fixture\n' > "$output/$file"
     }
 
     #[test]
+    fn artix_container_uses_core_mirrors_before_package_sync() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let containerfile =
+            manifest_dir.join("../conary/tests/integration/remi/containers/Containerfile.artix");
+        let contents = fs::read_to_string(containerfile).expect("read Artix containerfile");
+
+        let mirror1 = contents
+            .find("Server = https://mirror1.artixlinux.org/repos/$repo/os/$arch")
+            .expect("Artix container must select the first official core mirror");
+        let cvut = contents
+            .find("Server = https://ftp.sh.cvut.cz/artix-linux/$repo/os/$arch")
+            .expect("Artix container must select the second official core mirror");
+        let sync = contents
+            .find("pacman -Syyu --noconfirm")
+            .expect("Artix container must force-refresh package databases before upgrading");
+
+        assert!(
+            mirror1 < sync && cvut < sync,
+            "Artix core mirrors must be configured before package synchronization"
+        );
+        assert!(
+            !contents.contains("--overwrite"),
+            "the image must resolve repository coherence instead of masking file conflicts"
+        );
+    }
+
+    #[test]
     fn package_mode_containerfiles_install_exact_canonical_artifacts() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let containers = manifest_dir.join("../conary/tests/integration/remi/containers");
