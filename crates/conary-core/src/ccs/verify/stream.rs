@@ -7,10 +7,7 @@ use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::v3::schema::{AuthorityDocumentV3, PackageKindV3};
-use crate::filesystem::CasStore;
-use crate::packages::payload::{
-    PackagePayload, PackagePayloadFile, PayloadSpool, ReopenablePayload,
-};
+use crate::packages::payload::{PackagePayload, PackagePayloadFile, ReopenablePayload};
 use anyhow::{Context, Result};
 use flate2::bufread::GzDecoder;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -31,6 +28,7 @@ pub(super) struct StreamVerifiedArchive {
     pub debug_toml: Option<Vec<u8>>,
     pub components: HashMap<String, ComponentData>,
     pub payload: PackagePayload,
+    pub verified_object_metrics: Option<crate::filesystem::VerifiedObjectBatchMetrics>,
     pub files_checked: usize,
 }
 
@@ -59,15 +57,17 @@ struct AuthenticatedMetadata {
     files_checked: usize,
 }
 
-pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<StreamVerifiedArchive> {
+pub(super) fn verify_archive<'a>(
+    path: &Path,
+    policy: &TrustPolicy,
+    destination: super::object_sink::ObjectDestination<'a>,
+) -> Result<StreamVerifiedArchive> {
     let file = File::open(path).with_context(|| format!("open CCS package {}", path.display()))?;
     let decoder = GzDecoder::new(BufReader::new(file));
     let mut archive = Archive::new(decoder);
     let mut metadata = MetadataState::default();
     let mut authenticated = None;
-    let mut spool = None;
-    let mut object_store = None;
-    let mut object_sources = HashMap::new();
+    let mut object_sink = None;
     let mut objects_started = false;
     let mut entries_seen = 0_u64;
 
@@ -90,25 +90,20 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
         if is_object {
             if authenticated.is_none() {
                 authenticated = Some(authenticate_metadata(&metadata, policy)?);
-                let required = authenticated
-                    .as_ref()
-                    .expect("just authenticated")
-                    .expected_objects
-                    .values()
-                    .try_fold(0_u64, |total, size| total.checked_add(*size))
-                    .context("CCS signed object-size arithmetic overflow")?;
-                let payload_spool = PayloadSpool::new(required)?;
-                object_store = Some(CasStore::new(payload_spool.root().join("objects"))?);
-                spool = Some(payload_spool);
+                object_sink = Some(super::object_sink::VerifiedObjectSink::new(
+                    destination,
+                    &authenticated
+                        .as_ref()
+                        .expect("just authenticated")
+                        .expected_objects,
+                )?);
             }
             objects_started = true;
             read_object(
                 &mut entry,
                 &path,
                 authenticated.as_ref().expect("metadata authenticated"),
-                object_store.as_ref().expect("object store initialized"),
-                spool.as_ref().expect("payload spool initialized"),
-                &mut object_sources,
+                object_sink.as_mut().expect("object sink initialized"),
             )?;
             continue;
         }
@@ -120,7 +115,14 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
         Some(value) => value,
         None => authenticate_metadata(&metadata, policy)?,
     };
-    let archived_objects = object_sources.keys().cloned().collect::<BTreeSet<_>>();
+    let object_sink = match object_sink {
+        Some(value) => value,
+        None => super::object_sink::VerifiedObjectSink::new(
+            destination,
+            &authenticated.expected_objects,
+        )?,
+    };
+    let archived_objects = object_sink.seen().clone();
     let expected_objects = authenticated
         .expected_objects
         .keys()
@@ -132,7 +134,8 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
         ))
         .into());
     }
-    let payload = payload_from_authority(&authenticated.authority, &object_sources)?;
+    let object_output = object_sink.finish()?;
+    let payload = payload_from_authority(&authenticated.authority, &object_output.sources)?;
     // Components are derived from the signed authority, which is the source of
     // truth. Archive component entries are still parsed and validated on the
     // way past — name agreement, duplicates, and size budget — so a malformed
@@ -149,6 +152,7 @@ pub(super) fn verify_archive(path: &Path, policy: &TrustPolicy) -> Result<Stream
         debug_toml: metadata.debug_toml,
         components,
         payload,
+        verified_object_metrics: object_output.metrics,
         files_checked: authenticated.files_checked,
     })
 }
@@ -350,9 +354,7 @@ fn read_object(
     entry: &mut tar::Entry<'_, ArchiveDecoder>,
     path: &str,
     authenticated: &AuthenticatedMetadata,
-    store: &CasStore,
-    spool: &PayloadSpool,
-    sources: &mut HashMap<String, ReopenablePayload>,
+    sink: &mut super::object_sink::VerifiedObjectSink<'_>,
 ) -> Result<()> {
     require_regular(entry, path)?;
     let object = path
@@ -376,25 +378,7 @@ fn read_object(
         ))
         .into());
     }
-    if sources.contains_key(&hash) {
-        return Err(VerifyError::PackageError(format!(
-            "CCS archive contains duplicate object {hash}"
-        ))
-        .into());
-    }
-    match store.store_reader_expected(entry, *size, &hash) {
-        Ok(_) => {}
-        Err(crate::Error::ChecksumMismatch { expected, actual }) => {
-            return Err(VerifyError::PayloadInvalid(format!(
-                "CCS object path hash mismatch: expected {expected}, got {actual}"
-            ))
-            .into());
-        }
-        Err(error) => return Err(error.into()),
-    }
-    let path = store.hash_to_path(&hash)?;
-    sources.insert(hash, spool.source(path));
-    Ok(())
+    sink.ingest(&hash, *size, entry)
 }
 
 fn payload_from_authority(
@@ -675,7 +659,11 @@ mod tests {
     }
 
     fn error_text(path: &Path, policy: &TrustPolicy) -> String {
-        match verify_archive(path, policy) {
+        match verify_archive(
+            path,
+            policy,
+            super::super::object_sink::ObjectDestination::Spool,
+        ) {
             Ok(_) => panic!("mutated archive unexpectedly verified"),
             Err(error) => format!("{error:#}"),
         }
@@ -816,7 +804,14 @@ mod tests {
         let truncated = temp.path().join("truncated.ccs");
         let mut output = File::create(&truncated).unwrap();
         output.write_all(&bytes[..bytes.len() / 2]).unwrap();
-        assert!(verify_archive(&truncated, &policy).is_err());
+        assert!(
+            verify_archive(
+                &truncated,
+                &policy,
+                super::super::object_sink::ObjectDestination::Spool,
+            )
+            .is_err()
+        );
 
         // The aggregate control-document ceiling is derived from this
         // package's own census, so padding is refused without allocation.

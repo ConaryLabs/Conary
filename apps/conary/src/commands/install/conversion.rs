@@ -10,7 +10,9 @@ use super::PackageFormatType;
 use super::batch::{BatchInstaller, prepare_ccs_package_for_batch};
 use super::dep_resolution;
 use super::dependencies::resolved_repository_deps_from_sat_result;
-use super::repository_batch::{RepositoryBatchSelection, prepare_repository_batch};
+use super::repository_batch::{
+    RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
+};
 use super::{
     CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, RepositoryInstallProvenance,
     verify_ccs_package_authority,
@@ -538,12 +540,27 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
         resolution_policy,
     } = opts;
 
-    let verified = verify_ccs_package_authority(
-        db_path,
-        Path::new(ccs_path),
-        &envelope_authority,
-        repository_provenance.as_ref(),
-    )?;
+    let permanent_cas = (!dry_run)
+        .then(|| {
+            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        })
+        .transpose()?;
+    let verified = match &permanent_cas {
+        Some(cas) => super::verify_ccs_package_authority_into_cas(
+            db_path,
+            Path::new(ccs_path),
+            &envelope_authority,
+            repository_provenance.as_ref(),
+            cas,
+        )?,
+        None => verify_ccs_package_authority(
+            db_path,
+            Path::new(ccs_path),
+            &envelope_authority,
+            repository_provenance.as_ref(),
+        )?,
+    };
 
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
         .context("Failed to construct verified CCS package")?;
@@ -640,7 +657,8 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
             intent,
         })
         .collect();
-    let mut prepared = prepare_repository_batch(db_path, selections).await?;
+    let mut prepared =
+        prepare_repository_batch(db_path, selections, RepositoryBatchMode::Install).await?;
     prepared.push(prepare_ccs_package_for_batch(
         &ccs_pkg,
         db_path,

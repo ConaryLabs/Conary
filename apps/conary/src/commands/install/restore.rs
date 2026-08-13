@@ -15,7 +15,7 @@ use super::resolve::{
 use super::{
     CcsEnvelopeAuthority, ExtractionResult, InstallIntent, InstallOptions, InstallPhase,
     InstallProgress, InstallSemantics, NativeLifecycleInstallState, build_resolution_policy,
-    extract_and_classify_files, resolve_canonical_name, verify_ccs_package_authority,
+    extract_and_classify_files, resolve_canonical_name, verify_ccs_package_authority_into_cas,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
@@ -343,11 +343,14 @@ pub(crate) async fn prepare_install_for_restore(
                     "Repository-resolved CCS restore package is missing exact repository provenance"
                 );
             };
-            let verified = verify_ccs_package_authority(
+            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+            let cas = conary_core::filesystem::CasStore::new(runtime_root.objects_dir())?;
+            let verified = verify_ccs_package_authority_into_cas(
                 db_path,
                 &resolved.path,
                 &envelope_authority,
                 repository_provenance.as_ref(),
+                &cas,
             )?;
             let ccs_pkg = CcsPackage::from_verified_archive(path_str, &verified)
                 .context("Failed to construct verified CCS package")?;

@@ -19,7 +19,9 @@ use conary_core::version::VersionConstraint;
 use super::InstallIntent;
 use super::batch::BatchInstaller;
 use super::dependencies::resolved_repository_deps_from_sat_result;
-use super::repository_batch::{RepositoryBatchSelection, prepare_repository_batch};
+use super::repository_batch::{
+    RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
+};
 use super::source_policy::resolve_canonical_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +133,11 @@ async fn process_package_set(
             }
         })
         .collect();
-    let prepared = prepare_repository_batch(db_path, selections).await?;
+    let preparation_mode = match &operation {
+        PackageSetOperation::Validate => RepositoryBatchMode::Validate,
+        PackageSetOperation::Install(_) => RepositoryBatchMode::Install,
+    };
+    let prepared = prepare_repository_batch(db_path, selections, preparation_mode).await?;
     let root_count = resolved_requests.len();
     match operation {
         PackageSetOperation::Validate => {

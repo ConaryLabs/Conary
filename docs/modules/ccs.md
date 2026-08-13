@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-12
-revision: 61
+revision: 62
 summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -52,6 +52,7 @@ Apply typed install prefix (default `/`) to source-root children
 | v3 manifest identity projection | v3/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
 | `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
 | `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
+| Verified object sink | verify/object_sink.rs + filesystem/cas/verified_batch.rs | Streams signed objects to a read-only spool or transaction-owned permanent CAS batch and returns typed committed object authority |
 | Component view | v3/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
 | `ComponentType` | components/types.rs | Closed typed names for standard component metadata; never inferred from payload paths |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
@@ -465,6 +466,19 @@ cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
 decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
 
+Verification-only and dry-run callers use a temporary payload spool and do not
+create permanent CAS state. Mutating CCS install, restore, and repository-batch
+preparation instead stream the signed complete object set into one permanent
+SHA-256 `VerifiedObjectBatch`. Missing bytes are hashed while written once,
+data-synced, published without replacement, and followed by shard/root
+directory durability barriers. Exact-size canonical hits write no payload
+bytes and are not reread solely for insertion; a concurrent publication winner
+is reread and must match its signed size and digest. Only the committed batch
+can create `ReopenablePayload` sources carrying `VerifiedObjectSet` authority,
+and installer storage accepts those canonical identities only for the same CAS
+root after a final regular-file/size metadata check. Ordinary sources retain
+the existing bounded reader-ingestion path.
+
 Configuration authority is exact per path. Each signed declaration retains
 its source-specific record and a `matched` or `absent` payload association;
 there is no package-wide config default. Matched declarations identify one
@@ -626,8 +640,10 @@ behavior.
 ## Install
 
 CCS packages are installed via `conary ccs install`. The installer verifies
-signatures, evaluates capability policy, stores content in CAS, reuses the
-shared composefs generation transaction, and runs declarative hooks.
+signatures, ingests authenticated missing objects directly into permanent CAS,
+evaluates capability policy, reuses the shared composefs generation
+transaction, and runs declarative hooks. Dry-run verification remains
+filesystem-read-only with respect to permanent CAS.
 
 ```bash
 conary ccs install package.ccs --policy ./ccs-trust.toml --yes

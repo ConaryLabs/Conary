@@ -7,6 +7,7 @@
 //! behind an explicit bounded in-memory API for tests and small tooling.
 
 use crate::error::{Error, Result};
+use crate::filesystem::{CasStore, VerifiedObjectSet};
 use crate::packages::traits::ExtractedFile;
 use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind};
 use std::fmt;
@@ -33,6 +34,13 @@ enum PayloadBacking {
         path: PathBuf,
         _spool: Option<Arc<tempfile::TempDir>>,
     },
+    /// A canonical object admitted by one complete, durable verified batch.
+    VerifiedCasObject {
+        path: PathBuf,
+        sha256: String,
+        size: u64,
+        authority: Arc<VerifiedObjectSet>,
+    },
     /// Bounded test/tooling backing. Install parsers and trusted archive
     /// readers must use file-backed sources.
     InMemoryBytes(Arc<[u8]>),
@@ -44,6 +52,14 @@ impl fmt::Debug for ReopenablePayload {
             PayloadBacking::File { path, .. } => formatter
                 .debug_tuple("ReopenablePayload::File")
                 .field(path)
+                .finish(),
+            PayloadBacking::VerifiedCasObject {
+                path, sha256, size, ..
+            } => formatter
+                .debug_struct("ReopenablePayload::VerifiedCasObject")
+                .field("path", path)
+                .field("sha256", sha256)
+                .field("size", size)
                 .finish(),
             PayloadBacking::InMemoryBytes(bytes) => formatter
                 .debug_struct("ReopenablePayload::InMemoryBytes")
@@ -76,6 +92,24 @@ impl ReopenablePayload {
         }
     }
 
+    /// Bind one canonical path to a committed verified-object capability.
+    pub fn from_verified_cas_object(
+        authority: Arc<VerifiedObjectSet>,
+        sha256: impl Into<String>,
+        size: u64,
+    ) -> Result<Self> {
+        let sha256 = sha256.into();
+        let path = authority.object_path(&sha256)?;
+        Ok(Self {
+            backing: PayloadBacking::VerifiedCasObject {
+                path,
+                sha256,
+                size,
+                authority,
+            },
+        })
+    }
+
     /// Explicit bounded in-memory source for tests and small tooling.
     #[must_use]
     pub fn from_in_memory_bytes(bytes: impl Into<Arc<[u8]>>) -> Self {
@@ -89,6 +123,9 @@ impl ReopenablePayload {
             PayloadBacking::File { path, .. } => File::open(path)
                 .map(|file| Box::new(file) as Box<dyn Read + Send>)
                 .map_err(Error::from),
+            PayloadBacking::VerifiedCasObject { path, .. } => File::open(path)
+                .map(|file| Box::new(file) as Box<dyn Read + Send>)
+                .map_err(Error::from),
             PayloadBacking::InMemoryBytes(bytes) => Ok(Box::new(Cursor::new(Arc::clone(bytes)))),
         }
     }
@@ -98,8 +135,48 @@ impl ReopenablePayload {
     pub fn path(&self) -> Option<&Path> {
         match &self.backing {
             PayloadBacking::File { path, .. } => Some(path),
+            PayloadBacking::VerifiedCasObject { path, .. } => Some(path),
             PayloadBacking::InMemoryBytes(_) => None,
         }
+    }
+
+    /// Consume typed verified-object authority for the exact destination CAS.
+    ///
+    /// `Ok(None)` means this is an ordinary source that still requires normal
+    /// ingestion. A verified-CAS source that disagrees with the destination or
+    /// signed content fails closed instead of silently falling back to a reread.
+    pub fn verified_cas_identity_for(
+        &self,
+        cas: &CasStore,
+        content: &PayloadContentAuthority,
+    ) -> Result<Option<String>> {
+        let PayloadBacking::VerifiedCasObject {
+            path,
+            sha256,
+            size,
+            authority,
+        } = &self.backing
+        else {
+            return Ok(None);
+        };
+        if sha256 != &content.sha256 || *size != content.size {
+            return Err(Error::InternalError(format!(
+                "verified CAS payload authority {sha256}/{size} disagrees with signed content {}/{}",
+                content.sha256, content.size
+            )));
+        }
+        if !authority.authorizes(cas, sha256, *size) {
+            return Err(Error::InternalError(format!(
+                "verified CAS object {sha256} does not authorize the requested destination store"
+            )));
+        }
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_file() || metadata.len() != *size {
+            return Err(Error::InternalError(format!(
+                "verified CAS object {sha256} is absent or changed before installer admission"
+            )));
+        }
+        Ok(Some(sha256.clone()))
     }
 }
 

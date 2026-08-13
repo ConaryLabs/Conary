@@ -2,8 +2,9 @@
 
 use super::OwnershipMode;
 use anyhow::{Context, Result};
-use conary_core::ccs::verify::{TrustPolicy, verify_package};
+use conary_core::ccs::verify::{TrustPolicy, verify_package, verify_package_into_cas};
 use conary_core::db::models::{Repository, RepositoryPackage, RepositoryPackageKey};
+use conary_core::filesystem::CasStore;
 use conary_core::repository::RepositorySourceKind;
 use conary_core::repository::versioning::resolve_package_version_scheme;
 use conary_core::scriptlet::SandboxMode;
@@ -114,6 +115,36 @@ pub(crate) fn verify_ccs_package_authority(
     envelope_authority: &CcsEnvelopeAuthority,
     repository_provenance: Option<&RepositoryInstallProvenance>,
 ) -> Result<conary_core::ccs::VerifiedCcsArchive> {
+    let policy = ccs_trust_policy(db_path, envelope_authority, repository_provenance)?;
+    verify_package(ccs_path, &policy).with_context(|| {
+        format!(
+            "CCS package authority verification failed for {}",
+            ccs_path.display()
+        )
+    })
+}
+
+pub(crate) fn verify_ccs_package_authority_into_cas(
+    db_path: &str,
+    ccs_path: &Path,
+    envelope_authority: &CcsEnvelopeAuthority,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+    cas: &CasStore,
+) -> Result<conary_core::ccs::VerifiedCcsArchive> {
+    let policy = ccs_trust_policy(db_path, envelope_authority, repository_provenance)?;
+    verify_package_into_cas(ccs_path, &policy, cas).with_context(|| {
+        format!(
+            "CCS package authority verification and permanent CAS ingestion failed for {}",
+            ccs_path.display()
+        )
+    })
+}
+
+fn ccs_trust_policy(
+    db_path: &str,
+    envelope_authority: &CcsEnvelopeAuthority,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+) -> Result<TrustPolicy> {
     let keys = match envelope_authority {
         CcsEnvelopeAuthority::Repository => {
             let provenance = repository_provenance.context(
@@ -156,13 +187,7 @@ pub(crate) fn verify_ccs_package_authority(
             .to_vec(),
         CcsEnvelopeAuthority::ExactKey(key) => vec![key.clone()],
     };
-    let policy = TrustPolicy::strict(keys);
-    verify_package(ccs_path, &policy).with_context(|| {
-        format!(
-            "CCS package authority verification failed for {}",
-            ccs_path.display()
-        )
-    })
+    Ok(TrustPolicy::strict(keys))
 }
 
 #[cfg(test)]
