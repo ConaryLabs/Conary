@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-08
-revision: 11
+last_updated: 2026-08-13
+revision: 12
 summary: Canonical current signed CCS v3 identity, capability, archive, payload, and trust contract
 ---
 
@@ -25,7 +25,7 @@ A package is a gzip-compressed tar archive. Its accepted entries are:
 | `MANIFEST.toml` | optional regular file | diagnostic projection only; its digest must match signed authority when present |
 | `MANIFEST.attestation.json` | optional regular file | build-attestation envelope bound by signed provenance |
 | `MANIFEST.conversion-boundary.json` | optional regular file | foreign-conversion boundary bound by signed provenance |
-| `objects/<aa>/<62 lowercase hex>` | one per signed regular-file digest | content-addressed payload bytes |
+| `objects/<aa>/<62 lowercase hex>` | one per unique signed whole object or chunk digest | content-addressed payload bytes |
 
 `MANIFEST` is the first archived file. Directory entries may precede it; no
 other regular file may. Reading authority first lets every later ceiling be
@@ -57,8 +57,8 @@ contains:
   token, and required Debian `Multi-Arch` authority for Debian identities;
 - one typed package, group, or redirect body whose tag agrees with identity;
 - provenance-tagged capabilities, exact requirements, relations, and component summaries;
-- exact payload paths, node variants, content digests and sizes, component
-  ownership, per-path config semantics (`noreplace`, `ghost`, and
+- exact payload paths, node variants, whole-file content digests and sizes,
+  required typed content layouts, component ownership, per-path config semantics (`noreplace`, `ghost`, and
   `remove_on_upgrade`), and conflict policy;
 - canonical Linux file-capability declarations bound to exact signed regular
   payload paths;
@@ -135,10 +135,27 @@ Every signed file uses the shared `PayloadNode` contract in
 byte length. Non-regular variants carry their own exact data and do not carry
 regular-file content authority.
 
-For regular files, the archive contains exactly one object at the canonical
-path derived from the lowercase digest. Verification recomputes every digest
-and size, rejects missing or unreferenced objects, and proves that every
-component summary has the signed name, file count, and byte total.
+Every file carries an explicit content layout. Non-regular nodes carry
+`no-content`. An unchunked regular file carries `whole-object`, and the archive
+contains its complete bytes at the canonical path derived from the lowercase
+whole-file digest. A chunked regular file carries `fast-cdc-v2020`, the exact
+16 KiB minimum, 64 KiB average, and 256 KiB maximum profile, and an ordered
+list of chunk SHA-256 digests and lengths. Missing layout authority is a retired
+pre-alpha v3 shape and fails decoding; consumers never infer a layout.
+
+The archive emits each unique signed layout object once in the shared
+`objects/` SHA-256 namespace. Repeated bytes therefore retain one identity
+across files and packages regardless of whether the object is a whole file or
+a content-defined chunk. Verification authenticates every object, concatenates
+chunk objects in signed order, reruns the signed FastCDC profile, and proves
+the final whole-file size and SHA-256 before returning install authority.
+Unknown profiles, missing, duplicate, unreferenced, corrupt, reordered, or
+size-inconsistent objects fail before mutation. Generation materialization
+remains the explicit owner of the required whole-file CAS representation; the
+archive verifier does not create a second persistent whole-file copy.
+
+Verification also proves that every component summary has the signed name,
+file count, and whole-file byte total.
 
 `MANIFEST.toml` is a readable projection. A projection may help inspection, but
 it can neither add nor replace install behavior.
@@ -152,7 +169,8 @@ limit table and no fixed serialized-byte ceiling on `MANIFEST`.
 
 The budget states explicit dimensions, each with its own typed diagnostic:
 
-- counts: payload nodes, payload objects, components, config declarations,
+- counts: payload nodes, ordered payload references, unique payload objects,
+  components, config declarations,
   file-capability declarations and names, provides, requirement groups,
   relation groups, lifecycle entries, and archive entries;
 - per-item lengths: install-path bytes and path-component depth, identifier
@@ -165,9 +183,9 @@ The budget states explicit dimensions, each with its own typed diagnostic:
 Byte ceilings are derived from those dimensions rather than chosen:
 
 - `max_authority_bytes()` bounds decoder memory before allocation. It is the
-  envelope plus `max_files` times the fixed per-record cost plus the aggregate
-  pools. A reader refuses a declared `MANIFEST` length above it before reading
-  a byte.
+  envelope plus `max_files` times the fixed per-record cost, the maximum signed
+  object-reference cost, and the aggregate pools. A reader refuses a declared
+  `MANIFEST` length above it before reading a byte.
 - `authority_bytes_ceiling(census)` bounds the exact document one package may
   occupy, computed from that package's measured structure, so a package that
   declares little authority cannot ship a padded document.
@@ -183,8 +201,9 @@ persistence.
 
 Untrusted inspection never retains payload bytes: it stream-hashes each object
 against its canonical path and discards it. Verification streams objects into
-the payload spool with their signed sizes. Neither path buffers whole-package
-payload.
+the payload spool or transaction-owned CAS with their signed sizes, then uses
+a lazy concatenating reader for chunked files. Neither path buffers a complete
+file or whole-package payload.
 
 ## Signatures And Trust
 

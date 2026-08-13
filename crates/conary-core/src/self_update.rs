@@ -453,16 +453,16 @@ mod tests {
 
     fn chunked_self_update_build(
         package_name: &str,
-        chunks: &[&[u8]],
+        content: &[u8],
     ) -> crate::ccs::builder::BuildResult {
-        let content = chunks.concat();
-        let mut build = current_self_update_build(package_name, &content);
-        let chunk_hashes = chunks
+        let mut build = current_self_update_build(package_name, content);
+        let chunk_references = crate::ccs::chunking::Chunker::new()
+            .chunk_bytes(content)
             .iter()
-            .map(|chunk| crate::hash::sha256(chunk))
+            .map(crate::ccs::chunking::Chunk::reference)
             .collect::<Vec<_>>();
-        build.files[0].chunks = Some(chunk_hashes.clone());
-        build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_hashes);
+        build.files[0].chunks = Some(chunk_references.clone());
+        build.components.get_mut("runtime").unwrap().files[0].chunks = Some(chunk_references);
         build.chunked = true;
         build
     }
@@ -619,10 +619,9 @@ mod tests {
     fn extract_binary_reads_current_authority_from_chunked_builder_state() {
         let dir = tempfile::tempdir().unwrap();
         let ccs_path = dir.path().join("chunked.ccs");
-        let first = b"#!/bin/sh\n";
-        let second = b"echo chunks\n";
-        let content = [first.as_slice(), second.as_slice()].concat();
-        let build = chunked_self_update_build("conary", &[first, second]);
+        let mut content = b"#!/bin/sh\necho chunks\n".to_vec();
+        content.resize(crate::ccs::chunking::MIN_CHUNK_SIZE as usize + 4096, b'#');
+        let build = chunked_self_update_build("conary", &content);
         let key = write_current_self_update_ccs(&ccs_path, &build);
 
         let verified = verify_test_self_update_ccs(&ccs_path, &key);
@@ -645,7 +644,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![content_hash]
         );
-        assert!(verified.components()["runtime"].files[0].chunks.is_none());
+        assert!(
+            verified.components()["runtime"].files[0]
+                .chunks
+                .as_ref()
+                .is_some_and(|chunks| !chunks.is_empty())
+        );
         let binary = extract_binary(&verified, dir.path()).unwrap();
         assert_eq!(std::fs::read(binary).unwrap(), content);
     }

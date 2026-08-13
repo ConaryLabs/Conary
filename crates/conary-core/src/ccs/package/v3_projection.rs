@@ -56,7 +56,7 @@ pub(super) fn files_from_v3_authority(authority: &AuthorityDocumentV3) -> Result
             node: file.node.clone(),
             content: file.content.clone(),
             component: file.component.clone(),
-            chunks: None,
+            chunks: file.content_layout.chunks().map(<[_]>::to_vec),
         })
         .collect())
 }

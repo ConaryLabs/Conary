@@ -41,6 +41,8 @@ enum PayloadBacking {
         size: u64,
         authority: Arc<VerifiedObjectSet>,
     },
+    /// Ordered authenticated objects that reconstruct one signed whole file.
+    ConcatenatedObjects(Vec<ReopenablePayload>),
     /// Bounded test/tooling backing. Install parsers and trusted archive
     /// readers must use file-backed sources.
     InMemoryBytes(Arc<[u8]>),
@@ -60,6 +62,10 @@ impl fmt::Debug for ReopenablePayload {
                 .field("path", path)
                 .field("sha256", sha256)
                 .field("size", size)
+                .finish(),
+            PayloadBacking::ConcatenatedObjects(parts) => formatter
+                .debug_struct("ReopenablePayload::ConcatenatedObjects")
+                .field("parts", &parts.len())
                 .finish(),
             PayloadBacking::InMemoryBytes(bytes) => formatter
                 .debug_struct("ReopenablePayload::InMemoryBytes")
@@ -110,6 +116,18 @@ impl ReopenablePayload {
         })
     }
 
+    /// Reopen one file as the ordered concatenation of authenticated objects.
+    pub fn from_concatenated_objects(parts: Vec<ReopenablePayload>) -> Result<Self> {
+        if parts.is_empty() {
+            return Err(Error::ParseError(
+                "concatenated payload requires at least one object".to_string(),
+            ));
+        }
+        Ok(Self {
+            backing: PayloadBacking::ConcatenatedObjects(parts),
+        })
+    }
+
     /// Explicit bounded in-memory source for tests and small tooling.
     #[must_use]
     pub fn from_in_memory_bytes(bytes: impl Into<Arc<[u8]>>) -> Self {
@@ -126,6 +144,10 @@ impl ReopenablePayload {
             PayloadBacking::VerifiedCasObject { path, .. } => File::open(path)
                 .map(|file| Box::new(file) as Box<dyn Read + Send>)
                 .map_err(Error::from),
+            PayloadBacking::ConcatenatedObjects(parts) => Ok(Box::new(ConcatenatedReader {
+                remaining: parts.clone().into_iter(),
+                current: None,
+            })),
             PayloadBacking::InMemoryBytes(bytes) => Ok(Box::new(Cursor::new(Arc::clone(bytes)))),
         }
     }
@@ -136,6 +158,7 @@ impl ReopenablePayload {
         match &self.backing {
             PayloadBacking::File { path, .. } => Some(path),
             PayloadBacking::VerifiedCasObject { path, .. } => Some(path),
+            PayloadBacking::ConcatenatedObjects(_) => None,
             PayloadBacking::InMemoryBytes(_) => None,
         }
     }
@@ -177,6 +200,34 @@ impl ReopenablePayload {
             )));
         }
         Ok(Some(sha256.clone()))
+    }
+}
+
+struct ConcatenatedReader {
+    remaining: std::vec::IntoIter<ReopenablePayload>,
+    current: Option<Box<dyn Read + Send>>,
+}
+
+impl Read for ConcatenatedReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if let Some(current) = self.current.as_mut() {
+                let read = current.read(buffer)?;
+                if read != 0 {
+                    return Ok(read);
+                }
+                self.current = None;
+            }
+            let Some(next) = self.remaining.next() else {
+                return Ok(0);
+            };
+            self.current = Some(next.open().map_err(|error| {
+                std::io::Error::other(format!("open concatenated payload object: {error}"))
+            })?);
+        }
     }
 }
 
@@ -343,5 +394,24 @@ mod tests {
 
         assert_eq!(file.to_extracted_in_memory().unwrap().content, b"payload");
         assert_eq!(file.to_extracted_in_memory().unwrap().content, b"payload");
+    }
+
+    #[test]
+    fn concatenated_objects_are_lazy_reopenable_and_empty_reads_do_not_consume_them() {
+        let source = ReopenablePayload::from_concatenated_objects(vec![
+            ReopenablePayload::from_in_memory_bytes(Arc::<[u8]>::from(&b"pay"[..])),
+            ReopenablePayload::from_in_memory_bytes(Arc::<[u8]>::from(&b"load"[..])),
+        ])
+        .unwrap();
+
+        let mut first = source.open().unwrap();
+        assert_eq!(first.read(&mut []).unwrap(), 0);
+        let mut bytes = Vec::new();
+        first.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"payload");
+
+        let mut reopened = Vec::new();
+        source.open().unwrap().read_to_end(&mut reopened).unwrap();
+        assert_eq!(reopened, b"payload");
     }
 }

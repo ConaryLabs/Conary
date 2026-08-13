@@ -18,7 +18,7 @@
 //! this same owner instead of maintaining a second package-parser limit table.
 
 use super::v3::schema::{
-    AuthorityDocumentV3, FileAuthorityV3, LifecycleAuthorityV3, PackageKindV3,
+    AuthorityDocumentV3, FileAuthorityV3, FileContentLayoutV3, LifecycleAuthorityV3, PackageKindV3,
 };
 use crate::payload::PayloadNodeKind;
 
@@ -29,11 +29,14 @@ mod tests;
 /// Exact CBOR cost of one `FileAuthorityV3` record excluding its variable
 /// length authority (install path, component name, link target, xattrs).
 ///
-/// A minimal regular-file record measures 238 bytes and the widest variant with
-/// maximal scalars and config semantics measures 323.
+/// A minimal regular-file record and the widest non-chunked node variant remain
+/// below this allowance; ordered chunk references are budgeted separately.
 /// `file_authority_fixed_bytes_is_an_upper_bound` proves this constant bounds
 /// every node variant the schema admits.
-const FILE_AUTHORITY_FIXED_BYTES: u64 = 384;
+const FILE_AUTHORITY_FIXED_BYTES: u64 = 448;
+
+/// CBOR and decoder-memory allowance for one signed chunk reference.
+const PAYLOAD_OBJECT_REFERENCE_BYTES: u64 = 128;
 
 /// CBOR cost of the document map itself once every section is accounted for.
 const AUTHORITY_ENVELOPE_BYTES: u64 = 4096;
@@ -91,6 +94,7 @@ pub enum BudgetDimension {
     SignatureBytes,
     MetadataBytes,
     PayloadObjectCount,
+    PayloadReferenceCount,
     PayloadObjectBytes,
     TotalPayloadBytes,
     ArchiveEntryCount,
@@ -128,6 +132,7 @@ impl BudgetDimension {
             Self::SignatureBytes => "signature-bytes",
             Self::MetadataBytes => "metadata-bytes",
             Self::PayloadObjectCount => "payload-object-count",
+            Self::PayloadReferenceCount => "payload-reference-count",
             Self::PayloadObjectBytes => "payload-object-bytes",
             Self::TotalPayloadBytes => "total-payload-bytes",
             Self::ArchiveEntryCount => "archive-entry-count",
@@ -218,6 +223,8 @@ pub struct AuthorityCensus {
     pub config_entries: u64,
     pub file_capabilities: u64,
     pub payload_objects: u64,
+    pub payload_references: u64,
+    pub logical_payload_bytes: u64,
     pub payload_bytes: u64,
     pub path_bytes: u64,
     pub xattr_bytes: u64,
@@ -426,11 +433,18 @@ impl CcsStructuralBudget {
             FILE_AUTHORITY_FIXED_BYTES,
         )
         .unwrap_or(u64::MAX);
+        let payload_references = product(
+            "max_authority_bytes",
+            self.max_payload_references(),
+            PAYLOAD_OBJECT_REFERENCE_BYTES,
+        )
+        .unwrap_or(u64::MAX);
         sum(
             "max_authority_bytes",
             [
                 AUTHORITY_ENVELOPE_BYTES,
                 files,
+                payload_references,
                 self.max_total_path_bytes,
                 self.max_total_xattr_bytes,
                 self.max_non_payload_authority_bytes,
@@ -446,11 +460,17 @@ impl CcsStructuralBudget {
             census.files,
             FILE_AUTHORITY_FIXED_BYTES,
         )?;
+        let payload_references = product(
+            "authority_bytes_ceiling",
+            census.payload_references,
+            PAYLOAD_OBJECT_REFERENCE_BYTES,
+        )?;
         sum(
             "authority_bytes_ceiling",
             [
                 AUTHORITY_ENVELOPE_BYTES,
                 files,
+                payload_references,
                 census.path_bytes,
                 census.xattr_bytes,
                 census.name_bytes,
@@ -486,7 +506,23 @@ impl CcsStructuralBudget {
     /// instead of the generic foreign-archive entry guard, so the writer and
     /// reader cannot disagree about how many entries are admissible.
     pub fn max_archive_entries(&self) -> u64 {
-        self.max_files.saturating_add(256 + 1 + 8)
+        self.max_payload_objects().saturating_add(256 + 1 + 8)
+    }
+
+    /// Maximum distinct object references implied by the total payload and
+    /// file-count bounds. Every non-final canonical chunk is at least the
+    /// minimum chunk size; one final short chunk per file accounts for the
+    /// additive file term.
+    pub fn max_payload_objects(&self) -> u64 {
+        self.max_total_payload_bytes
+            .saturating_div(u64::from(crate::ccs::chunking::MIN_CHUNK_SIZE))
+            .saturating_add(self.max_files)
+    }
+
+    /// Bound ordered references independently of unique archive objects so
+    /// repeated identities still consume signed-authority memory budget.
+    pub fn max_payload_references(&self) -> u64 {
+        self.max_payload_objects()
     }
 
     pub fn admit_archive_entry(&self, entries_seen: u64) -> BudgetResult<()> {
@@ -584,12 +620,18 @@ impl CcsStructuralBudget {
             for file in &data.files {
                 self.admit_file(file, &mut census, &mut payload_objects)?;
             }
+            admit(
+                BudgetDimension::PayloadReferenceCount,
+                "kind.package.files.content_layout",
+                census.payload_references,
+                self.max_payload_references(),
+            )?;
             census.payload_objects = payload_objects.len() as u64;
             admit(
                 BudgetDimension::PayloadObjectCount,
                 "kind.package.files.content",
                 census.payload_objects,
-                self.max_files,
+                self.max_payload_objects(),
             )?;
 
             census.config_entries = data.config.len() as u64;
@@ -623,6 +665,12 @@ impl CcsStructuralBudget {
         admit(
             BudgetDimension::TotalPayloadBytes,
             "kind.package.files.content.size",
+            census.logical_payload_bytes,
+            self.max_total_payload_bytes,
+        )?;
+        admit(
+            BudgetDimension::TotalPayloadBytes,
+            "kind.package.files.content_layout",
             census.payload_bytes,
             self.max_total_payload_bytes,
         )?;
@@ -909,10 +957,39 @@ impl CcsStructuralBudget {
                 content.size,
                 self.max_payload_object_bytes,
             )?;
-            if payload_objects.insert(content.sha256.clone()) {
+            census.logical_payload_bytes = sum(
+                "kind.package.files.content.size",
+                [census.logical_payload_bytes, content.size],
+            )?;
+        }
+
+        let objects = match &file.content_layout {
+            FileContentLayoutV3::NoContent => Vec::new(),
+            FileContentLayoutV3::WholeObject => file
+                .content
+                .as_ref()
+                .map(|content| vec![(content.sha256.as_str(), content.size)])
+                .unwrap_or_default(),
+            FileContentLayoutV3::FastCdcV2020 { chunks, .. } => chunks
+                .iter()
+                .map(|chunk| (chunk.sha256.as_str(), u64::from(chunk.size)))
+                .collect(),
+        };
+        census.payload_references = sum(
+            "kind.package.files.content_layout",
+            [census.payload_references, objects.len() as u64],
+        )?;
+        for (sha256, size) in objects {
+            admit(
+                BudgetDimension::PayloadObjectBytes,
+                "kind.package.files.content_layout",
+                size,
+                self.max_payload_object_bytes,
+            )?;
+            if payload_objects.insert(sha256.to_string()) {
                 census.payload_bytes = sum(
-                    "kind.package.files.content.size",
-                    [census.payload_bytes, content.size],
+                    "kind.package.files.content_layout",
+                    [census.payload_bytes, size],
                 )?;
             }
         }

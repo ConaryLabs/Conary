@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 62
+last_updated: 2026-08-13
+revision: 63
 summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -25,13 +25,15 @@ Apply typed install prefix (default `/`) to source-root children
      +-- Compute SHA-256 hash
      +-- Apply PolicyChain (Keep / Replace / Skip / Reject)
      +-- Apply exact path/rule component assignment, else lossless `runtime`
-     +-- Optional: split into CDC chunks (FastCDC)
+     +-- By default, split files >= 16 KiB into canonical FastCDC v2020 chunks
      |
   Group files by component -> ComponentData
      |
   BuildResult { manifest, components, files, payloads, chunk_stats }
      |
-  Sign manifest (Ed25519) -> embed PackageSignature
+  Project required whole-object or signed ordered-chunk layout
+     |
+  Sign MANIFEST authority (Ed25519)
      |
   Output .ccs archive (tar.gz with MANIFEST + MANIFEST.toml + objects/)
 ```
@@ -49,10 +51,12 @@ Apply typed install prefix (default `/`) to source-root children
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v3_projection.rs | Project verified signed v3 authority into install-time package data |
 | `AuthorityDocumentV3` | v3/schema.rs | Signed CCS v3 native package authority |
+| `FileContentLayoutV3` | v3/schema.rs + v3/validation/content_layout.rs | Required whole-object/no-content or canonical FastCDC v2020 reconstruction authority |
 | v3 manifest identity projection | v3/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
 | `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
 | `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
 | Verified object sink | verify/object_sink.rs + filesystem/cas/verified_batch.rs | Streams signed objects to a read-only spool or transaction-owned permanent CAS batch and returns typed committed object authority |
+| `ReopenablePayload` | packages/payload.rs | Reopens one object or lazily concatenates authenticated ordered chunks without whole-file buffering |
 | Component view | v3/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
 | `ComponentType` | components/types.rs | Closed typed names for standard component metadata; never inferred from payload paths |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
@@ -164,6 +168,17 @@ regular file, an exact SHA-256 and byte length. Symlink targets, hardlink
 identity, device numbers, FIFOs, sockets, and directories are variant data;
 consumers must not recover node kind from mode bits, path spelling, content
 length, or the presence of an unrelated field.
+
+`FileContentLayoutV3` is the signed storage contract layered beneath that
+whole-file authority. Non-regular nodes explicitly carry `no-content`.
+Unchunked regular files carry `whole-object`; default authoring for files at
+least 16 KiB carries the canonical FastCDC v2020 16/64/256 KiB profile and an
+ordered digest/length list. The writer re-chunks the reopened source and emits
+each unique address once. Verification authenticates those objects, lazily
+concatenates them, reruns the signed boundary profile, and proves the final
+whole-file digest and size before exposing payload authority. Generation and
+composefs materialization, not archive verification, owns the persistent
+whole-file CAS object required to publish a root.
 
 RPM header arrays own installed metadata while the paired CPIO member owns
 bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain source identities.
@@ -451,7 +466,7 @@ separate exact-key or policy authority.
 `crates/conary-core/src/ccs/budget.rs` owns every CCS limit. There is no fixed
 serialized-byte ceiling on `MANIFEST`: limits are structural counts, per-item
 string and depth bounds, aggregate variable-length pools, payload-object
-bounds, and CBOR nesting depth, and byte ceilings are derived from them. The
+bounds, ordered-reference bounds, and CBOR nesting depth, and byte ceilings are derived from them. The
 writer admits the authority it is about to sign through the same
 `admit_authority` call verification uses, so a package this repository emits is
 readable by construction.
@@ -468,16 +483,18 @@ decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
 
 Verification-only and dry-run callers use a temporary payload spool and do not
 create permanent CAS state. Mutating CCS install, restore, and repository-batch
-preparation instead stream the signed complete object set into one permanent
-SHA-256 `VerifiedObjectBatch`. Missing bytes are hashed while written once,
+preparation instead stream the signed complete layout-object set into one
+permanent SHA-256 `VerifiedObjectBatch`. Missing bytes are hashed while written once,
 data-synced, published without replacement, and followed by shard/root
 directory durability barriers. Exact-size canonical hits write no payload
 bytes and are not reread solely for insertion; a concurrent publication winner
 is reread and must match its signed size and digest. Only the committed batch
-can create `ReopenablePayload` sources carrying `VerifiedObjectSet` authority,
-and installer storage accepts those canonical identities only for the same CAS
-root after a final regular-file/size metadata check. Ordinary sources retain
-the existing bounded reader-ingestion path.
+can create `ReopenablePayload` object sources carrying `VerifiedObjectSet`
+authority. A whole-object source can transfer its canonical identity directly
+to installer storage for the same CAS root; a chunk layout yields a lazy
+concatenated source that installer storage ingests once into the whole-file CAS
+representation generation publication requires. Ordinary sources retain the
+existing bounded reader-ingestion path.
 
 Configuration authority is exact per path. Each signed declaration retains
 its source-specific record and a `matched` or `absent` payload association;
