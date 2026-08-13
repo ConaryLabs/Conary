@@ -114,7 +114,7 @@ test_packages = [
 ]
 
 [distros."opensuse-tumbleweed".target_root]
-base_image = "registry.opensuse.org/opensuse/tumbleweed:latest@sha256:ed1053df8889aa5a6191aa19f9af9593d1c783674e8ca1dbb55d6c75e75dc306"
+base_image = "registry.opensuse.org/opensuse/tumbleweed:20260811@sha256:47903f56b5c63e7a000db16649cc4e9f71f1293e4aac8adc0df7e1a44c26212e"
 package_query = "rpm"
 identity_packages = [
     { name = "openSUSE-release", version = "20260811-4247.1" },

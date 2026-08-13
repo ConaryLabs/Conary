@@ -121,15 +121,15 @@ fn rolling_roots_carry_authenticated_native_authority() {
             .as_deref(),
         Some("arch")
     );
-    assert_eq!(
-        config.distros["opensuse-tumbleweed"]
-            .target_root
-            .as_ref()
-            .unwrap()
-            .expected_os_release
-            .id,
-        "opensuse-tumbleweed"
-    );
+    let tumbleweed = config.distros["opensuse-tumbleweed"]
+        .target_root
+        .as_ref()
+        .unwrap();
+    assert_eq!(tumbleweed.expected_os_release.id, "opensuse-tumbleweed");
+    assert!(tumbleweed.base_image.contains(&format!(
+        ":{}@sha256:",
+        tumbleweed.expected_os_release.version_id
+    )));
 }
 
 #[test]
