@@ -16,13 +16,15 @@ use conary_core::db::models::{CollectionMember, Trove, TroveType};
 use conary_core::model::remote::{
     CollectionData, CollectionSignature, PublishedCollectionEnvelope,
 };
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[cfg(test)]
 use conary_core::model::remote::CollectionMemberData;
+#[cfg(test)]
+use rusqlite::Connection;
 #[cfg(test)]
 use std::collections::BTreeMap;
 
@@ -154,7 +156,7 @@ fn query_signature(
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
 
-    let conn = Connection::open(db_path)?;
+    let conn = super::open_handler_db(db_path)?;
 
     let result: Option<(Vec<u8>, String)> = conn
         .query_row(
@@ -372,7 +374,8 @@ fn store_collection(
         });
     }
 
-    let mut conn = Connection::open(db_path).map_err(|e| StoreError::Database(e.to_string()))?;
+    let mut conn =
+        super::open_handler_db(db_path).map_err(|e| StoreError::Database(e.to_string()))?;
     let transaction = conn
         .transaction()
         .map_err(|error| StoreError::Database(error.to_string()))?;
@@ -481,7 +484,7 @@ fn build_collection_data(
     db_path: &std::path::Path,
     name: &str,
 ) -> Result<Option<CollectionData>, anyhow::Error> {
-    let conn = Connection::open(db_path)?;
+    let conn = super::open_handler_db(db_path)?;
 
     let stored: Option<String> = conn
         .query_row(
@@ -514,7 +517,7 @@ fn insert_invalid_stored_collection(conn: &Connection, name: &str) {
 
 /// Build a listing of all collections with member counts in a single query
 fn build_collection_list(db_path: &std::path::Path) -> Result<Vec<CollectionEntry>, anyhow::Error> {
-    let conn = Connection::open(db_path)?;
+    let conn = super::open_handler_db(db_path)?;
 
     let mut stmt = conn.prepare(
         "SELECT t.name, t.version, t.description, COUNT(cm.id) AS member_count

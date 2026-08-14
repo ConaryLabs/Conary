@@ -193,7 +193,7 @@ async fn test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction()
     let (consumer_url, _consumer_server) = serve_test_file(consumer_path.clone());
     let (provider_url, _provider_server) = serve_test_file(provider_path.clone());
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let repository_id = insert_test_static_ccs_repository(
         &conn,
         "fedora",
@@ -283,7 +283,7 @@ install = ["a-model-consumer", "z-model-provider"]
     let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
     result.await.unwrap();
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let mut changeset_ids = Vec::new();
     for name in [consumer_name, provider_name] {
         let installed = Trove::find_by_name(&conn, name).unwrap();
@@ -329,7 +329,7 @@ async fn test_replatform_executor_replaces_package_when_route_is_executable() {
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let mut fedora_repo = Repository::new(
         "fedora".to_string(),
         "https://example.test/fedora".to_string(),
@@ -403,7 +403,7 @@ async fn test_replatform_executor_replaces_package_when_route_is_executable() {
         "unexpected replatform errors: {errors:?}"
     );
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
     assert_eq!(installed_troves.len(), 1);
     let installed = &installed_troves[0];
@@ -447,7 +447,7 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let mut arch_repo =
         Repository::new("arch".to_string(), "https://example.test/arch".to_string());
     arch_repo.source_profile = Some("arch".to_string());
@@ -534,7 +534,7 @@ async fn test_model_apply_replatform_executes_typed_rpm_lifecycle() {
         "unexpected replatform errors: {errors:?}"
     );
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
     assert_eq!(installed_troves.len(), 1);
     let installed = &installed_troves[0];
@@ -583,7 +583,7 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
     let package_checksum = conary_core::hash::sha256(&std::fs::read(&package_path).unwrap());
     let (package_url, _server_handle) = serve_test_file(package_path.clone());
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
 
     let mut fedora_repo = Repository::new(
         "fedora".to_string(),
@@ -670,7 +670,7 @@ async fn test_model_apply_rolls_back_or_reports_partial_failure_during_replatfor
         errors[0]
     );
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let installed_troves = Trove::find_by_name(&conn, "vim").unwrap();
     assert_eq!(installed_troves.len(), 1);
     let installed = &installed_troves[0];

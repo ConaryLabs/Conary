@@ -228,7 +228,7 @@ async fn get_chunk_hides_unreferenced_protected_local_cache_hash() {
     let (state, _temp) = chunk_state_with_db(TEST_HASH, Vec::new()).await;
     {
         let state_guard = state.read().await;
-        let conn = rusqlite::Connection::open(&state_guard.config.db_path).unwrap();
+        let conn = crate::server::open_runtime_db(&state_guard.config.db_path).unwrap();
         let mut chunk = ChunkAccess::new(TEST_HASH.to_string(), 11);
         chunk.protected = true;
         chunk.upsert(&conn).unwrap();

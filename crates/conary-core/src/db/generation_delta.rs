@@ -111,20 +111,32 @@ pub struct GenerationDbDeltaRecorder<'connection> {
 
 impl<'connection> GenerationDbDeltaRecorder<'connection> {
     pub fn begin(source: &'connection Connection, source_path: impl AsRef<Path>) -> Result<Self> {
+        Self::begin_with_arm_hook(source, source_path, || Ok(()))
+    }
+
+    fn begin_with_arm_hook(
+        source: &'connection Connection,
+        source_path: impl AsRef<Path>,
+        arm_hook: impl FnOnce() -> Result<()>,
+    ) -> Result<Self> {
         let source_path = source_path.as_ref();
         validate_source_connection_path(source, source_path)?;
+        let before_data_version = data_version(source)?;
         let source_baseline = read_baseline_token(source)?;
-        let starting_data_version = data_version(source)?;
+        arm_hook()?;
         let mut session = Session::new(source)?;
         session.table_filter(Some(|table: &str| table != MUTATION_EPOCH_TABLE));
         session.attach::<&str>(None)?;
+        let starting_data_version = data_version(source)?;
+        let baseline_fallback = (starting_data_version != before_data_version)
+            .then_some(GenerationDbDeltaFallbackReason::ConcurrentConnectionWrite);
         Ok(Self {
             session,
             source,
             source_path: source_path.to_path_buf(),
             source_baseline,
             starting_data_version,
-            baseline_fallback: None,
+            baseline_fallback,
         })
     }
 
@@ -133,14 +145,11 @@ impl<'connection> GenerationDbDeltaRecorder<'connection> {
         source_path: impl AsRef<Path>,
         expected: GenerationDbBaselineToken,
     ) -> Result<Self> {
-        let source_path = source_path.as_ref();
-        let observed = read_baseline_token(source)?;
         let mut recorder = Self::begin(source, source_path)?;
-        recorder.baseline_fallback = if observed == expected {
-            None
-        } else {
-            Some(GenerationDbDeltaFallbackReason::SourceBaselineChanged)
-        };
+        if recorder.source_baseline != expected && recorder.baseline_fallback.is_none() {
+            recorder.baseline_fallback =
+                Some(GenerationDbDeltaFallbackReason::SourceBaselineChanged);
+        }
         Ok(recorder)
     }
 
@@ -389,6 +398,31 @@ mod tests {
                 "INSERT INTO authority (id, value) VALUES (2, 'other connection')",
                 [],
             )
+            .unwrap();
+
+        assert_eq!(
+            recorder.finish().unwrap(),
+            GenerationDbDeltaCapture::Fallback(
+                GenerationDbDeltaFallbackReason::ConcurrentConnectionWrite
+            )
+        );
+    }
+
+    #[test]
+    fn commit_while_the_recorder_is_arming_forces_full_snapshot_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let source = create_epoch_fixture(&source_path);
+        let writer = Connection::open(&source_path).unwrap();
+        configure_mutation_epoch(&writer).unwrap();
+        let recorder =
+            GenerationDbDeltaRecorder::begin_with_arm_hook(&source, &source_path, || {
+                writer.execute(
+                    "INSERT INTO authority (id, value) VALUES (2, 'arming window')",
+                    [],
+                )?;
+                Ok(())
+            })
             .unwrap();
 
         assert_eq!(

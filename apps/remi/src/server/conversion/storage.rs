@@ -359,8 +359,7 @@ mod tests {
 
     fn initialized_db(temp_dir: &tempfile::TempDir) -> PathBuf {
         let db_path = temp_dir.path().join("remi.db");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
+        conary_core::db::init(&db_path).unwrap();
         db_path
     }
 
@@ -505,7 +504,7 @@ mod tests {
         // Age every row past any plausible grace period, then convert the same
         // artifact again: every chunk is already in the CAS, so this second run
         // stores nothing new and only takes references.
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = crate::server::open_runtime_db(&db_path).unwrap();
         conn.execute("UPDATE chunk_access SET last_accessed = ?1", [ANCIENT])
             .unwrap();
         drop(conn);
@@ -696,7 +695,7 @@ mod tests {
 
         // What a GC run does: unlink the chunk, then drop its tracking rows.
         harness.delete_chunk(&missing);
-        rusqlite::Connection::open(&harness.db_path)
+        crate::server::open_runtime_db(&harness.db_path)
             .unwrap()
             .execute("DELETE FROM chunk_access", [])
             .unwrap();

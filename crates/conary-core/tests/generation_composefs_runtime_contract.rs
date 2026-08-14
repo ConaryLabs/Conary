@@ -403,7 +403,7 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
 }
 
 #[test]
-fn publication_writes_generation_db_backup_before_marking_debt_complete() {
+fn publication_writes_recoverable_and_terminal_generation_db_authority() {
     let publication_rs = fs::read_to_string(app_source("commands/generation/publication.rs"))
         .expect("failed to read generation publication source");
     let replay_rs = publication_rs
@@ -415,8 +415,8 @@ fn publication_writes_generation_db_backup_before_marking_debt_complete() {
         .find("mark_generation_state_active")
         .expect("publication must mark the selected generation active");
     let backup = replay_rs
-        .find("create_generation_db_backup")
-        .expect("publication must write a generation-bound DB backup");
+        .find("write_generation_db_backup")
+        .expect("publication must write crash-valid generation DB authority");
     let backup_phase = replay_rs
         .find("GenerationPublicationPhase::DatabaseBackedUp")
         .expect("publication must persist generation DB backup completion");
@@ -428,6 +428,22 @@ fn publication_writes_generation_db_backup_before_marking_debt_complete() {
     assert!(
         publication_rs.contains("debt.mark_complete_through"),
         "publication must finalize covered debt through the backup-gated model API"
+    );
+
+    let completion = publication_rs
+        .split_once("fn publish_pending_debt_with_hook")
+        .and_then(|(_, body)| body.split_once("struct PublicationReplayRequest"))
+        .map(|(body, _)| body)
+        .expect("publication must expose the terminal completion owner");
+    let mark_complete = completion
+        .find("debt.mark_complete_through")
+        .expect("publication must mark covered debt terminal");
+    let terminal_backup = completion
+        .find("write_generation_db_backup")
+        .expect("normal publication must replace provisional authority after terminal state");
+    assert!(
+        mark_complete < terminal_backup,
+        "normal publication must recapture terminal database state after marking covered debt complete"
     );
 }
 

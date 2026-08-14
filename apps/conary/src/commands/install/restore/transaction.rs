@@ -228,6 +228,8 @@ fn execute_locked_restore(
         .map(|prepared| inner::store_install_files_in_cas(cas, &prepared.extraction))
         .collect::<Result<Vec<_>>>()?;
     let selected_path = selected_root.selected_root().to_path_buf();
+    let mut generation_db_delta =
+        conary_core::db::generation_delta::GenerationDbDeltaRecorder::begin(conn, db_path)?;
     let tx = conn.unchecked_transaction()?;
     let execution = (|| -> Result<_> {
         let mut changeset = Changeset::new(description.to_string());
@@ -340,6 +342,7 @@ fn execute_locked_restore(
         db_path,
         description,
         publication_debt,
+        Some(&mut generation_db_delta),
     )?;
     if outcome.needs_publication {
         crate::commands::append_deferred_follow_up_metadata(

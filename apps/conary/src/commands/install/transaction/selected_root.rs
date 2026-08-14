@@ -170,6 +170,13 @@ where
     );
     let selected_path = selected_root.selected_root().to_path_buf();
     let mut changeset = Changeset::new(tx_description.clone());
+    let mut generation_db_delta = if ctx.defer_generation {
+        None
+    } else {
+        Some(
+            conary_core::db::generation_delta::GenerationDbDeltaRecorder::begin(conn, ctx.db_path)?,
+        )
+    };
     let tx = conn.unchecked_transaction()?;
     let changeset_id = changeset.insert(&tx)?;
     let materialized_directories =
@@ -263,6 +270,7 @@ where
             ctx.db_path,
             &tx_description,
             publication_debt,
+            generation_db_delta.as_mut(),
         )?;
         if outcome.needs_publication {
             crate::commands::append_deferred_follow_up_metadata(

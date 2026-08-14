@@ -60,6 +60,11 @@ impl BatchInstaller<'_> {
             std::path::PathBuf::from(self.db_path),
         );
         let selected_root = selected.selected_root().to_path_buf();
+        let mut generation_db_delta =
+            conary_core::db::generation_delta::GenerationDbDeltaRecorder::begin(
+                conn,
+                self.db_path,
+            )?;
         let tx = conn.unchecked_transaction()?;
         let execution = (|| -> Result<_> {
             let BatchDbRows {
@@ -162,6 +167,7 @@ impl BatchInstaller<'_> {
             self.db_path,
             summary,
             publication_debt,
+            Some(&mut generation_db_delta),
         )?;
         if outcome.needs_publication {
             crate::commands::append_deferred_follow_up_metadata(

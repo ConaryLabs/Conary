@@ -132,6 +132,15 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --exclude conary-test --verbose
 
+  generation-db-reflink:
+    name: generation-db-reflink
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - uses: ./.github/actions/test-generation-db-reflink
+
   conary-test-crate:
     name: conary-test-crate
     runs-on: ubuntu-latest

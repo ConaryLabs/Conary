@@ -88,6 +88,8 @@ fn execute_selected_root_graph(
         .to_string();
     let summary = format!("Remove {package_name}");
     let mut changeset = Changeset::new(format!("Remove {}-{}", trove.name, trove.version));
+    let mut generation_db_delta =
+        conary_core::db::generation_delta::GenerationDbDeltaRecorder::begin(conn, db_path)?;
     let tx = conn.unchecked_transaction()?;
     let changeset_id = changeset.insert(&tx)?;
     let mut output: Option<(RemoveInnerResult, crate::commands::LiveRootStats)> = None;
@@ -220,6 +222,7 @@ fn execute_selected_root_graph(
         db_path,
         &summary,
         publication_debt,
+        Some(&mut generation_db_delta),
     )?;
     if outcome.needs_publication {
         crate::commands::append_deferred_follow_up_metadata(

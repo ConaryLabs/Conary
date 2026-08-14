@@ -214,7 +214,7 @@ mod tests {
     async fn test_remote_diff_detects_missing() {
         // Create test DB and populate cache
         let (_temp_file, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
 
         // Create a cached remote collection with members
         let mut signed_data = CollectionData {

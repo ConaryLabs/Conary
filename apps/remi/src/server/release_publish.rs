@@ -261,7 +261,6 @@ mod tests {
         FileAuthorityV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3, PackageKindTagV3,
         PackageKindV3, PackagePolicyV3, ProvenanceAuthorityV3,
     };
-    use conary_core::db::schema;
     use conary_core::payload::{PayloadContentAuthority, PayloadNode};
     use conary_core::recipe::hermetic::{
         BuildInputIdentity, BuilderEnvironmentIdentity, BuilderEnvironmentKind, DependencyLock,
@@ -302,11 +301,7 @@ mod tests {
             std::fs::create_dir_all(&cache_dir).unwrap();
             write_tuf_role_keys(&keys_dir, TEST_PROFILE, tuf_roles);
 
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                .unwrap();
-            schema::ensure_current(&conn).unwrap();
-            drop(conn);
+            conary_core::db::init(&db_path).unwrap();
 
             let release_publish = crate::server::config::ReleasePublishSection {
                 repository_keys_dir: Some(keys_dir.clone()),
@@ -354,7 +349,7 @@ mod tests {
         }
 
         fn converted_package_row_exists(&self, package: &str) -> bool {
-            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM converted_packages
@@ -367,7 +362,7 @@ mod tests {
         }
 
         fn native_publication_row_exists(&self, package: &str, package_release: &str) -> bool {
-            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM native_package_publications
@@ -381,7 +376,7 @@ mod tests {
         }
 
         fn native_status_count(&self, package: &str, status: &str) -> i64 {
-            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             conn.query_row(
                 "SELECT COUNT(*) FROM native_package_publications
                  WHERE source_profile = ?1 AND name = ?2 AND status = ?3",
@@ -392,7 +387,7 @@ mod tests {
         }
 
         fn public_package_detail_exists(&self, package: &str) -> bool {
-            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM repository_packages rp
@@ -410,7 +405,7 @@ mod tests {
         }
 
         fn tuf_target_exists(&self, package: &str) -> bool {
-            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM tuf_targets
@@ -423,7 +418,7 @@ mod tests {
         }
 
         fn tuf_target_hash_exists(&self, content_hash: &str) -> bool {
-            let conn = rusqlite::Connection::open(&self.db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM tuf_targets
@@ -677,7 +672,7 @@ mod tests {
     fn seed_admin_token(db_path: &Path) {
         let token = "test-admin-token-12345";
         let hash = crate::server::auth::hash_token(token);
-        let conn = rusqlite::Connection::open(db_path).unwrap();
+        let conn = crate::server::open_runtime_db(db_path).unwrap();
         conary_core::db::models::admin_token::create(&conn, "test-admin", &hash, "admin").unwrap();
     }
 

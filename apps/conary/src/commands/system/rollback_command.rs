@@ -59,8 +59,10 @@ where
     }
 
     require_active_generation(changeset_id, &runtime_root)?;
-    let mut conn = crate::commands::open_db(db_path)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let conn = crate::commands::open_db(db_path)?;
+    let mut generation_db_delta =
+        conary_core::db::generation_delta::GenerationDbDeltaRecorder::begin(&conn, db_path)?;
+    let tx = rusqlite::Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)?;
     let execution = (|| -> Result<CommittedRollback> {
         let changeset = require_effective_rollback_target(&tx, changeset_id)?;
         let authority = exact_rollback_authority(&tx, &changeset)?;
@@ -168,6 +170,7 @@ where
         db_path,
         &committed.summary,
         committed.publication_debt,
+        Some(&mut generation_db_delta),
     )?;
     if publication.needs_publication {
         crate::commands::append_deferred_follow_up_metadata(

@@ -518,15 +518,11 @@ pub fn cmd_generation_verify_db_backup(
             verification.generation_number
         ),
     );
-    crate::ui::field("Backup", &verification.backup_path.display().to_string());
-    crate::ui::field(
-        "Manifest",
-        &verification.manifest_path.display().to_string(),
-    );
+    crate::ui::field("Authority", &verification.backup_path.display().to_string());
     crate::ui::field("Schema", &verification.db_schema_version.to_string());
     crate::ui::field("Integrity", &verification.integrity_check);
     crate::ui::field(
-        "SQLite pages",
+        "Base SQLite pages",
         &verification
             .sqlite_page_count
             .map(|pages| pages.to_string())
@@ -539,11 +535,15 @@ pub fn cmd_generation_verify_db_backup(
             .map(|changeset| changeset.to_string())
             .unwrap_or_else(|| "none".to_string()),
     );
-    crate::ui::field("Snapshot method", verification.snapshot.method.as_str());
     crate::ui::field(
-        "Snapshot payload bytes written",
+        "Base snapshot method",
+        verification.snapshot.method.as_str(),
+    );
+    crate::ui::field(
+        "Base snapshot payload bytes",
         &verification.snapshot.payload_bytes_written.to_string(),
     );
+    crate::ui::field("Deltas", &verification.delta_count.to_string());
     let fallbacks = verification
         .snapshot
         .fallbacks
@@ -552,14 +552,14 @@ pub fn cmd_generation_verify_db_backup(
         .collect::<Vec<_>>()
         .join(",");
     crate::ui::field(
-        "Snapshot fallbacks",
+        "Base snapshot fallbacks",
         if fallbacks.is_empty() {
             "none"
         } else {
             &fallbacks
         },
     );
-    crate::ui::field("SHA-256", &verification.backup_sha256);
+    crate::ui::field("Chain SHA-256", &verification.backup_sha256);
     Ok(())
 }
 

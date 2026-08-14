@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-14
-revision: 52
+revision: 53
 summary: Describe workspace and release boundaries, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
@@ -514,9 +514,10 @@ not a fallback for normal mutation.
 
 Publication and rollback rows reference the same SQLite-selected-root snapshot
 lineage by foreign key. The retired filesystem candidate and complete
-`rollback_root` JSON copy have no current-schema reader. Revision 38 is a
+`rollback_root` JSON copy have no current-schema reader. Revision 39 is a
 pre-alpha hard cut: older databases must be rebuilt from authoritative package
-and repository inputs.
+and repository inputs. It retains revision 38's indexed selected-root authority
+and adds the generation database mutation epoch described below.
 
 1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise mount the current generation's verified composefs image directly beneath its typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
@@ -704,20 +705,12 @@ the owning package directly:
 lives in SQLite. No TOML/YAML/JSON config files drive runtime state. The live
 database is the single source of truth, queryable with standard SQL tools.
 Conary writes SQLite-native checkpoint backups around first-wave
-adoption/unadoption mutations and writes a generation-bound SQLite backup under
-`/conary/generations/<n>/state/` when a generation publication reaches the
-selected-generation boundary. Generation publication does not compact the
-complete database with `VACUUM INTO`. It holds mutation authority, establishes
-and synchronizes an exact WAL checkpoint, and selects a typed snapshot provider:
-reflink first, SQLite online backup as the portable fallback, and a full copy
-only when both faster providers are unavailable. The v2 generation-backup
-manifest records the selected method, typed fallback reasons, schema epoch,
-transaction high-water mark, page count, logical size, payload bytes written,
-and SHA-256 identity. Creation performs one full integrity/digest pass; explicit
-verification and recovery repeat the full check, while an uninterrupted
-publication does not immediately verify the same snapshot a second time.
-Recovery opens checkpointed snapshots through SQLite's immutable read-only
-mode so verification cannot create or consume WAL sidecars.
+adoption/unadoption mutations and writes generation-bound v3 recovery authority
+under `/conary/generations/<n>/state/`. A new base does not compact the database
+with `VACUUM INTO`: it selects reflink first, SQLite online backup as the
+portable fallback, and a full copy only when both faster providers are
+unavailable. Normal generation publication instead records a SQLite session
+changeset from before the package transaction through terminal publication.
 
 Schema revision 39 adds one generation-delta mutation epoch row plus generated
 triggers for every authoritative table. A connection-local SQLite function
@@ -730,17 +723,25 @@ registers the function before schema validation. An unconfigured writer fails
 closed at the trigger instead of changing authority without advancing the
 epoch. This is a pre-alpha hard cut: revision 38 databases must be rebuilt.
 
-`generation_backup_chain.rs` owns the staged replacement format: one
+`generation_backup_chain.rs` owns the active v3 format: one
 content-addressed SQLite base plus at most 32 ordered, content-addressed session
 changesets. Each generation hard-links the complete base/delta set into its own
 state directory, so generation GC never leaves a surviving manifest dependent
 on an ancestor directory. The recursive chain identity binds the base digest,
-every ordered delta digest, and each resulting mutation token. Normal append
-writes and hashes only the new changeset; full payload hashing, changeset replay,
-SQLite integrity checking, and foreign-key checking occur when verification or
-recovery materializes the database. A schema change, chain limit, or mismatched
-source baseline requires a new full base. Until publication and recovery are
-wired to this owner, the v2 full-snapshot manifest remains active authority.
+base token, every ordered delta digest, and every source/result token transition.
+Normal append writes and hashes only the new changeset; full payload hashing,
+changeset replay, SQLite integrity checking, and foreign-key checking occur
+when verification or recovery materializes the database. A schema change,
+32-delta chain limit, mismatched source baseline, concurrent-connection write,
+retry publication, or otherwise unprovable capture requires a new full base.
+
+Publication first persists a crash-valid `active_marked` chain, advances the
+SQLite publication row to terminal state, then atomically replaces the manifest
+with the recorder's cumulative terminal delta. A crash before replacement keeps
+the provisional chain recoverable; its token mismatch forces the next normal
+publication to create a new base. A successful terminal replacement removes
+unreferenced provisional artifacts. The retired v2 whole-file manifest and
+checksum sidecar have no compatibility reader.
 
 **Composefs-native transactions**: Every package mutation follows one linear
 pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed

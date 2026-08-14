@@ -1,0 +1,30 @@
+name: Test generation DB reflink provider
+description: Mount a Btrfs loop filesystem and require zero-copy generation DB snapshots.
+runs:
+  using: composite
+  steps:
+    - name: Create a reflink-capable Btrfs proof filesystem
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y btrfs-progs
+        truncate -s 2G /tmp/conary-reflink.btrfs
+        sudo mkfs.btrfs -f /tmp/conary-reflink.btrfs
+        sudo mkdir -p /mnt/conary-reflink
+        sudo mount -o loop /tmp/conary-reflink.btrfs /mnt/conary-reflink
+        sudo chown "$(id -u):$(id -g)" /mnt/conary-reflink
+    - name: Require the reflink snapshot provider
+      shell: bash
+      env:
+        CONARY_TEST_REFLINK_DIR: /mnt/conary-reflink
+      run: >-
+        cargo test -p conary-core --lib
+        db::generation_snapshot::tests::required_reflink_filesystem_selects_zero_copy_provider
+        -- --ignored --exact --nocapture
+    - name: Unmount the proof filesystem
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        if mountpoint -q /mnt/conary-reflink; then
+          sudo umount /mnt/conary-reflink
+        fi

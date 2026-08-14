@@ -586,6 +586,46 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CONARY_TEST_REFLINK_DIR on a reflink-capable filesystem"]
+    fn required_reflink_filesystem_selects_zero_copy_provider() {
+        let root = std::env::var_os("CONARY_TEST_REFLINK_DIR")
+            .expect("CONARY_TEST_REFLINK_DIR must name the mounted proof filesystem");
+        let temp = tempfile::Builder::new()
+            .prefix("conary-reflink-proof-")
+            .tempdir_in(root)
+            .unwrap();
+        let db_path = temp.path().join("source.sqlite");
+        let destination = temp.path().join("snapshot.sqlite");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             CREATE TABLE authority (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO authority (value) VALUES ('reflink proof');",
+        )
+        .unwrap();
+
+        let snapshot = GenerationDbSnapshotProvider::default()
+            .snapshot(&conn, &db_path, &destination)
+            .unwrap();
+
+        assert_eq!(
+            snapshot.provenance.method,
+            GenerationDbSnapshotMethod::Reflink
+        );
+        assert_eq!(snapshot.provenance.payload_bytes_written, 0);
+        assert!(snapshot.provenance.fallbacks.is_empty());
+        assert_eq!(
+            Connection::open(destination)
+                .unwrap()
+                .query_row("SELECT value FROM authority", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "reflink proof"
+        );
+    }
+
+    #[test]
     fn unsupported_reflink_falls_back_to_sqlite_online_backup() {
         let (temp, db_path, conn) = fixture();
         let destination = temp.path().join("snapshot.sqlite");

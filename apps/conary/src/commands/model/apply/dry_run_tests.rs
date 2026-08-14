@@ -115,7 +115,7 @@ async fn model_apply_dry_run_rejects_the_same_invalid_package_transaction_as_app
     );
     let (package_url, _server) = serve_test_file_n(package_path.clone(), 2);
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
     let repository_id = insert_test_static_ccs_repository(
         &conn,
         "fedora",

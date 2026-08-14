@@ -247,12 +247,11 @@ mod tests {
     use conary_core::db::models::{
         CollectionMember, InstallSource, Repository, RepositoryPackage, Trove, TroveType,
     };
-    use rusqlite::Connection;
 
     #[tokio::test]
     async fn collection_update_preserves_member_variant_selector() {
         let (_temp, db_path) = create_test_db();
-        let conn = Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
 
         let mut repo = Repository::new(
             "variant-repo".to_string(),

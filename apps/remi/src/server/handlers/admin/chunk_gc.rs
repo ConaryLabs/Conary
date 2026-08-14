@@ -86,7 +86,7 @@ mod tests {
         let reader_token = "chunk-gc-reader-token-67890";
         let hash = crate::server::auth::hash_token(reader_token);
         {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&db_path).unwrap();
             conary_core::db::models::admin_token::create(
                 &conn,
                 "chunk-gc-reader",
