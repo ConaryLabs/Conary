@@ -662,4 +662,56 @@ mod tests {
         assert!(error.to_string().contains("source mismatch"));
         assert!(db_path.exists());
     }
+
+    #[test]
+    fn reflink_provider_is_byte_exact_when_the_filesystem_supports_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        std::fs::write(&source, b"reflink snapshot authority").unwrap();
+
+        match create_reflink(&source, &destination).unwrap() {
+            GenerationDbSnapshotProviderOutcome::Unsupported(reason) => assert!(matches!(
+                reason,
+                GenerationDbSnapshotFallbackReason::PlatformUnsupported
+                    | GenerationDbSnapshotFallbackReason::FilesystemUnsupported
+                    | GenerationDbSnapshotFallbackReason::CrossDevice
+            )),
+            GenerationDbSnapshotProviderOutcome::Created {
+                payload_bytes_written,
+            } => {
+                assert_eq!(payload_bytes_written, 0);
+                assert_eq!(
+                    std::fs::read(&destination).unwrap(),
+                    b"reflink snapshot authority"
+                );
+                std::fs::write(&destination, b"copy-on-write destination").unwrap();
+                assert_eq!(
+                    std::fs::read(&source).unwrap(),
+                    b"reflink snapshot authority"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn persisted_provenance_rejects_impossible_provider_order() {
+        let provenance = GenerationDbSnapshotProvenance {
+            method: GenerationDbSnapshotMethod::FullCopy,
+            fallbacks: vec![GenerationDbSnapshotFallback {
+                method: GenerationDbSnapshotMethod::Reflink,
+                reason: GenerationDbSnapshotFallbackReason::FilesystemUnsupported,
+            }],
+            wal_checkpoint: Some(GenerationDbWalCheckpoint {
+                journal_mode: "wal".to_string(),
+                log_frames: 0,
+                checkpointed_frames: 0,
+            }),
+            payload_bytes_written: 4096,
+            logical_size: 4096,
+        };
+
+        let error = provenance.validate().unwrap_err();
+        assert!(error.to_string().contains("provider order is invalid"));
+    }
 }
