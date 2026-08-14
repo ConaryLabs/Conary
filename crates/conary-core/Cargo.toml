@@ -163,3 +163,7 @@ criterion.workspace = true
 name = "erofs_build"
 harness = false
 required-features = ["composefs-rs"]
+
+[[bench]]
+name = "selected_root_delta"
+harness = false
