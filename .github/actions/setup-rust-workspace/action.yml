@@ -5,6 +5,10 @@ inputs:
     description: Optional comma-separated Rust components to install.
     required: false
     default: ""
+  toolchain:
+    description: Rust toolchain to install. Release jobs pass the exact workspace minimum.
+    required: false
+    default: stable
 runs:
   using: composite
   steps:
@@ -23,6 +27,7 @@ runs:
         } >> "$GITHUB_ENV"
     - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       with:
+        toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
     - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:

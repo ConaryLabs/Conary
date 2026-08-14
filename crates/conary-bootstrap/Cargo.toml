@@ -1,11 +1,12 @@
 [package]
 name = "conary-bootstrap"
-version = "0.14.0"
-edition = "2024"
-rust-version = "1.97.1"
-authors = ["Conary Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
 description = "Shared bootstrap helpers for Conary workspace binaries"
-license = "MIT"
+license.workspace = true
 
 [dependencies]
 anyhow.workspace = true

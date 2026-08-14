@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-09
-revision: 21
+last_updated: 2026-08-13
+revision: 22
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -236,46 +236,52 @@ old process. That can fail with `Text file busy`.
 ## Release Flow
 
 - GitHub Actions is the only long-term CI/CD control plane.
-- Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to inspect
-  the current release baseline, bump owned versions, update release state, and
-  create canonical tags
-- When the product decision is intentionally different from conventional-commit
-  inference, pass an exact typed target such as
-  `--target remi=0.8.0`. The script validates that the product is selected,
-  the version is an increasing `MAJOR.MINOR.PATCH`, and scoped changes exist.
-- Use `--prepare-only` for an issue-backed release PR that must update and
-  stage multiple product tracks without creating commits or tags before merge.
-- The supported release tracks are:
-  - `conary`
-  - `remi`
-  - `conaryd`
-  - `conary-test`
-- Canonical tag forms are:
-  - `v*` for `conary`
-  - `remi-v*` for `remi`
-  - `conaryd-v*` for `conaryd`
-  - `conary-test-v*` for `conary-test`
-- Historical tag prefixes are not release inputs; only canonical tags participate
-  in version baselines and release routing
-- Push the relevant canonical tags to trigger the GitHub release pipeline
-- GitHub Actions builds release artifacts in `release-build` and serializes the
-  resolved product metadata into the bundle
+- The eight Cargo packages are code-ownership boundaries. The four artifact
+  products are Conary, Remi, conaryd, and conary-test. One suite release owns
+  their shared root `[workspace.package]` version, reviewed commit, tag, and
+  GitHub release. All members inherit `publish = false`; there is no parallel
+  crates.io release track.
+- Run `./scripts/release.sh suite --dry-run` to inspect the next version, or
+  pass an exact decision such as `--target 0.15.0`. The target must be an
+  increasing `MAJOR.MINOR.PATCH` version for the complete suite.
+- Run `./scripts/release.sh suite --prepare-only --target VERSION` on the
+  issue-linked release branch. Preparation updates the root version, inherited
+  workspace lock state, Conary native/CCS packaging, generated man page, and
+  suite changelog, but creates no commit or tag.
+- After exact-head CI and review complete, merge the preparation PR and prove
+  local `main`, `origin/main`, and remote `main` agree. Only then create the
+  annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it. The
+  active `Protect suite tags` ruleset permits creation of `v*` tags but rejects
+  their update or deletion. Live release construction rejects a tag commit
+  that is not reachable from `origin/main` and revalidates the remote tag
+  immediately before draft mutation and publication.
+- Product-prefixed tags remain immutable historical evidence for their exact
+  trees. They are not current baselines, version inputs, or workflow routes.
+- `release-build` constructs all four products from the exact suite tag,
+  serializes their deployment modes in one schema-v1 metadata document with a
+  typed rehearsal boolean, verifies raw and tar identities plus binary
+  versions, generates one complete checksum set, and publishes one GitHub
+  release only after every product bundle succeeds. Repository release
+  immutability is enabled, so publishing the completed draft locks its tag and
+  assets and creates a GitHub release attestation. Released-artifact proof must
+  reject any draft or mutable release; closeout independently runs
+  `gh release verify` and `gh release verify-asset`.
 - `merge-validation` proves the current source tree through deterministic
   source, build, policy, and test checks. It must not probe mutable production
   endpoints, because production continues to serve the previously deployed
   release until the candidate passes this gate and is tagged.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
-  product behavior locally
+  product behavior locally. It deploys and proves Remi first, then stages and
+  proves Conary release assets and static sites from the same suite bundle.
 - Within GitHub Actions, `deploy-and-verify` owns live contract proof after it
   deploys the exact tagged artifact. For Remi this includes both liveness and
   structured fail-closed readiness; independent production verification still
   follows the terminal workflow result.
-- `conary-test` is a supported build-and-release track in this phase, but it
-  intentionally has no deployment lane
-- `deploy-and-verify` performs protected deployment and verification only for
-  deployable products (`conary` and `remi`)
-- The `conaryd` release track is build-and-release only until a replacement
-  staging host exists; its release matrix entry remains `deploy_mode=none`
+- conaryd and conary-test are first-class suite artifacts with explicit
+  `deploy_mode=none`; no runtime deployment job may start for either product.
+- Exact-main `deploy-remi-candidate` remains available between suite releases
+  for bounded hard cuts. It creates no tag or release and does not change suite
+  version authority.
 - Release verification is a GitHub workflow concern, not a Forgejo or
   Forge-hosted control-plane concern
 

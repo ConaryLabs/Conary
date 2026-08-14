@@ -43,7 +43,7 @@ if [[ ! -f "$SIGNING_KEY" || -L "$SIGNING_KEY" ]]; then
     exit 1
 fi
 
-bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version conary "$VERSION"
+bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
 
 NAME="conary"
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then

@@ -14,7 +14,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SPEC="$SCRIPT_DIR/conary.spec"
 OUTPUT="$SCRIPT_DIR/output"
 
-VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"
+bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
 NAME="conary"
 TARNAME="$NAME-$VERSION"
 

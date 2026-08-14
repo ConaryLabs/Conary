@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-13
-revision: 70
+revision: 71
 summary: Route feature ownership through typed database rebuilds, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -1298,13 +1298,15 @@ task explicitly needs live image proof.
 
 **Slug:** release
 
-**Capability:** construct exact-tag release artifacts, bind CCS and detached
-signatures to the release authority, publish immutable GitHub releases, route
-serialized deployment, and prove installed or live behavior independently.
+**Capability:** synchronize one workspace version, construct four artifact
+products from one exact suite tag, bind CCS and detached signatures to that
+release authority, publish one immutable GitHub release, route serialized
+deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/release-artifact-proof.yml`;
+`Cargo.toml`; workspace member `Cargo.toml` manifests; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
@@ -1319,6 +1321,7 @@ static-site deployment, and production health proof.
 **Paths:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/release-artifact-proof.yml`;
+`Cargo.toml`; `apps/*/Cargo.toml`; `crates/*/Cargo.toml`; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
@@ -1343,12 +1346,17 @@ claimed.
 `docs/roadmaps/external-tester-milestone.md`;
 `docs/llms/subsystem-map.md`.
 
-**Safety notes:** published tags and releases are immutable evidence. A live
-release must come from the exact canonical tag at a reviewed commit; dry-run
-artifact proof is not publication or production proof. Release signing secrets
-must never be logged or persisted in artifacts. A successful workflow dispatch
-is not deployment proof: wait for terminal CI, then verify installed binaries,
-served artifacts, signatures, and live health independently.
+**Safety notes:** published tags and releases are immutable evidence. The
+workspace has one suite version and one current `vMAJOR.MINOR.PATCH` tag route;
+artifact products do not own independent version baselines or Cargo-registry
+publication. A live release must come from the exact canonical tag at a
+reviewed commit already reachable from `main`. The active suite-tag rule must
+reject updates and deletions of `v*` tags from creation onward; GitHub's
+immutable-release enforcement must then lock the published tag and assets.
+Dry-run artifact proof is not publication or production proof. Release signing
+secrets must never be logged or persisted in artifacts. A successful workflow
+dispatch is not deployment proof: wait for terminal CI, then verify installed
+binaries, served artifacts, signatures, and live health independently.
 
 ## conary-test Integration Execution
 

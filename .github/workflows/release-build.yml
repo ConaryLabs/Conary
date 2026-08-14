@@ -2,14 +2,11 @@ name: release-build
 
 on:
   push:
-    tags: ['v*', 'remi-v*', 'conaryd-v*', 'conary-test-v*']
+    tags: ['v*']
   workflow_dispatch:
     inputs:
-      product:
-        description: Product release track to build.
-        required: false
       tag_name:
-        description: Tag name to model for this build.
+        description: Synchronized suite tag to model for this build.
         required: true
       dry_run:
         description: Skip live publication side effects.
@@ -27,7 +24,7 @@ jobs:
     name: prepare
     runs-on: ubuntu-latest
     outputs:
-      product: ${{ steps.meta.outputs.product }}
+      release: ${{ steps.meta.outputs.release }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       version: ${{ steps.meta.outputs.version }}
       dry_run: ${{ steps.meta.outputs.dry_run }}
@@ -41,16 +38,17 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: bash
+        env:
+          DISPATCH_TAG_NAME: ${{ github.event.inputs.tag_name }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -euo pipefail
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag_name="${{ github.event.inputs.tag_name }}"
-            manual_product="${{ github.event.inputs.product || '' }}"
-            dry_run="${{ github.event.inputs.dry_run || 'true' }}"
+            tag_name="$DISPATCH_TAG_NAME"
+            dry_run="${DISPATCH_DRY_RUN:-true}"
           else
             tag_name="${GITHUB_REF#refs/tags/}"
-            manual_product=""
             dry_run="false"
           fi
 
@@ -63,19 +61,28 @@ jobs:
           bash scripts/release-matrix.sh resolve-tag "$tag_name" --format shell > release-metadata/resolved.env
           source release-metadata/resolved.env
 
-          if [[ -n "$manual_product" && "$manual_product" != "$product" ]]; then
-            echo "workflow_dispatch product ${manual_product} does not match resolved tag product ${product}" >&2
-            exit 1
-          fi
-
           if [[ "$dry_run" != "true" ]]; then
-            bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
+            [[ "$(git cat-file -t "refs/tags/${tag_name}")" == "tag" ]] || {
+              echo "live suite tag ${tag_name} must be annotated" >&2
+              exit 1
+            }
+            [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/${tag_name}^{}")" ]] || {
+              echo "checkout does not match the peeled suite tag ${tag_name}" >&2
+              exit 1
+            }
+            git fetch --no-tags origin \
+              refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "refs/tags/${tag_name}^{}" origin/main || {
+              echo "live suite tag ${tag_name} is not reachable from origin/main" >&2
+              exit 1
+            }
+            bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
           fi
 
-          bash scripts/release-matrix.sh metadata-json "$product" "$version" "$tag_name" "$dry_run" > release-metadata/metadata.json
+          bash scripts/release-matrix.sh metadata-json "$release" "$version" "$tag_name" "$dry_run" > release-metadata/metadata.json
           artifact_patterns="$(jq -c '.artifact_patterns' release-metadata/metadata.json)"
 
-          echo "product=${product}" >> "$GITHUB_OUTPUT"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
@@ -100,6 +107,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
         with:
           components: clippy,rustfmt
+          toolchain: 1.97.1
       - name: Enable exact ownership-test namespaces
         uses: ./.github/actions/setup-exact-ownership-tests
       - name: Check formatting
@@ -115,7 +123,6 @@ jobs:
 
   build-ccs:
     name: build-ccs
-    if: ${{ needs.prepare.outputs.product == 'conary' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
@@ -144,7 +151,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -158,9 +165,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build CCS package
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -210,7 +217,6 @@ jobs:
 
   build-rpm:
     name: build-rpm
-    if: ${{ needs.prepare.outputs.product == 'conary' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
@@ -237,7 +243,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -251,9 +257,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build RPM
         run: bash packaging/rpm/build.sh
       - name: Upload RPM artifact
@@ -268,7 +274,6 @@ jobs:
 
   build-deb:
     name: build-deb
-    if: ${{ needs.prepare.outputs.product == 'conary' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
@@ -299,7 +304,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -313,9 +318,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build DEB
         run: bash packaging/deb/build.sh
       - name: Upload DEB artifact
@@ -328,7 +333,6 @@ jobs:
 
   build-arch:
     name: build-arch
-    if: ${{ needs.prepare.outputs.product == 'conary' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     container:
@@ -354,7 +358,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -368,9 +372,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Fix ownership for makepkg
         run: chown -R builder:builder .
       - name: Build Arch package
@@ -387,11 +391,8 @@ jobs:
 
   bundle-conary:
     name: bundle-conary
-    if: ${{ needs.prepare.outputs.product == 'conary' }}
     needs: [prepare, workspace-validation, build-ccs, build-rpm, build-deb, build-arch]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Download artifacts
@@ -483,96 +484,27 @@ jobs:
       - name: Upload release bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
+          name: release-bundle
           path: release-packages/*
           if-no-files-found: error
           retention-days: 5
-      - name: Create GitHub Release
-        if: ${{ needs.prepare.outputs.dry_run != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
-              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
-              exit 1
-            fi
-          else
-            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
-          fi
-
-          version="${TAG_NAME#v}"
-          generated_notes="$(mktemp)"
-          release_notes="$(mktemp)"
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$TAG_NAME" \
-            --jq '.body' > "$generated_notes"
-          {
-            cat <<EOF
-          ## Conary ${TAG_NAME} limited public preview
-
-          This is an early preview for disposable, snapshotted, or explicitly
-          non-critical systems. It is not a production recommendation.
-
-          ### Supported tester lane
-
-          - Fedora 44, Ubuntu 26.04 LTS, or Arch Linux
-          - x86_64
-          - the cross-distro install/query/update-preview/remove loop in the [tester guide](https://github.com/ConaryLabs/Conary/blob/${TAG_NAME}/docs/guides/agent-assisted-tester-loop.md)
-          - a source package format that differs from the host's native format
-
-          Download \`SHA256SUMS\` and exactly one matching package:
-
-          - Fedora 44: \`conary-${version}-1.fc44.x86_64.rpm\`
-          - Ubuntu 26.04 LTS: \`conary_${version}-1_amd64.deb\`
-          - Arch Linux: \`conary-${version}-1-x86_64.pkg.tar.zst\`
-
-          Verify the downloaded package before installation:
-
-          \`\`\`bash
-          sha256sum -c SHA256SUMS --ignore-missing
-          \`\`\`
-
-          The native packages initialize one source-independent Conary database
-          with the built-in RPM, Debian, and Arch source feeds. Conary preserves
-          the source package ABI and resolves it against explicit target
-          capabilities; an unimplemented source contract or missing target
-          capability is reported exactly before mutation rather than guessed or
-          routed to a manual review queue. SBOM and provenance sidecars are not
-          published yet.
-
-          Report results with the [pre-alpha tester feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md).
-
-          ## Changes
-
-          EOF
-            cat "$generated_notes"
-          } > "$release_notes"
-          gh release edit "$TAG_NAME" --notes-file "$release_notes"
-          rm -f "$generated_notes" "$release_notes"
-
-          gh release upload "$TAG_NAME" release-packages/* --clobber
-          gh release edit "$TAG_NAME" --draft=false
 
   build-remi:
     name: build-remi
-    if: ${{ needs.prepare.outputs.product == 'remi' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -586,10 +518,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
-      - uses: ./.github/actions/setup-rust-workspace
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build remi release binary
         run: cargo build -p remi --release --verbose
       - name: Download metadata
@@ -606,7 +537,7 @@ jobs:
       - name: Upload remi bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
+          name: remi-bundle
           path: release-packages/*
           if-no-files-found: error
           retention-days: 5
@@ -618,59 +549,25 @@ jobs:
             echo "- tag: \`${{ needs.prepare.outputs.tag_name }}\`"
             echo "- version: \`${{ needs.prepare.outputs.version }}\`"
             echo "- dry_run: \`${{ needs.prepare.outputs.dry_run }}\`"
-            echo "- bundle_name: \`${{ needs.prepare.outputs.bundle_name }}\`"
+            echo "- bundle_name: \`remi-bundle\`"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  publish-remi:
-    name: publish-remi
-    if: ${{ needs.prepare.outputs.product == 'remi' && needs.prepare.outputs.dry_run != 'true' }}
-    needs: [prepare, workspace-validation, build-remi]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-      - name: Download remi bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
-          path: release-packages
-      - name: Publish remi release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
-              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
-              exit 1
-            fi
-          else
-            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
-          fi
-
-          gh release upload "$TAG_NAME" release-packages/* --clobber
-          gh release edit "$TAG_NAME" --draft=false
 
   build-conaryd:
     name: build-conaryd
-    if: ${{ needs.prepare.outputs.product == 'conaryd' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -684,10 +581,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
-      - uses: ./.github/actions/setup-rust-workspace
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build conaryd release binary
         run: cargo build -p conaryd --release --verbose
       - name: Download metadata
@@ -704,7 +600,7 @@ jobs:
       - name: Upload conaryd bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
+          name: conaryd-bundle
           path: release-packages/*
           if-no-files-found: error
           retention-days: 5
@@ -716,59 +612,25 @@ jobs:
             echo "- tag: \`${{ needs.prepare.outputs.tag_name }}\`"
             echo "- version: \`${{ needs.prepare.outputs.version }}\`"
             echo "- dry_run: \`${{ needs.prepare.outputs.dry_run }}\`"
-            echo "- bundle_name: \`${{ needs.prepare.outputs.bundle_name }}\`"
+            echo "- bundle_name: \`conaryd-bundle\`"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  publish-conaryd:
-    name: publish-conaryd
-    if: ${{ needs.prepare.outputs.product == 'conaryd' && needs.prepare.outputs.dry_run != 'true' }}
-    needs: [prepare, workspace-validation, build-conaryd]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-      - name: Download conaryd bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
-          path: release-packages
-      - name: Publish conaryd release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
-              echo "release $TAG_NAME is already published; refusing to replace immutable assets" >&2
-              exit 1
-            fi
-          else
-            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
-          fi
-
-          gh release upload "$TAG_NAME" release-packages/* --clobber
-          gh release edit "$TAG_NAME" --draft=false
 
   build-conary-test:
     name: build-conary-test
-    if: ${{ needs.prepare.outputs.product == 'conary-test' }}
     needs: [prepare, workspace-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         env:
-          product: ${{ needs.prepare.outputs.product }}
+          release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
           dry_run: ${{ needs.prepare.outputs.dry_run }}
@@ -782,10 +644,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$product"
-          git tag --points-at HEAD | grep -Fx "$tag_name"
-          bash scripts/release-matrix.sh assert-owned-version "$product" "$version"
-      - uses: ./.github/actions/setup-rust-workspace
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
+          [[ "$tag_name" == "v${version}" ]]
+          bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build conary-test release binary
         run: cargo build -p conary-test --release --verbose
       - name: Download metadata
@@ -802,7 +663,7 @@ jobs:
       - name: Upload conary-test bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
+          name: conary-test-bundle
           path: release-packages/*
           if-no-files-found: error
           retention-days: 5
@@ -814,32 +675,146 @@ jobs:
             echo "- tag: \`${{ needs.prepare.outputs.tag_name }}\`"
             echo "- version: \`${{ needs.prepare.outputs.version }}\`"
             echo "- dry_run: \`${{ needs.prepare.outputs.dry_run }}\`"
-            echo "- bundle_name: \`${{ needs.prepare.outputs.bundle_name }}\`"
+            echo "- bundle_name: \`conary-test-bundle\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  publish-conary-test:
-    name: publish-conary-test
-    if: ${{ needs.prepare.outputs.product == 'conary-test' && needs.prepare.outputs.dry_run != 'true' }}
-    needs: [prepare, workspace-validation, build-conary-test]
+  bundle-suite:
+    name: bundle-suite
+    needs:
+      - prepare
+      - workspace-validation
+      - bundle-conary
+      - build-remi
+      - build-conaryd
+      - build-conary-test
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-      - name: Download conary-test bundle
+      - name: Download every product bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.prepare.outputs.bundle_name }}
-          path: release-packages
-      - name: Publish conary-test release assets
+          path: release-artifacts
+      - name: Assemble and verify the synchronized suite
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+
+          mkdir -p suite-packages
+
+          copy_exact() {
+            local source="$1"
+            local destination="suite-packages/$2"
+            [[ -s "$source" && ! -L "$source" ]] || {
+              echo "required suite asset is missing, empty, or symlinked: $source" >&2
+              exit 1
+            }
+            cp -- "$source" "$destination"
+          }
+
+          copy_exact release-artifacts/release-metadata/metadata.json metadata.json
+          copy_exact "release-artifacts/release-bundle/conary-${VERSION}.ccs" "conary-${VERSION}.ccs"
+          copy_exact "release-artifacts/release-bundle/conary-${VERSION}.ccs.sig" "conary-${VERSION}.ccs.sig"
+          copy_exact "release-artifacts/release-bundle/conary-${VERSION}-1.fc44.x86_64.rpm" "conary-${VERSION}-1.fc44.x86_64.rpm"
+          copy_exact "release-artifacts/release-bundle/conary_${VERSION}-1_amd64.deb" "conary_${VERSION}-1_amd64.deb"
+          copy_exact "release-artifacts/release-bundle/conary-${VERSION}-1-x86_64.pkg.tar.zst" "conary-${VERSION}-1-x86_64.pkg.tar.zst"
+          copy_exact "release-artifacts/remi-bundle/remi-${VERSION}-linux-x64" "remi-${VERSION}-linux-x64"
+          copy_exact "release-artifacts/remi-bundle/remi-${VERSION}-linux-x64.tar.gz" "remi-${VERSION}-linux-x64.tar.gz"
+          copy_exact "release-artifacts/conaryd-bundle/conaryd-${VERSION}-linux-x64" "conaryd-${VERSION}-linux-x64"
+          copy_exact "release-artifacts/conaryd-bundle/conaryd-${VERSION}-linux-x64.tar.gz" "conaryd-${VERSION}-linux-x64.tar.gz"
+          copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64" "conary-test-${VERSION}-linux-x64"
+          copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64.tar.gz" "conary-test-${VERSION}-linux-x64.tar.gz"
+
+          if [[ -s release-artifacts/release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt ]]; then
+            copy_exact \
+              release-artifacts/release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt \
+              REHEARSAL_SIGNING_PUBLIC_KEY.txt
+          fi
+
+          jq -e \
+            --arg version "$VERSION" \
+            --arg tag "v${VERSION}" \
+            '.schema_version == 1 and
+             (.dry_run | type) == "boolean" and
+             .release == "suite" and
+             .version == $version and
+             .tag_name == $tag and
+             .bundle_name == "suite-bundle" and
+             .deploy_mode == "suite" and
+             (.artifact_patterns | length) == 11 and
+             (.artifacts | map({product, bundle_name, deploy_mode})) == [
+               {"product":"conary","bundle_name":"release-bundle","deploy_mode":"release_bundle"},
+               {"product":"remi","bundle_name":"remi-bundle","deploy_mode":"remote_bundle"},
+               {"product":"conaryd","bundle_name":"conaryd-bundle","deploy_mode":"none"},
+               {"product":"conary-test","bundle_name":"conary-test-bundle","deploy_mode":"none"}
+             ]' \
+            suite-packages/metadata.json >/dev/null
+
+          for product in remi conaryd conary-test; do
+            extracted="$(mktemp -d)"
+            tar -xzf "suite-packages/${product}-${VERSION}-linux-x64.tar.gz" -C "$extracted"
+            cmp \
+              "suite-packages/${product}-${VERSION}-linux-x64" \
+              "$extracted/${product}-${VERSION}-linux-x64"
+            chmod +x "suite-packages/${product}-${VERSION}-linux-x64"
+            version_output="$("suite-packages/${product}-${VERSION}-linux-x64" --version)"
+            [[ "$version_output" == "${product} ${VERSION}" ]] || {
+              echo "unexpected ${product} version output: ${version_output}" >&2
+              exit 1
+            }
+            rm -rf -- "$extracted"
+          done
+
+          (
+            cd suite-packages
+            mapfile -d '' assets < <(
+              find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' | sort -z
+            )
+            [[ ${#assets[@]} -eq 12 || ${#assets[@]} -eq 13 ]] || {
+              echo "expected 12 live suite assets or 13 rehearsal assets; found ${#assets[@]}" >&2
+              exit 1
+            }
+            sha256sum -- "${assets[@]}" > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+      - name: Upload synchronized suite bundle
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: suite-bundle
+          path: suite-packages/*
+          if-no-files-found: error
+          retention-days: 5
+      - name: Publish one immutable suite release
+        if: ${{ needs.prepare.outputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_release_tag() {
+            local phase="$1"
+            local actual_commit
+            git fetch --force origin \
+              "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+            [[ "$(git cat-file -t "refs/tags/${TAG_NAME}")" == "tag" ]] || {
+              echo "live suite tag ${TAG_NAME} is no longer annotated ${phase}" >&2
+              exit 1
+            }
+            actual_commit="$(git rev-parse "refs/tags/${TAG_NAME}^{}")"
+            [[ "$actual_commit" == "$EXPECTED_COMMIT" ]] || {
+              echo "live suite tag ${TAG_NAME} moved to ${actual_commit} ${phase}; expected ${EXPECTED_COMMIT}" >&2
+              exit 1
+            }
+          }
+
+          verify_release_tag "before draft mutation"
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
@@ -847,8 +822,99 @@ jobs:
               exit 1
             fi
           else
-            gh release create "$TAG_NAME" --draft --generate-notes --verify-tag
+            gh release create "$TAG_NAME" \
+              --draft \
+              --generate-notes \
+              --title "Conary ${TAG_NAME} synchronized suite" \
+              --verify-tag
           fi
 
-          gh release upload "$TAG_NAME" release-packages/* --clobber
+          generated_notes="$(mktemp)"
+          release_notes="$(mktemp)"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG_NAME" \
+            --jq '.body' > "$generated_notes"
+          {
+            cat <<EOF
+          ## Conary ${TAG_NAME} synchronized pre-alpha suite
+
+          This one source release contains the Conary, Remi, conaryd, and
+          conary-test artifacts at version ${VERSION}. It is an early preview
+          for disposable, snapshotted, or explicitly non-critical systems, not
+          a production recommendation.
+
+          ### Artifact evaluation boundary
+
+          The Conary native packages target x86_64 Fedora 44, Ubuntu 26.04 LTS,
+          and Arch Linux. Publication and released-package proof do not make
+          this the pinned external-tester release. The ordinary-package corpus
+          gate remains separately owned by issue #110, and the tester loop stays
+          paused until that gate and the release closeout are recorded.
+
+          Download \`SHA256SUMS\` and the required artifact. Native Conary
+          packages are named:
+
+          - Fedora 44: \`conary-${VERSION}-1.fc44.x86_64.rpm\`
+          - Ubuntu 26.04 LTS: \`conary_${VERSION}-1_amd64.deb\`
+          - Arch Linux: \`conary-${VERSION}-1-x86_64.pkg.tar.zst\`
+
+          Verify downloaded files with:
+
+          \`\`\`bash
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+
+          The release also contains raw and tarred Linux x86_64 binaries for
+          Remi, conaryd, and conary-test. SBOM and provenance sidecars are not
+          published yet.
+
+          Defects can be reported with the [pre-alpha tester feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md).
+
+          ## Changes
+
+          EOF
+            cat "$generated_notes"
+          } > "$release_notes"
+          gh release edit "$TAG_NAME" --notes-file "$release_notes"
+          rm -f -- "$generated_notes" "$release_notes"
+
+          gh release upload "$TAG_NAME" suite-packages/* --clobber
+
+          remote_assets="$(mktemp)"
+          local_names="$(mktemp)"
+          remote_names="$(mktemp)"
+          gh release view "$TAG_NAME" --json assets > "$remote_assets"
+          find suite-packages -maxdepth 1 -type f -printf '%f\n' | sort > "$local_names"
+          jq -r '.assets[].name' "$remote_assets" | sort > "$remote_names"
+          diff -u "$local_names" "$remote_names" || {
+            echo "draft release asset inventory does not match the complete suite" >&2
+            exit 1
+          }
+
+          while IFS= read -r asset; do
+            expected="sha256:$(sha256sum "suite-packages/${asset}" | awk '{print $1}')"
+            actual="$(jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .digest' "$remote_assets")"
+            [[ "$actual" == "$expected" ]] || {
+              echo "draft release digest for ${asset} is ${actual}, expected ${expected}" >&2
+              exit 1
+            }
+          done < "$local_names"
+          rm -f -- "$remote_assets" "$local_names" "$remote_names"
+
+          verify_release_tag "before publication"
           gh release edit "$TAG_NAME" --draft=false
+
+          release_state="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}"
+          )"
+          jq -e \
+            --arg tag "$TAG_NAME" \
+            '.tag_name == $tag and .draft == false and .immutable == true' \
+            <<< "$release_state" >/dev/null || {
+            echo "published release ${TAG_NAME} is not exact and immutable" >&2
+            exit 1
+          }

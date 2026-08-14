@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-13
-revision: 48
-summary: Describe workspace architecture, exact native source authority, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+revision: 49
+summary: Describe workspace and release boundaries, exact native source authority, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -38,6 +38,36 @@ Supporting workspace members
   crates/conary-agent-contract/ transport-neutral agent operation contract
   crates/conary-mcp/ shared MCP adapter helpers
 ```
+
+## Workspace, Artifact, and Release Boundaries
+
+The Cargo workspace is organized by code ownership, not by publication unit.
+Its eight packages have focused dependency boundaries, while four packages
+produce shipped artifacts and the whole workspace shares one release authority:
+
+| Boundary | Count | Authority |
+| --- | ---: | --- |
+| Cargo package | 8 | Owns a focused code surface and dependency API |
+| Artifact product | 4 | Owns construction and deployment routing for `conary`, `remi`, `conaryd`, or `conary-test` |
+| Suite release | 1 | Owns the workspace version, reviewed source commit, canonical `vMAJOR.MINOR.PATCH` tag, and GitHub release |
+
+The root `[workspace.package]` table owns the version, Rust edition, minimum
+toolchain, authors, license, and disabled Cargo-registry publication policy
+inherited by every member. Conary publishes the synchronized source suite and
+its named artifacts through GitHub; workspace packages are not separate
+crates.io release tracks.
+`conary-core` owns shared package-management behavior;
+`conary-bootstrap` owns common binary startup;
+`conary-agent-contract` owns transport-neutral operation types; and
+`conary-mcp` adapts that contract to MCP. The application packages remain the
+artifact entrypoints. `conaryd` reuses Conary command behavior through the
+adapter boundary documented in `docs/modules/conaryd.md`, while `conary-test`
+consumes product contracts without owning runtime release authority.
+
+One synchronized release still preserves distinct operational behavior:
+Conary and Remi have protected deployment lanes, while conaryd and conary-test
+are build-only artifacts. Those routes are serialized in suite metadata; they
+do not create separate version or tag authorities.
 
 ## Core Concepts
 
@@ -645,7 +675,8 @@ and the current ownership SQL instead of relying on this overview.
 
 ## Package Graph
 
-The root manifest is now a virtual workspace. Build the owning crate directly:
+The root manifest owns the virtual workspace and shared package metadata. Build
+the owning package directly:
 
 | Package | Purpose | Typical command |
 |---------|---------|-----------------|
