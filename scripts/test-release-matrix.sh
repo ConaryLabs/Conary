@@ -905,6 +905,19 @@ test_check_release_matrix_rejects_mutable_artifact_proof() {
         "published artifact proof must reject a draft, mutable, or mismatched GitHub release"
 }
 
+test_check_release_matrix_rejects_moving_artifact_proof_toolchain() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-artifact-proof.yml" \
+        '          toolchain: 1.97.1' \
+        '          toolchain: stable'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "published artifact proof exact Rust toolchain"
+}
+
 test_check_release_matrix_rejects_rehearsal_artifact_promotion() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1216,6 +1229,7 @@ main() {
         test_check_release_matrix_rejects_unmerged_live_tag
         test_check_release_matrix_rejects_unbound_proof_metadata_version
         test_check_release_matrix_rejects_mutable_artifact_proof
+        test_check_release_matrix_rejects_moving_artifact_proof_toolchain
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes

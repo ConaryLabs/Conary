@@ -47,6 +47,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Require the hosted container runtime
         run: docker info
       - name: Resolve the published native package
