@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-14
-revision: 72
-summary: Route feature ownership through typed database rebuilds and generation snapshots, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+revision: 73
+summary: Route feature ownership through typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -550,6 +550,7 @@ and export raw/qcow2/ISO carriers.
 
 **Start here:** `crates/conary-core/src/generation/builder.rs`;
 `crates/conary-core/src/db/backup.rs`;
+`crates/conary-core/src/db/generation_delta.rs`;
 `crates/conary-core/src/db/generation_snapshot.rs`;
 `crates/conary-core/src/generation/root_manifest.rs`;
 `crates/conary-core/src/generation/root_manifest/delta.rs`;
@@ -605,6 +606,7 @@ state, image building, bootstrap validation, conaryd route history.
 
 **Paths:** `crates/conary-core/src/generation/*`;
 `crates/conary-core/src/db/backup.rs`;
+`crates/conary-core/src/db/generation_delta.rs`;
 `crates/conary-core/src/db/generation_snapshot.rs`;
 `crates/conary-core/benches/generation_db_snapshot.rs`;
 `crates/conary-core/src/ccs/hooks/capabilities.rs`;
@@ -641,6 +643,7 @@ state, image building, bootstrap validation, conaryd route history.
 `cargo test -p conary --lib commands::generation::activation_intents`;
 `cargo test -p conary --lib commands::generation::gc`;
 `cargo test -p conary-core --test db_backup`;
+`cargo test -p conary-core --lib db::generation_delta`;
 `cargo bench -p conary-core --bench generation_db_snapshot`;
 `cargo test -p conary-core --test generation_composefs_runtime_contract`;
 `cargo test -p conary --test packaged_onboarding`.
