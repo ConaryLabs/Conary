@@ -117,13 +117,8 @@ pub(crate) mod test_helpers {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
 
-        // Initialize DB with full schema
-        {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-                .unwrap();
-            conary_core::db::schema::ensure_current(&conn).unwrap();
-        }
+        // Initialize DB with the same connection contract as the server.
+        conary_core::db::init(&db_path).unwrap();
 
         let config = crate::server::ServerConfig {
             db_path: db_path.clone(),
@@ -154,7 +149,7 @@ pub(crate) mod test_helpers {
         let test_token = "test-admin-token-12345";
         let hash = crate::server::auth::hash_token(test_token);
         {
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            let conn = crate::server::open_runtime_db(&db_path).unwrap();
             conary_core::db::models::admin_token::create(&conn, "test-admin", &hash, "admin")
                 .unwrap();
         }

@@ -677,7 +677,7 @@ mod tests {
         let (_app, db_path) = crate::server::handlers::admin::test_helpers::test_app().await;
         let token = "test-repo-reader-token-54321";
         let hash = crate::server::auth::hash_token(token);
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = crate::server::open_runtime_db(&db_path).unwrap();
         conary_core::db::models::admin_token::create(
             &conn,
             "test-repo-reader",

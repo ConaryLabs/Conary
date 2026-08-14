@@ -2,6 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use conary_core::config_transaction::GenerationConfigTransaction;
+use conary_core::db::generation_delta::{GenerationDbDeltaCapture, GenerationDbDeltaRecorder};
 use conary_core::db::models::{
     GenerationPublication, GenerationPublicationPhase, GenerationPublicationStatus,
 };
@@ -78,8 +79,9 @@ pub(crate) fn publish_recorded_selected_root(
     db_path: &str,
     summary: &str,
     debt: GenerationPublication,
+    delta_recorder: Option<&mut GenerationDbDeltaRecorder<'_>>,
 ) -> Result<PublicationOutcome> {
-    publish_pending_debt(conn, db_path, summary, debt)
+    publish_pending_debt(conn, db_path, summary, debt, delta_recorder)
 }
 
 pub(crate) fn retry_pending_publication(
@@ -91,7 +93,7 @@ pub(crate) fn retry_pending_publication(
         .into_iter()
         .last()
         .ok_or_else(|| anyhow!("no pending generation publication debt"))?;
-    publish_pending_debt(conn, db_path, summary, debt)
+    publish_pending_debt(conn, db_path, summary, debt, None)
 }
 
 fn publish_pending_debt(
@@ -99,8 +101,9 @@ fn publish_pending_debt(
     db_path: &str,
     summary: &str,
     debt: GenerationPublication,
+    delta_recorder: Option<&mut GenerationDbDeltaRecorder<'_>>,
 ) -> Result<PublicationOutcome> {
-    publish_pending_debt_with_hook(conn, db_path, summary, debt, |_| Ok(()))
+    publish_pending_debt_with_hook(conn, db_path, summary, debt, delta_recorder, |_| Ok(()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +118,7 @@ fn publish_pending_debt_with_hook(
     db_path: &str,
     summary: &str,
     debt: GenerationPublication,
+    mut delta_recorder: Option<&mut GenerationDbDeltaRecorder<'_>>,
     mut checkpoint: impl FnMut(PublicationReplayCheckpoint) -> Result<()>,
 ) -> Result<PublicationOutcome> {
     let runtime_root = ConaryRuntimeRoot::from_db_path(db_path);
@@ -127,11 +131,14 @@ fn publish_pending_debt_with_hook(
 
     let publish_result = replay_publication(
         conn,
-        db_path,
-        summary,
-        &runtime_root,
-        &debt,
-        &config_transactions,
+        PublicationReplayRequest {
+            db_path,
+            summary,
+            runtime_root: &runtime_root,
+            debt: &debt,
+            config_transactions: &config_transactions,
+        },
+        delta_recorder.as_deref_mut(),
         &mut checkpoint,
     )
     .and_then(|built| {
@@ -142,6 +149,9 @@ fn publish_pending_debt_with_hook(
             built.state_number,
             built.generation_number,
         )?;
+        if let Some(recorder) = delta_recorder {
+            write_generation_db_backup(conn, db_path, &runtime_root, &built, Some(recorder))?;
+        }
         Ok((built, completed))
     });
 
@@ -169,15 +179,27 @@ fn publish_pending_debt_with_hook(
     }
 }
 
+struct PublicationReplayRequest<'a> {
+    db_path: &'a str,
+    summary: &'a str,
+    runtime_root: &'a ConaryRuntimeRoot,
+    debt: &'a GenerationPublication,
+    config_transactions: &'a [GenerationConfigTransaction],
+}
+
 fn replay_publication(
     conn: &Connection,
-    db_path: &str,
-    summary: &str,
-    runtime_root: &ConaryRuntimeRoot,
-    debt: &GenerationPublication,
-    config_transactions: &[GenerationConfigTransaction],
+    request: PublicationReplayRequest<'_>,
+    mut delta_recorder: Option<&mut GenerationDbDeltaRecorder<'_>>,
     checkpoint: &mut impl FnMut(PublicationReplayCheckpoint) -> Result<()>,
 ) -> Result<BuiltForPublication> {
+    let PublicationReplayRequest {
+        db_path,
+        summary,
+        runtime_root,
+        debt,
+        config_transactions,
+    } = request;
     let mut phase = debt.phase;
     let mut built = recorded_publication_numbers(debt)?;
 
@@ -283,12 +305,12 @@ fn replay_publication(
                     Some(built),
                 )?;
                 checkpoint(PublicationReplayCheckpoint::ActiveStateMarkedBeforeDatabaseBackup)?;
-                conary_core::db::backup::create_generation_db_backup(
+                write_generation_db_backup(
                     conn,
                     db_path,
-                    runtime_root.generation_path(built.generation_number),
-                    built.generation_number,
-                    built.state_number,
+                    runtime_root,
+                    built,
+                    delta_recorder.as_deref_mut(),
                 )
                 .map_err(|error| anyhow!("failed to write generation DB backup: {error}"))?;
                 set_replay_phase(
@@ -320,6 +342,54 @@ fn replay_publication(
             }
         }
     }
+}
+
+fn write_generation_db_backup(
+    conn: &Connection,
+    db_path: &str,
+    runtime_root: &ConaryRuntimeRoot,
+    built: &BuiltForPublication,
+    delta_recorder: Option<&mut GenerationDbDeltaRecorder<'_>>,
+) -> Result<()> {
+    let generation_dir = runtime_root.generation_path(built.generation_number);
+    if let Some(recorder) = delta_recorder {
+        match recorder.capture()? {
+            GenerationDbDeltaCapture::Captured(delta) => {
+                let prior =
+                    conary_core::db::generation_backup_chain::find_generation_db_chain_by_baseline(
+                        runtime_root.generations_dir(),
+                        built.generation_number,
+                        delta.source_baseline(),
+                    )?;
+                if let Some(prior_generation_dir) = prior {
+                    conary_core::db::backup::create_generation_db_backup_from_delta(
+                        conn,
+                        db_path,
+                        prior_generation_dir,
+                        &generation_dir,
+                        built.generation_number,
+                        built.state_number,
+                        &delta,
+                    )?;
+                    return Ok(());
+                }
+            }
+            GenerationDbDeltaCapture::Fallback(reason) => {
+                tracing::info!(
+                    fallback_reason = reason.as_str(),
+                    "Generation database delta capture requires a new full base"
+                );
+            }
+        }
+    }
+    conary_core::db::backup::create_generation_db_backup(
+        conn,
+        db_path,
+        generation_dir,
+        built.generation_number,
+        built.state_number,
+    )?;
+    Ok(())
 }
 
 fn set_replay_phase(
@@ -460,6 +530,7 @@ mod tests {
             &fixture.db_path,
             "link-before-projection crash",
             fixture.debt.clone(),
+            None,
             |checkpoint| {
                 if checkpoint == PublicationReplayCheckpoint::CurrentLinkSwappedBeforePhase
                     && !interrupted
@@ -518,6 +589,7 @@ mod tests {
             &fixture.db_path,
             "active-before-backup crash",
             fixture.debt.clone(),
+            None,
             |checkpoint| {
                 if checkpoint == PublicationReplayCheckpoint::ActiveStateMarkedBeforeDatabaseBackup
                     && !interrupted
@@ -567,6 +639,7 @@ mod tests {
             &fixture.db_path,
             "database-backup crash",
             fixture.debt.clone(),
+            None,
             |checkpoint| {
                 if checkpoint == PublicationReplayCheckpoint::DatabaseBackedUpBeforeTerminalState
                     && !interrupted
@@ -605,6 +678,71 @@ mod tests {
             fixture.reload_debt()
         );
         fixture.assert_terminal_publication();
+    }
+
+    #[test]
+    fn normal_publication_finalizes_one_self_contained_terminal_delta() {
+        let fixture = PublicationCrashFixture::new();
+        fixture
+            .conn
+            .execute(
+                "INSERT INTO generation_publications (
+                     db_path, runtime_root, phase, status, state_number,
+                     generation_number, summary, recoverable, completed_at
+                 ) VALUES (?1, ?2, 'database_backed_up', 'complete', 1, 1,
+                           'prior generation', 0, CURRENT_TIMESTAMP)",
+                rusqlite::params![
+                    &fixture.db_path,
+                    fixture.runtime_root.root().display().to_string()
+                ],
+            )
+            .unwrap();
+        conary_core::db::backup::create_generation_db_backup(
+            &fixture.conn,
+            &fixture.db_path,
+            fixture.runtime_root.generation_path(1),
+            1,
+            1,
+        )
+        .unwrap();
+        let mut recorder =
+            GenerationDbDeltaRecorder::begin(&fixture.conn, &fixture.db_path).unwrap();
+
+        let outcome = publish_pending_debt_with_hook(
+            &fixture.conn,
+            &fixture.db_path,
+            "delta publication",
+            fixture.debt.clone(),
+            Some(&mut recorder),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert!(!outcome.needs_publication, "{outcome:?}");
+        let generation = outcome.generation_number.unwrap();
+        let manifest = conary_core::db::generation_backup_chain::read_generation_db_chain(
+            fixture
+                .runtime_root
+                .generation_path(generation)
+                .join("state"),
+        )
+        .unwrap();
+        assert_eq!(manifest.deltas.len(), 1);
+        assert_eq!(
+            manifest.final_baseline,
+            conary_core::db::generation_delta::read_baseline_token(&fixture.conn).unwrap()
+        );
+        let state_dir = fixture
+            .runtime_root
+            .generation_path(generation)
+            .join("state");
+        let delta_artifact_count = std::fs::read_dir(state_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with("conary.db.delta-"))
+            .count();
+        assert_eq!(delta_artifact_count, 1);
+        assert!(fixture.generation_backup_exists(&fixture.reload_debt()));
     }
 
     struct PublicationCrashFixture {

@@ -613,7 +613,7 @@ fn delta_result_uses_verified_cas_retrieval() {
 #[test]
 fn mark_pending_changeset_rolled_back_updates_pending_rows() {
     let (_temp, db_path) = create_test_db();
-    let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+    let mut conn = conary_core::db::open(&db_path).unwrap();
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = conary_core::db::models::Changeset::new("test update".to_string());
         changeset.insert(tx)
@@ -634,7 +634,7 @@ fn mark_pending_changeset_rolled_back_updates_pending_rows() {
 #[test]
 fn mark_pending_changeset_rolled_back_leaves_applied_rows_alone() {
     let (_temp, db_path) = create_test_db();
-    let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+    let mut conn = conary_core::db::open(&db_path).unwrap();
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = conary_core::db::models::Changeset::new("applied update".to_string());
         let id = changeset.insert(tx)?;

@@ -2,9 +2,14 @@
 
 //! Durable SQLite checkpoint backups for Conary live-state recovery.
 
-use crate::db::generation_snapshot::{
-    GenerationDbSnapshotMetrics, GenerationDbSnapshotProvenance, GenerationDbSnapshotProvider,
+use crate::db::generation_backup_chain::{
+    GENERATION_DB_CHAIN_MANIFEST_FILE, GenerationDbBackupIdentity, GenerationDbChainAppend,
+    GenerationDbChainManifest, GenerationDbChainMetrics, GenerationDbChainRecord,
+    append_generation_db_chain_delta, create_generation_db_chain_base,
+    materialize_and_verify_generation_db_chain, read_generation_db_chain,
 };
+use crate::db::generation_delta::GenerationDbDelta;
+use crate::db::generation_snapshot::GenerationDbSnapshotProvenance;
 use crate::db::schema;
 use crate::filesystem::durable::{sync_parent_directory, write_file_atomic, write_json_atomic};
 use crate::hash::sha256_reader_hex;
@@ -18,14 +23,9 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 const BACKUP_FORMAT: &str = "conary.db-checkpoint.v1";
-const GENERATION_BACKUP_FORMAT: &str = "conary.generation-db-backup.v2";
 const CHECKPOINT_MANIFEST_VERSION: u32 = 1;
-const GENERATION_MANIFEST_VERSION: u32 = 2;
 const DEFAULT_RETAIN_COUNT: usize = 5;
 const DEFAULT_RETAIN_DAYS: i64 = 14;
-const GENERATION_BACKUP_FILE: &str = "conary.db.backup";
-const GENERATION_BACKUP_CHECKSUM_FILE: &str = "conary.db.backup.sha256";
-const GENERATION_BACKUP_MANIFEST_FILE: &str = "conary-db-backup.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -73,30 +73,20 @@ pub struct BackupVerification {
     pub sqlite_page_count: Option<i64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GenerationDbBackupManifest {
-    pub format: String,
-    pub manifest_version: u32,
-    pub db_schema_version: i32,
-    pub generation_number: i64,
-    pub state_number: i64,
-    pub created_at: String,
-    pub backup_file: String,
-    pub compression: Option<String>,
-    pub backup_sha256: String,
-    pub sqlite_page_count: Option<i64>,
-    pub transaction_high_water_mark: Option<i64>,
-    pub snapshot: GenerationDbSnapshotProvenance,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MaterializedSqliteInspection {
+    db_schema_version: i32,
+    sqlite_page_count: Option<i64>,
 }
+
+pub type GenerationDbBackupManifest = GenerationDbChainManifest;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationDbBackupRecord {
     pub backup_path: PathBuf,
-    pub checksum_path: PathBuf,
     pub manifest_path: PathBuf,
     pub manifest: GenerationDbBackupManifest,
-    pub creation_metrics: Option<GenerationDbSnapshotMetrics>,
+    pub creation_metrics: Option<GenerationDbChainMetrics>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +101,7 @@ pub struct GenerationDbBackupVerification {
     pub sqlite_page_count: Option<i64>,
     pub transaction_high_water_mark: Option<i64>,
     pub snapshot: GenerationDbSnapshotProvenance,
+    pub delta_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -394,74 +385,104 @@ pub fn create_generation_db_backup(
         return Err(Error::DatabaseNotFound(db_path.display().to_string()));
     }
 
-    let state_dir = generation_state_backup_dir(generation_dir);
-    std::fs::create_dir_all(&state_dir)?;
-    let tmp_backup_path = state_dir.join(".conary.db.backup.tmp");
-    let backup_path = state_dir.join(GENERATION_BACKUP_FILE);
-    let checksum_path = state_dir.join(GENERATION_BACKUP_CHECKSUM_FILE);
-    let manifest_path = state_dir.join(GENERATION_BACKUP_MANIFEST_FILE);
-
-    remove_if_exists(&tmp_backup_path)?;
     let transaction_high_water_mark =
         crate::db::models::GenerationPublication::applied_high_water_changeset_id(source)?;
     validate_generation_directory_number(generation_dir, generation_number)?;
     verify_generation_artifact_identity(generation_dir, generation_number)?;
-
-    let snapshot =
-        GenerationDbSnapshotProvider::default().snapshot(source, db_path, &tmp_backup_path)?;
-    std::fs::rename(&tmp_backup_path, &backup_path)?;
-    sync_parent_directory(&backup_path)?;
-
-    let verification = verify_sqlite_database(&backup_path)?;
-    if verification.db_schema_version != schema::SCHEMA_VERSION {
-        return Err(Error::RecoveryFailed(format!(
-            "refusing to write generation DB backup with schema version {}; supported schema is {}",
-            verification.db_schema_version,
-            schema::SCHEMA_VERSION
-        )));
-    }
-    verify_generation_publication_state_values(generation_number, state_number, &backup_path)?;
-    verify_transaction_high_water_mark(transaction_high_water_mark, &backup_path)?;
-
-    let manifest = GenerationDbBackupManifest {
-        format: GENERATION_BACKUP_FORMAT.to_string(),
-        manifest_version: GENERATION_MANIFEST_VERSION,
-        db_schema_version: verification.db_schema_version,
-        generation_number,
-        state_number,
-        created_at: Utc::now().to_rfc3339(),
-        backup_file: GENERATION_BACKUP_FILE.to_string(),
-        compression: None,
-        backup_sha256: verification.backup_sha256.clone(),
-        sqlite_page_count: verification.sqlite_page_count,
-        transaction_high_water_mark,
-        snapshot: snapshot.provenance,
-    };
-
-    write_file_atomic(
-        &checksum_path,
-        format!("{}  {}\n", manifest.backup_sha256, manifest.backup_file).as_bytes(),
+    verify_generation_publication_state_connection(source, generation_number, state_number)?;
+    verify_transaction_high_water_mark_connection(source, transaction_high_water_mark)?;
+    let state_dir = generation_state_backup_dir(generation_dir);
+    let chain = create_generation_db_chain_base(
+        source,
+        db_path,
+        &state_dir,
+        schema::SCHEMA_EPOCH,
+        schema::SCHEMA_VERSION,
+        GenerationDbBackupIdentity {
+            generation_number,
+            state_number,
+            transaction_high_water_mark,
+        },
     )?;
-    write_json_atomic(&manifest_path, &manifest)?;
-
-    let record = GenerationDbBackupRecord {
-        backup_path,
-        checksum_path,
-        manifest_path,
-        manifest,
-        creation_metrics: Some(snapshot.metrics),
-    };
+    let record = generation_record_from_chain(chain);
     tracing::info!(
-        snapshot_method = record.manifest.snapshot.method.as_str(),
-        payload_bytes_written = record.manifest.snapshot.payload_bytes_written,
-        logical_size = record.manifest.snapshot.logical_size,
+        snapshot_method = record.manifest.base.snapshot.method.as_str(),
+        payload_bytes_written = record
+            .creation_metrics
+            .map(|metrics| metrics.payload_bytes_written)
+            .unwrap_or_default(),
+        logical_size = record.manifest.base.logical_size,
+        delta_count = record.manifest.deltas.len(),
         provider_elapsed_ns = record
             .creation_metrics
-            .map(|metrics| metrics.provider_elapsed_ns)
+            .and_then(|metrics| metrics.provider_elapsed_ns)
             .unwrap_or_default(),
-        "Created generation database snapshot"
+        "Created generation database recovery chain"
     );
     Ok(record)
+}
+
+pub fn create_generation_db_backup_from_delta(
+    source: &Connection,
+    db_path: impl AsRef<Path>,
+    prior_generation_dir: impl AsRef<Path>,
+    generation_dir: impl AsRef<Path>,
+    generation_number: i64,
+    state_number: i64,
+    delta: &GenerationDbDelta,
+) -> Result<GenerationDbBackupRecord> {
+    let db_path = db_path.as_ref();
+    let generation_dir = generation_dir.as_ref();
+    let transaction_high_water_mark =
+        crate::db::models::GenerationPublication::applied_high_water_changeset_id(source)?;
+    validate_generation_directory_number(generation_dir, generation_number)?;
+    verify_generation_artifact_identity(generation_dir, generation_number)?;
+    verify_generation_publication_state_connection(source, generation_number, state_number)?;
+    verify_transaction_high_water_mark_connection(source, transaction_high_water_mark)?;
+    let identity = GenerationDbBackupIdentity {
+        generation_number,
+        state_number,
+        transaction_high_water_mark,
+    };
+    let state_dir = generation_state_backup_dir(generation_dir);
+    match append_generation_db_chain_delta(
+        generation_state_backup_dir(prior_generation_dir.as_ref()),
+        &state_dir,
+        delta,
+        schema::SCHEMA_EPOCH,
+        schema::SCHEMA_VERSION,
+        identity,
+    )? {
+        GenerationDbChainAppend::Appended(chain) => {
+            let record = generation_record_from_chain(*chain);
+            tracing::info!(
+                payload_bytes_written = record
+                    .creation_metrics
+                    .map(|metrics| metrics.payload_bytes_written)
+                    .unwrap_or_default(),
+                linked_artifacts = record
+                    .creation_metrics
+                    .map(|metrics| metrics.linked_artifacts)
+                    .unwrap_or_default(),
+                delta_count = record.manifest.deltas.len(),
+                "Created generation database recovery delta"
+            );
+            Ok(record)
+        }
+        GenerationDbChainAppend::NeedsBase(reason) => {
+            tracing::info!(
+                fallback_reason = ?reason,
+                "Generation database delta requires a new full base"
+            );
+            create_generation_db_backup(
+                source,
+                db_path,
+                generation_dir,
+                generation_number,
+                state_number,
+            )
+        }
+    }
 }
 
 pub fn verify_generation_db_backup(
@@ -482,7 +503,10 @@ pub fn recover_generation_db_backup(
     verify_generation_db_backup_record(&record, None)?;
 
     if options.dry_run {
-        let verified_temp_path = verify_generation_backup_copy(&record.backup_path, options)?;
+        let verified_temp_path = verify_generation_backup_copy(
+            &generation_state_backup_dir(generation_dir.as_ref()),
+            options,
+        )?;
         return Ok(GenerationDbRecoveryOutcome {
             backup_path: record.backup_path,
             manifest_path: record.manifest_path,
@@ -523,8 +547,10 @@ pub fn recover_generation_db_backup(
 
     let restore_tmp = restore_temp_path(db_path);
     remove_if_exists(&restore_tmp)?;
-    std::fs::copy(&record.backup_path, &restore_tmp)?;
-    sync_file(&restore_tmp)?;
+    materialize_and_verify_generation_db_chain(
+        generation_state_backup_dir(generation_dir.as_ref()),
+        &restore_tmp,
+    )?;
     verify_sqlite_database(&restore_tmp)?;
     std::fs::rename(&restore_tmp, db_path)?;
     sync_parent_directory(db_path)?;
@@ -607,6 +633,16 @@ fn verify_sqlite_database(path: &Path) -> Result<BackupVerification> {
     verify_sqlite_connection(path, &conn)
 }
 
+fn inspect_materialized_sqlite(path: &Path) -> Result<MaterializedSqliteInspection> {
+    let conn = open_immutable_sqlite_snapshot(path)?;
+    Ok(MaterializedSqliteInspection {
+        db_schema_version: schema::get_schema_version(&conn)?,
+        sqlite_page_count: conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .ok(),
+    })
+}
+
 fn verify_live_sqlite_database(path: &Path) -> Result<BackupVerification> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     verify_sqlite_connection(path, &conn)
@@ -655,17 +691,21 @@ fn generation_state_backup_dir(generation_dir: &Path) -> PathBuf {
     generation_dir.join("state")
 }
 
+fn generation_record_from_chain(chain: GenerationDbChainRecord) -> GenerationDbBackupRecord {
+    GenerationDbBackupRecord {
+        backup_path: chain.manifest_path.clone(),
+        manifest_path: chain.manifest_path,
+        manifest: chain.manifest,
+        creation_metrics: Some(chain.metrics),
+    }
+}
+
 fn read_generation_record(generation_dir: &Path) -> Result<GenerationDbBackupRecord> {
     let state_dir = generation_state_backup_dir(generation_dir);
-    let manifest_path = state_dir.join(GENERATION_BACKUP_MANIFEST_FILE);
-    let raw = std::fs::read(&manifest_path)?;
-    let manifest: GenerationDbBackupManifest = serde_json::from_slice(&raw)?;
-    let backup_rel = validate_generation_backup_file_name(&manifest.backup_file)?;
-    let backup_path = state_dir.join(backup_rel);
-    let checksum_path = state_dir.join(GENERATION_BACKUP_CHECKSUM_FILE);
+    let manifest_path = state_dir.join(GENERATION_DB_CHAIN_MANIFEST_FILE);
+    let manifest = read_generation_db_chain(&state_dir)?;
     Ok(GenerationDbBackupRecord {
-        backup_path,
-        checksum_path,
+        backup_path: manifest_path.clone(),
         manifest_path,
         manifest,
         creation_metrics: None,
@@ -682,31 +722,14 @@ fn verify_generation_db_backup_record(
         .and_then(Path::parent)
         .ok_or_else(|| Error::InvalidPath(record.manifest_path.display().to_string()))?;
 
-    if record.manifest.format != GENERATION_BACKUP_FORMAT {
+    if record.manifest.schema_epoch != schema::SCHEMA_EPOCH {
         return Err(Error::RecoveryFailed(format!(
-            "unsupported generation DB backup manifest format: {}",
-            record.manifest.format
+            "generation DB backup schema epoch {} is not supported by this Conary binary (expected {})",
+            record.manifest.schema_epoch,
+            schema::SCHEMA_EPOCH
         )));
     }
-    if record.manifest.manifest_version != GENERATION_MANIFEST_VERSION {
-        return Err(Error::RecoveryFailed(format!(
-            "unsupported generation DB backup manifest version: {}",
-            record.manifest.manifest_version
-        )));
-    }
-    if record.manifest.compression.is_some() {
-        return Err(Error::RecoveryFailed(
-            "compressed generation DB backups are not supported by this recovery path yet"
-                .to_string(),
-        ));
-    }
-    record.manifest.snapshot.validate()?;
-    if record.manifest.backup_file != GENERATION_BACKUP_FILE {
-        return Err(Error::InvalidPath(format!(
-            "generation DB backup file must be {GENERATION_BACKUP_FILE}, got {}",
-            record.manifest.backup_file
-        )));
-    }
+
     validate_generation_directory_number(generation_dir, record.manifest.generation_number)?;
 
     verify_generation_artifact_identity(generation_dir, record.manifest.generation_number)?;
@@ -720,52 +743,51 @@ fn verify_generation_db_backup_record(
         }
     }
 
-    let actual_hash = sha256_file(&record.backup_path)?;
-    if actual_hash != record.manifest.backup_sha256 {
-        return Err(Error::ChecksumMismatch {
-            expected: record.manifest.backup_sha256.clone(),
-            actual: actual_hash,
-        });
-    }
-    verify_checksum_sidecar(record)?;
-
-    let verification = verify_sqlite_database(&record.backup_path)?;
-    if verification.db_schema_version != schema::SCHEMA_VERSION {
-        return Err(Error::RecoveryFailed(format!(
-            "generation DB backup schema version {} is not supported by this Conary binary (expected {})",
-            verification.db_schema_version,
-            schema::SCHEMA_VERSION
-        )));
-    }
-    if verification.db_schema_version != record.manifest.db_schema_version {
-        return Err(Error::RecoveryFailed(format!(
-            "generation DB backup schema version changed since manifest creation: manifest={}, backup={}",
-            record.manifest.db_schema_version, verification.db_schema_version
-        )));
-    }
-    if verification.sqlite_page_count != record.manifest.sqlite_page_count {
-        return Err(Error::RecoveryFailed(format!(
-            "generation DB backup page count changed since manifest creation: manifest={:?}, backup={:?}",
-            record.manifest.sqlite_page_count, verification.sqlite_page_count
-        )));
-    }
-    verify_generation_publication_state(&record.manifest, &record.backup_path)?;
-    verify_transaction_high_water_mark(
-        record.manifest.transaction_high_water_mark,
-        &record.backup_path,
-    )?;
+    let state_dir = generation_state_backup_dir(generation_dir);
+    let temp_path = generation_backup_temp_path();
+    let inspection = (|| -> Result<MaterializedSqliteInspection> {
+        materialize_and_verify_generation_db_chain(&state_dir, &temp_path)?;
+        let inspection = inspect_materialized_sqlite(&temp_path).map_err(|error| {
+            Error::RecoveryFailed(format!(
+                "materialized generation DB verification failed: {error}"
+            ))
+        })?;
+        if inspection.db_schema_version != schema::SCHEMA_VERSION {
+            return Err(Error::RecoveryFailed(format!(
+                "generation DB backup schema version {} is not supported by this Conary binary (expected {})",
+                inspection.db_schema_version,
+                schema::SCHEMA_VERSION
+            )));
+        }
+        if inspection.db_schema_version != record.manifest.db_schema_version {
+            return Err(Error::RecoveryFailed(format!(
+                "generation DB backup schema version changed since manifest creation: manifest={}, backup={}",
+                record.manifest.db_schema_version, inspection.db_schema_version
+            )));
+        }
+        verify_generation_publication_state(&record.manifest, &temp_path)?;
+        verify_transaction_high_water_mark(
+            record.manifest.transaction_high_water_mark,
+            &temp_path,
+        )?;
+        Ok(inspection)
+    })();
+    let cleanup = remove_if_exists(&temp_path);
+    let inspection = inspection?;
+    cleanup?;
 
     Ok(GenerationDbBackupVerification {
-        backup_path: record.backup_path.clone(),
+        backup_path: record.manifest_path.clone(),
         manifest_path: record.manifest_path.clone(),
         generation_number: record.manifest.generation_number,
         state_number: record.manifest.state_number,
-        db_schema_version: verification.db_schema_version,
-        integrity_check: verification.integrity_check,
-        backup_sha256: record.manifest.backup_sha256.clone(),
-        sqlite_page_count: verification.sqlite_page_count,
+        db_schema_version: inspection.db_schema_version,
+        integrity_check: "ok".to_string(),
+        backup_sha256: record.manifest.chain_sha256.clone(),
+        sqlite_page_count: inspection.sqlite_page_count,
         transaction_high_water_mark: record.manifest.transaction_high_water_mark,
-        snapshot: record.manifest.snapshot.clone(),
+        snapshot: record.manifest.base.snapshot.clone(),
+        delta_count: record.manifest.deltas.len(),
     })
 }
 
@@ -784,20 +806,6 @@ fn verify_generation_artifact_identity(
     Ok(())
 }
 
-fn validate_generation_backup_file_name(file_name: &str) -> Result<&Path> {
-    let path = Path::new(file_name);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return Err(Error::InvalidPath(format!(
-            "generation DB backup file must be a plain relative filename: {file_name}"
-        )));
-    }
-    Ok(path)
-}
-
 fn validate_generation_directory_number(generation_dir: &Path, expected: i64) -> Result<()> {
     let actual = generation_dir
         .file_name()
@@ -812,21 +820,6 @@ fn validate_generation_directory_number(generation_dir: &Path, expected: i64) ->
     if actual != expected {
         return Err(Error::RecoveryFailed(format!(
             "generation directory mismatch: directory is {actual}, backup manifest says {expected}"
-        )));
-    }
-    Ok(())
-}
-
-fn verify_checksum_sidecar(record: &GenerationDbBackupRecord) -> Result<()> {
-    let raw = std::fs::read_to_string(&record.checksum_path)?;
-    let expected = format!(
-        "{}  {}\n",
-        record.manifest.backup_sha256, record.manifest.backup_file
-    );
-    if raw != expected {
-        return Err(Error::RecoveryFailed(format!(
-            "generation DB backup checksum sidecar mismatch at {}",
-            record.checksum_path.display()
         )));
     }
     Ok(())
@@ -849,6 +842,14 @@ fn verify_generation_publication_state_values(
     backup_path: &Path,
 ) -> Result<()> {
     let conn = open_immutable_sqlite_snapshot(backup_path)?;
+    verify_generation_publication_state_connection(&conn, generation_number, expected_state_number)
+}
+
+fn verify_generation_publication_state_connection(
+    conn: &Connection,
+    generation_number: i64,
+    expected_state_number: i64,
+) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT phase, status, recoverable, state_number
          FROM generation_publications
@@ -879,6 +880,13 @@ fn verify_generation_publication_state_values(
 
 fn verify_transaction_high_water_mark(expected: Option<i64>, backup_path: &Path) -> Result<()> {
     let conn = open_immutable_sqlite_snapshot(backup_path)?;
+    verify_transaction_high_water_mark_connection(&conn, expected)
+}
+
+fn verify_transaction_high_water_mark_connection(
+    conn: &Connection,
+    expected: Option<i64>,
+) -> Result<()> {
     let actual: Option<i64> = conn.query_row(
         "SELECT MAX(id) FROM changesets WHERE status = 'applied'",
         [],
@@ -892,8 +900,15 @@ fn verify_transaction_high_water_mark(expected: Option<i64>, backup_path: &Path)
     Ok(())
 }
 
+fn generation_backup_temp_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "conary-generation-db-verify-{}.sqlite",
+        uuid::Uuid::new_v4()
+    ))
+}
+
 fn verify_generation_backup_copy(
-    backup_path: &Path,
+    state_dir: &Path,
     options: GenerationDbRecoveryOptions,
 ) -> Result<Option<PathBuf>> {
     let stamp = Utc::now()
@@ -901,9 +916,7 @@ fn verify_generation_backup_copy(
         .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000);
     let temp_path =
         std::env::temp_dir().join(format!("conary-generation-db-recover-{stamp}.sqlite"));
-    std::fs::copy(backup_path, &temp_path)?;
-    sync_file(&temp_path)?;
-    verify_sqlite_database(&temp_path)?;
+    materialize_and_verify_generation_db_chain(state_dir, &temp_path)?;
     if options.keep_temp {
         Ok(Some(temp_path))
     } else {

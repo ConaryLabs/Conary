@@ -17,5 +17,6 @@ pub fn create_current_schema(conn: &Connection) -> Result<()> {
     ] {
         conn.execute_batch(schema)?;
     }
+    crate::db::generation_delta::create_mutation_epoch_triggers(conn)?;
     Ok(())
 }

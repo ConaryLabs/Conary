@@ -10,6 +10,8 @@
 
 pub mod backup;
 pub mod current_schema;
+pub mod generation_backup_chain;
+pub mod generation_delta;
 pub mod generation_snapshot;
 pub mod models;
 pub mod paths;
@@ -45,6 +47,7 @@ const SQLITE_WAL_MAGIC_BE: [u32; 2] = [0x377f0682, 0x377f0683];
 
 /// Apply standard PRAGMAs to a connection
 fn configure(conn: &Connection) -> Result<()> {
+    generation_delta::configure_mutation_epoch(conn)?;
     conn.execute_batch(CONNECTION_PRAGMAS)?;
     Ok(())
 }

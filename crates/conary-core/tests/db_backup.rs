@@ -157,20 +157,16 @@ fn generation_backup_writes_manifest_and_verifies_artifact_and_publication_state
     )
     .unwrap();
 
-    assert_eq!(record.manifest.format, "conary.generation-db-backup.v2");
-    assert_eq!(record.manifest.manifest_version, 2);
+    assert_eq!(record.manifest.format, "conary.generation-db-backup.v3");
+    assert_eq!(record.manifest.manifest_version, 3);
     assert_eq!(record.manifest.generation_number, 3);
     assert_eq!(record.manifest.state_number, 3);
     assert_eq!(record.manifest.db_schema_version, SCHEMA_VERSION);
-    assert_eq!(record.manifest.backup_file, "conary.db.backup");
+    assert!(record.manifest.base.file.starts_with("conary.db.base-"));
+    assert!(record.manifest.deltas.is_empty());
     assert_eq!(record.manifest.transaction_high_water_mark, None);
     assert!(record.creation_metrics.is_some());
-    assert!(record.backup_path.ends_with("state/conary.db.backup"));
-    assert!(
-        record
-            .checksum_path
-            .ends_with("state/conary.db.backup.sha256")
-    );
+    assert!(record.backup_path.ends_with("state/conary-db-backup.json"));
     assert!(
         record
             .manifest_path
@@ -196,10 +192,39 @@ fn generation_backup_verification_rejects_tampered_backup_file() {
     )
     .unwrap();
 
-    std::fs::write(&record.backup_path, b"not the original backup").unwrap();
+    std::fs::write(
+        fixture
+            .generation_dir
+            .join("state")
+            .join(&record.manifest.base.file),
+        b"not the original backup",
+    )
+    .unwrap();
 
     let error = verify_generation_db_backup(&fixture.generation_dir, None).unwrap_err();
-    assert!(error.to_string().to_lowercase().contains("checksum"));
+    assert!(error.to_string().contains("size mismatch"));
+}
+
+#[test]
+fn generation_backup_verification_rejects_a_retired_schema_epoch() {
+    let fixture = GenerationBackupFixture::new(4);
+    let mut record = create_generation_db_backup(
+        &fixture.connection(),
+        &fixture.db_path,
+        &fixture.generation_dir,
+        4,
+        4,
+    )
+    .unwrap();
+    record.manifest.schema_epoch = "conary-retired-v0".to_string();
+    std::fs::write(
+        &record.manifest_path,
+        serde_json::to_vec_pretty(&record.manifest).unwrap(),
+    )
+    .unwrap();
+
+    let error = verify_generation_db_backup(&fixture.generation_dir, None).unwrap_err();
+    assert!(error.to_string().contains("schema epoch"));
 }
 
 #[test]
@@ -305,19 +330,22 @@ fn generation_backup_retry_replaces_partial_snapshot_and_metadata() {
         .unwrap();
     let state_dir = fixture.generation_dir.join("state");
     std::fs::write(
-        state_dir.join(".conary.db.backup.tmp"),
+        state_dir.join(".conary.db.base.tmp"),
         b"interrupted snapshot",
     )
     .unwrap();
-    std::fs::write(&first.backup_path, b"interrupted published snapshot").unwrap();
-    std::fs::write(&first.checksum_path, b"interrupted checksum").unwrap();
+    std::fs::write(
+        state_dir.join(&first.manifest.base.file),
+        b"interrupted published snapshot",
+    )
+    .unwrap();
     std::fs::write(&first.manifest_path, b"{\"interrupted\":true}").unwrap();
 
     let retried =
         create_generation_db_backup(&conn, &fixture.db_path, &fixture.generation_dir, 8, 8)
             .unwrap();
 
-    assert!(!state_dir.join(".conary.db.backup.tmp").exists());
+    assert!(!state_dir.join(".conary.db.base.tmp").exists());
     assert_eq!(retried.manifest.generation_number, 8);
     verify_generation_db_backup(&fixture.generation_dir, None).unwrap();
 }

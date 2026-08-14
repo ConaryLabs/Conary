@@ -225,7 +225,7 @@ pub(super) async fn apply_replatform_changes(
     root: &str,
     actions: &[&DiffAction],
 ) -> Result<(usize, Vec<String>)> {
-    let conn = rusqlite::Connection::open(db_path)?;
+    let conn = conary_core::db::open(db_path)?;
     let owned_actions = actions
         .iter()
         .map(|action| (*action).clone())
@@ -271,7 +271,7 @@ pub(super) async fn apply_replatform_changes(
         };
 
         let current_source = {
-            let conn = rusqlite::Connection::open(db_path)?;
+            let conn = conary_core::db::open(db_path)?;
             find_current_replatform_source(&conn, &transaction)?
                 .or_else(|| transaction.current_source_identity.clone())
                 .unwrap_or_else(|| "unknown source".to_string())
@@ -285,7 +285,7 @@ pub(super) async fn apply_replatform_changes(
             let repository_package_id = transaction
                 .install_repository_package_id
                 .context("executable replatform plan has no exact repository package id")?;
-            let conn = rusqlite::Connection::open(db_path)?;
+            let conn = conary_core::db::open(db_path)?;
             let package = RepositoryPackage::find_by_id(&conn, repository_package_id)?
                 .context("exact replatform repository package row disappeared")?;
             if package.name != transaction.package
@@ -321,7 +321,7 @@ pub(super) async fn apply_replatform_changes(
         .await
         {
             Ok(()) => {
-                let conn = rusqlite::Connection::open(db_path)?;
+                let conn = conary_core::db::open(db_path)?;
                 match finalize_replatform_provenance(&conn, &transaction, &selection_reason) {
                     Ok(()) => {
                         println!(

@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn search_rebuild_marks_stale_rows_unconverted() {
         let (db_file, _) = create_test_db();
-        let conn = rusqlite::Connection::open(db_file.path()).unwrap();
+        let conn = crate::server::open_runtime_db(db_file.path()).unwrap();
         insert_repo_package(&conn, "fedora", "gtk3", "3.24.0");
         insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0");
         drop(conn);

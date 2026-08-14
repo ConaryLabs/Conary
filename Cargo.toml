@@ -31,7 +31,7 @@ resolvo = { path = "third_party/resolvo-0.12.0-patched" }
 sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
 
 # Database
-rusqlite = { version = "0.40", features = ["backup", "bundled", "limits"] }
+rusqlite = { version = "0.40", features = ["backup", "bundled", "functions", "limits", "session"] }
 liblzma = "0.4"
 zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 

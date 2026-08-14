@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn selects_debian_update_from_generic_metadata_driven_repo() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let mut repo = Repository::new(
             "slice-d-local-update".to_string(),
             "http://127.0.0.1:18087".to_string(),
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn repology_latest_signal_cannot_switch_update_source() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let trove = seed_cross_source_update_fixture(&conn);
         let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive);
 
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn security_update_refuses_unknown_source_metadata_before_mutation() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Unknown, false);
         let policy = ResolutionPolicy::new();
 
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn security_update_refuses_unsupported_source_metadata_before_mutation() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let trove =
             seed_security_update_fixture(&conn, SecurityAdvisorySupport::Unsupported, false);
         let policy = ResolutionPolicy::new();
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn security_update_selects_supported_security_candidate() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Supported, true);
         let policy = ResolutionPolicy::new();
 
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn security_update_ignores_supported_non_security_candidate() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let trove = seed_security_update_fixture(&conn, SecurityAdvisorySupport::Supported, false);
         let policy = ResolutionPolicy::new();
 
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn strict_mixing_update_stays_on_current_source() {
         let (_temp, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
         let trove = seed_cross_source_update_fixture(&conn);
         let policy = ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict);
 
